@@ -1,7 +1,0 @@
-DROP TABLE IF EXISTS index_memos;
-CREATE TABLE index_memos (
-    id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    memo   VARCHAR(250) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
-
-CREATE UNIQUE INDEX memo on index_memos (memo);

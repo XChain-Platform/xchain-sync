@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Replaced 77 copied SQL files with dynamic schema replication from the live indexer database via `SHOW CREATE TABLE` — eliminates drift risk when indexer tables are added or modified
+- `db.js`: added `replicateSchema(sourceDb)` method; renamed `verifyTables()` to `verifySyncTables()` (only handles sync-service-owned tables like `sync_meta`)
+- `SnapshotBuilder.js`: discovers tables dynamically from `information_schema` instead of using a hardcoded table list
+- `ClientSync.js`: added `_fetchAndApplySchema()` to fetch table DDLs from server's new `GET /schema/:chain/:network` endpoint during client bootstrap
+
+### Added
+- `GET /schema/:chain/:network` REST endpoint — returns all table DDLs for schema replication by remote clients
+
 ## [1.0.0] - 2026-04-03
 
 ### Added

@@ -109,9 +109,10 @@ class Database {
         }
     }
 
-    // Verify all database tables exist
-    async verifyTables(){
-        let dir   = path.join(__dirname, 'sql');
+    // Verify sync-service-owned tables exist (only sync_meta — indexer tables
+    // are replicated dynamically via replicateSchema, not from local SQL files)
+    async verifySyncTables(){
+        let dir  = path.join(__dirname, 'sql');
         let files = fs.readdirSync(dir);
         let db    = await this.getConnection();
         for(let file of files){
@@ -121,7 +122,7 @@ class Database {
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
                     if(results.length === 0)
-                        await this.createTable(file);
+                        await this._createTableFromFile(file);
                 } catch(e){
                     this.util.throwError('Error verifying ' + table + ' table: ' + e);
                     return false;
@@ -132,8 +133,8 @@ class Database {
         return true;
     }
 
-    // Create database tables from SQL file
-    async createTable(file){
+    // Create a table from a local SQL file (only used for sync-service-owned tables like sync_meta)
+    async _createTableFromFile(file){
         let dir     = path.join(__dirname, 'sql');
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
         let table   = file.substring(0, file.indexOf('.sql'));
@@ -144,6 +145,77 @@ class Database {
             if(query === '') continue;
             await this.doQuery(query);
         }
+    }
+
+    // Replicate schema from a source database into this database.
+    // Reads all table DDLs from the source via SHOW CREATE TABLE and
+    // creates any missing tables locally. This ensures the replica always
+    // matches the authoritative indexer schema — no copied SQL files needed.
+    async replicateSchema(sourceDb){
+        console.log('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
+
+        // Get list of all tables in the source database
+        let sourceTables = await sourceDb.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
+            [sourceDb.dbName]
+        );
+
+        // Get list of existing tables in this (target) database
+        let existingTables = await this.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+            [this.dbName]
+        );
+        let existingSet = new Set(existingTables.map(r => r.table_name || r.TABLE_NAME));
+
+        let created = 0;
+        for(let row of sourceTables){
+            let tableName = row.table_name || row.TABLE_NAME;
+            if(existingSet.has(tableName)) continue;
+
+            // Get the CREATE TABLE DDL from the source
+            let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
+            if(ddlRows.length === 0) continue;
+
+            let createSql = ddlRows[0]['Create Table'];
+            if(!createSql) continue;
+
+            console.log('Creating table ' + tableName + '...');
+            try {
+                await this.doQuery(createSql);
+                created++;
+            } catch(e){
+                // Table may reference another table not yet created — retry later
+                console.log('Deferred: ' + tableName + ' (' + (e.message || e) + ')');
+            }
+        }
+
+        // Retry any deferred tables (handles foreign-key ordering)
+        if(created < sourceTables.length - existingSet.size){
+            let retryTables = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+                [this.dbName]
+            );
+            let retrySet = new Set(retryTables.map(r => r.table_name || r.TABLE_NAME));
+
+            for(let row of sourceTables){
+                let tableName = row.table_name || row.TABLE_NAME;
+                if(retrySet.has(tableName)) continue;
+
+                let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
+                if(ddlRows.length === 0) continue;
+                let createSql = ddlRows[0]['Create Table'];
+                if(!createSql) continue;
+
+                try {
+                    await this.doQuery(createSql);
+                    console.log('Created table ' + tableName + ' (retry)');
+                } catch(e){
+                    console.error('Failed to create table ' + tableName + ':', e.message || e);
+                }
+            }
+        }
+
+        console.log('Schema replication complete for ' + this.dbName);
     }
 
     // Get a database connection (with exponential backoff + circuit breaker)

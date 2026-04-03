@@ -27,46 +27,48 @@ class SnapshotBuilder {
     constructor(util) {
         this.util = util;
 
-        // Table ordering for correct INSERT dependency (index/dedup tables first)
-        this.tableOrder = [
-            // Index/dedup tables (must exist before referencing tables)
+        // Priority ordering for tables that must come first (index/dedup, then core).
+        // Any tables not in this list are included alphabetically after these.
+        this.priorityTables = [
             'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
             'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
             'index_tickers', 'index_transactions',
-            // Core tables
-            'blocks', 'transactions', 'actions',
-            // Action-specific tables
-            'addresses', 'airdrops', 'batches', 'broadcasts', 'callbacks',
-            'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
-            'contracts', 'contract_state', 'contract_executions', 'contract_emissions', 'contract_balances',
-            'credits', 'debits', 'escrows',
-            'delegates', 'delegations',
-            'deposits', 'destroys',
-            'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
-            'dispenser_expires', 'dispenser_statuses', 'dispenses',
-            'dividends', 'events',
-            'fees', 'files',
-            'issues',
-            'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
-            'mappings_actions', 'mappings_files',
-            'markets', 'messages', 'mints',
-            'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
-            'reward_claims',
-            'sends', 'sleeps',
-            'stakes',
-            'swaps', 'swap_cancels', 'swap_edits', 'swap_expires', 'swap_matches', 'swap_statuses',
-            'sweeps',
-            'tokens', 'unstakes',
-            'validator_rewards',
-            'withdrawals',
-            // Derived/computed tables
-            'balances',
-            // Sync service metadata
-            'sync_meta'
+            'blocks', 'transactions', 'actions'
         ];
+
+        // Tables to put last (derived/computed — depend on everything else)
+        this.trailingTables = ['balances', 'sync_meta'];
 
         // Page size for paginated reads
         this.pageSize = 10000;
+    }
+
+    // Discover all tables in the database and return them in dependency order.
+    // Priority tables come first, trailing tables last, everything else alphabetically in between.
+    async _getOrderedTables(db){
+        let rows = await db.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+            [db.dbName]
+        );
+        let allTables = rows.map(r => r.table_name || r.TABLE_NAME);
+
+        let prioritySet  = new Set(this.priorityTables);
+        let trailingSet  = new Set(this.trailingTables);
+
+        let ordered = [];
+        // Priority tables first (in defined order)
+        for(let t of this.priorityTables){
+            if(allTables.includes(t)) ordered.push(t);
+        }
+        // Middle tables alphabetically
+        let middle = allTables.filter(t => !prioritySet.has(t) && !trailingSet.has(t)).sort();
+        ordered.push(...middle);
+        // Trailing tables last
+        for(let t of this.trailingTables){
+            if(allTables.includes(t)) ordered.push(t);
+        }
+
+        return ordered;
     }
 
     // Stream a full snapshot to an HTTP response
@@ -95,8 +97,9 @@ class SnapshotBuilder {
         // Start JSON structure
         gzip.write('{"block_height":' + lastBlock + ',"tables":{');
 
+        let tableOrder = await this._getOrderedTables(db);
         let first = true;
-        for(let table of this.tableOrder){
+        for(let table of tableOrder){
             try {
                 let count = await db.getTableCount(table);
                 if(count === 0) continue;
@@ -154,20 +157,24 @@ class SnapshotBuilder {
 
         gzip.write('{"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
-        // Block-scoped tables
-        let blockTables = ['blocks', 'transactions', 'validator_rewards', 'contract_state'];
-        // Everything else is action-scoped
+        // Tables scoped by block_index (not action_index)
+        let blockScopedSet = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'sync_meta']);
+        let tableOrder = await this._getOrderedTables(db);
         let first = true;
 
-        for(let table of this.tableOrder){
+        for(let table of tableOrder){
             try {
                 let rows;
-                if(blockTables.includes(table)){
+                if(blockScopedSet.has(table)){
                     rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
-                } else if(table === 'sync_meta'){
-                    rows = await db.doQuery("SELECT * FROM sync_meta WHERE block_index >= ?", [sinceBlock]);
                 } else if(firstActionIndex !== null){
-                    rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
+                    // Try action_index column — not all tables may have it
+                    try {
+                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
+                    } catch(e){
+                        // Table doesn't have action_index — skip it for incremental
+                        continue;
+                    }
                 } else {
                     continue;
                 }
@@ -193,10 +200,6 @@ class SnapshotBuilder {
         gzip.end();
     }
 
-    // Get the table order (used by ClientApplier for INSERT ordering)
-    getTableOrder(){
-        return this.tableOrder;
-    }
 }
 
 module.exports = SnapshotBuilder;

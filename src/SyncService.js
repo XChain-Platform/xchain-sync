@@ -117,14 +117,28 @@ class SyncService {
                     this.config['REPLICA_DB_PASS'],
                     this.util
                 );
-                // Ensure the replica database and tables exist
+                // Ensure the replica database exists
                 await db.createDatabase();
-                await db.verifyTables();
+                // Schema replication: try direct DB connection first (faster), fall back to
+                // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
+                try {
+                    let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util);
+                    let sourceExists = await sourceDb.verifyDatabase();
+                    if(sourceExists){
+                        await db.replicateSchema(sourceDb);
+                    }
+                    await sourceDb.close();
+                } catch(e){
+                    // Source DB not reachable — schema will be fetched from server via /schema endpoint
+                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + ' — schema will be fetched from sync server');
+                }
+                // Ensure sync-service-owned tables exist (sync_meta)
+                await db.verifySyncTables();
             } else {
                 // Server mode: connect to the authoritative indexer DB using hub-provided credentials
                 db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util);
-                // Verify tables (including sync_meta for transparency log)
-                await db.verifyTables();
+                // Ensure sync-service-owned tables exist (sync_meta for transparency log)
+                await db.verifySyncTables();
             }
 
             this.databases.set(key, { db, config: cfg });

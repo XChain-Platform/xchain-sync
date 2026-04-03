@@ -87,6 +87,38 @@ class ClientSync {
         this.wsConns = [];
     }
 
+    // Fetch and apply schema from a remote sync server
+    async _fetchAndApplySchema(source){
+        console.log('Fetching schema from ' + source + '...');
+        try {
+            let url = source + '/schema/' + this.chain + '/' + this.network;
+            let response = await axios.get(url, { timeout: 30000 });
+            let schema = response.data;
+            if(schema && schema.tables){
+                for(let tableName in schema.tables){
+                    let createSql = schema.tables[tableName];
+                    if(!createSql) continue;
+                    try {
+                        // Check if table already exists
+                        let exists = await this.db.doQuery(
+                            "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                            [this.db.dbName, tableName]
+                        );
+                        if(exists.length === 0){
+                            await this.db.doQuery(createSql);
+                            console.log('  Created table: ' + tableName);
+                        }
+                    } catch(e){
+                        // May fail on ordering — retry will catch it
+                    }
+                }
+                console.log('Schema applied from ' + source);
+            }
+        } catch(e){
+            console.error('Failed to fetch schema from ' + source + ':', e.message);
+        }
+    }
+
     // Bootstrap from a full snapshot
     async _bootstrapFromSnapshot(){
         let source = this.sources[0];
@@ -94,6 +126,9 @@ class ClientSync {
             console.error('No sync sources configured');
             return;
         }
+
+        // Fetch and apply schema before downloading data
+        await this._fetchAndApplySchema(source);
 
         console.log('Downloading full snapshot from ' + source + '...');
         try {

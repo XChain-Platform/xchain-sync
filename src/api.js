@@ -122,6 +122,33 @@ async function startApi(){
         }
     });
 
+    // GET /schema/:chain/:network — table DDLs for schema replication (server mode)
+    app.get('/schema/:chain/:network', async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Schema only available in server mode' });
+
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network);
+        if(!db) return res.status(404).json({ error: 'Chain/network not found' });
+
+        try {
+            let tables = await db.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
+                [db.dbName]
+            );
+            let schema = {};
+            for(let row of tables){
+                let tableName = row.table_name || row.TABLE_NAME;
+                let ddlRows = await db.doQuery("SHOW CREATE TABLE `" + tableName + "`");
+                if(ddlRows.length > 0)
+                    schema[tableName] = ddlRows[0]['Create Table'];
+            }
+            res.json({ chain, network, tables: schema });
+        } catch(e){
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // GET /snapshot/:chain/:network — full snapshot (server mode)
     app.get('/snapshot/:chain/:network', fullSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')

@@ -1,7 +1,0 @@
-DROP TABLE IF EXISTS index_tickers;
-CREATE TABLE index_tickers (
-    id   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    tick TEXT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-
-CREATE UNIQUE INDEX tick on index_tickers (tick(200));
