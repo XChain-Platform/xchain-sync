@@ -1,0 +1,190 @@
+/*********************************************************************
+ *
+ * Copyright © 2025 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC – https://dankest.llc
+ *
+ * Licensed under the Dankest Community License (Apache License 2.0 + Additional Terms).
+ * You may not use this file except in compliance with that License.
+ *
+ * A copy of the License is available at:
+ *     https://dankest.llc/license
+ *
+ * This software is provided "AS IS", without warranties or conditions of any kind.
+ *
+ **********************************************************************
+ *
+ * XChain Indexer Sync - Block Broadcaster
+ *
+ * Manages WebSocket subscriptions per chain/network and broadcasts
+ * block, reorg, and status events to all subscribers.
+ *
+ ********************************************************************/
+
+const WebSocket = require('ws');
+
+class BlockBroadcaster {
+
+    constructor(config) {
+        this.config = config;
+
+        // Subscribers per chain/network: Map<"chain:network", Set<ws>>
+        this.subscribers = new Map();
+
+        // Track connections per IP for rate limiting: Map<ip, Set<ws>>
+        this.ipConnections = new Map();
+
+        // Status data per chain/network for periodic broadcasts
+        this.statusData = new Map();
+    }
+
+    // Get the key for a chain/network pair
+    _key(chain, network){
+        return chain + ':' + network;
+    }
+
+    // Get client IP from WebSocket request
+    _getIp(req){
+        return req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    }
+
+    // Add a subscriber for a chain/network
+    addSubscription(ws, req, chain, network){
+        let ip = this._getIp(req);
+        let key = this._key(chain, network);
+
+        // Check per-IP connection limit
+        if(!this.ipConnections.has(ip))
+            this.ipConnections.set(ip, new Set());
+        let ipSet = this.ipConnections.get(ip);
+        if(ipSet.size >= this.config['WS_MAX_PER_IP']){
+            ws.close(1008, 'Too many connections from this IP');
+            return false;
+        }
+
+        // Register the subscription
+        if(!this.subscribers.has(key))
+            this.subscribers.set(key, new Set());
+        this.subscribers.get(key).add(ws);
+        ipSet.add(ws);
+
+        // Store metadata on the ws object
+        ws._syncChain   = chain;
+        ws._syncNetwork = network;
+        ws._syncIp      = ip;
+        ws._syncBuffered = 0;
+
+        // Setup cleanup on close
+        ws.on('close', () => this.removeSubscription(ws));
+        ws.on('error', () => this.removeSubscription(ws));
+
+        // Send initial status if available
+        let status = this.statusData.get(key);
+        if(status){
+            this._send(ws, { type: 'status', chain, network, ...status });
+        }
+
+        console.log('WebSocket subscriber added for ' + key + ' from ' + ip + ' (' + this.subscribers.get(key).size + ' total)');
+        return true;
+    }
+
+    // Remove a subscriber
+    removeSubscription(ws){
+        let chain   = ws._syncChain;
+        let network = ws._syncNetwork;
+        let ip      = ws._syncIp;
+        if(!chain || !network) return;
+
+        let key = this._key(chain, network);
+        let subs = this.subscribers.get(key);
+        if(subs){
+            subs.delete(ws);
+            if(subs.size === 0)
+                this.subscribers.delete(key);
+        }
+
+        let ipSet = this.ipConnections.get(ip);
+        if(ipSet){
+            ipSet.delete(ws);
+            if(ipSet.size === 0)
+                this.ipConnections.delete(ip);
+        }
+
+        // Clear metadata
+        ws._syncChain   = null;
+        ws._syncNetwork = null;
+    }
+
+    // Update status data for a chain/network
+    updateStatus(chain, network, statusObj){
+        this.statusData.set(this._key(chain, network), statusObj);
+    }
+
+    // Broadcast an event to all subscribers for a chain/network
+    broadcast(chain, network, event){
+        let key  = this._key(chain, network);
+        let subs = this.subscribers.get(key);
+        if(!subs || subs.size === 0) return;
+
+        let message = JSON.stringify(event);
+        for(let ws of subs){
+            this._send(ws, message, true);
+        }
+    }
+
+    // Broadcast status to all subscribers for a chain/network
+    broadcastStatus(chain, network){
+        let key = this._key(chain, network);
+        let status = this.statusData.get(key);
+        if(!status) return;
+
+        let subs = this.subscribers.get(key);
+        if(!subs || subs.size === 0) return;
+
+        let event = { type: 'status', chain, network, ...status };
+        let message = JSON.stringify(event);
+        for(let ws of subs){
+            this._send(ws, message, true);
+        }
+    }
+
+    // Send a message to a single WebSocket with backpressure handling
+    _send(ws, message, isPreSerialized){
+        if(ws.readyState !== WebSocket.OPEN) return;
+
+        let data = isPreSerialized ? message : JSON.stringify(message);
+
+        // Backpressure: check buffered amount
+        if(ws.bufferedAmount > 0)
+            ws._syncBuffered = (ws._syncBuffered || 0) + 1;
+        else
+            ws._syncBuffered = 0;
+
+        if(ws._syncBuffered > this.config['WS_BACKPRESSURE_LIMIT']){
+            console.log('WebSocket backpressure limit exceeded for ' + ws._syncIp + ', dropping connection');
+            ws.close(1008, 'Backpressure limit exceeded');
+            this.removeSubscription(ws);
+            return;
+        }
+
+        try {
+            ws.send(data);
+        } catch(e){
+            console.log('WebSocket send error:', e.message);
+            this.removeSubscription(ws);
+        }
+    }
+
+    // Get subscriber count for a chain/network (or all)
+    getSubscriberCount(chain, network){
+        if(chain && network){
+            let subs = this.subscribers.get(this._key(chain, network));
+            return subs ? subs.size : 0;
+        }
+        let total = 0;
+        for(let subs of this.subscribers.values())
+            total += subs.size;
+        return total;
+    }
+}
+
+module.exports = BlockBroadcaster;
