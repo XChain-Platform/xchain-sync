@@ -5,3 +5,4 @@ reports/mutation/*.html
 reports/mutation/*.json
 reports/mutation/.stryker-incremental.json
 .stryker-tmp/
+.DS_Store
