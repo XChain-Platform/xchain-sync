@@ -69,6 +69,14 @@ describe('config', function(){
             process.env.VERIFY_HASHES = 'false';
             assert.strictEqual(config.getConfig().VERIFY_HASHES, false);
         });
+        it('returns false when set to "FALSE" (case-insensitive)', function(){
+            process.env.VERIFY_HASHES = 'FALSE';
+            assert.strictEqual(config.getConfig().VERIFY_HASHES, false);
+        });
+        it('returns false when set to "False"', function(){
+            process.env.VERIFY_HASHES = 'False';
+            assert.strictEqual(config.getConfig().VERIFY_HASHES, false);
+        });
         it('returns true when set to "true"', function(){
             process.env.VERIFY_HASHES = 'true';
             assert.strictEqual(config.getConfig().VERIFY_HASHES, true);

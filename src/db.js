@@ -47,6 +47,7 @@ class Database {
             acquireTimeout:     10000,
             idleTimeout:        60000,
             insertIdAsNumber:   true,
+            bigIntAsNumber:     true,
             minDelayValidation: 3000
         };
 

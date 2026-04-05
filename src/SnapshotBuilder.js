@@ -22,6 +22,9 @@
 
 const zlib = require('zlib');
 
+// JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
+const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
+
 class SnapshotBuilder {
 
     constructor(util) {
@@ -115,7 +118,7 @@ class SnapshotBuilder {
                     for(let row of rows){
                         if(!firstRow) gzip.write(',');
                         firstRow = false;
-                        gzip.write(JSON.stringify(row));
+                        gzip.write(JSON.stringify(row, bigIntReplacer));
                     }
                     offset += this.pageSize;
                 }
@@ -187,7 +190,7 @@ class SnapshotBuilder {
 
                 for(let i = 0; i < rows.length; i++){
                     if(i > 0) gzip.write(',');
-                    gzip.write(JSON.stringify(rows[i]));
+                    gzip.write(JSON.stringify(rows[i], bigIntReplacer));
                 }
 
                 gzip.write(']');

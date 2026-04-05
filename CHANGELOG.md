@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-05
+
+### Fixed
+- Config parsing: `parseInt(x) || default` pattern replaced with `parseIntSafe()` to correctly handle zero as a valid value (e.g. `SNAPSHOT_RATE_FULL=0` no longer silently becomes `1`)
+- Config parsing: negative values now clamped — `WS_MAX_PER_IP=-1` clamps to 1 (previously accepted, causing all WebSocket connections to be rejected)
+- Config parsing: `VERIFY_HASHES` is now case-insensitive — `"FALSE"`, `"False"`, `"false"` all disable verification (previously only exact lowercase `"false"` worked)
+- HubClient: `db_port` parsing uses same safe pattern — zero preserved, negatives default to 3306
+- ClientSync: `_bootstrapFromSnapshot()` no longer recurses infinitely when all sync sources fail — stops after trying each source once
+- Database: added `bigIntAsNumber: true` to MariaDB connection pool to prevent BigInt object returns
+
+### Added
+- Boundary test suite: 159 tests across 12 files in `test/unit/boundaries/`
+  - `config-parsing.test.js` — zero values, negative clamping, NaN fallbacks, VERIFY_HASHES case insensitivity
+  - `poll-limit.test.js` — 99/100/101 blocks per poll boundary
+  - `batch-insert.test.js` — 99/100/101 rows per INSERT batch boundary
+  - `transparency-page.test.js` — page/limit clamping (0, -1, 1000, 1001, NaN, floats)
+  - `hash-continuity.test.js` — exact +1 block requirement, null bootstrap, zero-based chains
+  - `reorg-detection.test.js` — same-height non-detection, null currentBlock, first poll
+  - `websocket-limits.test.js` — per-IP limit at 1/3/4, backpressure at 49/50/51
+  - `rollback-scope.test.js` — rollback at block 0/1/highest/non-existent, null action index
+  - `circuit-breaker.test.js` — 9/10 failure threshold, half-open recovery, 30-attempt max, exponential backoff arithmetic
+  - `block-index.test.js` — block_index=0 handling, JS safe integer limits, BigInt precision loss
+  - `source-array.test.js` — empty/trailing/leading commas, whitespace, recursion limit
+  - `hub-port-parsing.test.js` — HubClient._parsePort zero/null/negative/NaN boundaries
+
 ## [1.1.0] - 2026-04-04
 
 ### Added

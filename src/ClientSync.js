@@ -120,7 +120,9 @@ class ClientSync {
     }
 
     // Bootstrap from a full snapshot
-    async _bootstrapFromSnapshot(){
+    // attempt tracks recursion depth to prevent infinite retries when all sources fail
+    async _bootstrapFromSnapshot(attempt){
+        attempt = attempt || 0;
         let source = this.sources[0];
         if(!source){
             console.error('No sync sources configured');
@@ -161,11 +163,13 @@ class ClientSync {
             console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
         } catch(e){
             console.error('Bootstrap failed:', e.message);
-            // Try next source
-            if(this.sources.length > 1){
+            // Try next source, but only if we haven't exhausted all sources
+            if(this.sources.length > 1 && attempt < this.sources.length - 1){
                 console.log('Trying secondary source...');
                 this.sources.push(this.sources.shift());
-                await this._bootstrapFromSnapshot();
+                await this._bootstrapFromSnapshot(attempt + 1);
+            } else {
+                console.error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
             }
         }
     }

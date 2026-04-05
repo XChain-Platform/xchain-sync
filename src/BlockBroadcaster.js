@@ -22,6 +22,9 @@
 
 const WebSocket = require('ws');
 
+// JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
+const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
+
 class BlockBroadcaster {
 
     constructor(config) {
@@ -125,7 +128,7 @@ class BlockBroadcaster {
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
-        let message = JSON.stringify(event);
+        let message = JSON.stringify(event, bigIntReplacer);
         for(let ws of subs){
             this._send(ws, message, true);
         }
@@ -141,7 +144,7 @@ class BlockBroadcaster {
         if(!subs || subs.size === 0) return;
 
         let event = { type: 'status', chain, network, ...status };
-        let message = JSON.stringify(event);
+        let message = JSON.stringify(event, bigIntReplacer);
         for(let ws of subs){
             this._send(ws, message, true);
         }
@@ -151,7 +154,7 @@ class BlockBroadcaster {
     _send(ws, message, isPreSerialized){
         if(ws.readyState !== WebSocket.OPEN) return;
 
-        let data = isPreSerialized ? message : JSON.stringify(message);
+        let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
 
         // Backpressure: check buffered amount
         if(ws.bufferedAmount > 0)

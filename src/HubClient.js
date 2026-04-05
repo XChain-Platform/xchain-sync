@@ -79,7 +79,7 @@ class HubClient {
                         coin:    coin,
                         network: network,
                         db_host: idx.db_host || idx.host || 'localhost',
-                        db_port: parseInt(idx.db_port || idx.port) || 3306,
+                        db_port: HubClient._parsePort(idx.db_port, idx.port),
                         db_name: idx.name,
                         db_user: idx.user,
                         db_pass: idx.pass
@@ -88,6 +88,15 @@ class HubClient {
             }
         }
         return indexerConfigs;
+    }
+
+    // Parse a port value safely — returns defaultPort when the value is
+    // absent, empty, or non-numeric.  Handles 0 correctly (unlike parseInt(x) || default).
+    static _parsePort(primary, fallback){
+        let val = primary !== undefined && primary !== null && primary !== '' ? primary : fallback;
+        if(val === undefined || val === null || val === '') return 3306;
+        let parsed = parseInt(val, 10);
+        return isNaN(parsed) || parsed < 0 ? 3306 : parsed;
     }
 }
 
