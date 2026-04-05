@@ -24,8 +24,9 @@ const axios = require('axios');
 
 class HubClient {
 
-    constructor(host, port) {
-        this.url = "http://" + host + ":" + port;
+    constructor(host, port, protocol) {
+        let proto = (protocol === 'https') ? 'https' : 'http';
+        this.url = proto + "://" + host + ":" + port;
     }
 
     // Ping the hub to check if it's alive
@@ -71,8 +72,11 @@ class HubClient {
         let indexerConfigs = [];
         for(let coin in allConfigs){
             if(coin === '') continue;
-            for(let network in allConfigs[coin]){
-                let modules = allConfigs[coin][network];
+            let coinObj = allConfigs[coin];
+            if(!coinObj || typeof coinObj !== 'object') continue;
+            for(let network in coinObj){
+                let modules = coinObj[network];
+                if(!modules || typeof modules !== 'object') continue;
                 if(modules['xchain-indexer']){
                     let idx = modules['xchain-indexer'];
                     indexerConfigs.push({

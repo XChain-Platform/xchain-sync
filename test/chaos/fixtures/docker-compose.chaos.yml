@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # Source MariaDB — what the sync server reads from (indexer DB)
+  source-db-chaos:
+    image: mariadb:11
+    command: --max-connections=500
+    environment:
+      MARIADB_ROOT_PASSWORD: test
+      MARIADB_USER: xchain-node
+      MARIADB_PASSWORD: XChain4life
+    ports:
+      - "33065:3306"   # Direct access for admin seeding (bypasses toxiproxy)
+    networks:
+      - chaos-net
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  # Replica MariaDB — what the sync client writes to
+  replica-db-chaos:
+    image: mariadb:11
+    command: --max-connections=500
+    environment:
+      MARIADB_ROOT_PASSWORD: test
+      MARIADB_USER: xchain-node
+      MARIADB_PASSWORD: XChain4life
+    networks:
+      - chaos-net
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  # Toxiproxy — TCP fault injection proxy for both databases + WebSocket
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"    # Toxiproxy HTTP API
+      - "33060:33060"  # Source DB proxy endpoint
+      - "33061:33061"  # Replica DB proxy endpoint
+      - "33062:33062"  # WebSocket proxy endpoint (for CE-NET tests)
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    networks:
+      - chaos-net
+    depends_on:
+      source-db-chaos:
+        condition: service_healthy
+      replica-db-chaos:
+        condition: service_healthy
+
+networks:
+  chaos-net:
+    driver: bridge

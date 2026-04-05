@@ -87,10 +87,11 @@ describe('BlockBroadcaster', function(){
             assert.strictEqual(ws.on.calledWith('error'), true);
         });
 
-        it('uses x-forwarded-for when present', function(){
+        it('uses x-forwarded-for when TRUST_PROXY is true', function(){
+            let trustedBroadcaster = new BlockBroadcaster({ WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50, TRUST_PROXY: true });
             let ws = mockWs();
             let req = { headers: { 'x-forwarded-for': '9.9.9.9' }, socket: { remoteAddress: '1.1.1.1' } };
-            broadcaster.addSubscription(ws, req, 'bitcoin', 'mainnet');
+            trustedBroadcaster.addSubscription(ws, req, 'bitcoin', 'mainnet');
             assert.strictEqual(ws._syncIp, '9.9.9.9');
         });
     });

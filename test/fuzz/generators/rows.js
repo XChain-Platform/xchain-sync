@@ -1,0 +1,175 @@
+/**
+ * fast-check arbitraries for complete DB row objects matching table schemas.
+ *
+ * Used by suites for _insertRows, applyBlock, and snapshot testing.
+ */
+
+const fc = require('fast-check');
+const {
+    blockIndex, actionIndex, txIndex, blockTime,
+    amountString, hashString, bigIntLikeValue, tinyIntValue,
+    textValue, addressString, tickString,
+} = require('./values');
+
+/** blocks table row */
+function blocksRow() {
+    return fc.record({
+        block_index: blockIndex(),
+        block_time: blockTime(),
+        ledger_hash_id: bigIntLikeValue(),
+        actions_hash_id: bigIntLikeValue(),
+        contract_hash_id: bigIntLikeValue(),
+    });
+}
+
+/** transactions table row */
+function transactionsRow() {
+    return fc.record({
+        tx_index: txIndex(),
+        block_index: blockIndex(),
+        tx_hash_id: bigIntLikeValue(),
+        source_id: bigIntLikeValue(),
+    });
+}
+
+/** actions table row */
+function actionsRow() {
+    return fc.record({
+        action_index: actionIndex(),
+        block_index: blockIndex(),
+        tx_index: txIndex(),
+        tx_vout: fc.integer({ min: 0, max: 10 }),
+        action_id: bigIntLikeValue(),
+        action_format: tinyIntValue(),
+    });
+}
+
+/** credits table row */
+function creditsRow() {
+    return fc.record({
+        action_index: actionIndex(),
+        address_id: bigIntLikeValue(),
+        tick_id: bigIntLikeValue(),
+        amount: amountString(),
+    });
+}
+
+/** debits table row (same shape as credits) */
+function debitsRow() {
+    return fc.record({
+        action_index: actionIndex(),
+        address_id: bigIntLikeValue(),
+        tick_id: bigIntLikeValue(),
+        amount: amountString(),
+    });
+}
+
+/** index_addresses row */
+function indexAddressRow() {
+    return fc.record({ address: addressString() });
+}
+
+/** index_transactions row */
+function indexTransactionRow() {
+    return fc.record({ hash: hashString() });
+}
+
+/** index_tickers row */
+function indexTickerRow() {
+    return fc.record({ tick: tickString() });
+}
+
+/** index_actions row */
+function indexActionRow() {
+    return fc.record({ action: fc.string({ minLength: 0, maxLength: 30 }) });
+}
+
+/** index_coins row */
+function indexCoinRow() {
+    return fc.record({ coin: fc.string({ minLength: 0, maxLength: 50 }) });
+}
+
+/** index_memos row */
+function indexMemoRow() {
+    return fc.record({ memo: textValue() });
+}
+
+/** index_pubkeys row */
+function indexPubkeyRow() {
+    return fc.record({ pubkey: hashString() });
+}
+
+/** index_statuses row */
+function indexStatusRow() {
+    return fc.record({ status: fc.string({ minLength: 0, maxLength: 50 }) });
+}
+
+/** index_mime_types row */
+function indexMimeTypeRow() {
+    return fc.record({ type: fc.string({ minLength: 0, maxLength: 100 }) });
+}
+
+/** index_fiats row */
+function indexFiatRow() {
+    return fc.record({
+        code: fc.string({ minLength: 0, maxLength: 10 }),
+        name: fc.string({ minLength: 0, maxLength: 50 }),
+    });
+}
+
+/**
+ * Generic data row with 1–8 columns of arbitrary names and values.
+ * Column names are restricted to lowercase + underscore to be SQL-safe.
+ */
+function genericDataRow() {
+    return fc.integer({ min: 1, max: 8 }).chain(count =>
+        fc.array(
+            fc.tuple(
+                fc.stringOf(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), { minLength: 1, maxLength: 20 })
+                    .filter(s => /^[a-z]/.test(s)),
+                fc.oneof(amountString(), bigIntLikeValue(), textValue())
+            ),
+            { minLength: count, maxLength: count }
+        ).filter(pairs => {
+            // Ensure unique column names
+            let names = pairs.map(p => p[0]);
+            return new Set(names).size === names.length;
+        }).map(pairs => Object.fromEntries(pairs))
+    );
+}
+
+/** Array of rows from a given row arbitrary */
+function rowArray(rowArb, minLength, maxLength) {
+    return fc.array(rowArb, { minLength: minLength || 0, maxLength: maxLength || 20 });
+}
+
+/** Mixed rows from various table types */
+function mixedRows() {
+    return fc.oneof(
+        rowArray(blocksRow(), 1, 5),
+        rowArray(actionsRow(), 1, 20),
+        rowArray(creditsRow(), 1, 20),
+        rowArray(genericDataRow(), 1, 50),
+    );
+}
+
+module.exports = {
+    blocksRow,
+    transactionsRow,
+    actionsRow,
+    creditsRow,
+    debitsRow,
+    indexAddressRow,
+    indexTransactionRow,
+    indexTickerRow,
+    indexActionRow,
+    indexCoinRow,
+    indexMemoRow,
+    indexPubkeyRow,
+    indexStatusRow,
+    indexMimeTypeRow,
+    indexFiatRow,
+    genericDataRow,
+    rowArray,
+    mixedRows,
+};

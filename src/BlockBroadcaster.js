@@ -47,7 +47,12 @@ class BlockBroadcaster {
 
     // Get client IP from WebSocket request
     _getIp(req){
-        return req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+        if(this.config['TRUST_PROXY']){
+            let forwarded = req.headers['x-forwarded-for'];
+            if(forwarded)
+                return forwarded.split(',')[0].trim();
+        }
+        return req.socket.remoteAddress || 'unknown';
     }
 
     // Add a subscriber for a chain/network

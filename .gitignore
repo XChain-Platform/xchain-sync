@@ -1,0 +1,7 @@
+node_modules/
+
+# Mutation testing output
+reports/mutation/*.html
+reports/mutation/*.json
+reports/mutation/.stryker-incremental.json
+.stryker-tmp/

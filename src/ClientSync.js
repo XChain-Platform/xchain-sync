@@ -21,9 +21,10 @@
  *
  ********************************************************************/
 
-const WebSocket = require('ws');
-const axios     = require('axios');
-const zlib      = require('zlib');
+const WebSocket  = require('ws');
+const axios      = require('axios');
+const zlib       = require('zlib');
+const validation = require('./validation');
 
 class ClientSync {
 
@@ -98,6 +99,19 @@ class ClientSync {
                 for(let tableName in schema.tables){
                     let createSql = schema.tables[tableName];
                     if(!createSql) continue;
+
+                    // Validate table name and DDL before executing
+                    let idCheck = validation.validateIdentifier(tableName);
+                    if(!idCheck.valid){
+                        console.error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
+                        continue;
+                    }
+                    let ddlCheck = validation.validateDdl(createSql);
+                    if(!ddlCheck.valid){
+                        console.error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
+                        continue;
+                    }
+
                     try {
                         // Check if table already exists
                         let exists = await this.db.doQuery(
@@ -138,7 +152,8 @@ class ClientSync {
             let response = await axios.get(url, {
                 responseType: 'arraybuffer',
                 timeout: 600000, // 10 minute timeout for large snapshots
-                decompress: true
+                decompress: true,
+                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
             });
 
             let jsonStr = response.data;
@@ -185,7 +200,8 @@ class ClientSync {
             let response = await axios.get(url, {
                 responseType: 'arraybuffer',
                 timeout: 300000,
-                decompress: true
+                decompress: true,
+                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
             });
 
             let jsonStr = response.data;
@@ -248,7 +264,7 @@ class ClientSync {
 
         let ws;
         try {
-            ws = new WebSocket(wsUrl);
+            ws = new WebSocket(wsUrl, { maxPayload: this.config['WS_MAX_PAYLOAD'] });
         } catch(e){
             console.error('WebSocket connection error:', e.message);
             this._scheduleReconnect(source, sourceIndex);
@@ -262,6 +278,11 @@ class ClientSync {
         ws.on('message', async (data) => {
             try {
                 let event = JSON.parse(data.toString());
+                let check = validation.validateWsEvent(event);
+                if(!check.valid){
+                    console.error('Invalid WS event from ' + source + ': ' + check.reason);
+                    return;
+                }
                 await this._handleEvent(event, sourceIndex);
             } catch(e){
                 console.error('Error handling WebSocket message:', e.message);
@@ -341,11 +362,16 @@ class ClientSync {
                 // Wait for second source (with timeout)
                 if(sourceIndex === 0){
                     setTimeout(() => {
-                        // If still waiting after timeout, apply from primary source anyway
+                        // If still waiting after timeout, handle based on strict mode
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
-                            console.log('Cross-source timeout for block ' + blockIndex + ', applying from primary');
-                            this._applyBlockEvent(event);
-                            this.pendingHashes.delete(blockIndex);
+                            if(this.config['HASH_CONFIRM_STRICT']){
+                                console.error('STRICT: Cross-source timeout for block ' + blockIndex + ', rejecting (HASH_CONFIRM_STRICT=true)');
+                                this.pendingHashes.delete(blockIndex);
+                            } else {
+                                console.log('Cross-source timeout for block ' + blockIndex + ', applying from primary');
+                                this._applyBlockEvent(event);
+                                this.pendingHashes.delete(blockIndex);
+                            }
                         }
                     }, this.config['HASH_CONFIRM_TIMEOUT']);
                 }
@@ -394,6 +420,16 @@ class ClientSync {
     // Handle a reorg event
     async _handleReorg(event){
         console.log('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
+
+        // Enforce max rollback depth
+        if(this.lastAppliedBlock !== null){
+            let depth = this.lastAppliedBlock - event.block_index + 1;
+            if(depth > this.config['MAX_ROLLBACK_DEPTH']){
+                console.error('Reorg depth ' + depth + ' exceeds MAX_ROLLBACK_DEPTH ' + this.config['MAX_ROLLBACK_DEPTH'] + ' — rejecting');
+                return;
+            }
+        }
+
         try {
             await this.rollback.rollback(event.block_index);
             this.lastAppliedBlock = event.block_index - 1;

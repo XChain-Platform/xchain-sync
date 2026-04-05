@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-05
+
+### Added
+- Mutation testing infrastructure using StrykerJS v8.7.1
+  - `stryker.config.json` — Full mutation config: 15 source files, 2218 mutants, perTest coverage analysis, HTML/JSON/clear-text reporters
+  - `stryker.quick.config.json` — Priority 1 modules only (ClientApplier, HashVerifier, validation, ServerPoller, ClientRollback, TransparencyLog): 6 files, 795 mutants
+  - Thresholds: break at 80%, low at 85%, high at 95% mutation score
+  - Incremental mode for CI: only re-tests mutants in changed files
+  - StringLiteral mutations excluded (stubbed console produces equivalent mutants)
+  - Static mutants ignored (module-level compiled regexes in validation.js)
+- npm scripts: `test:mutate` (full run), `test:mutate:quick` (Priority 1 only), `test:mutate:check` (incremental)
+- `.gitignore` for mutation report outputs and Stryker temp files
+- `@stryker-mutator/core` and `@stryker-mutator/mocha-runner` dev dependencies
+
+## [1.4.0] - 2026-04-05
+
+### Added
+- Performance and load testing suite: 7 scenario files across `test/perf/scenarios/`
+  - `01-payload-throughput.test.js` — Block payload build rate at varying action densities (1, 10, 50, 200 actions/block)
+  - `02-snapshot-performance.test.js` — Full and incremental snapshot export timing with compression metrics
+  - `03-bootstrap-apply.test.js` — Client bootstrap throughput measuring rows/second across dataset sizes
+  - `04-subscriber-scaling.test.js` — WebSocket broadcast overhead scaling from 1 to 50 concurrent subscribers
+  - `05-sustained-sync.test.js` — Long-running server+client sync with degradation detection and memory leak checks
+  - `06-incremental-catchup.test.js` — Catch-up performance across gap sizes (10 to 500 blocks) with linearity checks
+  - `07-rollback-performance.test.js` — Reorg rollback timing by depth (1 to 100 blocks) with scaling assertions
+- Performance test infrastructure: `test/perf/setup/`
+  - `metrics-collector.js` — Block-level and operation-level timing with percentile distributions, memory snapshots, and event loop delay monitoring
+  - `report-generator.js` — Console summary, JSON, and Markdown report output
+  - `data-generator.js` — Bulk data seeder wrapping e2e fixtures with batch control
+  - `perf-setup.js` — Shared environment boot/teardown reusing e2e helpers
+- npm scripts: `test:perf` (unlimited timeout), `test:perf:quick` (reduced block count)
+
+## [1.3.0] - 2026-04-05
+
+### Fixed
+- HashVerifier: `verifyChainContinuity()` now guards against null/undefined payload instead of crashing with `TypeError: Cannot read properties of null`
+- HubClient: `getIndexerConfigs()` now guards against null/non-object values in the hub response tree instead of crashing when a network value is null
+
+### Added
+- Fuzz testing suite: 55 property-based tests across 6 suites using `fast-check`
+  - `tier1-client-applier.fuzz.js` — crash safety for applyBlock, snapshots, _insertRows; transaction leak detection; INSERT IGNORE correctness; batch sizing; null coercion
+  - `tier1-hash-verifier.fuzz.js` — crash safety for compareBlockHashes and verifyChainContinuity; return shape invariants; match/mismatch bidirectional correctness; sequential block validation
+  - `tier2-server-poller.fuzz.js` — _buildBlockPayload with fuzzed DB returns; per-table error isolation; payload shape verification
+  - `tier2-client-rollback.fuzz.js` — rollback with fuzzed block_index; transaction safety; per-table error tolerance; balance rebuild ordering; sync_meta cleanup
+  - `tier2-hub-client.fuzz.js` — getIndexerConfigs with adversarial responses; _parsePort with boundary values; network error resilience
+  - `tier3-config.fuzz.js` — getConfig with fuzzed env vars; type/range invariants; VERIFY_HASHES bidirectional spec; hardcoded constant immutability
+- Fuzz test infrastructure: `test/fuzz/setup/harness.js`, generators (`values.js`, `rows.js`, `payloads.js`)
+- `fast-check` dev dependency
+- npm scripts: `test:fuzz`, `test:fuzz:tier1`, `test:fuzz:tier2`, `test:fuzz:tier3`, `test:fuzz:quick`
+
 ## [1.2.0] - 2026-04-05
 
 ### Fixed

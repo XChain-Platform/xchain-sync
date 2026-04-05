@@ -82,6 +82,27 @@ module.exports = {
         // WebSocket ping interval (30 seconds)
         config['WS_PING_INTERVAL'] = 30000;
 
+        // Security: API key authentication (disabled when not set)
+        config['SYNC_API_KEY'] = process.env.SYNC_API_KEY || '';
+
+        // Security: Hub protocol (http or https)
+        config['HUB_PROTOCOL'] = (process.env.HUB_PROTOCOL || '').toLowerCase() === 'https' ? 'https' : 'http';
+
+        // Security: Trust x-forwarded-for header (only enable behind a reverse proxy)
+        config['TRUST_PROXY'] = (process.env.TRUST_PROXY || '').toLowerCase() === 'true';
+
+        // Security: Maximum rollback depth from a single source (blocks)
+        config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
+
+        // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
+        config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
+
+        // Security: WebSocket max incoming message size in bytes (default 1 MB)
+        config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
+
+        // Security: Max HTTP response size for snapshot downloads in bytes (default 512 MB)
+        config['SNAPSHOT_MAX_CONTENT'] = parseIntMin1(process.env.SNAPSHOT_MAX_CONTENT, 536870912);
+
         // Client reconnect delay (5 seconds)
         config['CLIENT_RECONNECT_DELAY'] = 5000;
 

@@ -21,9 +21,10 @@
  *
  ********************************************************************/
 
-const mariadb = require('mariadb');
-const fs      = require('fs');
-const path    = require('path');
+const mariadb    = require('mariadb');
+const fs         = require('fs');
+const path       = require('path');
+const validation = require('./validation');
 
 class Database {
 
@@ -93,8 +94,9 @@ class Database {
             password: this.pass,
             port:     this.port
         };
-        if(!/^[A-Za-z0-9_]+$/.test(this.dbName))
-            throw new Error('Invalid database name: ' + this.dbName);
+        let dbCheck = validation.validateIdentifier(this.dbName);
+        if(!dbCheck.valid)
+            throw new Error('Invalid database name: ' + this.dbName + ' (' + dbCheck.reason + ')');
         console.log("Creating " + this.dbName + " database!");
         while(true){
             try {
@@ -173,12 +175,26 @@ class Database {
             let tableName = row.table_name || row.TABLE_NAME;
             if(existingSet.has(tableName)) continue;
 
+            // Validate table name before using in SQL
+            let idCheck = validation.validateIdentifier(tableName);
+            if(!idCheck.valid){
+                console.error('Skipping invalid table name: ' + tableName + ' (' + idCheck.reason + ')');
+                continue;
+            }
+
             // Get the CREATE TABLE DDL from the source
             let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
             if(ddlRows.length === 0) continue;
 
             let createSql = ddlRows[0]['Create Table'];
             if(!createSql) continue;
+
+            // Validate DDL before executing
+            let ddlCheck = validation.validateDdl(createSql);
+            if(!ddlCheck.valid){
+                console.error('Rejected DDL for ' + tableName + ': ' + ddlCheck.reason);
+                continue;
+            }
 
             console.log('Creating table ' + tableName + '...');
             try {
@@ -202,10 +218,19 @@ class Database {
                 let tableName = row.table_name || row.TABLE_NAME;
                 if(retrySet.has(tableName)) continue;
 
+                let idCheck = validation.validateIdentifier(tableName);
+                if(!idCheck.valid) continue;
+
                 let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
                 if(ddlRows.length === 0) continue;
                 let createSql = ddlRows[0]['Create Table'];
                 if(!createSql) continue;
+
+                let ddlCheck = validation.validateDdl(createSql);
+                if(!ddlCheck.valid){
+                    console.error('Rejected DDL for ' + tableName + ' (retry): ' + ddlCheck.reason);
+                    continue;
+                }
 
                 try {
                     await this.doQuery(createSql);

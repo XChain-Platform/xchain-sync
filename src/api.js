@@ -29,6 +29,7 @@ const WebSocket   = require('ws');
 const rateLimit   = require('express-rate-limit');
 const config      = require('./config');
 const SyncService = require('./SyncService');
+const { createApiKeyMiddleware } = require('./middleware');
 
 // Parse .env
 dotenv.config();
@@ -51,6 +52,7 @@ async function startApi(){
     const app = express();
     app.use(helmet());
     app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET'] }));
+    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     // Rate limiters for snapshot endpoints
     const fullSnapshotLimiter = rateLimit({
@@ -95,7 +97,8 @@ async function startApi(){
             result.last_updated = new Date().toISOString();
             res.json(result);
         }).catch(e => {
-            res.status(500).json({ error: e.message });
+            console.error('[API error] /status:', e.message);
+            res.status(500).json({ error: 'Internal server error' });
         });
     });
 
@@ -118,7 +121,8 @@ async function startApi(){
                 last_updated: new Date().toISOString()
             });
         } catch(e){
-            res.status(500).json({ error: e.message });
+            console.error('[API error] /status/:chain/:network:', e.message);
+            res.status(500).json({ error: 'Internal server error' });
         }
     });
 
@@ -145,7 +149,8 @@ async function startApi(){
             }
             res.json({ chain, network, tables: schema });
         } catch(e){
-            res.status(500).json({ error: e.message });
+            console.error('[API error] /schema/:chain/:network:', e.message);
+            res.status(500).json({ error: 'Internal server error' });
         }
     });
 
@@ -164,8 +169,9 @@ async function startApi(){
         try {
             await builder.streamFullSnapshot(db, res);
         } catch(e){
+            console.error('[API error] /snapshot/:chain/:network:', e.message);
             if(!res.headersSent)
-                res.status(500).json({ error: e.message });
+                res.status(500).json({ error: 'Internal server error' });
         }
     });
 
@@ -188,8 +194,9 @@ async function startApi(){
         try {
             await builder.streamIncrementalSnapshot(db, sinceBlock, res);
         } catch(e){
+            console.error('[API error] /snapshot/:chain/:network/since/:blockHeight:', e.message);
             if(!res.headersSent)
-                res.status(500).json({ error: e.message });
+                res.status(500).json({ error: 'Internal server error' });
         }
     });
 
@@ -209,7 +216,8 @@ async function startApi(){
             let result = await log.getPage(page, limit);
             res.json(result);
         } catch(e){
-            res.status(500).json({ error: e.message });
+            console.error('[API error] /transparency/:chain/:network/roots:', e.message);
+            res.status(500).json({ error: 'Internal server error' });
         }
     });
 
@@ -222,6 +230,17 @@ async function startApi(){
 
     // Handle WebSocket upgrade requests
     server.on('upgrade', (request, socket, head) => {
+        // API key authentication for WebSocket connections
+        let apiKey = cfg['SYNC_API_KEY'];
+        if(apiKey){
+            let authHeader = request.headers['authorization'];
+            if(!authHeader || authHeader !== 'Bearer ' + apiKey){
+                socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+                socket.destroy();
+                return;
+            }
+        }
+
         // Parse the path: /subscribe/:chain/:network
         let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
         if(!match){

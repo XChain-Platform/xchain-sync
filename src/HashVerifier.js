@@ -52,6 +52,10 @@ class HashVerifier {
         if(prevBlockIndex === null || prevHashes === null)
             return { valid: true, reason: null };
 
+        // Guard against null/undefined payload
+        if(!payload || payload.block_index === undefined || payload.block_index === null)
+            return { valid: false, reason: 'Invalid payload: missing block_index' };
+
         // The new block should be exactly prevBlockIndex + 1 for continuity
         if(payload.block_index !== prevBlockIndex + 1){
             return {

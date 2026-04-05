@@ -20,6 +20,8 @@
  *
  ********************************************************************/
 
+const validation = require('./validation');
+
 class ClientApplier {
 
     constructor(db, util) {
@@ -75,6 +77,11 @@ class ClientApplier {
             // Truncate all tables first (reverse order to handle any logical dependencies)
             let tables = Object.keys(snapshotData.tables);
             for(let i = tables.length - 1; i >= 0; i--){
+                let tCheck = validation.validateIdentifier(tables[i]);
+                if(!tCheck.valid){
+                    console.error('Skipping truncate of invalid table: ' + tables[i]);
+                    continue;
+                }
                 await this.db.truncateTable(tables[i]);
             }
 
@@ -123,8 +130,24 @@ class ClientApplier {
     async _insertRows(table, rows){
         if(!rows || rows.length === 0) return;
 
+        // Validate table name
+        let tableCheck = validation.validateIdentifier(table);
+        if(!tableCheck.valid){
+            console.error('Rejected table name in _insertRows: ' + table + ' (' + tableCheck.reason + ')');
+            return;
+        }
+
         let useIgnore = this.ignoreTables.has(table);
         let columns   = Object.keys(rows[0]);
+
+        // Validate all column names
+        for(let col of columns){
+            let colCheck = validation.validateIdentifier(col);
+            if(!colCheck.valid){
+                console.error('Rejected column name in _insertRows: ' + col + ' (' + colCheck.reason + ')');
+                return;
+            }
+        }
         let colList   = columns.map(c => '`' + c + '`').join(', ');
         let placeholders = columns.map(() => '?').join(', ');
 
