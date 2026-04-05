@@ -1,7 +1,7 @@
 {
   "name": "xchain-indexer-sync",
   "description": "Database replication service for the XChain Platform — syncs indexer databases to validators and consumers via REST snapshots and WebSocket streaming",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
@@ -41,8 +41,8 @@
     "test:perf": "mocha --timeout 0 --slow 10000 --recursive 'test/perf/scenarios/**/*.test.js'",
     "test:perf:quick": "PERF_BLOCK_COUNT=50 mocha --timeout 300000 --slow 10000 --recursive 'test/perf/scenarios/**/*.test.js'",
     "test:chaos": "mocha --timeout 0 --recursive 'test/chaos/**/*.test.js'",
-    "test:mutate": "npx stryker run",
-    "test:mutate:quick": "npx stryker run stryker.quick.config.json",
-    "test:mutate:check": "npx stryker run --incremental"
+    "test:mutate": "npx stryker run test/mutation/stryker.config.json",
+    "test:mutate:quick": "npx stryker run test/mutation/stryker.quick.config.json",
+    "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental"
   }
 }

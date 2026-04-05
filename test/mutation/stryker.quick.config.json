@@ -1,29 +1,29 @@
 {
-  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
   "testRunner": "mocha",
   "plugins": [
     "@stryker-mutator/mocha-runner"
   ],
   "mutate": [
-    "src/ClientApplier.js",
-    "src/HashVerifier.js",
-    "src/validation.js",
-    "src/ServerPoller.js",
-    "src/ClientRollback.js",
-    "src/TransparencyLog.js"
+    "../../src/ClientApplier.js",
+    "../../src/HashVerifier.js",
+    "../../src/validation.js",
+    "../../src/ServerPoller.js",
+    "../../src/ClientRollback.js",
+    "../../src/TransparencyLog.js"
   ],
   "coverageAnalysis": "perTest",
   "mochaOptions": {
     "spec": [
-      "test/unit/**/*.test.js"
+      "../../test/unit/**/*.test.js"
     ]
   },
   "reporters": ["html", "clear-text", "json", "progress"],
   "htmlReporter": {
-    "fileName": "reports/mutation/mutation-report.html"
+    "fileName": "../../reports/mutation/mutation-report.html"
   },
   "jsonReporter": {
-    "fileName": "reports/mutation/mutation-report.json"
+    "fileName": "../../reports/mutation/mutation-report.json"
   },
   "thresholds": {
     "high": 90,
@@ -31,7 +31,7 @@
     "break": 75
   },
   "incremental": true,
-  "incrementalFile": "reports/mutation/.stryker-incremental.json",
+  "incrementalFile": "../../reports/mutation/.stryker-incremental.json",
   "concurrency": 4,
   "timeoutMS": 10000,
   "timeoutFactor": 1.5,
