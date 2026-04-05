@@ -1,7 +1,7 @@
 {
   "name": "xchain-indexer-sync",
   "description": "Database replication service for the XChain Platform — syncs indexer databases to validators and consumers via REST snapshots and WebSocket streaming",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",

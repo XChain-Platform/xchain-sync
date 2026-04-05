@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-04-05
+
+### Changed
+- `README.md` — updated to match platform README structure: version badge to 1.5.0, added tests (725 passing) and coverage badges, added Test Suite breakdown table, expanded Scripts from 3 to 18 entries, added Input validation and test count to Features, updated Development dependencies with all current packages (chai, fast-check, proxyquire, Stryker)
+
 ## [1.5.0] - 2026-04-05
 
 ### Added
