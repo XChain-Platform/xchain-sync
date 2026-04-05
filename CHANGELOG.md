@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-04
+
+### Added
+- Comprehensive unit test suite: 203 tests across 12 test files covering all modules
+- Test files: utility, config, HashVerifier, HubClient, TransparencyLog, BlockBroadcaster, ClientApplier, ClientRollback, ServerPoller, SnapshotBuilder, ClientSync, SyncService
+- `proxyquire` dev dependency for mocking ESM-only mariadb module in SyncService tests
+
 ### Changed
 - Replaced 77 copied SQL files with dynamic schema replication from the live indexer database via `SHOW CREATE TABLE` — eliminates drift risk when indexer tables are added or modified
 - `db.js`: added `replicateSchema(sourceDb)` method; renamed `verifyTables()` to `verifySyncTables()` (only handles sync-service-owned tables like `sync_meta`)
