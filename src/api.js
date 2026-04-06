@@ -71,6 +71,14 @@ async function startApi(){
         message: { error: 'Incremental snapshot rate limit exceeded. Try again later.' }
     });
 
+    const transparencyLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: cfg['TRANSPARENCY_RATE_LIMIT'] || 10,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: 'Transparency endpoint rate limit exceeded. Try again later.' }
+    });
+
     // Initialize the SyncService
     const syncService = new SyncService(cfg);
 
@@ -201,7 +209,7 @@ async function startApi(){
     });
 
     // GET /transparency/:chain/:network/roots — transparency log
-    app.get('/transparency/:chain/:network/roots', async (req, res) => {
+    app.get('/transparency/:chain/:network/roots', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
 
@@ -217,6 +225,43 @@ async function startApi(){
             res.json(result);
         } catch(e){
             console.error('[API error] /transparency/:chain/:network/roots:', e.message);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    // GET /transparency/:chain/:network/proof/:block_index — Merkle inclusion proof
+    app.get('/transparency/:chain/:network/proof/:block_index', transparencyLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Transparency log only available in server mode' });
+
+        let { chain, network, block_index } = req.params;
+        let log = syncService.getTransparencyLog(chain, network);
+        if(!log) return res.status(404).json({ error: 'Chain/network not found' });
+
+        try {
+            let result = await log.getProof(block_index);
+            if(!result) return res.status(404).json({ error: 'Block not found' });
+            res.json(result);
+        } catch(e){
+            console.error('[API error] /transparency/.../proof/' + block_index + ':', e.message);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    // GET /transparency/:chain/:network/root/latest — latest committed Merkle root
+    app.get('/transparency/:chain/:network/root/latest', transparencyLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Transparency log only available in server mode' });
+
+        let { chain, network } = req.params;
+        let log = syncService.getTransparencyLog(chain, network);
+        if(!log) return res.status(404).json({ error: 'Chain/network not found' });
+
+        try {
+            let result = await log.getLatestRoot();
+            res.json(result || { epoch: null, merkle_root: null });
+        } catch(e){
+            console.error('[API error] /transparency/.../root/latest:', e.message);
             res.status(500).json({ error: 'Internal server error' });
         }
     });

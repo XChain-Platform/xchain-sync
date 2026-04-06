@@ -177,7 +177,7 @@ class SyncService {
     _startPollerForChain(key, db, cfg){
         if(this.pollers.has(key)) return;
 
-        let log    = new TransparencyLog(db);
+        let log    = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE']);
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
@@ -258,7 +258,7 @@ class SyncService {
         let poller = this.pollers.get(key);
         if(poller) return poller.transparencyLog;
         // If no poller, create a temporary log reader
-        return new TransparencyLog(entry.db);
+        return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE']);
     }
 }
 

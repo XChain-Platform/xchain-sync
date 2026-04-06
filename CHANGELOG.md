@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-04-06
+
+### Added
+- Merkle tree utility (`MerkleTree.js`) — binary SHA-256 tree with proof generation and verification
+- Merkle epoch system — automatic Merkle root commitment over configurable epoch windows (default 100 blocks)
+- `merkle_epochs` table for storing committed epoch roots
+- `GET /transparency/:chain/:network/proof/:block_index` — Merkle inclusion proof endpoint
+- `GET /transparency/:chain/:network/root/latest` — latest committed Merkle root endpoint
+- Rate limiting on all transparency endpoints (configurable, default 10 req/min per IP)
+- `MERKLE_EPOCH_SIZE` and `TRANSPARENCY_RATE_LIMIT` config options
+
 ## [1.5.2] - 2026-04-05
 
 ### Changed

@@ -74,6 +74,12 @@ module.exports = {
         // Hub re-poll interval (5 minutes)
         config['HUB_REPOLL_INTERVAL'] = 300000;
 
+        // Merkle tree epoch size (blocks per epoch)
+        config['MERKLE_EPOCH_SIZE'] = parseInt(process.env.MERKLE_EPOCH_SIZE) || 100;
+
+        // Transparency endpoint rate limit (requests per minute per IP)
+        config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
+
         // WebSocket backpressure limit
         config['WS_BACKPRESSURE_LIMIT'] = 50;
 
