@@ -39,7 +39,8 @@ class SyncService {
         this.util   = new Utility();
 
         // Hub client for chain discovery
-        this.hubClient = new HubClient(config['HUB_API_HOST'], config['HUB_PORT'], config['HUB_PROTOCOL']);
+        let hubEndpoints = HubClient.parseEndpoints(config);
+        this.hubClient = new HubClient(hubEndpoints);
 
         // Database pools per chain/network: Map<"chain:network", Database>
         this.databases = new Map();

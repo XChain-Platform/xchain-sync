@@ -15,8 +15,9 @@
  *
  * XChain Indexer Sync - Hub Client
  *
- * JSON-RPC client for calling the local xchain-hub to discover
+ * JSON-RPC client for calling xchain-hub instances to discover
  * installed chains and their indexer database connections.
+ * Supports multi-endpoint fallback for high availability.
  *
  ********************************************************************/
 
@@ -24,43 +25,42 @@ const axios = require('axios');
 
 class HubClient {
 
-    constructor(host, port, protocol) {
-        let proto = (protocol === 'https') ? 'https' : 'http';
-        this.url = proto + "://" + host + ":" + port;
+    // Accept an array of endpoint URLs, or legacy (host, port, protocol) for backward compat
+    constructor(endpoints, port, protocol) {
+        if(Array.isArray(endpoints)){
+            this.urls = endpoints;
+        } else {
+            let proto = (port === 'https' || protocol === 'https') ? 'https' : 'http';
+            let host = endpoints;
+            let p = (typeof port === 'number' || /^\d+$/.test(port)) ? port : '10000';
+            this.urls = [proto + "://" + host + ":" + p];
+        }
+    }
+
+    // Internal: call a JSON-RPC method, trying each endpoint in order
+    async _call(data, timeout = 5000){
+        for(let url of this.urls){
+            try {
+                let response = await axios.post(url, data, { timeout });
+                if(response.data && response.data.result !== undefined)
+                    return response.data.result;
+            } catch(err){
+                console.warn('Hub endpoint ' + url + ' failed: ' + (err.message || err));
+            }
+        }
+        return null;
     }
 
     // Ping the hub to check if it's alive
     async ping(){
-        const data = {
-            jsonrpc: '2.0',
-            method: 'ping',
-            id: 1
-        };
-        try {
-            let response = await axios.post(this.url, data, { timeout: 5000 });
-            return (response.data && response.data.result);
-        } catch (err) {
-            return false;
-        }
+        let result = await this._call({ jsonrpc: '2.0', method: 'ping', id: 1 });
+        return result !== null;
     }
 
     // Get all configs from the hub
     // Returns nested object: { coin: { network: { module: { param: value } } } }
     async getallconfigs(){
-        const data = {
-            jsonrpc: '2.0',
-            method: 'getallconfigs',
-            id: 1
-        };
-        try {
-            let response = await axios.post(this.url, data, { timeout: 10000 });
-            if(response.data && response.data.result)
-                return response.data.result;
-            return null;
-        } catch (err) {
-            console.error('Error calling hub getallconfigs:', err.message);
-            return null;
-        }
+        return await this._call({ jsonrpc: '2.0', method: 'getallconfigs', id: 1 }, 10000);
     }
 
     // Extract indexer database configs from the hub response
@@ -103,5 +103,24 @@ class HubClient {
         return isNaN(parsed) || parsed < 0 ? 3306 : parsed;
     }
 }
+
+// Parse hub endpoints from environment/config
+// Returns an array of URL strings
+HubClient.parseEndpoints = function(config){
+    if(config.HUB_VALIDATORS){
+        return config.HUB_VALIDATORS.split(',')
+            .map(e => e.trim())
+            .filter(e => e)
+            .map(e => {
+                if(e.startsWith('http')) return e;
+                let proto = (config.HUB_PROTOCOL === 'https') ? 'https' : 'http';
+                return proto + '://' + e;
+            });
+    }
+    let host = config.HUB_API_HOST || 'localhost';
+    let port = config.HUB_PORT || 10000;
+    let proto = (config.HUB_PROTOCOL === 'https') ? 'https' : 'http';
+    return [proto + '://' + host + ':' + port];
+};
 
 module.exports = HubClient;

@@ -49,9 +49,10 @@ module.exports = {
         // API port
         config['SYNC_API_PORT'] = parseIntMin0(process.env.SYNC_API_PORT, 3006);
 
-        // Hub connection
-        config['HUB_API_HOST']  = process.env.HUB_API_HOST;
-        config['HUB_PORT']      = parseIntMin1(process.env.HUB_PORT, 10000);
+        // Hub connection (HUB_VALIDATORS takes priority over HUB_API_HOST:HUB_PORT)
+        config['HUB_VALIDATORS'] = process.env.HUB_VALIDATORS || '';
+        config['HUB_API_HOST']   = process.env.HUB_API_HOST;
+        config['HUB_PORT']       = parseIntMin1(process.env.HUB_PORT, 10000);
 
         // CORS
         config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || '*';
