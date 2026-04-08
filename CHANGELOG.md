@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-08
+
+### Added
+- Selective sync mode per chain — subscribers can request `full` (default, all tables) or `infra-only` (only cross-chain infrastructure tables) via `?sync_mode=infra-only` query parameter on `/subscribe/:chain/:network`
+- `infraTables` set on `ServerPoller` — `stakes`, `delegations`, `validator_rewards`, `prices`, `reward_claims`, plus relevant index tables
+- `BlockBroadcaster.broadcast()` now accepts `infraTables` and filters payloads — infra-only subscribers receive only infrastructure table changes
+- `ClientSync._connectWebSocket()` reads `SYNC_MODE_<CHAIN>` env vars (e.g. `SYNC_MODE_DOGE=infra-only`) and appends the query parameter when connecting upstream
+- `prices` added to `actionScopedTables` so on-chain PRICE actions are replicated like other actions
+
 ## [1.6.1] - 2026-04-06
 
 ### Changed

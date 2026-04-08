@@ -286,8 +286,8 @@ async function startApi(){
             }
         }
 
-        // Parse the path: /subscribe/:chain/:network
-        let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+        // Parse the path: /subscribe/:chain/:network[?sync_mode=full|infra-only]
+        let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)(?:\?(.*))?/);
         if(!match){
             socket.destroy();
             return;
@@ -295,6 +295,16 @@ async function startApi(){
 
         let chain   = match[1];
         let network = match[2];
+
+        // Parse query string for sync_mode preference
+        // Subscribers can request 'full' (default — all tables) or 'infra-only' (only cross-chain
+        // infrastructure tables: stakes, delegations, validator_rewards, prices, etc.)
+        let syncMode = 'full';
+        if(match[3]){
+            let qs = new URLSearchParams(match[3]);
+            let mode = qs.get('sync_mode');
+            if(mode === 'infra-only') syncMode = 'infra-only';
+        }
 
         // Verify this chain/network is supported
         let db = syncService.getDatabase(chain, network);
@@ -311,7 +321,7 @@ async function startApi(){
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
-            broadcaster.addSubscription(ws, request, chain, network);
+            broadcaster.addSubscription(ws, request, chain, network, syncMode);
         });
     });
 

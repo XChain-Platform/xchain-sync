@@ -259,8 +259,13 @@ class ClientSync {
 
     // Connect a single WebSocket
     _connectWebSocket(source, sourceIndex){
-        let wsUrl = source.replace(/^http/, 'ws') + '/subscribe/' + this.chain + '/' + this.network;
-        console.log('Connecting WebSocket to ' + wsUrl);
+        // Per-chain sync mode preference: 'full' (default) or 'infra-only'
+        // Set via env: SYNC_MODE_BTC, SYNC_MODE_LTC, SYNC_MODE_DOGE (e.g., SYNC_MODE_DOGE=infra-only)
+        let envKey   = 'SYNC_MODE_' + String(this.chain).toUpperCase();
+        let syncMode = process.env[envKey] || this.config[envKey] || 'full';
+        let modeQs   = (syncMode === 'infra-only') ? '?sync_mode=infra-only' : '';
+        let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.chain + '/' + this.network + modeQs;
+        console.log('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
 
         let ws;
         try {

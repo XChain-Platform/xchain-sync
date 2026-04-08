@@ -56,7 +56,8 @@ class BlockBroadcaster {
     }
 
     // Add a subscriber for a chain/network
-    addSubscription(ws, req, chain, network){
+    // syncMode: 'full' (default) or 'infra-only' — controls which tables are forwarded
+    addSubscription(ws, req, chain, network, syncMode){
         let ip = this._getIp(req);
         let key = this._key(chain, network);
 
@@ -80,6 +81,7 @@ class BlockBroadcaster {
         ws._syncNetwork = network;
         ws._syncIp      = ip;
         ws._syncBuffered = 0;
+        ws._syncMode    = (syncMode === 'infra-only') ? 'infra-only' : 'full';
 
         // Setup cleanup on close
         ws.on('close', () => this.removeSubscription(ws));
@@ -128,14 +130,38 @@ class BlockBroadcaster {
     }
 
     // Broadcast an event to all subscribers for a chain/network
-    broadcast(chain, network, event){
+    // For block events with a `tables` payload, infra-only subscribers receive a filtered
+    // version containing only infrastructure tables (passed in as `infraTables`).
+    broadcast(chain, network, event, infraTables){
         let key  = this._key(chain, network);
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
-        let message = JSON.stringify(event, bigIntReplacer);
+        let fullMessage = JSON.stringify(event, bigIntReplacer);
+        let infraMessage = null;
+
+        // Pre-build the infra-only filtered message if any subscriber needs it
+        let hasInfraOnly = false;
         for(let ws of subs){
-            this._send(ws, message, true);
+            if(ws._syncMode === 'infra-only'){ hasInfraOnly = true; break; }
+        }
+        if(hasInfraOnly && event && event.tables && infraTables){
+            let filteredTables = {};
+            for(let tbl of Object.keys(event.tables)){
+                if(infraTables.has(tbl)){
+                    filteredTables[tbl] = event.tables[tbl];
+                }
+            }
+            let infraEvent = Object.assign({}, event, { tables: filteredTables, sync_mode: 'infra-only' });
+            infraMessage = JSON.stringify(infraEvent, bigIntReplacer);
+        }
+
+        for(let ws of subs){
+            if(ws._syncMode === 'infra-only' && infraMessage){
+                this._send(ws, infraMessage, true);
+            } else {
+                this._send(ws, fullMessage, true);
+            }
         }
     }
 

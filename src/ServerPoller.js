@@ -57,6 +57,7 @@ class ServerPoller {
             'mappings_actions', 'mappings_files',
             'markets', 'messages', 'mints',
             'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
+            'prices',
             'reward_claims',
             'sends', 'sleeps',
             'stakes',
@@ -65,6 +66,15 @@ class ServerPoller {
             'withdrawals',
             'balances'
         ];
+
+        // Infrastructure tables — always synced regardless of subscriber sync mode
+        // These tables provide cross-chain state that every node needs (validator set,
+        // rewards) or that participate in cross-chain queries (PRICE actions on any chain).
+        // Subscribers in 'infra-only' mode receive ONLY these tables for this chain.
+        this.infraTables = new Set([
+            'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
+            'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
+        ]);
 
         // Index tables that may have new entries per block
         this.indexTables = [
@@ -136,8 +146,8 @@ class ServerPoller {
                     payload.ledger_hash, payload.actions_hash, payload.contract_hash
                 );
 
-                // Broadcast to subscribers
-                this.broadcaster.broadcast(this.chain, this.network, payload);
+                // Broadcast to subscribers (infraTables enables filtering for infra-only subscribers)
+                this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
 
                 console.log('Synced block ' + nextBlock + ' for ' + this.chain + '/' + this.network);
             }
