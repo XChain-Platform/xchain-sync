@@ -13,10 +13,10 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - Hub Client
+ * XChain Sync - Hub Client
  *
  * JSON-RPC client for calling xchain-hub instances to discover
- * installed chains and their indexer database connections.
+ * installed chains and their indexer + decoder database connections.
  * Supports multi-endpoint fallback for high availability.
  *
  ********************************************************************/
@@ -63,13 +63,25 @@ class HubClient {
         return await this._call({ jsonrpc: '2.0', method: 'getallconfigs', id: 1 }, 10000);
     }
 
-    // Extract indexer database configs from the hub response
-    // Returns array of: [{ coin, network, db_host, db_port, db_name, db_user, db_pass }]
+    // Extract indexer database configs from the hub response.
+    // Returns array of: [{ coin, network, dbType, db_host, db_port, db_name, db_user, db_pass }]
     async getIndexerConfigs(){
-        let allConfigs = await this.getallconfigs();
+        return this._extractDbConfigs(await this.getallconfigs(), 'xchain-indexer', 'indexer');
+    }
+
+    // Extract decoder database configs from the hub response.
+    // Returns array of: [{ coin, network, dbType, db_host, db_port, db_name, db_user, db_pass }]
+    async getDecoderConfigs(){
+        return this._extractDbConfigs(await this.getallconfigs(), 'xchain-decoder', 'decoder');
+    }
+
+    // Walk the hub config tree and extract DB connection info for a specific
+    // module type. Used by both getIndexerConfigs and getDecoderConfigs to
+    // avoid duplicating the traversal logic.
+    _extractDbConfigs(allConfigs, moduleName, dbType){
         if(!allConfigs) return [];
 
-        let indexerConfigs = [];
+        let configs = [];
         for(let coin in allConfigs){
             if(coin === '') continue;
             let coinObj = allConfigs[coin];
@@ -77,21 +89,22 @@ class HubClient {
             for(let network in coinObj){
                 let modules = coinObj[network];
                 if(!modules || typeof modules !== 'object') continue;
-                if(modules['xchain-indexer']){
-                    let idx = modules['xchain-indexer'];
-                    indexerConfigs.push({
+                if(modules[moduleName]){
+                    let mod = modules[moduleName];
+                    configs.push({
                         coin:    coin,
                         network: network,
-                        db_host: idx.db_host || idx.host || 'localhost',
-                        db_port: HubClient._parsePort(idx.db_port, idx.port),
-                        db_name: idx.name,
-                        db_user: idx.user,
-                        db_pass: idx.pass
+                        dbType:  dbType,
+                        db_host: mod.db_host || mod.host || 'localhost',
+                        db_port: HubClient._parsePort(mod.db_port, mod.port),
+                        db_name: mod.name,
+                        db_user: mod.user,
+                        db_pass: mod.pass
                     });
                 }
             }
         }
-        return indexerConfigs;
+        return configs;
     }
 
     // Parse a port value safely — returns defaultPort when the value is

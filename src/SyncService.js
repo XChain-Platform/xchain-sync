@@ -13,10 +13,11 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - Sync Service
+ * XChain Sync - Sync Service
  *
  * Top-level orchestrator. Discovers chains via the hub, creates
- * database pools, and branches into server or client mode.
+ * database pools for both indexer and decoder DBs, and branches
+ * into server or client mode.
  *
  ********************************************************************/
 
@@ -42,10 +43,12 @@ class SyncService {
         let hubEndpoints = HubClient.parseEndpoints(config);
         this.hubClient = new HubClient(hubEndpoints);
 
-        // Database pools per chain/network: Map<"chain:network", Database>
+        // Database pools per chain/network/dbType:
+        //   Map<"chain:network:dbType", { db, config, dbType }>
+        // dbType is one of: 'indexer', 'decoder'
         this.databases = new Map();
 
-        // Active pollers/syncs per chain/network
+        // Active pollers/syncs per chain/network/dbType
         this.pollers = new Map();
         this.clientSyncs = new Map();
 
@@ -66,7 +69,7 @@ class SyncService {
         await this._discoverChains();
 
         if(this.databases.size === 0){
-            console.log('No indexer databases found. Waiting for hub config...');
+            console.log('No indexer/decoder databases found. Waiting for hub config...');
         }
 
         // Start mode-specific components
@@ -96,16 +99,22 @@ class SyncService {
         }
     }
 
-    // Discover chains from the hub and create DB pools
+    // Discover chains from the hub and create DB pools for both indexer
+    // and decoder DBs. Decoder DBs use the same connection/sync machinery
+    // as indexer DBs but skip the transparency log (decoder content is
+    // deterministic from the coin node — no synthetic chain-of-state hash
+    // needed).
     async _discoverChains(){
         let indexerConfigs = await this.hubClient.getIndexerConfigs();
+        let decoderConfigs = await this.hubClient.getDecoderConfigs();
+        let allConfigs = indexerConfigs.concat(decoderConfigs);
         let newChains = [];
 
-        for(let cfg of indexerConfigs){
-            let key = cfg.coin + ':' + cfg.network;
+        for(let cfg of allConfigs){
+            let key = cfg.coin + ':' + cfg.network + ':' + cfg.dbType;
             if(this.databases.has(key)) continue;
 
-            console.log('Discovered indexer: ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
+            console.log('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
@@ -131,29 +140,37 @@ class SyncService {
                     await sourceDb.close();
                 } catch(e){
                     // Source DB not reachable — schema will be fetched from server via /schema endpoint
-                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + ' — schema will be fetched from sync server');
+                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + ' — schema will be fetched from sync server');
                 }
-                // Ensure sync-service-owned tables exist (sync_meta)
-                await db.verifySyncTables();
+                // sync_meta table (for transparency log) is indexer-only — skip for decoder
+                if(cfg.dbType === 'indexer'){
+                    await db.verifySyncTables();
+                }
             } else {
-                // Server mode: connect to the authoritative indexer DB using hub-provided credentials
+                // Server mode: connect to the authoritative DB using hub-provided credentials
                 db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util);
-                // Ensure sync-service-owned tables exist (sync_meta for transparency log)
-                await db.verifySyncTables();
+                // sync_meta table (for transparency log) is indexer-only — skip for decoder
+                if(cfg.dbType === 'indexer'){
+                    await db.verifySyncTables();
+                }
             }
 
-            this.databases.set(key, { db, config: cfg });
+            this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
             newChains.push({ key, db, config: cfg });
         }
 
-        // Start components for newly discovered chains
+        // Start components for newly discovered chains.
+        // NOTE (Phase 1): Decoder DBs are discovered + tracked but not yet polled/synced
+        // because ServerPoller and ClientSync still assume the indexer schema. Phase 2
+        // will dbType-aware those classes and enable decoder polling/syncing.
         if(newChains.length > 0){
-            if(this.config['SYNC_MODE'] === 'server'){
-                for(let { key, db, config: cfg } of newChains)
+            for(let { key, db, config: cfg } of newChains){
+                if(cfg.dbType !== 'indexer') continue;  // Phase 1: indexer only
+                if(this.config['SYNC_MODE'] === 'server'){
                     this._startPollerForChain(key, db, cfg);
-            } else {
-                for(let { key, db, config: cfg } of newChains)
+                } else {
                     this._startClientSyncForChain(key, db, cfg);
+                }
             }
         }
 
@@ -165,12 +182,16 @@ class SyncService {
         this.broadcaster     = new BlockBroadcaster(this.config);
         this.snapshotBuilder = new SnapshotBuilder(this.util);
 
-        // Start a poller for each discovered chain
+        // Start a poller for each discovered indexer DB.
+        // Phase 1: decoder DBs are tracked but not yet polled (Phase 2 enables this).
+        let started = 0;
         for(let [key, { db, config: cfg }] of this.databases){
+            if(cfg.dbType !== 'indexer') continue;
             this._startPollerForChain(key, db, cfg);
+            started++;
         }
 
-        console.log('Server mode started with ' + this.databases.size + ' chain(s)');
+        console.log('Server mode started with ' + started + ' indexer poller(s); ' + this.databases.size + ' total DB(s) discovered');
     }
 
     // Start a poller for a single chain/network
@@ -189,10 +210,15 @@ class SyncService {
 
     // Start client mode components
     async _startClientMode(){
+        // Phase 1: only indexer DBs are actively synced; decoder DBs are
+        // discovered + tracked but ClientSync is not yet dbType-aware.
+        let started = 0;
         for(let [key, { db, config: cfg }] of this.databases){
+            if(cfg.dbType !== 'indexer') continue;
             this._startClientSyncForChain(key, db, cfg);
+            started++;
         }
-        console.log('Client mode started with ' + this.databases.size + ' chain(s)');
+        console.log('Client mode started with ' + started + ' indexer sync(s); ' + this.databases.size + ' total DB(s) discovered');
     }
 
     // Start client sync for a single chain/network
@@ -233,25 +259,29 @@ class SyncService {
         return this.snapshotBuilder;
     }
 
-    // Get the database for a chain/network (used by api.js for status/snapshot endpoints)
-    getDatabase(chain, network){
-        let key = chain + ':' + network;
+    // Get the database for a chain/network/dbType (used by api.js for status/snapshot endpoints).
+    // dbType defaults to 'indexer' for callers that haven't been updated to be dbType-aware yet.
+    getDatabase(chain, network, dbType){
+        let type = dbType || 'indexer';
+        let key = chain + ':' + network + ':' + type;
         let entry = this.databases.get(key);
         return entry ? entry.db : null;
     }
 
-    // Get all discovered chain/network pairs
+    // Get all discovered chain/network/dbType triples
     getChains(){
         let chains = [];
         for(let [key, { config: cfg }] of this.databases){
-            chains.push({ coin: cfg.coin, network: cfg.network });
+            chains.push({ coin: cfg.coin, network: cfg.network, dbType: cfg.dbType });
         }
         return chains;
     }
 
-    // Get the transparency log for a chain/network
+    // Get the transparency log for a chain/network. Always indexer-only —
+    // the decoder DB does not maintain a transparency log (see decoder-DB
+    // architecture decisions: skip TransparencyLog for decoder).
     getTransparencyLog(chain, network){
-        let key = chain + ':' + network;
+        let key = chain + ':' + network + ':indexer';
         let entry = this.databases.get(key);
         if(!entry) return null;
         // Find the poller's transparency log
