@@ -73,10 +73,19 @@ describe('SyncService', function(){
             assert.strictEqual(service.getDatabase('bitcoin', 'mainnet'), null);
         });
 
-        it('returns db for known chain/network', function(){
+        it('returns db for known chain/network (indexer default)', function(){
             let mockDb = { doQuery: sinon.stub() };
-            service.databases.set('bitcoin:mainnet', { db: mockDb, config: {} });
+            service.databases.set('bitcoin:mainnet:indexer', { db: mockDb, config: {}, dbType: 'indexer' });
             assert.strictEqual(service.getDatabase('bitcoin', 'mainnet'), mockDb);
+        });
+
+        it('returns decoder db when dbType=decoder is requested', function(){
+            let indexerDb = { name: 'indexer' };
+            let decoderDb = { name: 'decoder' };
+            service.databases.set('bitcoin:mainnet:indexer', { db: indexerDb, config: {}, dbType: 'indexer' });
+            service.databases.set('bitcoin:mainnet:decoder', { db: decoderDb, config: {}, dbType: 'decoder' });
+            assert.strictEqual(service.getDatabase('bitcoin', 'mainnet', 'decoder'), decoderDb);
+            assert.strictEqual(service.getDatabase('bitcoin', 'mainnet', 'indexer'), indexerDb);
         });
     });
 
@@ -85,12 +94,12 @@ describe('SyncService', function(){
             assert.deepStrictEqual(service.getChains(), []);
         });
 
-        it('returns array of chain/network pairs', function(){
-            service.databases.set('bitcoin:mainnet', { db: {}, config: { coin: 'bitcoin', network: 'mainnet' } });
-            service.databases.set('litecoin:testnet', { db: {}, config: { coin: 'litecoin', network: 'testnet' } });
+        it('returns array of chain/network/dbType triples', function(){
+            service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: { coin: 'bitcoin', network: 'mainnet', dbType: 'indexer' } });
+            service.databases.set('litecoin:testnet:indexer', { db: {}, config: { coin: 'litecoin', network: 'testnet', dbType: 'indexer' } });
             let chains = service.getChains();
             assert.strictEqual(chains.length, 2);
-            assert.deepStrictEqual(chains[0], { coin: 'bitcoin', network: 'mainnet' });
+            assert.deepStrictEqual(chains[0], { coin: 'bitcoin', network: 'mainnet', dbType: 'indexer' });
         });
     });
 
@@ -101,14 +110,14 @@ describe('SyncService', function(){
 
         it('returns poller transparency log when poller exists', function(){
             let mockLog = { recordBlock: sinon.stub() };
-            service.databases.set('bitcoin:mainnet', { db: {}, config: {} });
-            service.pollers.set('bitcoin:mainnet', { transparencyLog: mockLog });
+            service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
+            service.pollers.set('bitcoin:mainnet:indexer', { transparencyLog: mockLog });
             assert.strictEqual(service.getTransparencyLog('bitcoin', 'mainnet'), mockLog);
         });
 
         it('creates a temporary TransparencyLog when no poller', function(){
             let mockDb = {};
-            service.databases.set('bitcoin:mainnet', { db: mockDb, config: {} });
+            service.databases.set('bitcoin:mainnet:indexer', { db: mockDb, config: {}, dbType: 'indexer' });
             let log = service.getTransparencyLog('bitcoin', 'mainnet');
             assert.ok(log instanceof TransparencyLog);
         });
@@ -148,11 +157,12 @@ describe('SyncService', function(){
 
     describe('_discoverChains', function(){
         it('skips already-known chains', async function(){
-            service.databases.set('bitcoin:mainnet', { db: {}, config: {} });
+            service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([{
-                coin: 'bitcoin', network: 'mainnet',
+                coin: 'bitcoin', network: 'mainnet', dbType: 'indexer',
                 db_host: 'db', db_port: 3306, db_name: 'btc', db_user: 'u', db_pass: 'p'
             }]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
 
             let newChains = await service._discoverChains();
             assert.strictEqual(newChains.length, 0);

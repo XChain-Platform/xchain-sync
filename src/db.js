@@ -13,11 +13,15 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - Database Class
+ * XChain Sync - Database Class
  *
  * This file handles connecting to MariaDB and running SQL queries.
  * Simplified from xchain-indexer/src/db.js — no action processing,
  * just connection pool, circuit breaker, and query execution.
+ *
+ * Supports both 'indexer' and 'decoder' DBs via the dbType parameter.
+ * Most queries are schema-agnostic; the indexer-specific block-hash join
+ * (ledger_hash/actions_hash/contract_hash) only runs for dbType='indexer'.
  *
  ********************************************************************/
 
@@ -28,13 +32,14 @@ const validation = require('./validation');
 
 class Database {
 
-    constructor(host, port, dbName, user, pass, util) {
+    constructor(host, port, dbName, user, pass, util, dbType) {
         this.host   = host;
         this.port   = port;
         this.dbName = dbName;
         this.user   = user;
         this.pass   = pass;
         this.util   = util;
+        this.dbType = dbType || 'indexer';  // 'indexer' (default) or 'decoder'
 
         // Connection pool parameters
         this.connectionPoolParams = {
@@ -378,43 +383,74 @@ class Database {
         return null;
     }
 
-    // Get block hash data for a given block_index
+    // Get block hash data for a given block_index.
+    // Indexer: joins to index_transactions for the synthetic ledger/actions/contract hashes.
+    // Decoder: simpler — decoder DB has no synthetic chain-of-state hashes; only the
+    // blockchain block hash itself (via block_hash_id → index_transactions).
     async getBlockHashRow(block_index){
-        let query = `SELECT
-                b.block_index,
-                b.block_time,
-                t1.hash as ledger_hash,
-                t2.hash as actions_hash,
-                t3.hash as contract_hash
-            FROM
-                blocks b
-                LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
-                LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
-                LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
-            WHERE
-                b.block_index=?`;
+        let query;
+        if(this.dbType === 'decoder'){
+            query = `SELECT
+                    b.block_index,
+                    b.block_time,
+                    t1.hash as block_hash
+                FROM
+                    blocks b
+                    LEFT JOIN index_transactions t1 ON (t1.id=b.block_hash_id)
+                WHERE
+                    b.block_index=?`;
+        } else {
+            query = `SELECT
+                    b.block_index,
+                    b.block_time,
+                    t1.hash as ledger_hash,
+                    t2.hash as actions_hash,
+                    t3.hash as contract_hash
+                FROM
+                    blocks b
+                    LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
+                    LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
+                    LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
+                WHERE
+                    b.block_index=?`;
+        }
         let rows = await this.doQuery(query, [block_index]);
         if(rows.length > 0)
             return rows[0];
         return null;
     }
 
-    // Get block data for a range of blocks (for building payloads)
+    // Get block data for a range of blocks (for building payloads).
+    // Same indexer-vs-decoder branching as getBlockHashRow.
     async getBlockRows(startBlock, endBlock){
-        let query = `SELECT
-                b.block_index,
-                b.block_time,
-                t1.hash as ledger_hash,
-                t2.hash as actions_hash,
-                t3.hash as contract_hash
-            FROM
-                blocks b
-                LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
-                LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
-                LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
-            WHERE
-                b.block_index >= ? AND b.block_index <= ?
-            ORDER BY b.block_index ASC`;
+        let query;
+        if(this.dbType === 'decoder'){
+            query = `SELECT
+                    b.block_index,
+                    b.block_time,
+                    t1.hash as block_hash
+                FROM
+                    blocks b
+                    LEFT JOIN index_transactions t1 ON (t1.id=b.block_hash_id)
+                WHERE
+                    b.block_index >= ? AND b.block_index <= ?
+                ORDER BY b.block_index ASC`;
+        } else {
+            query = `SELECT
+                    b.block_index,
+                    b.block_time,
+                    t1.hash as ledger_hash,
+                    t2.hash as actions_hash,
+                    t3.hash as contract_hash
+                FROM
+                    blocks b
+                    LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
+                    LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
+                    LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
+                WHERE
+                    b.block_index >= ? AND b.block_index <= ?
+                ORDER BY b.block_index ASC`;
+        }
         return await this.doQuery(query, [startBlock, endBlock]);
     }
 
@@ -433,11 +469,22 @@ class Database {
         return await this.doQuery(query, [block_index]);
     }
 
-    // Get all rows from a table for actions in a given block (action_index-scoped tables)
+    // Get all rows from a table for actions in a given block (action_index-scoped tables).
+    // Indexer-only: decoder DB has no actions table.
     async getActionScopedRows(table, block_index){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
             INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
+            WHERE tx.block_index = ?`;
+        return await this.doQuery(query, [block_index]);
+    }
+
+    // Get all rows from a table for transactions in a given block (tx_index-scoped tables).
+    // Used for decoder DB tables like transaction_outputs and dispensers, which key off
+    // tx_index and join to the transactions table to recover the block scope.
+    async getTxScopedRows(table, block_index){
+        let query = `SELECT t.* FROM \`${table}\` t
+            INNER JOIN transactions tx ON (tx.tx_index = t.tx_index)
             WHERE tx.block_index = ?`;
         return await this.doQuery(query, [block_index]);
     }

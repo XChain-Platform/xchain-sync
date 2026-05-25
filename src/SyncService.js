@@ -125,14 +125,15 @@ class SyncService {
                     cfg.db_name,
                     this.config['REPLICA_DB_USER'],
                     this.config['REPLICA_DB_PASS'],
-                    this.util
+                    this.util,
+                    cfg.dbType
                 );
                 // Ensure the replica database exists
                 await db.createDatabase();
                 // Schema replication: try direct DB connection first (faster), fall back to
                 // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
                 try {
-                    let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util);
+                    let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                     let sourceExists = await sourceDb.verifyDatabase();
                     if(sourceExists){
                         await db.replicateSchema(sourceDb);
@@ -148,7 +149,7 @@ class SyncService {
                 }
             } else {
                 // Server mode: connect to the authoritative DB using hub-provided credentials
-                db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util);
+                db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                 // sync_meta table (for transparency log) is indexer-only — skip for decoder
                 if(cfg.dbType === 'indexer'){
                     await db.verifySyncTables();
@@ -160,15 +161,15 @@ class SyncService {
         }
 
         // Start components for newly discovered chains.
-        // NOTE (Phase 1): Decoder DBs are discovered + tracked but not yet polled/synced
-        // because ServerPoller and ClientSync still assume the indexer schema. Phase 2
-        // will dbType-aware those classes and enable decoder polling/syncing.
+        // Phase 2: ServerPoller is now dbType-aware — decoder polling enabled here.
+        // ClientSync is still indexer-only (Phase 3 enables decoder client syncing).
         if(newChains.length > 0){
             for(let { key, db, config: cfg } of newChains){
-                if(cfg.dbType !== 'indexer') continue;  // Phase 1: indexer only
                 if(this.config['SYNC_MODE'] === 'server'){
                     this._startPollerForChain(key, db, cfg);
                 } else {
+                    // Phase 2: client mode is still indexer-only — Phase 3 will enable decoder
+                    if(cfg.dbType !== 'indexer') continue;
                     this._startClientSyncForChain(key, db, cfg);
                 }
             }
@@ -182,23 +183,23 @@ class SyncService {
         this.broadcaster     = new BlockBroadcaster(this.config);
         this.snapshotBuilder = new SnapshotBuilder(this.util);
 
-        // Start a poller for each discovered indexer DB.
-        // Phase 1: decoder DBs are tracked but not yet polled (Phase 2 enables this).
-        let started = 0;
+        // Start a poller for each discovered DB (both indexer and decoder).
+        // ServerPoller reads dbType from db.dbType and switches table lists +
+        // payload structure accordingly.
         for(let [key, { db, config: cfg }] of this.databases){
-            if(cfg.dbType !== 'indexer') continue;
             this._startPollerForChain(key, db, cfg);
-            started++;
         }
 
-        console.log('Server mode started with ' + started + ' indexer poller(s); ' + this.databases.size + ' total DB(s) discovered');
+        console.log('Server mode started with ' + this.databases.size + ' poller(s)');
     }
 
-    // Start a poller for a single chain/network
+    // Start a poller for a single chain/network/dbType.
+    // TransparencyLog is created only for indexer DBs — decoder content is
+    // deterministic from the coin node and doesn't need a synthetic hash chain.
     _startPollerForChain(key, db, cfg){
         if(this.pollers.has(key)) return;
 
-        let log    = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE']);
+        let log    = (cfg.dbType === 'indexer') ? new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE']) : null;
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
