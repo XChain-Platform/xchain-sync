@@ -44,11 +44,21 @@ describe('E2E: Transparency Log', function() {
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
+            // The poller's default init skips history (production semantic);
+            // for transparency we need recordBlock to fire for the pre-seeded
+            // blocks, so reset the cursor and force a poll cycle.
+            server.poller.lastPolledBlock = 0;
+            await server.poll();
 
-            // Wait for server to process all blocks
+            // Wait on the transparency endpoint itself — /status reads sourceDb
+            // directly, so it reports block_height=20 the instant the seed is
+            // done, before the poller has had a chance to call recordBlock.
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
-                return res.data.block_height >= 20;
+                let res = await axios.get(
+                    server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
+                    { timeout: 3000 }
+                );
+                return res.data.total >= 20;
             }, 15000);
 
             // Query transparency log
@@ -89,6 +99,11 @@ describe('E2E: Transparency Log', function() {
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
+            // The poller's default init skips history (production semantic);
+            // for transparency we need recordBlock to fire for the pre-seeded
+            // blocks, so reset the cursor and force a poll cycle.
+            server.poller.lastPolledBlock = 0;
+            await server.poll();
 
             // Wait for all blocks to be logged
             await waitFor(async () => {
@@ -142,6 +157,11 @@ describe('E2E: Transparency Log', function() {
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
+            // The poller's default init skips history (production semantic);
+            // for transparency we need recordBlock to fire for the pre-seeded
+            // blocks, so reset the cursor and force a poll cycle.
+            server.poller.lastPolledBlock = 0;
+            await server.poll();
 
             // Wait for all blocks to be logged
             await waitFor(async () => {

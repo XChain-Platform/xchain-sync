@@ -181,7 +181,12 @@ class ServerProcess {
 
         await new Promise(resolve => this.server.listen(this.port, resolve));
 
-        // Initialize poller state
+        // Initialize poller state — match production semantics: lastPolledBlock
+        // starts at the current chain tip, so the poll loop only streams *new*
+        // blocks. Tests that need the poller to also process pre-seeded blocks
+        // (e.g. transparency tests asserting on sync_meta) should set
+        // `server.poller.lastPolledBlock = 0` and then `await server.poll()`
+        // before asserting.
         this.poller.lastPolledBlock = await this.sourceDb.getLastBlock();
         await this.poller._updateStatus();
 
