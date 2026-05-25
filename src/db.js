@@ -54,6 +54,13 @@ class Database {
             idleTimeout:        60000,
             insertIdAsNumber:   true,
             bigIntAsNumber:     true,
+            // Return DATETIME columns as MariaDB-format strings rather than
+            // JS Dates. JSON.stringify would otherwise emit Date as ISO
+            // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
+            // on re-insert. Affects decoder columns events.time and
+            // dispensers.expiration; indexer schemas use INTEGER timestamps,
+            // so this is a no-op there.
+            dateStrings:        true,
             minDelayValidation: 3000
         };
 

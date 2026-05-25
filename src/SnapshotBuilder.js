@@ -133,7 +133,15 @@ class SnapshotBuilder {
         gzip.end();
     }
 
-    // Stream an incremental snapshot to an HTTP response
+    // Stream an incremental snapshot to an HTTP response.
+    // Behaviour branches on db.dbType:
+    //   - indexer: block-scoped tables filtered by block_index, action-scoped
+    //     tables filtered by action_index (the original logic).
+    //   - decoder: block-scoped tables filtered by block_index, tx-scoped tables
+    //     joined through transactions, and the small append-only index_* / pubkeys
+    //     tables included in full (the client uses INSERT IGNORE on those).
+    //     `events` is skipped — it has no block cursor and no monotonic id we
+    //     can scope by (see decoder review Finding D).
     async streamIncrementalSnapshot(db, sinceBlock, res){
         let lastBlock = await db.getLastBlock();
         if(lastBlock === null || sinceBlock > lastBlock){
@@ -141,8 +149,8 @@ class SnapshotBuilder {
             return;
         }
 
+        let dbType  = (db && db.dbType) || 'indexer';
         let hashRow = await db.getBlockHashRow(lastBlock);
-        let firstActionIndex = await db.getFirstActionIndex(sinceBlock);
 
         // Set response headers
         res.setHeader('Content-Type', 'application/json');
@@ -150,9 +158,13 @@ class SnapshotBuilder {
         res.setHeader('X-Block-Height', lastBlock);
         res.setHeader('X-Since-Block', sinceBlock);
         if(hashRow){
-            res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
-            res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
-            res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+            if(dbType === 'decoder'){
+                res.setHeader('X-Block-Hash', hashRow.block_hash || '');
+            } else {
+                res.setHeader('X-Ledger-Hash',   hashRow.ledger_hash   || '');
+                res.setHeader('X-Actions-Hash',  hashRow.actions_hash  || '');
+                res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+            }
         }
 
         let gzip = zlib.createGzip();
@@ -160,26 +172,54 @@ class SnapshotBuilder {
 
         gzip.write('{"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
-        // Tables scoped by block_index (not action_index)
-        let blockScopedSet = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'sync_meta']);
         let tableOrder = await this._getOrderedTables(db);
         let first = true;
+
+        // Scoping rules per dbType.
+        // Decoder full-dump tables: index_* and pubkeys are small + append-only;
+        //   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
+        let decoderBlockScoped = new Set(['blocks', 'transactions']);
+        let decoderTxScoped    = new Set(['transaction_outputs', 'dispensers']);
+        let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys']);
+        let decoderSkip        = new Set(['events', 'mempool_transactions']);
+
+        // Indexer block-scoped set (unchanged)
+        let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'sync_meta']);
+        let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
 
         for(let table of tableOrder){
             try {
                 let rows;
-                if(blockScopedSet.has(table)){
-                    rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
-                } else if(firstActionIndex !== null){
-                    // Try action_index column — not all tables may have it
-                    try {
-                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
-                    } catch(e){
-                        // Table doesn't have action_index — skip it for incremental
+                if(dbType === 'decoder'){
+                    if(decoderSkip.has(table)){
+                        continue;
+                    } else if(decoderBlockScoped.has(table)){
+                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                    } else if(decoderTxScoped.has(table)){
+                        rows = await db.doQuery(
+                            "SELECT t.* FROM `" + table + "` t " +
+                            "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
+                            "WHERE tx.block_index >= ?",
+                            [sinceBlock]
+                        );
+                    } else if(decoderFullDump.has(table)){
+                        rows = await db.doQuery("SELECT * FROM `" + table + "`");
+                    } else {
                         continue;
                     }
                 } else {
-                    continue;
+                    if(indexerBlockScoped.has(table)){
+                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                    } else if(firstActionIndex !== null){
+                        try {
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
+                        } catch(e){
+                            // Table doesn't have action_index — skip it for incremental
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
                 }
 
                 if(!rows || rows.length === 0) continue;

@@ -101,10 +101,22 @@ class ClientRollback {
         ];
     }
 
-    // Roll back all data at or after the given block_index
+    // Roll back all data at or after the given block_index.
+    // Branches on db.dbType — decoder has a different table layout (no actions,
+    // no balances, tx-scoped tables instead of action-scoped) and no
+    // contract_emissions / sync_meta.
     async rollback(block_index){
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        if(dbType === 'decoder'){
+            return this._rollbackDecoder(block_index);
+        }
+        return this._rollbackIndexer(block_index);
+    }
+
+    // Indexer rollback (original behaviour)
+    async _rollbackIndexer(block_index){
         let timer = this.util.startTimer();
-        console.log('Starting rollback to block ' + block_index + '...');
+        console.log('Starting indexer rollback to block ' + block_index + '...');
 
         // Get the first action_index at or after the given block
         let firstActionIndex = await this.db.getFirstActionIndex(block_index);
@@ -167,11 +179,61 @@ class ClientRollback {
             }
 
             await this.db.commitTransaction();
-            console.log('Rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
+            console.log('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Rollback failed:', e.message);
+            console.error('Indexer rollback failed:', e.message);
+            throw e;
+        }
+    }
+
+    // Decoder rollback. Decoder schema has no actions / contract_emissions /
+    // balances / sync_meta. Tx-scoped tables (transaction_outputs, dispensers)
+    // must be deleted BEFORE the parent transactions rows that gave them their
+    // tx_index scope. events is left untouched: it has no block_index and no
+    // monotonic cursor, so per-block rollback isn't possible without a schema
+    // change (decoder review Finding D).
+    async _rollbackDecoder(block_index){
+        let timer = this.util.startTimer();
+        console.log('Starting decoder rollback to block ' + block_index + '...');
+
+        await this.db.beginTransaction();
+        try {
+            // Collect tx_indexes for the blocks being rolled back so we can
+            // clean tx-scoped tables before the transactions row goes away.
+            let txRows = await this.db.doQuery(
+                "SELECT tx_index FROM transactions WHERE block_index >= ?",
+                [block_index]
+            );
+            let txIndexes = txRows.map(r => Number(r.tx_index));
+
+            if(txIndexes.length > 0){
+                let placeholders = txIndexes.map(() => '?').join(',');
+                for(let t of ['transaction_outputs', 'dispensers']){
+                    try {
+                        await this.db.doQuery("DELETE FROM `" + t + "` WHERE tx_index IN (" + placeholders + ")", txIndexes);
+                    } catch(e){
+                        // Table may not exist in the target schema — skip
+                    }
+                }
+            }
+
+            // Block-scoped: transactions before blocks (no declared FK in
+            // current schema, but kept in dependency order for clarity).
+            await this.db.doQuery("DELETE FROM transactions WHERE block_index >= ?", [block_index]);
+            await this.db.doQuery("DELETE FROM blocks       WHERE block_index >= ?", [block_index]);
+
+            // index_addresses, index_transactions, pubkeys: append-only;
+            // orphan rows are harmless (the sync stream uses INSERT IGNORE to
+            // re-introduce them when new blocks arrive). Skip.
+
+            await this.db.commitTransaction();
+            console.log('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
+
+        } catch(e){
+            await this.db.rollbackTransaction();
+            console.error('Decoder rollback failed:', e.message);
             throw e;
         }
     }

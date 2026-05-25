@@ -28,11 +28,15 @@ class ClientApplier {
         this.db   = db;
         this.util = util;
 
-        // Index/dedup tables use INSERT IGNORE (rows may already exist)
+        // Index/dedup tables use INSERT IGNORE (rows may already exist).
+        // pubkeys (decoder DB) is included: incremental snapshots and per-block
+        // payloads can re-send the same address's pubkey row across multiple
+        // blocks, and the PK on address_id would otherwise collide.
         this.ignoreTables = new Set([
             'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
             'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
-            'index_tickers', 'index_transactions'
+            'index_tickers', 'index_transactions',
+            'pubkeys'
         ]);
     }
 
@@ -74,15 +78,19 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            // Truncate all tables first (reverse order to handle any logical dependencies)
+            // Clear all snapshot tables first (reverse order: child rows before parents).
+            // DELETE rather than TRUNCATE: MariaDB rejects TRUNCATE on any table referenced
+            // by a foreign key, even when the referencing table is empty. The decoder DB
+            // declares such a FK (pubkeys.address_id → index_addresses.id), so TRUNCATE
+            // would crash the bootstrap; DELETE honours FK constraints row-by-row.
             let tables = Object.keys(snapshotData.tables);
             for(let i = tables.length - 1; i >= 0; i--){
                 let tCheck = validation.validateIdentifier(tables[i]);
                 if(!tCheck.valid){
-                    console.error('Skipping truncate of invalid table: ' + tables[i]);
+                    console.error('Skipping clear of invalid table: ' + tables[i]);
                     continue;
                 }
-                await this.db.truncateTable(tables[i]);
+                await this.db.doQuery('DELETE FROM `' + tables[i] + '`');
             }
 
             // Insert rows in forward order
