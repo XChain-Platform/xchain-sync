@@ -29,7 +29,7 @@ describe('Integration: Client Bootstrap', function() {
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let lastBlock = await sourceDb.getLastBlock();
             let hashRow = lastBlock !== null ? await sourceDb.getBlockHashRow(lastBlock) : null;
             res.json({
@@ -41,7 +41,7 @@ describe('Integration: Client Bootstrap', function() {
             });
         });
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             let tables = await sourceDb.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
                 [sourceDb.dbName]
@@ -55,11 +55,11 @@ describe('Integration: Client Bootstrap', function() {
             res.json({ chain: req.params.chain, network: req.params.network, tables: schema });
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             await snapshotBuilder.streamFullSnapshot(sourceDb, res);
         });
 
-        app.get('/snapshot/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
             let sinceBlock = parseInt(req.params.blockHeight);
             await snapshotBuilder.streamIncrementalSnapshot(sourceDb, sinceBlock, res);
         });
@@ -68,7 +68,7 @@ describe('Integration: Client Bootstrap', function() {
 
         let wss = new WebSocket.Server({ noServer: true });
         server.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             wss.handleUpgrade(request, socket, head, () => {});
         });

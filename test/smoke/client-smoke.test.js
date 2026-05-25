@@ -87,7 +87,7 @@ describe('Smoke: Client Mode', function() {
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             let tables = await sourceDb.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
                 [sourceDb.dbName]
@@ -101,11 +101,11 @@ describe('Smoke: Client Mode', function() {
             res.json({ tables: schema });
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             await snapshotBuilder.streamFullSnapshot(sourceDb, res);
         });
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let lastBlock = await sourceDb.getLastBlock();
             let hashRow = lastBlock !== null ? await sourceDb.getBlockHashRow(lastBlock) : null;
             res.json({
@@ -119,7 +119,7 @@ describe('Smoke: Client Mode', function() {
         server = http.createServer(app);
         let wss = new WebSocket.Server({ noServer: true });
         server.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             wss.handleUpgrade(request, socket, head, () => {});
         });
@@ -170,7 +170,7 @@ describe('Smoke: Client Mode', function() {
     it('snapshot is downloadable and parseable', async function() {
         let axios = require('axios');
         let zlib  = require('zlib');
-        let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/snapshot/bitcoin/mainnet', {
+        let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/snapshot/indexer/bitcoin/mainnet', {
             responseType: 'arraybuffer', decompress: false
         });
         assert.strictEqual(res.status, 200);

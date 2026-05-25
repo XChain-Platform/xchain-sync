@@ -66,21 +66,23 @@ describe('E2E: Multi-Chain Synchronization', function() {
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        // Routes mirror src/api.js — namespaced by :dbType.
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let lastBlock = await sourceDb.getLastBlock();
             let hashRow = lastBlock !== null ? await sourceDb.getBlockHashRow(lastBlock) : null;
             res.json({
-                chain: req.params.chain,
+                chain:   req.params.chain,
                 network: req.params.network,
+                dbType:  req.params.dbType,
                 block_height: hashRow ? Number(hashRow.block_index) : null,
-                block_time: hashRow ? Number(hashRow.block_time) : null,
-                ledger_hash: hashRow ? hashRow.ledger_hash : null,
-                actions_hash: hashRow ? hashRow.actions_hash : null,
-                contract_hash: hashRow ? hashRow.contract_hash : null
+                block_time:   hashRow ? Number(hashRow.block_time)  : null,
+                ledger_hash:  hashRow ? hashRow.ledger_hash         : null,
+                actions_hash: hashRow ? hashRow.actions_hash        : null,
+                contract_hash:hashRow ? hashRow.contract_hash       : null
             });
         });
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             let tables = await sourceDb.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
                 [sourceDb.dbName]
@@ -94,11 +96,11 @@ describe('E2E: Multi-Chain Synchronization', function() {
             res.json({ tables: schema });
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             await snapshotBuilder.streamFullSnapshot(sourceDb, res);
         });
 
-        app.get('/snapshot/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
             let sinceBlock = parseInt(req.params.blockHeight);
             await snapshotBuilder.streamIncrementalSnapshot(sourceDb, sinceBlock, res);
         });
@@ -107,10 +109,11 @@ describe('E2E: Multi-Chain Synchronization', function() {
         wss = new WebSocket.Server({ noServer: true });
 
         httpServer.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
+            let [, dbType, chain, network] = match;
             wss.handleUpgrade(request, socket, head, (ws) => {
-                broadcaster.addSubscription(ws, request, match[1], match[2]);
+                broadcaster.addSubscription(ws, request, chain, network, 'full', dbType);
             });
         });
 
@@ -156,14 +159,14 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             // Subscribe to bitcoin/mainnet
             let btcMessages = [];
-            let btcWs = new WebSocket(wsUrl + '/subscribe/bitcoin/mainnet');
+            let btcWs = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
             btcWs.on('message', (data) => {
                 btcMessages.push(JSON.parse(data.toString()));
             });
 
             // Subscribe to litecoin/mainnet
             let ltcMessages = [];
-            let ltcWs = new WebSocket(wsUrl + '/subscribe/litecoin/mainnet');
+            let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
             ltcWs.on('message', (data) => {
                 ltcMessages.push(JSON.parse(data.toString()));
             });
@@ -200,7 +203,7 @@ describe('E2E: Multi-Chain Synchronization', function() {
             let wsUrl = 'ws://127.0.0.1:' + SERVER_PORT;
 
             let ltcMessages = [];
-            let ltcWs = new WebSocket(wsUrl + '/subscribe/litecoin/mainnet');
+            let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
             ltcWs.on('message', (data) => {
                 ltcMessages.push(JSON.parse(data.toString()));
             });

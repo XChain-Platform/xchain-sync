@@ -116,7 +116,7 @@ describe('E2E: Error Handling & Recovery', function() {
 
             // Server should be operational
             let axios = require('axios');
-            let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 5000 });
+            let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 5000 });
             assert.strictEqual(res.data.block_height, 5);
         });
     });
@@ -169,7 +169,7 @@ describe('E2E: Error Handling & Recovery', function() {
             // Wait for server to pick them up
             let axios = require('axios');
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 3000 });
+                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 10;
             }, 10000);
         });

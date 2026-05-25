@@ -61,7 +61,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let { chain, network } = req.params;
             if (chain !== 'bitcoin' || network !== 'mainnet')
                 return res.status(404).json({ error: 'Chain/network not found' });
@@ -79,7 +79,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             try {
                 let tables = await sourceDb.doQuery(
                     "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -95,7 +95,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             try {
                 await snapshotBuilder.streamFullSnapshot(sourceDb, res);
             } catch (e) {
@@ -103,7 +103,7 @@ describe('Integration: REST API', function() {
             }
         });
 
-        app.get('/snapshot/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
             let sinceBlock = parseInt(req.params.blockHeight);
             if (isNaN(sinceBlock) || sinceBlock < 0)
                 return res.status(400).json({ error: 'Invalid blockHeight' });
@@ -114,7 +114,7 @@ describe('Integration: REST API', function() {
             }
         });
 
-        app.get('/transparency/:chain/:network/roots', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/roots', async (req, res) => {
             try {
                 let page  = parseInt(req.query.page) || 0;
                 let limit = parseInt(req.query.limit) || 100;
@@ -160,10 +160,10 @@ describe('Integration: REST API', function() {
         });
     });
 
-    describe('GET /status/:chain/:network', function() {
+    describe('GET /status/:dbType/:chain/:network', function() {
         it('returns status for specific chain', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
-            let res = await axios.get(baseUrl + '/status/bitcoin/mainnet');
+            let res = await axios.get(baseUrl + '/status/indexer/bitcoin/mainnet');
             assert.strictEqual(res.status, 200);
             assert.strictEqual(res.data.block_height, 5);
             assert.strictEqual(res.data.chain, 'bitcoin');
@@ -172,7 +172,7 @@ describe('Integration: REST API', function() {
 
         it('returns 404 for unknown chain', async function() {
             try {
-                await axios.get(baseUrl + '/status/unknown/chain');
+                await axios.get(baseUrl + '/status/indexer/unknown/chain');
                 assert.fail('Should have thrown');
             } catch (e) {
                 assert.strictEqual(e.response.status, 404);
@@ -180,9 +180,9 @@ describe('Integration: REST API', function() {
         });
     });
 
-    describe('GET /schema/:chain/:network', function() {
+    describe('GET /schema/:dbType/:chain/:network', function() {
         it('returns table DDLs', async function() {
-            let res = await axios.get(baseUrl + '/schema/bitcoin/mainnet');
+            let res = await axios.get(baseUrl + '/schema/indexer/bitcoin/mainnet');
             assert.strictEqual(res.status, 200);
             assert.ok(res.data.tables);
             assert.ok(res.data.tables.blocks);
@@ -192,10 +192,10 @@ describe('Integration: REST API', function() {
         });
     });
 
-    describe('GET /snapshot/:chain/:network', function() {
+    describe('GET /snapshot/:dbType/:chain/:network', function() {
         it('returns gzip-compressed full snapshot', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
-            let res = await axios.get(baseUrl + '/snapshot/bitcoin/mainnet', {
+            let res = await axios.get(baseUrl + '/snapshot/indexer/bitcoin/mainnet', {
                 responseType: 'arraybuffer',
                 decompress: false
             });
@@ -213,17 +213,17 @@ describe('Integration: REST API', function() {
         });
 
         it('returns 404 when no blocks', async function() {
-            let res = await axios.get(baseUrl + '/snapshot/bitcoin/mainnet', {
+            let res = await axios.get(baseUrl + '/snapshot/indexer/bitcoin/mainnet', {
                 validateStatus: () => true
             });
             assert.strictEqual(res.status, 404);
         });
     });
 
-    describe('GET /snapshot/:chain/:network/since/:blockHeight', function() {
+    describe('GET /snapshot/:dbType/:chain/:network/since/:blockHeight', function() {
         it('returns incremental snapshot', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 10);
-            let res = await axios.get(baseUrl + '/snapshot/bitcoin/mainnet/since/6', {
+            let res = await axios.get(baseUrl + '/snapshot/indexer/bitcoin/mainnet/since/6', {
                 responseType: 'arraybuffer',
                 decompress: false
             });
@@ -241,7 +241,7 @@ describe('Integration: REST API', function() {
 
         it('returns 400 for invalid blockHeight', async function() {
             try {
-                await axios.get(baseUrl + '/snapshot/bitcoin/mainnet/since/abc');
+                await axios.get(baseUrl + '/snapshot/indexer/bitcoin/mainnet/since/abc');
                 assert.fail('Should have thrown');
             } catch (e) {
                 assert.strictEqual(e.response.status, 400);
@@ -249,13 +249,13 @@ describe('Integration: REST API', function() {
         });
     });
 
-    describe('GET /transparency/:chain/:network/roots', function() {
+    describe('GET /transparency/:dbType/:chain/:network/roots', function() {
         it('returns paginated transparency log', async function() {
             for (let i = 1; i <= 20; i++) {
                 await log.recordBlock(i, 1700000000 + i, 'lh' + i, 'ah' + i, 'ch' + i);
             }
 
-            let res = await axios.get(baseUrl + '/transparency/bitcoin/mainnet/roots?page=0&limit=10');
+            let res = await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=10');
             assert.strictEqual(res.status, 200);
             assert.strictEqual(res.data.total, 20);
             assert.strictEqual(res.data.results.length, 10);

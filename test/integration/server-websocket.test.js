@@ -36,10 +36,10 @@ describe('Integration: WebSocket Broadcasting', function() {
         wss = new WebSocket.Server({ noServer: true });
 
         server.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             wss.handleUpgrade(request, socket, head, (ws) => {
-                broadcaster.addSubscription(ws, request, match[1], match[2]);
+                broadcaster.addSubscription(ws, request, match[2], match[3], 'full', match[1]);
             });
         });
 
@@ -63,7 +63,7 @@ describe('Integration: WebSocket Broadcasting', function() {
     function connectWs(chain, network) {
         return new Promise((resolve, reject) => {
             let messages = [];
-            let ws = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/' + chain + '/' + network);
+            let ws = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/indexer/' + chain + '/' + network);
             ws.on('open', () => resolve({ ws, messages }));
             ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
             ws.on('error', reject);
@@ -150,7 +150,7 @@ describe('Integration: WebSocket Broadcasting', function() {
                 }
 
                 // 4th connection should be closed
-                let ws4 = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/bitcoin/mainnet');
+                let ws4 = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/indexer/bitcoin/mainnet');
                 let closed = await new Promise((resolve) => {
                     ws4.on('close', (code) => resolve(code));
                     ws4.on('open', () => {
@@ -183,7 +183,7 @@ describe('Integration: WebSocket Broadcasting', function() {
 
             let btcConn = await connectWs('bitcoin', 'mainnet');
             // litecoin subscriber — no status data for it
-            let ltcWs = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/litecoin/mainnet');
+            let ltcWs = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/indexer/litecoin/mainnet');
             await new Promise(resolve => ltcWs.on('open', resolve));
             let ltcMessages = [];
             ltcWs.on('message', (data) => ltcMessages.push(JSON.parse(data.toString())));

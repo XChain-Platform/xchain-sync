@@ -54,7 +54,7 @@ describe('02 Snapshot Performance', function () {
             // Measure snapshot download
             collector.beginOperation('fullSnapshot');
             const res = await axios.get(
-                server.getUrl() + '/snapshot/bitcoin/mainnet',
+                server.getUrl() + '/snapshot/indexer/bitcoin/mainnet',
                 { responseType: 'arraybuffer', timeout: 300000, decompress: false }
             );
             const downloadMs = collector.endOperation('fullSnapshot');
@@ -129,7 +129,7 @@ describe('02 Snapshot Performance', function () {
 
             collector.beginOperation('incrementalSnapshot');
             const res = await axios.get(
-                server.getUrl() + '/snapshot/bitcoin/mainnet/since/' + sinceBlock,
+                server.getUrl() + '/snapshot/indexer/bitcoin/mainnet/since/' + sinceBlock,
                 { responseType: 'arraybuffer', timeout: 300000, decompress: false }
             );
             const downloadMs = collector.endOperation('incrementalSnapshot');

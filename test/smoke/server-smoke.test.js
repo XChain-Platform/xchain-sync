@@ -113,7 +113,7 @@ describe('Smoke: Server Mode', function() {
             });
         });
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let lastBlock = await db.getLastBlock();
             let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
             res.json({
@@ -123,7 +123,7 @@ describe('Smoke: Server Mode', function() {
             });
         });
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             let tables = await db.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
                 [db.dbName]
@@ -137,17 +137,17 @@ describe('Smoke: Server Mode', function() {
             res.json({ tables: schema });
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             await snapshotBuilder.streamFullSnapshot(db, res);
         });
 
         server = http.createServer(app);
         wss = new WebSocket.Server({ noServer: true });
         server.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             wss.handleUpgrade(request, socket, head, (ws) => {
-                broadcaster.addSubscription(ws, request, match[1], match[2]);
+                broadcaster.addSubscription(ws, request, match[2], match[3], 'full', match[1]);
             });
         });
 
@@ -229,14 +229,14 @@ describe('Smoke: Server Mode', function() {
     });
 
     it('GET /schema returns tables', async function() {
-        let res = await axios.get(baseUrl + '/schema/bitcoin/mainnet');
+        let res = await axios.get(baseUrl + '/schema/indexer/bitcoin/mainnet');
         assert.strictEqual(res.status, 200);
         assert.ok(res.data.tables);
         assert.ok(Object.keys(res.data.tables).length >= 10);
     });
 
     it('GET /snapshot returns decompressible data', async function() {
-        let res = await axios.get(baseUrl + '/snapshot/bitcoin/mainnet', {
+        let res = await axios.get(baseUrl + '/snapshot/indexer/bitcoin/mainnet', {
             responseType: 'arraybuffer', decompress: false
         });
         assert.strictEqual(res.status, 200);
@@ -249,7 +249,7 @@ describe('Smoke: Server Mode', function() {
     // Scenario 6: WebSocket
     it('WebSocket connection accepted and receives status', async function() {
         broadcaster.updateStatus('bitcoin', 'mainnet', { block_height: 3 });
-        let ws = new WebSocket('ws://127.0.0.1:' + SERVER_PORT + '/subscribe/bitcoin/mainnet');
+        let ws = new WebSocket('ws://127.0.0.1:' + SERVER_PORT + '/subscribe/indexer/bitcoin/mainnet');
         let msg = await new Promise((resolve, reject) => {
             let timer = setTimeout(() => reject(new Error('WS timeout')), 5000);
             ws.on('message', (data) => { clearTimeout(timer); resolve(JSON.parse(data.toString())); });

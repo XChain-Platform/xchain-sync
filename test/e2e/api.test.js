@@ -46,7 +46,7 @@ describe('E2E: API Correctness', function() {
 
             // Wait for poller to catch up
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 3000 });
+                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 50;
             }, 10000);
 
@@ -54,7 +54,7 @@ describe('E2E: API Correctness', function() {
             await fixtures.seedBlocks(sourceDb, 51, 51);
             await server.poll();
 
-            let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 5000 });
+            let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 5000 });
             assert.strictEqual(res.data.block_height, 51);
             assert.ok(res.data.ledger_hash, 'Should have ledger_hash');
             assert.ok(res.data.actions_hash, 'Should have actions_hash');
@@ -77,7 +77,7 @@ describe('E2E: API Correctness', function() {
             await server.start();
 
             let res = await axios.get(
-                server.getUrl() + '/schema/bitcoin/mainnet',
+                server.getUrl() + '/schema/indexer/bitcoin/mainnet',
                 { timeout: 10000 }
             );
 
@@ -113,13 +113,13 @@ describe('E2E: API Correctness', function() {
 
             // Wait for initial polling
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 3000 });
+                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 5;
             }, 10000);
 
             // Subscribe to WebSocket
             let messages = [];
-            let ws = new WebSocket(server.getWsUrl() + '/subscribe/bitcoin/mainnet');
+            let ws = new WebSocket(server.getWsUrl() + '/subscribe/indexer/bitcoin/mainnet');
             ws.on('message', (data) => {
                 messages.push(JSON.parse(data.toString()));
             });
@@ -173,13 +173,13 @@ describe('E2E: API Correctness', function() {
 
             // Wait for initial polling
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 3000 });
+                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 10;
             }, 10000);
 
             // Subscribe
             let messages = [];
-            let ws = new WebSocket(server.getWsUrl() + '/subscribe/bitcoin/mainnet');
+            let ws = new WebSocket(server.getWsUrl() + '/subscribe/indexer/bitcoin/mainnet');
             ws.on('message', (data) => {
                 messages.push(JSON.parse(data.toString()));
             });
@@ -210,7 +210,7 @@ describe('E2E: API Correctness', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 5000 });
+            let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 5000 });
             assert.strictEqual(res.data.block_height, null);
         });
     });
@@ -225,7 +225,7 @@ describe('E2E: API Correctness', function() {
             await server.start();
 
             let res = await axios.get(
-                server.getUrl() + '/snapshot/bitcoin/mainnet/since/15',
+                server.getUrl() + '/snapshot/indexer/bitcoin/mainnet/since/15',
                 { responseType: 'arraybuffer', timeout: 10000, decompress: false }
             );
 
@@ -251,7 +251,7 @@ describe('E2E: API Correctness', function() {
             await server.start();
 
             try {
-                await axios.get(server.getUrl() + '/status/dogecoin/mainnet', { timeout: 5000 });
+                await axios.get(server.getUrl() + '/status/indexer/dogecoin/mainnet', { timeout: 5000 });
                 assert.fail('Should have returned 404');
             } catch (e) {
                 assert.strictEqual(e.response.status, 404);

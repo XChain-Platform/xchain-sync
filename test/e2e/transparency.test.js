@@ -47,13 +47,13 @@ describe('E2E: Transparency Log', function() {
 
             // Wait for server to process all blocks
             await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/bitcoin/mainnet', { timeout: 3000 });
+                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 20;
             }, 15000);
 
             // Query transparency log
             let res = await axios.get(
-                server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=100',
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=100',
                 { timeout: 5000 }
             );
 
@@ -93,7 +93,7 @@ describe('E2E: Transparency Log', function() {
             // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
-                    server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=1',
+                    server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
                     { timeout: 3000 }
                 );
                 return res.data.total >= 20;
@@ -114,14 +114,14 @@ describe('E2E: Transparency Log', function() {
 
             await waitFor(async () => {
                 let res = await axios.get(
-                    server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=1',
+                    server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
                     { timeout: 3000 }
                 );
                 return res.data.total >= 22;
             }, 10000);
 
             let res = await axios.get(
-                server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=100',
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=100',
                 { timeout: 5000 }
             );
 
@@ -146,7 +146,7 @@ describe('E2E: Transparency Log', function() {
             // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
-                    server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=1',
+                    server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
                     { timeout: 3000 }
                 );
                 return res.data.total >= 50;
@@ -154,7 +154,7 @@ describe('E2E: Transparency Log', function() {
 
             // First page
             let page0 = await axios.get(
-                server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=0&limit=10',
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=10',
                 { timeout: 5000 }
             );
             assert.strictEqual(page0.data.results.length, 10);
@@ -163,7 +163,7 @@ describe('E2E: Transparency Log', function() {
 
             // Last page
             let page4 = await axios.get(
-                server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=4&limit=10',
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=4&limit=10',
                 { timeout: 5000 }
             );
             assert.strictEqual(page4.data.results.length, 10);
@@ -171,7 +171,7 @@ describe('E2E: Transparency Log', function() {
 
             // Middle page
             let page2 = await axios.get(
-                server.getUrl() + '/transparency/bitcoin/mainnet/roots?page=2&limit=10',
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=2&limit=10',
                 { timeout: 5000 }
             );
             assert.strictEqual(page2.data.results.length, 10);

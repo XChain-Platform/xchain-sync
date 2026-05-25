@@ -49,6 +49,15 @@ class ServerProcess {
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
+        // Routes mirror src/api.js (all namespaced by :dbType). This helper
+        // backs the e2e suite, so its surface needs to match the real API
+        // after the Phase 3 path migration — otherwise the suite would
+        // either 404 on status checks or pass-by-accident on snapshots.
+        // :dbType is one of 'indexer' or 'decoder'; this helper only seeds
+        // indexer-shaped data, so 'decoder' requests respond as a stub.
+
+        let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
+
         // Status endpoints
         app.get('/status', async (req, res) => {
             try {
@@ -57,11 +66,13 @@ class ServerProcess {
                 let result = {};
                 result[this.chain] = {};
                 result[this.chain][this.network] = {
-                    block_height: hashRow ? Number(hashRow.block_index) : null,
-                    block_time: hashRow ? Number(hashRow.block_time) : null,
-                    ledger_hash: hashRow ? hashRow.ledger_hash : null,
-                    actions_hash: hashRow ? hashRow.actions_hash : null,
-                    contract_hash: hashRow ? hashRow.contract_hash : null
+                    indexer: {
+                        block_height: hashRow ? Number(hashRow.block_index) : null,
+                        block_time:   hashRow ? Number(hashRow.block_time)  : null,
+                        ledger_hash:  hashRow ? hashRow.ledger_hash         : null,
+                        actions_hash: hashRow ? hashRow.actions_hash        : null,
+                        contract_hash:hashRow ? hashRow.contract_hash       : null
+                    }
                 };
                 result.last_updated = new Date().toISOString();
                 res.json(result);
@@ -70,7 +81,9 @@ class ServerProcess {
             }
         });
 
-        app.get('/status/:chain/:network', async (req, res) => {
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
+            let dbType = validateDbType(req.params.dbType);
+            if (!dbType) return res.status(400).json({ error: 'Invalid dbType' });
             let { chain, network } = req.params;
             if (chain !== this.chain || network !== this.network)
                 return res.status(404).json({ error: 'Chain/network not found' });
@@ -78,21 +91,28 @@ class ServerProcess {
             try {
                 let lastBlock = await this.sourceDb.getLastBlock();
                 let hashRow = lastBlock !== null ? await this.sourceDb.getBlockHashRow(lastBlock) : null;
-                res.json({
-                    chain, network,
+                let body = {
+                    chain, network, dbType,
                     block_height: hashRow ? Number(hashRow.block_index) : null,
-                    block_time: hashRow ? Number(hashRow.block_time) : null,
-                    ledger_hash: hashRow ? hashRow.ledger_hash : null,
-                    actions_hash: hashRow ? hashRow.actions_hash : null,
-                    contract_hash: hashRow ? hashRow.contract_hash : null,
+                    block_time:   hashRow ? Number(hashRow.block_time)  : null,
                     last_updated: new Date().toISOString()
-                });
+                };
+                if (dbType === 'decoder') {
+                    body.block_hash = hashRow ? hashRow.ledger_hash : null;  // stub — helper seeds indexer rows
+                } else {
+                    body.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
+                    body.actions_hash  = hashRow ? hashRow.actions_hash  : null;
+                    body.contract_hash = hashRow ? hashRow.contract_hash : null;
+                }
+                res.json(body);
             } catch (e) {
                 res.status(500).json({ error: e.message });
             }
         });
 
-        app.get('/schema/:chain/:network', async (req, res) => {
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
+            if (!validateDbType(req.params.dbType))
+                return res.status(400).json({ error: 'Invalid dbType' });
             try {
                 let tables = await this.sourceDb.doQuery(
                     "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -104,13 +124,15 @@ class ServerProcess {
                     let ddl = await this.sourceDb.doQuery("SHOW CREATE TABLE `" + tn + "`");
                     if (ddl.length > 0) schema[tn] = ddl[0]['Create Table'];
                 }
-                res.json({ chain: this.chain, network: this.network, tables: schema });
+                res.json({ chain: this.chain, network: this.network, dbType: req.params.dbType, tables: schema });
             } catch (e) {
                 res.status(500).json({ error: e.message });
             }
         });
 
-        app.get('/snapshot/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
+            if (!validateDbType(req.params.dbType))
+                return res.status(400).json({ error: 'Invalid dbType' });
             try {
                 await this.snapshotBuilder.streamFullSnapshot(this.sourceDb, res);
             } catch (e) {
@@ -118,7 +140,9 @@ class ServerProcess {
             }
         });
 
-        app.get('/snapshot/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
+            if (!validateDbType(req.params.dbType))
+                return res.status(400).json({ error: 'Invalid dbType' });
             let sinceBlock = parseInt(req.params.blockHeight);
             if (isNaN(sinceBlock) || sinceBlock < 0)
                 return res.status(400).json({ error: 'Invalid blockHeight' });
@@ -129,7 +153,9 @@ class ServerProcess {
             }
         });
 
-        app.get('/transparency/:chain/:network/roots', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/roots', async (req, res) => {
+            if (req.params.dbType !== 'indexer')
+                return res.status(400).json({ error: 'Transparency log is indexer-only' });
             let page  = parseInt(req.query.page) || 0;
             let limit = parseInt(req.query.limit) || 100;
             try {
@@ -144,10 +170,12 @@ class ServerProcess {
         this.wss = new WebSocket.Server({ noServer: true });
 
         this.server.on('upgrade', (request, socket, head) => {
-            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)/);
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
+            let [, dbType, chain, network] = match;
+            if (!validateDbType(dbType)) { socket.destroy(); return; }
             this.wss.handleUpgrade(request, socket, head, (ws) => {
-                this.broadcaster.addSubscription(ws, request, match[1], match[2]);
+                this.broadcaster.addSubscription(ws, request, chain, network, 'full', dbType);
             });
         });
 

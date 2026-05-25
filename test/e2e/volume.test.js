@@ -159,7 +159,7 @@ describe('E2E: Large Data Volume', function() {
 
             let startTime = Date.now();
             let res = await axios.get(
-                server.getUrl() + '/snapshot/bitcoin/mainnet',
+                server.getUrl() + '/snapshot/indexer/bitcoin/mainnet',
                 { responseType: 'arraybuffer', timeout: 30000, decompress: false }
             );
             let elapsed = Date.now() - startTime;

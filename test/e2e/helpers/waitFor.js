@@ -20,7 +20,7 @@ async function waitForReplicaBlock(replicaDb, expectedBlock, timeout = 15000) {
 async function waitForServerStatus(axios, serverUrl, chain, network, expectedBlock, timeout = 15000) {
     await waitFor(async () => {
         try {
-            let res = await axios.get(serverUrl + '/status/' + chain + '/' + network, { timeout: 3000 });
+            let res = await axios.get(serverUrl + '/status/indexer/' + chain + '/' + network, { timeout: 3000 });
             return res.data && res.data.block_height >= expectedBlock;
         } catch (e) {
             return false;

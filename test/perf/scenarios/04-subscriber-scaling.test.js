@@ -38,7 +38,7 @@ describe('04 Subscriber Scaling', function () {
 
     function connectSubscriber(wsUrl) {
         return new Promise((resolve, reject) => {
-            const ws = new WebSocket(wsUrl + '/subscribe/bitcoin/mainnet');
+            const ws = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
             ws.on('open', () => resolve(ws));
             ws.on('error', reject);
             // Timeout after 5s

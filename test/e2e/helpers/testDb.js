@@ -162,9 +162,15 @@ async function createDatabase(dbName, host, port, user, pass) {
     let p = port || TEST_DB_PORT;
     let u = user || TEST_DB_USER;
     let pw = pass || TEST_DB_PASS;
-    let conn = await mariadb.createConnection({ host: h, port: p, user: u, password: pw });
-    await conn.query("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
-    await conn.end();
+    // CREATE DATABASE needs a privileged user. The MARIADB_USER set up by the
+    // docker-compose only has rights on databases that already exist (no global
+    // CREATE), so use root for the admin step and then GRANT the test user.
+    // Compose declares MARIADB_ROOT_PASSWORD=test for both source-db and replica-db.
+    let admin = await mariadb.createConnection({ host: h, port: p, user: 'root', password: 'test' });
+    await admin.query("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
+    await admin.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + u + "`@'%'");
+    await admin.query("FLUSH PRIVILEGES");
+    await admin.end();
     return await createDb(dbName, h, p, u, pw);
 }
 
