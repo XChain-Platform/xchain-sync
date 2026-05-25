@@ -1,6 +1,6 @@
 version: '3.8'
 
-# E2E test infrastructure for xchain-indexer-sync
+# E2E test infrastructure for xchain-sync
 # Usage: docker compose -f test/e2e/docker-compose.e2e.yml up -d --wait
 
 services:

@@ -360,7 +360,7 @@ async function startApi(){
 
     // Start the HTTP server
     server.listen(cfg['SYNC_API_PORT'], () => {
-        console.log('xchain-indexer-sync API listening on port ' + cfg['SYNC_API_PORT']);
+        console.log('xchain-sync API listening on port ' + cfg['SYNC_API_PORT']);
     });
 
     // Start the SyncService (discovers chains and begins polling/syncing)

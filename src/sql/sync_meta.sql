@@ -1,4 +1,4 @@
--- Table used by xchain-indexer-sync for transparency log and sync metadata
+-- Table used by xchain-sync for transparency log and sync metadata
 
 DROP TABLE IF EXISTS sync_meta;
 CREATE TABLE sync_meta (

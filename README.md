@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: LicenseRef-Dankest-Community -->
 <!-- Copyright © 2025 Dankest, LLC -->
 
-# XChain Platform Indexer Sync
+# XChain Sync
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-1.6.1-blue" alt="Version">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/coverage-unit%20%7C%20integration%20%7C%20e2e%20%7C%20fuzz%20%7C%20chaos%20%7C%20mutation%20%7C%20boundary%20%7C%20smoke-brightgreen" alt="Coverage">
 </p>
 
-Database replication service for the XChain Platform. Syncs indexer databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
+Database replication service for the XChain Platform. Syncs indexer and decoder databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
 
 ## Features
 
@@ -36,20 +36,20 @@ Database replication service for the XChain Platform. Syncs indexer databases to
 
 ## Documentation
 
-Full indexer-sync documentation is available in the [xchain-documentation](https://github.com/XChain-platform/xchain-documentation/tree/master/components/indexer-sync) repository:
+Full xchain-sync documentation is available in the [xchain-documentation](https://github.com/XChain-Platform/xchain-documentation/tree/master/components/sync) repository:
 
 | Document | Description |
 |---|---|
-| [README](https://github.com/XChain-platform/xchain-documentation/blob/master/components/indexer-sync/README.md) | Overview, installation, quick start, scripts, dependencies |
-| [Architecture](https://github.com/XChain-platform/xchain-documentation/blob/master/components/indexer-sync/ARCHITECTURE.md) | Data pipeline position, dual-mode design, internal components, sync algorithms |
-| [Configuration](https://github.com/XChain-platform/xchain-documentation/blob/master/components/indexer-sync/CONFIGURATION.md) | Environment variables, hub discovery, database naming |
-| [Operations](https://github.com/XChain-platform/xchain-documentation/blob/master/components/indexer-sync/OPERATIONS.md) | Running, Docker, REST/WebSocket API reference, resilience, troubleshooting |
+| [README](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/README.md) | Overview, installation, quick start, scripts, dependencies |
+| [Architecture](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/ARCHITECTURE.md) | Data pipeline position, dual-mode design, internal components, sync algorithms |
+| [Configuration](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/CONFIGURATION.md) | Environment variables, hub discovery, database naming |
+| [Operations](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/OPERATIONS.md) | Running, Docker, REST/WebSocket API reference, resilience, troubleshooting |
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/XChain-platform/xchain-indexer-sync.git
-cd xchain-indexer-sync
+git clone https://github.com/XChain-Platform/xchain-sync.git
+cd xchain-sync
 npm install
 ```
 
