@@ -161,15 +161,12 @@ class SyncService {
         }
 
         // Start components for newly discovered chains.
-        // Phase 2: ServerPoller is now dbType-aware — decoder polling enabled here.
-        // ClientSync is still indexer-only (Phase 3 enables decoder client syncing).
+        // Both server and client modes now support indexer + decoder DBs.
         if(newChains.length > 0){
             for(let { key, db, config: cfg } of newChains){
                 if(this.config['SYNC_MODE'] === 'server'){
                     this._startPollerForChain(key, db, cfg);
                 } else {
-                    // Phase 2: client mode is still indexer-only — Phase 3 will enable decoder
-                    if(cfg.dbType !== 'indexer') continue;
                     this._startClientSyncForChain(key, db, cfg);
                 }
             }
@@ -211,15 +208,12 @@ class SyncService {
 
     // Start client mode components
     async _startClientMode(){
-        // Phase 1: only indexer DBs are actively synced; decoder DBs are
-        // discovered + tracked but ClientSync is not yet dbType-aware.
-        let started = 0;
+        // ClientSync reads dbType from db.dbType and threads it through URLs +
+        // skips three-hash verification for decoder DBs.
         for(let [key, { db, config: cfg }] of this.databases){
-            if(cfg.dbType !== 'indexer') continue;
             this._startClientSyncForChain(key, db, cfg);
-            started++;
         }
-        console.log('Client mode started with ' + started + ' indexer sync(s); ' + this.databases.size + ' total DB(s) discovered');
+        console.log('Client mode started with ' + this.databases.size + ' sync(s)');
     }
 
     // Start client sync for a single chain/network

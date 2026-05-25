@@ -13,11 +13,17 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - Client Sync
+ * XChain Sync - Client Sync
  *
- * Client-mode orchestrator for one chain/network. Handles bootstrap
- * (full snapshot), catch-up (incremental snapshot), and live sync
- * (WebSocket subscription). Manages reconnection and gap detection.
+ * Client-mode orchestrator for one chain/network/dbType triple.
+ * Handles bootstrap (full snapshot), catch-up (incremental snapshot),
+ * and live sync (WebSocket subscription). Manages reconnection and
+ * gap detection.
+ *
+ * dbType is read from db.dbType. Decoder DB instances skip the
+ * three-hash cross-source verification (decoder has no synthetic
+ * ledger/actions/contract hashes — content is deterministic from
+ * the coin node).
  *
  ********************************************************************/
 
@@ -32,6 +38,7 @@ class ClientSync {
         this.chain        = chain;
         this.network      = network;
         this.db           = db;
+        this.dbType       = (db && db.dbType) ? db.dbType : 'indexer';
         this.applier      = applier;
         this.rollback     = rollback;
         this.hashVerifier = hashVerifier;
@@ -51,7 +58,7 @@ class ClientSync {
     // Start the client sync loop
     async start(){
         this.running = true;
-        console.log('ClientSync starting for ' + this.chain + '/' + this.network);
+        console.log('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
 
         // Check local replica state
         this.lastAppliedBlock = await this.db.getLastBlock();
@@ -92,7 +99,7 @@ class ClientSync {
     async _fetchAndApplySchema(source){
         console.log('Fetching schema from ' + source + '...');
         try {
-            let url = source + '/schema/' + this.chain + '/' + this.network;
+            let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { timeout: 30000 });
             let schema = response.data;
             if(schema && schema.tables){
@@ -148,7 +155,7 @@ class ClientSync {
 
         console.log('Downloading full snapshot from ' + source + '...');
         try {
-            let url = source + '/snapshot/' + this.chain + '/' + this.network;
+            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, {
                 responseType: 'arraybuffer',
                 timeout: 600000, // 10 minute timeout for large snapshots
@@ -196,7 +203,7 @@ class ClientSync {
 
         console.log('Incremental catch-up from block ' + sinceBlock + '...');
         try {
-            let url = source + '/snapshot/' + this.chain + '/' + this.network + '/since/' + sinceBlock;
+            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock;
             let response = await axios.get(url, {
                 responseType: 'arraybuffer',
                 timeout: 300000,
@@ -219,10 +226,12 @@ class ClientSync {
         }
     }
 
-    // Verify local block hashes against a remote source
+    // Verify local block hashes against a remote source.
+    // Indexer-only — decoder DB has no synthetic chain-of-state hashes to compare.
     async _verifyAgainstSource(source, blockHeight){
+        if(this.dbType !== 'indexer') return;
         try {
-            let url = source + '/status/' + this.chain + '/' + this.network;
+            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { timeout: 10000 });
             let remoteStatus = response.data;
 
@@ -264,7 +273,7 @@ class ClientSync {
         let envKey   = 'SYNC_MODE_' + String(this.chain).toUpperCase();
         let syncMode = process.env[envKey] || this.config[envKey] || 'full';
         let modeQs   = (syncMode === 'infra-only') ? '?sync_mode=infra-only' : '';
-        let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.chain + '/' + this.network + modeQs;
+        let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.dbType + '/' + this.chain + '/' + this.network + modeQs;
         console.log('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
 
         let ws;
@@ -337,8 +346,8 @@ class ClientSync {
         // Skip if we already have this block
         if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock) return;
 
-        // Verify chain continuity
-        if(this.lastAppliedBlock !== null){
+        // Verify chain continuity — indexer only (decoder has no synthetic chain hashes)
+        if(this.dbType === 'indexer' && this.lastAppliedBlock !== null){
             let continuity = this.hashVerifier.verifyChainContinuity(
                 this.lastAppliedBlock, this.lastHashes, event
             );
@@ -349,8 +358,8 @@ class ClientSync {
             }
         }
 
-        // Cross-source verification
-        if(this.config['VERIFY_HASHES'] && this.sources.length > 1){
+        // Cross-source verification — indexer only (decoder has no synthetic chain hashes)
+        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.sources.length > 1){
             // Store hashes from this source
             if(!this.pendingHashes.has(blockIndex))
                 this.pendingHashes.set(blockIndex, {});
@@ -406,11 +415,15 @@ class ClientSync {
         try {
             await this.applier.applyBlock(event);
             this.lastAppliedBlock = event.block_index;
-            this.lastHashes = {
-                ledger_hash: event.ledger_hash,
-                actions_hash: event.actions_hash,
-                contract_hash: event.contract_hash
-            };
+            if(this.dbType === 'decoder'){
+                this.lastHashes = { block_hash: event.block_hash };
+            } else {
+                this.lastHashes = {
+                    ledger_hash: event.ledger_hash,
+                    actions_hash: event.actions_hash,
+                    contract_hash: event.contract_hash
+                };
+            }
 
             // Clean up old pending hashes
             for(let [key] of this.pendingHashes){

@@ -13,10 +13,15 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - API
+ * XChain Sync - API
  *
  * Entry point. Creates Express app with REST routes, attaches WebSocket
  * server for real-time subscriptions, and starts the SyncService.
+ *
+ * All routes are namespaced by :dbType (indexer or decoder), e.g.
+ * /snapshot/indexer/BTC/mainnet, /subscribe/decoder/LTC/testnet.
+ * Transparency endpoints are indexer-only (decoder has no synthetic
+ * chain-of-state hashes — see xchain-sync-decoder-db-decisions).
  *
  ********************************************************************/
 
@@ -83,23 +88,46 @@ async function startApi(){
     const syncService = new SyncService(cfg);
 
     // ── REST Routes (server mode only, but status works in client mode too) ──
+    //
+    // All routes use the /:dbType/:chain/:network namespace.
+    // :dbType is one of 'indexer' or 'decoder'.
 
-    // GET /status — all chains
+    // Validate the :dbType path segment (used by every route).
+    // Returns the canonical type string, or null if invalid.
+    function validateDbType(dbType){
+        if(dbType === 'indexer' || dbType === 'decoder') return dbType;
+        return null;
+    }
+
+    // Build the status row for one (db, dbType) pair.
+    async function buildStatusRow(db, dbType){
+        let lastBlock = await db.getLastBlock();
+        let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
+        let row = {
+            block_height: hashRow ? Number(hashRow.block_index) : null,
+            block_time:   hashRow ? Number(hashRow.block_time) : null
+        };
+        if(dbType === 'decoder'){
+            row.block_hash = hashRow ? hashRow.block_hash : null;
+        } else {
+            row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
+            row.actions_hash  = hashRow ? hashRow.actions_hash : null;
+            row.contract_hash = hashRow ? hashRow.contract_hash : null;
+        }
+        return row;
+    }
+
+    // GET /status — all chains, nested by coin → network → dbType
     app.get('/status', (req, res) => {
         let chains = syncService.getChains();
         let result = {};
-        let promises = chains.map(async ({ coin, network }) => {
-            let db = syncService.getDatabase(coin, network);
+        let promises = chains.map(async ({ coin, network, dbType }) => {
+            let db = syncService.getDatabase(coin, network, dbType);
             if(!db) return;
-            let hashRow = await db.getBlockHashRow(await db.getLastBlock());
+            let row = await buildStatusRow(db, dbType);
             if(!result[coin]) result[coin] = {};
-            result[coin][network] = {
-                block_height: hashRow ? Number(hashRow.block_index) : null,
-                block_time: hashRow ? Number(hashRow.block_time) : null,
-                ledger_hash: hashRow ? hashRow.ledger_hash : null,
-                actions_hash: hashRow ? hashRow.actions_hash : null,
-                contract_hash: hashRow ? hashRow.contract_hash : null
-            };
+            if(!result[coin][network]) result[coin][network] = {};
+            result[coin][network][dbType] = row;
         });
         Promise.all(promises).then(() => {
             result.last_updated = new Date().toISOString();
@@ -110,38 +138,39 @@ async function startApi(){
         });
     });
 
-    // GET /status/:chain/:network
-    app.get('/status/:chain/:network', async (req, res) => {
+    // GET /status/:dbType/:chain/:network
+    app.get('/status/:dbType/:chain/:network', async (req, res) => {
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+
         let { chain, network } = req.params;
-        let db = syncService.getDatabase(chain, network);
-        if(!db) return res.status(404).json({ error: 'Chain/network not found' });
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
 
         try {
-            let lastBlock = await db.getLastBlock();
-            let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
-            res.json({
-                chain, network,
-                block_height: hashRow ? Number(hashRow.block_index) : null,
-                block_time: hashRow ? Number(hashRow.block_time) : null,
-                ledger_hash: hashRow ? hashRow.ledger_hash : null,
-                actions_hash: hashRow ? hashRow.actions_hash : null,
-                contract_hash: hashRow ? hashRow.contract_hash : null,
-                last_updated: new Date().toISOString()
-            });
+            let row = await buildStatusRow(db, dbType);
+            row.chain = chain;
+            row.network = network;
+            row.dbType = dbType;
+            row.last_updated = new Date().toISOString();
+            res.json(row);
         } catch(e){
-            console.error('[API error] /status/:chain/:network:', e.message);
+            console.error('[API error] /status/:dbType/:chain/:network:', e.message);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
 
-    // GET /schema/:chain/:network — table DDLs for schema replication (server mode)
-    app.get('/schema/:chain/:network', async (req, res) => {
+    // GET /schema/:dbType/:chain/:network — table DDLs for schema replication (server mode)
+    app.get('/schema/:dbType/:chain/:network', async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Schema only available in server mode' });
 
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+
         let { chain, network } = req.params;
-        let db = syncService.getDatabase(chain, network);
-        if(!db) return res.status(404).json({ error: 'Chain/network not found' });
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
 
         try {
             let tables = await db.doQuery(
@@ -155,21 +184,24 @@ async function startApi(){
                 if(ddlRows.length > 0)
                     schema[tableName] = ddlRows[0]['Create Table'];
             }
-            res.json({ chain, network, tables: schema });
+            res.json({ chain, network, dbType, tables: schema });
         } catch(e){
-            console.error('[API error] /schema/:chain/:network:', e.message);
+            console.error('[API error] /schema/:dbType/:chain/:network:', e.message);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
 
-    // GET /snapshot/:chain/:network — full snapshot (server mode)
-    app.get('/snapshot/:chain/:network', fullSnapshotLimiter, async (req, res) => {
+    // GET /snapshot/:dbType/:chain/:network — full snapshot (server mode)
+    app.get('/snapshot/:dbType/:chain/:network', fullSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode' });
 
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+
         let { chain, network } = req.params;
-        let db = syncService.getDatabase(chain, network);
-        if(!db) return res.status(404).json({ error: 'Chain/network not found' });
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
 
         let builder = syncService.getSnapshotBuilder();
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
@@ -177,24 +209,27 @@ async function startApi(){
         try {
             await builder.streamFullSnapshot(db, res);
         } catch(e){
-            console.error('[API error] /snapshot/:chain/:network:', e.message);
+            console.error('[API error] /snapshot/:dbType/:chain/:network:', e.message);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
     });
 
-    // GET /snapshot/:chain/:network/since/:blockHeight — incremental snapshot (server mode)
-    app.get('/snapshot/:chain/:network/since/:blockHeight', incrSnapshotLimiter, async (req, res) => {
+    // GET /snapshot/:dbType/:chain/:network/since/:blockHeight — incremental snapshot (server mode)
+    app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
 
         let { chain, network, blockHeight } = req.params;
         let sinceBlock = parseInt(blockHeight);
         if(isNaN(sinceBlock) || sinceBlock < 0)
             return res.status(400).json({ error: 'Invalid blockHeight' });
 
-        let db = syncService.getDatabase(chain, network);
-        if(!db) return res.status(404).json({ error: 'Chain/network not found' });
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
 
         let builder = syncService.getSnapshotBuilder();
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
@@ -202,16 +237,22 @@ async function startApi(){
         try {
             await builder.streamIncrementalSnapshot(db, sinceBlock, res);
         } catch(e){
-            console.error('[API error] /snapshot/:chain/:network/since/:blockHeight:', e.message);
+            console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e.message);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
     });
 
-    // GET /transparency/:chain/:network/roots — transparency log
-    app.get('/transparency/:chain/:network/roots', transparencyLimiter, async (req, res) => {
+    // ── Transparency endpoints (indexer only) ──
+    // Decoder DB doesn't have synthetic chain-of-state hashes, so the
+    // transparency log doesn't apply. Decoder requests return 400.
+
+    // GET /transparency/:dbType/:chain/:network/roots — transparency log
+    app.get('/transparency/:dbType/:chain/:network/roots', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
+        if(req.params.dbType !== 'indexer')
+            return res.status(400).json({ error: 'Transparency log is indexer-only — decoder DB has no synthetic chain-of-state hashes' });
 
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
@@ -224,15 +265,17 @@ async function startApi(){
             let result = await log.getPage(page, limit);
             res.json(result);
         } catch(e){
-            console.error('[API error] /transparency/:chain/:network/roots:', e.message);
+            console.error('[API error] /transparency/:dbType/:chain/:network/roots:', e.message);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
 
-    // GET /transparency/:chain/:network/proof/:block_index — Merkle inclusion proof
-    app.get('/transparency/:chain/:network/proof/:block_index', transparencyLimiter, async (req, res) => {
+    // GET /transparency/:dbType/:chain/:network/proof/:block_index — Merkle inclusion proof
+    app.get('/transparency/:dbType/:chain/:network/proof/:block_index', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
+        if(req.params.dbType !== 'indexer')
+            return res.status(400).json({ error: 'Transparency log is indexer-only' });
 
         let { chain, network, block_index } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
@@ -248,10 +291,12 @@ async function startApi(){
         }
     });
 
-    // GET /transparency/:chain/:network/root/latest — latest committed Merkle root
-    app.get('/transparency/:chain/:network/root/latest', transparencyLimiter, async (req, res) => {
+    // GET /transparency/:dbType/:chain/:network/root/latest — latest committed Merkle root
+    app.get('/transparency/:dbType/:chain/:network/root/latest', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
+        if(req.params.dbType !== 'indexer')
+            return res.status(400).json({ error: 'Transparency log is indexer-only' });
 
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
@@ -286,28 +331,36 @@ async function startApi(){
             }
         }
 
-        // Parse the path: /subscribe/:chain/:network[?sync_mode=full|infra-only]
-        let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/\?]+)(?:\?(.*))?/);
+        // Parse the path: /subscribe/:dbType/:chain/:network[?sync_mode=full|infra-only]
+        let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)(?:\?(.*))?/);
         if(!match){
             socket.destroy();
             return;
         }
 
-        let chain   = match[1];
-        let network = match[2];
+        let dbType  = match[1];
+        let chain   = match[2];
+        let network = match[3];
+
+        // Reject unknown dbTypes
+        if(dbType !== 'indexer' && dbType !== 'decoder'){
+            socket.destroy();
+            return;
+        }
 
         // Parse query string for sync_mode preference
         // Subscribers can request 'full' (default — all tables) or 'infra-only' (only cross-chain
         // infrastructure tables: stakes, delegations, validator_rewards, prices, etc.)
+        // 'infra-only' is indexer-only; decoder always serves the full table set.
         let syncMode = 'full';
-        if(match[3]){
-            let qs = new URLSearchParams(match[3]);
+        if(match[4]){
+            let qs = new URLSearchParams(match[4]);
             let mode = qs.get('sync_mode');
-            if(mode === 'infra-only') syncMode = 'infra-only';
+            if(mode === 'infra-only' && dbType === 'indexer') syncMode = 'infra-only';
         }
 
-        // Verify this chain/network is supported
-        let db = syncService.getDatabase(chain, network);
+        // Verify this chain/network/dbType is supported
+        let db = syncService.getDatabase(chain, network, dbType);
         if(!db){
             socket.destroy();
             return;
@@ -321,7 +374,7 @@ async function startApi(){
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
-            broadcaster.addSubscription(ws, request, chain, network, syncMode);
+            broadcaster.addSubscription(ws, request, chain, network, syncMode, dbType);
         });
     });
 
@@ -346,14 +399,14 @@ async function startApi(){
         clearInterval(pingInterval);
     });
 
-    // Periodic status broadcasts (server mode)
+    // Periodic status broadcasts (server mode) — once per (chain, network, dbType)
     if(cfg['SYNC_MODE'] === 'server'){
         setInterval(() => {
             let broadcaster = syncService.getBroadcaster();
             if(!broadcaster) return;
             let chains = syncService.getChains();
-            for(let { coin, network } of chains){
-                broadcaster.broadcastStatus(coin, network);
+            for(let { coin, network, dbType } of chains){
+                broadcaster.broadcastStatus(coin, network, dbType);
             }
         }, cfg['WS_STATUS_INTERVAL']);
     }

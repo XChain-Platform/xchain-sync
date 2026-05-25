@@ -13,10 +13,12 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync - Block Broadcaster
+ * XChain Sync - Block Broadcaster
  *
- * Manages WebSocket subscriptions per chain/network and broadcasts
- * block, reorg, and status events to all subscribers.
+ * Manages WebSocket subscriptions per chain/network/dbType and broadcasts
+ * block, reorg, and status events to all subscribers. Subscribers
+ * watching indexer DB do not receive decoder DB events and vice versa
+ * — the dbType discriminator is part of the subscription key.
  *
  ********************************************************************/
 
@@ -30,19 +32,19 @@ class BlockBroadcaster {
     constructor(config) {
         this.config = config;
 
-        // Subscribers per chain/network: Map<"chain:network", Set<ws>>
+        // Subscribers per chain/network/dbType: Map<"chain:network:dbType", Set<ws>>
         this.subscribers = new Map();
 
         // Track connections per IP for rate limiting: Map<ip, Set<ws>>
         this.ipConnections = new Map();
 
-        // Status data per chain/network for periodic broadcasts
+        // Status data per chain/network/dbType for periodic broadcasts
         this.statusData = new Map();
     }
 
-    // Get the key for a chain/network pair
-    _key(chain, network){
-        return chain + ':' + network;
+    // Get the key for a chain/network/dbType triple
+    _key(chain, network, dbType){
+        return chain + ':' + network + ':' + (dbType || 'indexer');
     }
 
     // Get client IP from WebSocket request
@@ -55,11 +57,13 @@ class BlockBroadcaster {
         return req.socket.remoteAddress || 'unknown';
     }
 
-    // Add a subscriber for a chain/network
+    // Add a subscriber for a chain/network/dbType
     // syncMode: 'full' (default) or 'infra-only' — controls which tables are forwarded
-    addSubscription(ws, req, chain, network, syncMode){
+    // dbType:   'indexer' (default) or 'decoder' — controls which DB's events are received
+    addSubscription(ws, req, chain, network, syncMode, dbType){
         let ip = this._getIp(req);
-        let key = this._key(chain, network);
+        let type = dbType || 'indexer';
+        let key = this._key(chain, network, type);
 
         // Check per-IP connection limit
         if(!this.ipConnections.has(ip))
@@ -79,9 +83,10 @@ class BlockBroadcaster {
         // Store metadata on the ws object
         ws._syncChain   = chain;
         ws._syncNetwork = network;
+        ws._syncDbType  = type;
         ws._syncIp      = ip;
         ws._syncBuffered = 0;
-        ws._syncMode    = (syncMode === 'infra-only') ? 'infra-only' : 'full';
+        ws._syncMode    = (syncMode === 'infra-only' && type === 'indexer') ? 'infra-only' : 'full';
 
         // Setup cleanup on close
         ws.on('close', () => this.removeSubscription(ws));
@@ -90,7 +95,7 @@ class BlockBroadcaster {
         // Send initial status if available
         let status = this.statusData.get(key);
         if(status){
-            this._send(ws, { type: 'status', chain, network, ...status });
+            this._send(ws, { type: 'status', chain, network, dbType: type, ...status });
         }
 
         console.log('WebSocket subscriber added for ' + key + ' from ' + ip + ' (' + this.subscribers.get(key).size + ' total)');
@@ -101,10 +106,11 @@ class BlockBroadcaster {
     removeSubscription(ws){
         let chain   = ws._syncChain;
         let network = ws._syncNetwork;
+        let dbType  = ws._syncDbType;
         let ip      = ws._syncIp;
         if(!chain || !network) return;
 
-        let key = this._key(chain, network);
+        let key = this._key(chain, network, dbType);
         let subs = this.subscribers.get(key);
         if(subs){
             subs.delete(ws);
@@ -122,25 +128,33 @@ class BlockBroadcaster {
         // Clear metadata
         ws._syncChain   = null;
         ws._syncNetwork = null;
+        ws._syncDbType  = null;
     }
 
-    // Update status data for a chain/network
+    // Update status data for a chain/network/dbType
     updateStatus(chain, network, statusObj){
-        this.statusData.set(this._key(chain, network), statusObj);
+        // dbType is part of the statusObj per ServerPoller._updateStatus.
+        // Fall back to 'indexer' for backward compat with code that doesn't set it.
+        let dbType = (statusObj && statusObj.dbType) || 'indexer';
+        this.statusData.set(this._key(chain, network, dbType), statusObj);
     }
 
-    // Broadcast an event to all subscribers for a chain/network
+    // Broadcast an event to all subscribers for a chain/network/dbType.
+    // dbType is read from event.dbType (set by ServerPoller) — falls back to 'indexer'.
     // For block events with a `tables` payload, infra-only subscribers receive a filtered
     // version containing only infrastructure tables (passed in as `infraTables`).
     broadcast(chain, network, event, infraTables){
-        let key  = this._key(chain, network);
+        let dbType = (event && event.dbType) || 'indexer';
+        let key  = this._key(chain, network, dbType);
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
         let fullMessage = JSON.stringify(event, bigIntReplacer);
         let infraMessage = null;
 
-        // Pre-build the infra-only filtered message if any subscriber needs it
+        // Pre-build the infra-only filtered message if any subscriber needs it.
+        // infra-only is indexer-only (decoder has no infra tables concept), but we
+        // still check the subscriber's mode here for symmetry.
         let hasInfraOnly = false;
         for(let ws of subs){
             if(ws._syncMode === 'infra-only'){ hasInfraOnly = true; break; }
@@ -165,16 +179,17 @@ class BlockBroadcaster {
         }
     }
 
-    // Broadcast status to all subscribers for a chain/network
-    broadcastStatus(chain, network){
-        let key = this._key(chain, network);
+    // Broadcast status to all subscribers for a chain/network/dbType
+    broadcastStatus(chain, network, dbType){
+        let type = dbType || 'indexer';
+        let key = this._key(chain, network, type);
         let status = this.statusData.get(key);
         if(!status) return;
 
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
-        let event = { type: 'status', chain, network, ...status };
+        let event = { type: 'status', chain, network, dbType: type, ...status };
         let message = JSON.stringify(event, bigIntReplacer);
         for(let ws of subs){
             this._send(ws, message, true);
@@ -208,10 +223,10 @@ class BlockBroadcaster {
         }
     }
 
-    // Get subscriber count for a chain/network (or all)
-    getSubscriberCount(chain, network){
+    // Get subscriber count for a chain/network/dbType (or all)
+    getSubscriberCount(chain, network, dbType){
         if(chain && network){
-            let subs = this.subscribers.get(this._key(chain, network));
+            let subs = this.subscribers.get(this._key(chain, network, dbType));
             return subs ? subs.size : 0;
         }
         let total = 0;
