@@ -16,6 +16,8 @@
 
 Database replication service for the XChain Platform. Syncs indexer and decoder databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
 
+> **Breaking API change (2026-05):** REST and WebSocket paths now carry a `/:dbType/` segment (`indexer` or `decoder`) — for example `/status/indexer/BTC/mainnet`, `WS /subscribe/decoder/BTC/mainnet`. The bare `/status` endpoint now returns a nested `{coin: {network: {dbType: {...}}}}` structure. Clients must update their URLs. Transparency endpoints return HTTP 400 for `dbType=decoder` (decoder has no transparency log by design).
+
 ## Features
 
 - **Dual mode** — server mode serves data from authoritative indexer databases; client mode replicates data into local MariaDB instances
