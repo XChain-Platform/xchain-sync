@@ -1,6 +1,6 @@
 {
   "name": "xchain-sync",
-  "description": "Database replication service for the XChain Platform — syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
+  "description": "Database replication service for the XChain Platform \u2014 syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
   "version": "1.7.0",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
@@ -44,5 +44,11 @@
     "test:mutate": "npx stryker run test/mutation/stryker.config.json",
     "test:mutate:quick": "npx stryker run test/mutation/stryker.quick.config.json",
     "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.5",
+    "diff": "^8.0.3",
+    "tmp": "^0.2.7",
+    "fast-uri": "^3.1.2"
   }
 }
