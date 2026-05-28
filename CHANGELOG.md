@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `ClientRollback.js` — added `slash_events` to the `blockTables` rollback list (kept in sync with `xchain-indexer/src/rollback.js`) so a follower replica purges `slash_events` rows from rolled-back blocks during a reorg. Previously stale rows survived on the replica, surfacing phantom slash events through the replica-backed read paths until the chain advanced past the orphaned tip.
+- `ClientRollback.js` — added `gated_files` to the action-scoped `dataTables` rollback list. The table carries an `action_index` column and is already streamed live via `ServerPoller.actionScopedTables`, but it was absent from the rollback list, so a reorg left orphaned gated-file metadata rows on the replica. They survived until the next full/incremental snapshot, diverging the replica from canonical state for token-gated content read paths.
 
 ### Changed
 - Per-chain poller and client-sync background loops now log the full error object (with stack) and call `process.exit(1)` when their `start()` promise rejects, instead of logging only `error.message` and continuing. A crashed worker previously left the process running and the `/status` endpoint returning a stale `block_height` with a live timestamp, making the failure invisible to health checks; exiting lets the container restart policy surface it.
