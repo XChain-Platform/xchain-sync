@@ -30,10 +30,12 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 4 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 4);
+        it('has 6 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 6);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
+            assert.ok(rollback.blockTables.includes('attestation_validator_signatures'));
+            assert.ok(rollback.blockTables.includes('slash_events'));
         });
 
         it('has action-scoped data tables', function(){
@@ -41,6 +43,8 @@ describe('ClientRollback', function(){
             assert.ok(rollback.dataTables.includes('actions'));
             assert.ok(rollback.dataTables.includes('credits'));
             assert.ok(rollback.dataTables.includes('debits'));
+            assert.ok(rollback.dataTables.includes('attestation_requests'));
+            assert.ok(rollback.dataTables.includes('attestation_responses'));
             assert.ok(rollback.dataTables.includes('balances') === false); // balances are recalculated, not in dataTables
         });
     });

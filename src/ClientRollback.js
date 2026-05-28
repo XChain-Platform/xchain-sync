@@ -35,7 +35,9 @@ class ClientRollback {
             'blocks',
             'transactions',
             'validator_rewards',
-            'contract_state'
+            'contract_state',
+            'attestation_validator_signatures',
+            'slash_events'
         ];
 
         // Tables that store data using action_index
@@ -95,9 +97,12 @@ class ClientRollback {
             'delegations',
             'reward_claims',
             'contracts',
+            'contract_stakes',
             'contract_executions',
             'deposits',
-            'withdrawals'
+            'withdrawals',
+            'attestation_requests',
+            'attestation_responses'
         ];
     }
 
