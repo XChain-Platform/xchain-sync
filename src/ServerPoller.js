@@ -70,22 +70,29 @@ class ServerPoller {
             // Indexer schema: full set of 60+ tables
 
             // Tables that are scoped by block_index (not action_index)
-            this.blockScopedTables = ['blocks', 'transactions', 'validator_rewards', 'contract_state'];
+            // attestation_validator_signatures has no action_index column (only id PK +
+            // response_action_index + block_index), so it is block-scoped here.
+            // slash_events likewise keys off block_index (it has execution_index +
+            // block_index but no action_index), so it is block-scoped too.
+            this.blockScopedTables = ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events'];
 
             this.txScopedTables = [];  // indexer joins via actions, not directly via tx_index
 
             // Action-scoped tables to include in block payloads
             this.actionScopedTables = [
-                'actions', 'addresses', 'airdrops', 'batches', 'broadcasts', 'callbacks',
+                'actions', 'addresses', 'airdrops',
+                'attestation_requests', 'attestation_responses',
+                'batches', 'broadcasts', 'callbacks',
                 'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
                 'contracts', 'contract_executions', 'contract_emissions', 'contract_balances',
+                'contract_stakes', 'contract_unstakes', 'contract_delegations',
                 'credits', 'debits', 'escrows',
                 'delegates', 'delegations',
                 'deposits', 'destroys',
                 'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
                 'dispenser_expires', 'dispenser_statuses', 'dispenses',
                 'dividends', 'events',
-                'fees', 'files',
+                'fees', 'files', 'gated_files',
                 'issues',
                 'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
                 'mappings_actions', 'mappings_files',
