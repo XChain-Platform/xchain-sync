@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `CORS_ORIGIN` now defaults to `false` (CORS disabled) instead of `'*'` (any origin) when the env var is unset. The wildcard default served cross-origin requests from any domain in a default deployment, diverging from the other services (hub and encoder default to `false`). Operators who need cross-origin access must now set `CORS_ORIGIN` explicitly; the README `.env` examples document the variable. Breaking for any deployment that relied on the implicit wildcard.
+
 ### Fixed
 - `ClientRollback.js` — added `slash_events` to the `blockTables` rollback list (kept in sync with `xchain-indexer/src/rollback.js`) so a follower replica purges `slash_events` rows from rolled-back blocks during a reorg. Previously stale rows survived on the replica, surfacing phantom slash events through the replica-backed read paths until the chain advanced past the orphaned tip.
 - `ClientRollback.js` — added `gated_files` to the action-scoped `dataTables` rollback list. The table carries an `action_index` column and is already streamed live via `ServerPoller.actionScopedTables`, but it was absent from the rollback list, so a reorg left orphaned gated-file metadata rows on the replica. They survived until the next full/incremental snapshot, diverging the replica from canonical state for token-gated content read paths.

@@ -61,6 +61,9 @@ Create a `.env` file:
 SYNC_MODE=server
 SYNC_API_PORT=3006
 
+# Allowed CORS origin (defaults to disabled when unset)
+# CORS_ORIGIN=https://your-dashboard.example.com
+
 HUB_API_HOST=localhost
 HUB_PORT=10000
 ```
@@ -75,6 +78,9 @@ SYNC_API_PORT=3006
 
 SYNC_SOURCES=http://sync1.example.com:3006,http://sync2.example.com:3006
 VERIFY_HASHES=true
+
+# Allowed CORS origin (defaults to disabled when unset)
+# CORS_ORIGIN=https://your-dashboard.example.com
 
 REPLICA_DB_HOST=localhost
 REPLICA_DB_PORT=3306

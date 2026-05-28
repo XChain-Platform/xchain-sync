@@ -55,7 +55,7 @@ module.exports = {
         config['HUB_PORT']       = parseIntMin1(process.env.HUB_PORT, 10000);
 
         // CORS
-        config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || '*';
+        config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || false;
 
         // Server mode settings
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);

@@ -34,7 +34,7 @@ describe('config', function(){
             assert.strictEqual(cfg.SYNC_MODE, 'server');
             assert.strictEqual(cfg.SYNC_API_PORT, 3006);
             assert.strictEqual(cfg.HUB_PORT, 10000);
-            assert.strictEqual(cfg.CORS_ORIGIN, '*');
+            assert.strictEqual(cfg.CORS_ORIGIN, false);
             assert.strictEqual(cfg.BLOCK_POLL_INTERVAL, 3000);
             assert.strictEqual(cfg.WS_MAX_PER_IP, 3);
             assert.strictEqual(cfg.SNAPSHOT_RATE_FULL, 1);
