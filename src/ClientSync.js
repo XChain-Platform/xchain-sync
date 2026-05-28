@@ -68,9 +68,12 @@ class ClientSync {
             console.log('No local data found, bootstrapping from full snapshot...');
             await this._bootstrapFromSnapshot();
         } else {
-            // Partial data — incremental catch-up
+            // Partial data — incremental catch-up.
+            // Pass the next needed block (lastAppliedBlock + 1): the server uses
+            // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
+            // applied rows and the non-ignore INSERT throws a duplicate-key error.
             console.log('Resuming from block ' + this.lastAppliedBlock);
-            await this._incrementalCatchUp(this.lastAppliedBlock);
+            await this._incrementalCatchUp(this.lastAppliedBlock + 1);
         }
 
         // Load last block hashes for continuity checking

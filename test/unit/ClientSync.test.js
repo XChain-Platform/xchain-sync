@@ -73,6 +73,35 @@ describe('ClientSync', function(){
         });
     });
 
+    describe('start', function(){
+        it('passes lastAppliedBlock + 1 to incremental catch-up when resuming a populated replica', async function(){
+            db.getLastBlock.resolves(100);
+            sinon.stub(sync, '_incrementalCatchUp').resolves();
+            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+
+            await sync.start();
+
+            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
+            // Must request the NEXT needed block, not the last already-applied one.
+            // The server uses inclusive >= bounds, so passing 100 re-delivers block
+            // 100's already-applied rows and the non-ignore INSERT throws on the
+            // UNIQUE action_index, rolling back the whole catch-up (silent freeze).
+            assert.strictEqual(sync._incrementalCatchUp.firstCall.args[0], 101);
+        });
+
+        it('bootstraps from a full snapshot when the replica is empty', async function(){
+            db.getLastBlock.resolves(null);
+            sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+            sinon.stub(sync, '_incrementalCatchUp').resolves();
+            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+
+            await sync.start();
+
+            assert.strictEqual(sync._bootstrapFromSnapshot.calledOnce, true);
+            assert.strictEqual(sync._incrementalCatchUp.called, false);
+        });
+    });
+
     describe('_handleEvent', function(){
         it('routes block events to _handleBlock', async function(){
             sinon.stub(sync, '_handleBlock').resolves();

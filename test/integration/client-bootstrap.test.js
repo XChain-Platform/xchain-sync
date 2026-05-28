@@ -174,4 +174,41 @@ describe('Integration: Client Bootstrap', function() {
             assert.strictEqual(block1.length, 1);
         });
     });
+
+    describe('startup catch-up (start)', function() {
+        // Regression test for the off-by-one at ClientSync.start(): the startup
+        // resume path must request lastAppliedBlock + 1. Passing lastAppliedBlock
+        // re-delivers the last applied block's rows (server uses inclusive >=
+        // bounds), and the non-ignore INSERT throws on the UNIQUE action_index,
+        // rolling back the catch-up and freezing the replica at its old height.
+        it('resumes a pre-populated replica without re-inserting applied rows', async function() {
+            this.timeout(15000);
+
+            // Replica already has blocks 1-5 (e.g. from a prior run before restart).
+            await fixtures.seedBlocks(sourceDb, 1, 5);
+            let cs = createClientSync();
+            await cs._bootstrapFromSnapshot();
+            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 5);
+
+            // New blocks land on the source while the client is down.
+            await fixtures.seedBlocks(sourceDb, 6, 10);
+
+            // Restart: a fresh ClientSync whose start() reads lastAppliedBlock from
+            // the populated replica and runs the startup incremental catch-up.
+            let cs2 = createClientSync();
+            sinon.stub(cs2, '_connectWebSockets').callsFake(() => { cs2.running = false; });
+            await cs2.start();
+
+            // Catch-up must complete to the source tip — with the off-by-one the
+            // duplicate-key error would roll back and leave the replica stuck at 5.
+            assert.strictEqual(cs2.lastAppliedBlock, 10);
+            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 10);
+
+            // No duplicate action rows — replica matches source exactly.
+            assert.strictEqual(
+                await testDb.getRowCount(replicaDb, 'actions'),
+                await testDb.getRowCount(sourceDb, 'actions')
+            );
+        });
+    });
 });
