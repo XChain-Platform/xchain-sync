@@ -60,11 +60,46 @@ class ClientApplier {
                 if(!rows || rows.length === 0) continue;
                 await this._insertRows(table, rows);
             }
+            // Rebuild balances if this payload touched credits/debits.
+            // ServerPoller's per-block payload can't scope balances via the
+            // action-scoped JOIN (the balances table has no action_index
+            // column), so the only way the replica's balances table can stay
+            // consistent with credits/debits during live sync is to recompute
+            // it from the (now-updated) credit/debit data. Indexer-shaped DBs
+            // only — decoder has no balances/credits/debits tables.
+            let dbType = (this.db && this.db.dbType) || 'indexer';
+            if(dbType === 'indexer' && (data.credits || data.debits)){
+                await this._rebuildBalances();
+            }
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
             console.error('Error applying block ' + payload.block_index + ':', e.message);
             throw e;
+        }
+    }
+
+    // Recompute the balances table from the current credits/debits rows.
+    // Shared with ClientRollback (which calls the same SQL inline). Kept
+    // local to ClientApplier because it has no business reaching into
+    // ClientRollback to invoke a helper.
+    async _rebuildBalances(){
+        try {
+            await this.db.doQuery("DELETE FROM balances");
+            await this.db.doQuery(`INSERT INTO balances (address_id, tick_id, amount)
+                SELECT address_id, tick_id,
+                    CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END), 0) AS CHAR)
+                FROM (
+                    SELECT address_id, tick_id, amount, 'credit' as type FROM credits
+                    UNION ALL
+                    SELECT address_id, tick_id, amount, 'debit' as type FROM debits
+                ) t
+                GROUP BY address_id, tick_id
+                HAVING SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END) != 0`);
+        } catch(e){
+            // Tables may not exist on a decoder replica — the dbType guard above
+            // should prevent this from being reached, but the catch keeps the
+            // applier's containing transaction from blowing up if it is.
         }
     }
 
@@ -124,6 +159,16 @@ class ClientApplier {
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
                 await this._insertRows(table, rows);
+            }
+            // Rebuild balances if this snapshot touched credits/debits. The
+            // incremental catch-up inserts new credit/debit rows, but the
+            // balances table is a derived aggregate — without recomputing it
+            // here the replica's balances stay stale until the next live block
+            // happens to touch credits/debits (mirrors applyBlock above).
+            // Indexer-shaped DBs only — decoder has no balances table.
+            let dbType = (this.db && this.db.dbType) || 'indexer';
+            if(dbType === 'indexer' && (snapshotData.tables.credits || snapshotData.tables.debits)){
+                await this._rebuildBalances();
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
