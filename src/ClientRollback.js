@@ -203,6 +203,35 @@ class ClientRollback {
                 console.error('Error rebuilding balances after rollback:', e.message);
             }
 
+            // Recalculate contract custody balances from credits/debits' contract
+            // analogue: deposits/withdrawals. contract_balances is a derived aggregate
+            // keyed by (contract_index, tick_id) with no action_index column, so it
+            // can't be deleted by the generic action-scoped loop above (and it isn't
+            // streamed per-block — the source poller's action_index JOIN errors for it).
+            // The source indexer recomputes it after rollback via updateContractBalances();
+            // the replica must do the equivalent or stale custody balances survive the
+            // reorg. deposits/withdrawals ARE rolled back + re-streamed, so a wholesale
+            // rebuild from the surviving 'valid' rows reproduces the source exactly.
+            // Mirrors the balances rebuild directly above.
+            try {
+                await this.db.doQuery("DELETE FROM contract_balances");
+                await this.db.doQuery(`INSERT INTO contract_balances (contract_index, tick_id, amount)
+                    SELECT contract_index, tick_id,
+                        CAST(SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) AS CHAR)
+                    FROM (
+                        SELECT contract_index, tick_id, amount, 'deposit' as type FROM deposits
+                            WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
+                        UNION ALL
+                        SELECT contract_index, tick_id, amount, 'withdrawal' as type FROM withdrawals
+                            WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
+                    ) t
+                    GROUP BY contract_index, tick_id
+                    HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
+            } catch(e){
+                // Tables may not exist on older replica schemas — skip
+                console.error('Error rebuilding contract_balances after rollback:', e.message);
+            }
+
             await this.db.commitTransaction();
             console.log('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 

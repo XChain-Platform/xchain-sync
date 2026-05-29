@@ -71,6 +71,15 @@ class ClientApplier {
             if(dbType === 'indexer' && (data.credits || data.debits)){
                 await this._rebuildBalances();
             }
+            // contract_balances is the deposits/withdrawals analogue of balances:
+            // a derived aggregate with no action_index column, so the source poller
+            // can't stream it per-block (its action_index JOIN errors). Recompute it
+            // here whenever the payload touched deposits/withdrawals, exactly as we do
+            // for balances above — otherwise replica custody balances stay stale until
+            // the next full snapshot.
+            if(dbType === 'indexer' && (data.deposits || data.withdrawals)){
+                await this._rebuildContractBalances();
+            }
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
@@ -96,6 +105,33 @@ class ClientApplier {
                 ) t
                 GROUP BY address_id, tick_id
                 HAVING SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END) != 0`);
+        } catch(e){
+            // Tables may not exist on a decoder replica — the dbType guard above
+            // should prevent this from being reached, but the catch keeps the
+            // applier's containing transaction from blowing up if it is.
+        }
+    }
+
+    // Recompute the contract_balances table from the current deposits/withdrawals
+    // rows (valid status only). Shared in spirit with ClientRollback, which runs the
+    // same SQL inline during a reorg. contract_balances has no action_index column,
+    // so — like balances — it can't be streamed/scoped per-block and must be derived
+    // from the surviving ledger rows. Indexer-shaped DBs only.
+    async _rebuildContractBalances(){
+        try {
+            await this.db.doQuery("DELETE FROM contract_balances");
+            await this.db.doQuery(`INSERT INTO contract_balances (contract_index, tick_id, amount)
+                SELECT contract_index, tick_id,
+                    CAST(SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) AS CHAR)
+                FROM (
+                    SELECT contract_index, tick_id, amount, 'deposit' as type FROM deposits
+                        WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
+                    UNION ALL
+                    SELECT contract_index, tick_id, amount, 'withdrawal' as type FROM withdrawals
+                        WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
+                ) t
+                GROUP BY contract_index, tick_id
+                HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
         } catch(e){
             // Tables may not exist on a decoder replica — the dbType guard above
             // should prevent this from being reached, but the catch keeps the
@@ -169,6 +205,12 @@ class ClientApplier {
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer' && (snapshotData.tables.credits || snapshotData.tables.debits)){
                 await this._rebuildBalances();
+            }
+            // Same rationale as applyBlock: contract_balances is a derived aggregate
+            // with no action_index cursor, so refresh it from deposits/withdrawals
+            // whenever the incremental catch-up touched either.
+            if(dbType === 'indexer' && (snapshotData.tables.deposits || snapshotData.tables.withdrawals)){
+                await this._rebuildContractBalances();
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');

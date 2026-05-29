@@ -54,8 +54,13 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 // ── Coverage that lives outside ClientRollback's table arrays ──
 
 // Recomputed from surviving ledger rows during rollback (ClientRollback and
-// ClientApplier both rebuild balances from credits/debits).
-const RECOMPUTED = ['balances'];
+// ClientApplier both rebuild these derived aggregates):
+//   - balances           ← credits/debits
+//   - contract_balances   ← valid deposits/withdrawals (custody balances).
+// Both lack an action_index column, so the source poller can't stream them
+// per-block (its action_index JOIN errors and is swallowed); the replica derives
+// them from the surviving ledger rows instead.
+const RECOMPUTED = ['balances', 'contract_balances'];
 
 // Deleted by bespoke logic in _rollbackIndexer rather than the generic loops.
 const SPECIAL_CASE = ['contract_emissions', 'sync_meta'];
@@ -67,15 +72,16 @@ const ROLLBACK_EXEMPT = {
         'Append-only operational log; no block_index/action_index cursor to scope ' +
         'a rollback. Never rolled back — matches the source indexer.',
     markets:
-        'Derived aggregate keyed by (tick1_id, tick2_id) — no action_index column. ' +
+        'Derived OHLCV aggregate keyed by (tick1_id, tick2_id) — no action_index column. ' +
         'ServerPoller lists it under actionScopedTables but getActionScopedRows JOINs ' +
         'ON action_index, so the query errors and is swallowed: markets is NOT actually ' +
         'streamed per-block (it only rides along in a full snapshot). The source indexer ' +
-        'RECOMPUTES markets on rollback; the replica does not. KNOWN GAP — see test below.',
-    contract_balances:
-        'Derived aggregate keyed by (contract_index, tick_id) — no action_index column. ' +
-        'Same not-actually-streamed situation as markets; source recomputes, replica does ' +
-        'not. KNOWN GAP — see test below.',
+        'recomputes it via getMarketInfo (last-trade / 24hr price-high-low-change-volume / ' +
+        'bid / ask over orders/order_matches/dispenses), which the thin replica DB has no ' +
+        'machinery to reproduce — replicating that math here would re-introduce exactly the ' +
+        'indexer-mirror drift this guard exists to catch. The replica instead recovers ' +
+        'markets from the next full/incremental snapshot (the existing snapshot ride-along). ' +
+        'Deliberately snapshot-refreshed, not block-rolled-back.',
     icons:
         'Token-icon processing state keyed by token_id — no block/action cursor. ' +
         'Full-snapshot ride-along only (SnapshotBuilder), not block-streamed.',
