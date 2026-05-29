@@ -184,6 +184,23 @@ class ClientRollback {
                 // Skip if table doesn't exist
             }
 
+            // attestation_validator_stats: running per-validator aggregate counters
+            // (fulfilled/missed/slashed). This table is NOT block-streamed to
+            // replicas — it only arrives via full-snapshot ride-along — and the thin
+            // replica DB has none of the capability/governance machinery the source
+            // uses to derive missed_count (the responsible-set capability snapshot),
+            // so it cannot recompute these rows; reproducing that math here would
+            // re-introduce the indexer-mirror drift the rollback guard exists to
+            // catch. On reorg we therefore drop the rows whose most-recent touch is
+            // in the orphaned range — so the replica never serves overcounted values
+            // — and let the next full-snapshot ride-along restore correct counts
+            // from the (now reorg-safe) source. Same recovery model as markets.
+            try {
+                await this.db.doQuery("DELETE FROM `attestation_validator_stats` WHERE last_updated_block >= ?", [block_index]);
+            } catch(e){
+                // Table may not exist on older replica schemas — skip
+            }
+
             // Recalculate balances from credits/debits
             // After rollback, the new blocks will arrive via the sync stream and re-apply correct balances
             // For now, we rebuild balances from the remaining credit/debit data

@@ -63,7 +63,11 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 const RECOMPUTED = ['balances', 'contract_balances'];
 
 // Deleted by bespoke logic in _rollbackIndexer rather than the generic loops.
-const SPECIAL_CASE = ['contract_emissions', 'sync_meta'];
+// attestation_validator_stats is a snapshot-only aggregate the thin replica
+// can't recompute (no capability/governance machinery for missed_count); on
+// reorg _rollbackIndexer drops its orphaned-range rows and the next full-snapshot
+// ride-along restores correct counts from the source (same model as markets).
+const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attestation_validator_stats'];
 
 // Tables ServerPoller names but that are NOT rolled back, each with a reason.
 // Several are intentional; two flag a known smell (see test below).
@@ -85,9 +89,6 @@ const ROLLBACK_EXEMPT = {
     icons:
         'Token-icon processing state keyed by token_id — no block/action cursor. ' +
         'Full-snapshot ride-along only (SnapshotBuilder), not block-streamed.',
-    attestation_validator_stats:
-        'Running per-validator aggregate counters — no per-block cursor. Full-snapshot ' +
-        'ride-along; reorg rollback deferred (mirrors the source indexer deferral).',
     price_snapshots:
         'Mirrored from the hub price channel (round_number/coin_pair); live convergence ' +
         'is handled by the hub DB sync mirror, not this block stream.',
