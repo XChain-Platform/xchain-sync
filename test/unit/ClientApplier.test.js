@@ -98,7 +98,7 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
-        it('truncates in reverse order and inserts in forward order', async function(){
+        it('clears tables in reverse order and inserts in forward order', async function(){
             let snapshot = {
                 block_height: 10,
                 tables: {
@@ -108,9 +108,13 @@ describe('ClientApplier', function(){
             };
             await applier.applyFullSnapshot(snapshot);
             assert.strictEqual(db.beginTransaction.calledOnce, true);
-            // Truncate order: tableB first (reverse), then tableA
-            assert.strictEqual(db.truncateTable.firstCall.args[0], 'tableB');
-            assert.strictEqual(db.truncateTable.secondCall.args[0], 'tableA');
+            // Tables are cleared child-before-parent (reverse of declared order)
+            // via DELETE, not TRUNCATE: MariaDB rejects TRUNCATE on FK-referenced
+            // tables, so the bootstrap uses FK-safe row-by-row DELETEs.
+            let deletes = db.doQuery.getCalls()
+                .map(c => c.args[0])
+                .filter(q => /^DELETE FROM/.test(q));
+            assert.deepStrictEqual(deletes, ['DELETE FROM `tableB`', 'DELETE FROM `tableA`']);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
         });
 
