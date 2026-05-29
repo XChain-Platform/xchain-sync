@@ -64,6 +64,49 @@ function validateDdl(sql){
     return { valid: true };
 }
 
+// Extract the ordered list of column names from a CREATE TABLE DDL
+// (as produced by SHOW CREATE TABLE). Column definition lines are the
+// only lines that start with a backtick-quoted identifier — the opening
+// `CREATE TABLE \`name\` (` line begins with CREATE, and constraint lines
+// begin with PRIMARY/UNIQUE/KEY/CONSTRAINT/FULLTEXT etc. Returns [] for
+// non-string input or a DDL with no parseable columns.
+function extractColumnNames(ddl){
+    if(typeof ddl !== 'string') return [];
+    let names = [];
+    for(let line of ddl.split('\n')){
+        let trimmed = line.trim();
+        if(trimmed.charAt(0) !== '`') continue;
+        let endTick = trimmed.indexOf('`', 1);
+        if(endTick <= 1) continue;
+        names.push(trimmed.substring(1, endTick));
+    }
+    return names;
+}
+
+// Extract a single column's definition from a CREATE TABLE DDL, suitable
+// for use as the body of `ALTER TABLE ... ADD COLUMN`. Returns the
+// backtick-quoted name plus its type/attributes (e.g.
+// "`new_col` varchar(255) DEFAULT NULL") with any trailing comma stripped.
+// Returns null if the column cannot be cleanly located, or if the line
+// contains a semicolon (defends against a malformed/hostile DDL smuggling
+// a second statement past validateDdl into the ALTER) — callers should
+// treat null as "skip this column" rather than aborting.
+function extractColumnDefinition(ddl, columnName){
+    if(typeof ddl !== 'string' || typeof columnName !== 'string')
+        return null;
+    for(let line of ddl.split('\n')){
+        let trimmed = line.trim();
+        if(trimmed.charAt(0) !== '`') continue;
+        let endTick = trimmed.indexOf('`', 1);
+        if(endTick <= 1) continue;
+        if(trimmed.substring(1, endTick) !== columnName) continue;
+        let def = trimmed.replace(/,\s*$/, '');
+        if(def.indexOf(';') !== -1) return null;
+        return def;
+    }
+    return null;
+}
+
 // Validate a WebSocket event has the expected shape.
 // Accepted types: block, reorg, status.
 // block/reorg require a positive integer block_index.
@@ -100,5 +143,7 @@ function validateWsEvent(event){
 module.exports = {
     validateIdentifier,
     validateDdl,
-    validateWsEvent
+    validateWsEvent,
+    extractColumnNames,
+    extractColumnDefinition
 };

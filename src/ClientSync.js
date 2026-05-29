@@ -131,6 +131,15 @@ class ClientSync {
                         if(exists.length === 0){
                             await this.db.doQuery(createSql);
                             console.log('  Created table: ' + tableName);
+                        } else {
+                            // Table already exists — propagate any columns the
+                            // master has added since this replica was bootstrapped.
+                            // Without this the path is CREATE-only and a replica
+                            // that pre-dates a column addition stalls on the first
+                            // snapshot carrying it ("Unknown column ... in field
+                            // list"). Runs before the snapshot apply, so the ALTERs
+                            // are outside any snapshot transaction.
+                            await this.db.addMissingColumns(tableName, createSql);
                         }
                     } catch(e){
                         // May fail on ordering — retry will catch it

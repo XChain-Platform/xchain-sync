@@ -162,9 +162,66 @@ class Database {
         }
     }
 
+    // Bring an already-existing table on this (target) database up to the
+    // source schema by adding any columns the source has and the target
+    // lacks. Schema replication only ever CREATEd missing tables; a column
+    // added to a table that the replica had already bootstrapped from older
+    // DDL was never propagated, so the first snapshot/block carrying the new
+    // column failed with "Unknown column '...' in 'field list'" and rolled
+    // back permanently. Source column names + definitions are derived from
+    // the source's CREATE TABLE DDL (validated by validateDdl by the caller);
+    // the target's columns come from INFORMATION_SCHEMA. Each gap is closed
+    // with a best-effort ALTER TABLE ADD COLUMN — a column whose definition
+    // cannot be cleanly parsed is logged and skipped rather than aborting the
+    // whole sync. DDL auto-commits, so this must run before any snapshot
+    // transaction is opened. Returns the number of columns added.
+    //
+    // NOTE FOR OPERATORS: a replica that stalled BEFORE this fix shipped will
+    // not self-heal until it next runs schema replication. If one is wedged on
+    // an "Unknown column" error, restart it (replication re-runs on startup)
+    // or apply the missing `ALTER TABLE ... ADD COLUMN` on it manually once.
+    async addMissingColumns(tableName, sourceDdl){
+        let sourceColumns = validation.extractColumnNames(sourceDdl);
+        if(sourceColumns.length === 0) return 0;
+
+        let destRows = await this.doQuery(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?",
+            [this.dbName, tableName]
+        );
+        let destSet = new Set(destRows.map(r => r.column_name || r.COLUMN_NAME));
+
+        let added = 0;
+        for(let col of sourceColumns){
+            if(destSet.has(col)) continue;
+
+            let colCheck = validation.validateIdentifier(col);
+            if(!colCheck.valid){
+                console.error('Skipping invalid column name ' + col + ' on ' + tableName + ' (' + colCheck.reason + ')');
+                continue;
+            }
+
+            let def = validation.extractColumnDefinition(sourceDdl, col);
+            if(!def){
+                console.warn('Could not extract definition for column ' + col + ' on ' + tableName + ' — skipping (manual ALTER may be required)');
+                continue;
+            }
+
+            try {
+                await this.doQuery("ALTER TABLE `" + tableName + "` ADD COLUMN " + def);
+                console.log('Added column ' + col + ' to ' + tableName);
+                added++;
+            } catch(e){
+                console.error('Failed to add column ' + col + ' to ' + tableName + ': ' + (e.message || e));
+            }
+        }
+        return added;
+    }
+
     // Replicate schema from a source database into this database.
     // Reads all table DDLs from the source via SHOW CREATE TABLE and
-    // creates any missing tables locally. This ensures the replica always
+    // creates any missing tables locally. For tables that already exist,
+    // propagates any columns the source has added since the replica was
+    // bootstrapped (see addMissingColumns). This ensures the replica always
     // matches the authoritative indexer schema — no copied SQL files needed.
     async replicateSchema(sourceDb){
         console.log('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
@@ -185,7 +242,6 @@ class Database {
         let created = 0;
         for(let row of sourceTables){
             let tableName = row.table_name || row.TABLE_NAME;
-            if(existingSet.has(tableName)) continue;
 
             // Validate table name before using in SQL
             let idCheck = validation.validateIdentifier(tableName);
@@ -205,6 +261,13 @@ class Database {
             let ddlCheck = validation.validateDdl(createSql);
             if(!ddlCheck.valid){
                 console.error('Rejected DDL for ' + tableName + ': ' + ddlCheck.reason);
+                continue;
+            }
+
+            // Table already exists on the replica — don't recreate it, but
+            // propagate any columns the source has added since it was created.
+            if(existingSet.has(tableName)){
+                await this.addMissingColumns(tableName, createSql);
                 continue;
             }
 
@@ -253,7 +316,53 @@ class Database {
             }
         }
 
+        // replicateSchema only CREATEs missing tables — it never ALTERs an
+        // existing table to add a column introduced after the replica was first
+        // built. Run the column self-heal so replicas built before a column was
+        // added pick it up on this pass.
+        await this.ensureReplicatedColumns();
+
         console.log('Schema replication complete for ' + this.dbName);
+    }
+
+    // Self-heal known column drift on already-existing replicated tables.
+    // replicateSchema (and the server /schema fetch path) skip any table that
+    // already exists locally, so a column added to an authoritative table after
+    // the replica was first built never reaches the replica. The replica then
+    // rejects every synced row referencing the new field with "Unknown column",
+    // permanently stalling sync for that table until the column is added by hand.
+    //
+    // The token-ownership-trading feature added give_ownership/get_ownership to
+    // the orders and swaps tables. Mirror the indexer's alterTableForDrift
+    // contract: add the column from its authoritative definition only when
+    // absent. Both columns are NOT NULL DEFAULT 0, so the ADD COLUMN backfills
+    // existing rows safely. Scoped to indexer replicas — orders/swaps do not
+    // exist in the decoder schema. Tables absent locally are skipped (fresh
+    // replicas create them with the columns already present).
+    async ensureReplicatedColumns(){
+        if(this.dbType !== 'indexer') return;
+        let drift = [
+            { table: 'orders', column: 'give_ownership' },
+            { table: 'orders', column: 'get_ownership'  },
+            { table: 'swaps',  column: 'give_ownership' },
+            { table: 'swaps',  column: 'get_ownership'  }
+        ];
+        for(let { table, column } of drift){
+            let tableRows = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                [this.dbName, table]
+            );
+            if(tableRows.length === 0) continue;
+
+            let colRows = await this.doQuery(
+                "SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
+                [this.dbName, table, column]
+            );
+            if(colRows.length > 0) continue;
+
+            console.log('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding TINYINT(1) NOT NULL DEFAULT 0.');
+            await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` TINYINT(1) NOT NULL DEFAULT 0');
+        }
     }
 
     // Get a database connection (with exponential backoff + circuit breaker)

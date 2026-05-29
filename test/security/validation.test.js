@@ -330,4 +330,84 @@ describe('validation', function(){
             assert.strictEqual(result.valid, false);
         });
     });
+
+    // ── extractColumnNames ──
+
+    const SAMPLE_DDL = [
+        'CREATE TABLE `balances` (',
+        '  `id` int(11) NOT NULL AUTO_INCREMENT,',
+        '  `address` varchar(255) NOT NULL,',
+        "  `amount` decimal(30,8) NOT NULL DEFAULT '0',",
+        "  `kind` enum('a','b','c') DEFAULT NULL,",
+        '  `block_index` int(11) NOT NULL,',
+        '  PRIMARY KEY (`id`),',
+        '  UNIQUE KEY `uniq_addr` (`address`),',
+        '  KEY `idx_block` (`block_index`)',
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    ].join('\n');
+
+    describe('extractColumnNames', function(){
+
+        it('extracts every column name in order', function(){
+            let cols = validation.extractColumnNames(SAMPLE_DDL);
+            assert.deepStrictEqual(cols, ['id', 'address', 'amount', 'kind', 'block_index']);
+        });
+
+        it('does not pick up the table name or constraint identifiers', function(){
+            let cols = validation.extractColumnNames(SAMPLE_DDL);
+            assert.ok(!cols.includes('balances'));
+            assert.ok(!cols.includes('uniq_addr'));
+            assert.ok(!cols.includes('idx_block'));
+        });
+
+        it('returns [] for non-string input', function(){
+            assert.deepStrictEqual(validation.extractColumnNames(null), []);
+            assert.deepStrictEqual(validation.extractColumnNames(undefined), []);
+            assert.deepStrictEqual(validation.extractColumnNames(42), []);
+        });
+    });
+
+    // ── extractColumnDefinition ──
+
+    describe('extractColumnDefinition', function(){
+
+        it('returns the backtick-quoted name plus definition, comma stripped', function(){
+            let def = validation.extractColumnDefinition(SAMPLE_DDL, 'address');
+            assert.strictEqual(def, '`address` varchar(255) NOT NULL');
+        });
+
+        it('preserves commas inside the type definition', function(){
+            let def = validation.extractColumnDefinition(SAMPLE_DDL, 'amount');
+            assert.strictEqual(def, "`amount` decimal(30,8) NOT NULL DEFAULT '0'");
+        });
+
+        it('handles enum definitions with embedded commas and quotes', function(){
+            let def = validation.extractColumnDefinition(SAMPLE_DDL, 'kind');
+            assert.strictEqual(def, "`kind` enum('a','b','c') DEFAULT NULL");
+        });
+
+        it('returns null for a column that is not present', function(){
+            assert.strictEqual(validation.extractColumnDefinition(SAMPLE_DDL, 'missing'), null);
+        });
+
+        it('does not match a constraint identifier as a column', function(){
+            assert.strictEqual(validation.extractColumnDefinition(SAMPLE_DDL, 'uniq_addr'), null);
+            assert.strictEqual(validation.extractColumnDefinition(SAMPLE_DDL, 'idx_block'), null);
+        });
+
+        it('rejects a line carrying a smuggled second statement', function(){
+            let hostile = [
+                'CREATE TABLE `t` (',
+                '  `x` int(11) NOT NULL; DROP TABLE users,',
+                '  PRIMARY KEY (`x`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+            assert.strictEqual(validation.extractColumnDefinition(hostile, 'x'), null);
+        });
+
+        it('returns null for non-string input', function(){
+            assert.strictEqual(validation.extractColumnDefinition(null, 'x'), null);
+            assert.strictEqual(validation.extractColumnDefinition(SAMPLE_DDL, null), null);
+        });
+    });
 });

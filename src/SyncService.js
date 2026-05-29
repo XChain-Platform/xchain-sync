@@ -147,6 +147,14 @@ class SyncService {
                 if(cfg.dbType === 'indexer'){
                     await db.verifySyncTables();
                 }
+                // Self-heal column drift on a pre-existing replica before any row
+                // data is accepted. Runs regardless of which schema path applied
+                // above (direct replicateSchema or, when the source DB is
+                // unreachable, the server /schema fetch during ClientSync
+                // bootstrap) since it derives columns from authoritative
+                // definitions rather than the source DB. No-op when the table is
+                // absent or already current.
+                await db.ensureReplicatedColumns();
             } else {
                 // Server mode: connect to the authoritative DB using hub-provided credentials
                 db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
