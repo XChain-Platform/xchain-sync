@@ -74,63 +74,84 @@ class SnapshotBuilder {
         return ordered;
     }
 
-    // Stream a full snapshot to an HTTP response
+    // Stream a full snapshot to an HTTP response.
+    //
+    // The block-height anchor, the hash headers, and every paginated table read
+    // run inside a single REPEATABLE READ snapshot (opened before getLastBlock).
+    // This keeps the advertised hashes and the streamed rows consistent to one
+    // block height even if the source commits new blocks mid-stream; without it
+    // a busy source produces mixed-block payloads that fail validator hash
+    // verification on bootstrap.
     async streamFullSnapshot(db, res){
-        let lastBlock = await db.getLastBlock();
-        if(lastBlock === null){
-            res.status(404).json({ error: 'No blocks in database' });
-            return;
-        }
-
-        let hashRow = await db.getBlockHashRow(lastBlock);
-
-        // Set response headers
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Encoding', 'gzip');
-        res.setHeader('X-Block-Height', lastBlock);
-        if(hashRow){
-            res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
-            res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
-            res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
-        }
-
-        let gzip = zlib.createGzip();
-        gzip.pipe(res);
-
-        // Start JSON structure
-        gzip.write('{"block_height":' + lastBlock + ',"tables":{');
-
-        let tableOrder = await this._getOrderedTables(db);
-        let first = true;
-        for(let table of tableOrder){
-            try {
-                let count = await db.getTableCount(table);
-                if(count === 0) continue;
-
-                if(!first) gzip.write(',');
-                first = false;
-                gzip.write('"' + table + '":[');
-
-                let offset = 0;
-                let firstRow = true;
-                while(offset < count){
-                    let rows = await db.getTablePage(table, this.pageSize, offset);
-                    for(let row of rows){
-                        if(!firstRow) gzip.write(',');
-                        firstRow = false;
-                        gzip.write(JSON.stringify(row, bigIntReplacer));
-                    }
-                    offset += this.pageSize;
-                }
-
-                gzip.write(']');
-            } catch(e){
-                console.error('Error reading table ' + table + ':', e.message);
+        await db.beginReadSnapshot();
+        let snapshotOpen = true;
+        try {
+            let lastBlock = await db.getLastBlock();
+            if(lastBlock === null){
+                await db.commitTransaction();
+                snapshotOpen = false;
+                res.status(404).json({ error: 'No blocks in database' });
+                return;
             }
-        }
 
-        gzip.write('}}');
-        gzip.end();
+            let hashRow = await db.getBlockHashRow(lastBlock);
+
+            // Set response headers
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Encoding', 'gzip');
+            res.setHeader('X-Block-Height', lastBlock);
+            if(hashRow){
+                res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
+                res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
+                res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+            }
+
+            let gzip = zlib.createGzip();
+            gzip.pipe(res);
+
+            // Start JSON structure
+            gzip.write('{"block_height":' + lastBlock + ',"tables":{');
+
+            let tableOrder = await this._getOrderedTables(db);
+            let first = true;
+            for(let table of tableOrder){
+                try {
+                    let count = await db.getTableCount(table);
+                    if(count === 0) continue;
+
+                    if(!first) gzip.write(',');
+                    first = false;
+                    gzip.write('"' + table + '":[');
+
+                    let offset = 0;
+                    let firstRow = true;
+                    while(offset < count){
+                        let rows = await db.getTablePage(table, this.pageSize, offset);
+                        for(let row of rows){
+                            if(!firstRow) gzip.write(',');
+                            firstRow = false;
+                            gzip.write(JSON.stringify(row, bigIntReplacer));
+                        }
+                        offset += this.pageSize;
+                    }
+
+                    gzip.write(']');
+                } catch(e){
+                    console.error('Error reading table ' + table + ':', e.message);
+                }
+            }
+
+            // Release the read view only after the final page is read. The data
+            // is already buffered into gzip, so committing before gzip.end()
+            // does not race the stream flush.
+            gzip.write('}}');
+            await db.commitTransaction();
+            snapshotOpen = false;
+            gzip.end();
+        } catch(e){
+            if(snapshotOpen) await db.rollbackTransaction();
+            throw e;
+        }
     }
 
     // Stream an incremental snapshot to an HTTP response.
@@ -143,117 +164,134 @@ class SnapshotBuilder {
     //     `events` is skipped — it has no block cursor and no monotonic id we
     //     can scope by (see decoder review Finding D).
     async streamIncrementalSnapshot(db, sinceBlock, res){
-        let lastBlock = await db.getLastBlock();
-        if(lastBlock === null || sinceBlock > lastBlock){
-            res.status(404).json({ error: 'No data available after block ' + sinceBlock });
-            return;
-        }
-
-        let dbType  = (db && db.dbType) || 'indexer';
-        let hashRow = await db.getBlockHashRow(lastBlock);
-
-        // Set response headers
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Encoding', 'gzip');
-        res.setHeader('X-Block-Height', lastBlock);
-        res.setHeader('X-Since-Block', sinceBlock);
-        if(hashRow){
-            if(dbType === 'decoder'){
-                res.setHeader('X-Block-Hash', hashRow.block_hash || '');
-            } else {
-                res.setHeader('X-Ledger-Hash',   hashRow.ledger_hash   || '');
-                res.setHeader('X-Actions-Hash',  hashRow.actions_hash  || '');
-                res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+        // Same REPEATABLE READ snapshot discipline as streamFullSnapshot: the
+        // anchor, hash headers, and all per-table reads must observe one block
+        // height so the catch-up payload can't mix rows from two heights while
+        // the headers advertise only one.
+        await db.beginReadSnapshot();
+        let snapshotOpen = true;
+        try {
+            let lastBlock = await db.getLastBlock();
+            if(lastBlock === null || sinceBlock > lastBlock){
+                await db.commitTransaction();
+                snapshotOpen = false;
+                res.status(404).json({ error: 'No data available after block ' + sinceBlock });
+                return;
             }
-        }
 
-        let gzip = zlib.createGzip();
-        gzip.pipe(res);
+            let dbType  = (db && db.dbType) || 'indexer';
+            let hashRow = await db.getBlockHashRow(lastBlock);
 
-        gzip.write('{"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
-
-        let tableOrder = await this._getOrderedTables(db);
-        let first = true;
-
-        // Scoping rules per dbType.
-        // Decoder full-dump tables: index_* and pubkeys are small + append-only;
-        //   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
-        let decoderBlockScoped = new Set(['blocks', 'transactions']);
-        let decoderTxScoped    = new Set(['transaction_outputs', 'dispensers']);
-        let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys']);
-        let decoderSkip        = new Set(['events', 'mempool_transactions']);
-
-        // Indexer block-scoped set. These tables carry a block_index but no
-        // action_index, so the action_index branch below cannot reach them —
-        // they must be filtered by block_index here to appear in incremental
-        // snapshots. attestation_validator_signatures and slash_events are
-        // block-scoped for the same reason (see ServerPoller.blockScopedTables).
-        //
-        // Tables with neither a block_index nor an action_index cursor —
-        // icons (token-icon processing state, keyed by token_id),
-        // attestation_validator_stats (running per-validator aggregates), and
-        // price_snapshots (mirrored from the cross-chain hub's price channel,
-        // keyed by round_number/coin_pair) — cannot be scoped incrementally and
-        // are intentionally omitted. They ride along in the full snapshot only;
-        // for price_snapshots, live convergence is handled by the hub DB sync
-        // mirror, not this block stream.
-        let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events', 'sync_meta']);
-        let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
-
-        for(let table of tableOrder){
-            try {
-                let rows;
+            // Set response headers
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Encoding', 'gzip');
+            res.setHeader('X-Block-Height', lastBlock);
+            res.setHeader('X-Since-Block', sinceBlock);
+            if(hashRow){
                 if(dbType === 'decoder'){
-                    if(decoderSkip.has(table)){
-                        continue;
-                    } else if(decoderBlockScoped.has(table)){
-                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
-                    } else if(decoderTxScoped.has(table)){
-                        rows = await db.doQuery(
-                            "SELECT t.* FROM `" + table + "` t " +
-                            "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
-                            "WHERE tx.block_index >= ?",
-                            [sinceBlock]
-                        );
-                    } else if(decoderFullDump.has(table)){
-                        rows = await db.doQuery("SELECT * FROM `" + table + "`");
-                    } else {
-                        continue;
-                    }
+                    res.setHeader('X-Block-Hash', hashRow.block_hash || '');
                 } else {
-                    if(indexerBlockScoped.has(table)){
-                        rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
-                    } else if(firstActionIndex !== null){
-                        try {
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
-                        } catch(e){
-                            // Table doesn't have action_index — skip it for incremental
+                    res.setHeader('X-Ledger-Hash',   hashRow.ledger_hash   || '');
+                    res.setHeader('X-Actions-Hash',  hashRow.actions_hash  || '');
+                    res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+                }
+            }
+
+            let gzip = zlib.createGzip();
+            gzip.pipe(res);
+
+            gzip.write('{"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
+
+            let tableOrder = await this._getOrderedTables(db);
+            let first = true;
+
+            // Scoping rules per dbType.
+            // Decoder full-dump tables: index_* and pubkeys are small + append-only;
+            //   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
+            let decoderBlockScoped = new Set(['blocks', 'transactions']);
+            let decoderTxScoped    = new Set(['transaction_outputs', 'dispensers']);
+            let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys']);
+            let decoderSkip        = new Set(['events', 'mempool_transactions']);
+
+            // Indexer block-scoped set. These tables carry a block_index but no
+            // action_index, so the action_index branch below cannot reach them —
+            // they must be filtered by block_index here to appear in incremental
+            // snapshots. attestation_validator_signatures and slash_events are
+            // block-scoped for the same reason (see ServerPoller.blockScopedTables).
+            //
+            // Tables with neither a block_index nor an action_index cursor —
+            // icons (token-icon processing state, keyed by token_id),
+            // attestation_validator_stats (running per-validator aggregates), and
+            // price_snapshots (mirrored from the cross-chain hub's price channel,
+            // keyed by round_number/coin_pair) — cannot be scoped incrementally and
+            // are intentionally omitted. They ride along in the full snapshot only;
+            // for price_snapshots, live convergence is handled by the hub DB sync
+            // mirror, not this block stream.
+            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events', 'sync_meta']);
+            let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
+
+            for(let table of tableOrder){
+                try {
+                    let rows;
+                    if(dbType === 'decoder'){
+                        if(decoderSkip.has(table)){
+                            continue;
+                        } else if(decoderBlockScoped.has(table)){
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                        } else if(decoderTxScoped.has(table)){
+                            rows = await db.doQuery(
+                                "SELECT t.* FROM `" + table + "` t " +
+                                "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
+                                "WHERE tx.block_index >= ?",
+                                [sinceBlock]
+                            );
+                        } else if(decoderFullDump.has(table)){
+                            rows = await db.doQuery("SELECT * FROM `" + table + "`");
+                        } else {
                             continue;
                         }
                     } else {
-                        continue;
+                        if(indexerBlockScoped.has(table)){
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                        } else if(firstActionIndex !== null){
+                            try {
+                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
+                            } catch(e){
+                                // Table doesn't have action_index — skip it for incremental
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
                     }
+
+                    if(!rows || rows.length === 0) continue;
+
+                    if(!first) gzip.write(',');
+                    first = false;
+                    gzip.write('"' + table + '":[');
+
+                    for(let i = 0; i < rows.length; i++){
+                        if(i > 0) gzip.write(',');
+                        gzip.write(JSON.stringify(rows[i], bigIntReplacer));
+                    }
+
+                    gzip.write(']');
+                } catch(e){
+                    console.error('Error reading table ' + table + ' for incremental:', e.message);
                 }
-
-                if(!rows || rows.length === 0) continue;
-
-                if(!first) gzip.write(',');
-                first = false;
-                gzip.write('"' + table + '":[');
-
-                for(let i = 0; i < rows.length; i++){
-                    if(i > 0) gzip.write(',');
-                    gzip.write(JSON.stringify(rows[i], bigIntReplacer));
-                }
-
-                gzip.write(']');
-            } catch(e){
-                console.error('Error reading table ' + table + ' for incremental:', e.message);
             }
-        }
 
-        gzip.write('}}');
-        gzip.end();
+            // Release the read view only after the final table read (see the
+            // matching note in streamFullSnapshot).
+            gzip.write('}}');
+            await db.commitTransaction();
+            snapshotOpen = false;
+            gzip.end();
+        } catch(e){
+            if(snapshotOpen) await db.rollbackTransaction();
+            throw e;
+        }
     }
 
 }

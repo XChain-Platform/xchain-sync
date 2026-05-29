@@ -358,6 +358,30 @@ class Database {
         return false;
     }
 
+    // Begin a read-only REPEATABLE READ transaction with a consistent snapshot.
+    // Used by snapshot reads so the block-height anchor, the hash headers, and
+    // every paginated table read all observe the database at a single point in
+    // time. Without this, a concurrent block commit mid-read can produce a
+    // snapshot whose advertised hashes (captured first) disagree with the row
+    // data (read later), failing hash verification on the consuming validator.
+    // InnoDB MVCC means this read view does not block writers — the snapshot
+    // source keeps committing new blocks while the read view stays pinned.
+    // Isolation is set explicitly rather than relying on the server default so
+    // the guarantee holds regardless of how the source DB is configured.
+    async beginReadSnapshot(){
+        if(this.transactionConnection != null)
+            await this.releaseConnection();
+        this.transactionConnection = await this.getConnection();
+        try {
+            await this.transactionConnection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        } catch(e){
+            await this.transactionConnection.release();
+            this.transactionConnection = null;
+            this.util.throwError('beginReadSnapshot error=' + e);
+        }
+    }
+
     // Run a query and return results
     async doQuery(query, args){
         let results = [];

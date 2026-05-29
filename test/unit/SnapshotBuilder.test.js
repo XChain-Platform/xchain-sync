@@ -13,7 +13,10 @@ function createMockDb(dbName){
         getBlockHashRow: sinon.stub().resolves(null),
         getFirstActionIndex: sinon.stub().resolves(null),
         getTablePage: sinon.stub().resolves([]),
-        getTableCount: sinon.stub().resolves(0)
+        getTableCount: sinon.stub().resolves(0),
+        beginReadSnapshot: sinon.stub().resolves(),
+        commitTransaction: sinon.stub().resolves(true),
+        rollbackTransaction: sinon.stub().resolves()
     };
 }
 
@@ -234,6 +237,83 @@ describe('SnapshotBuilder', function(){
             let parsed = JSON.parse(json);
             assert.strictEqual(parsed.block_height, 100);
             assert.strictEqual(parsed.since_block, 80);
+        });
+    });
+
+    // The snapshot must be read inside a single REPEATABLE READ transaction so
+    // the block-height anchor, the hash headers, and every table read observe
+    // one consistent point in time. These tests pin that boundary: the snapshot
+    // opens before the anchor read, and the connection is always released
+    // (commit on success/empty, rollback on error) so it can't leak.
+    describe('transactional boundary', function(){
+        it('full: opens read snapshot before reading the block anchor', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(50);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.doQuery.resolves([]); // no tables
+
+            let res = new PassThrough();
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamFullSnapshot(db, res);
+            });
+
+            assert.ok(db.beginReadSnapshot.calledOnce, 'beginReadSnapshot called once');
+            assert.ok(db.beginReadSnapshot.calledBefore(db.getLastBlock), 'snapshot opens before anchor read');
+            assert.ok(db.commitTransaction.calledOnce, 'commit releases the read view');
+            assert.ok(db.rollbackTransaction.notCalled, 'no rollback on success');
+        });
+
+        it('full: commits (releases) the snapshot even on the 404 empty-db path', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(null);
+            let res = createMockRes();
+            await builder.streamFullSnapshot(db, res);
+            assert.ok(db.beginReadSnapshot.calledOnce);
+            assert.ok(db.commitTransaction.calledOnce, 'snapshot released on 404 so the connection is not leaked');
+        });
+
+        it('full: rolls back the snapshot if a read throws before streaming', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(50);
+            db.getBlockHashRow.rejects(new Error('boom'));
+            let res = createMockRes();
+            await assert.rejects(builder.streamFullSnapshot(db, res), /boom/);
+            assert.ok(db.rollbackTransaction.calledOnce, 'snapshot rolled back on error');
+            assert.ok(db.commitTransaction.notCalled, 'no commit on error');
+        });
+
+        it('incremental: opens read snapshot before reading the block anchor', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getFirstActionIndex.resolves(500);
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema')) return [{ table_name: 'blocks' }];
+                return [];
+            });
+
+            let res = new PassThrough();
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamIncrementalSnapshot(db, 80, res);
+            });
+
+            assert.ok(db.beginReadSnapshot.calledOnce);
+            assert.ok(db.beginReadSnapshot.calledBefore(db.getLastBlock));
+            assert.ok(db.commitTransaction.calledOnce);
+            assert.ok(db.rollbackTransaction.notCalled);
+        });
+
+        it('incremental: commits (releases) the snapshot on the 404 path', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(50);
+            let res = createMockRes();
+            await builder.streamIncrementalSnapshot(db, 100, res);
+            assert.ok(db.beginReadSnapshot.calledOnce);
+            assert.ok(db.commitTransaction.calledOnce, 'snapshot released on 404');
         });
     });
 });

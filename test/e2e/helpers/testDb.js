@@ -113,6 +113,13 @@ class TestDatabase {
         await this.transactionConnection.beginTransaction();
     }
 
+    async beginReadSnapshot() {
+        if (this.transactionConnection) await this.releaseConnection();
+        this.transactionConnection = await this.pool.getConnection();
+        await this.transactionConnection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+    }
+
     async commitTransaction() {
         if (this.transactionConnection) {
             await this.transactionConnection.commit();
