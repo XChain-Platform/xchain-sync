@@ -87,7 +87,7 @@ class ServerPoller {
                 'contracts', 'contract_executions', 'contract_emissions', 'contract_balances',
                 'contract_stakes', 'contract_unstakes', 'contract_delegations',
                 'credits', 'debits', 'escrows',
-                'delegates', 'delegations',
+                'delegations',
                 'deposits', 'destroys',
                 'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
                 'dispenser_expires', 'dispenser_statuses', 'dispenses',

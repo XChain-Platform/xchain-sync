@@ -27,8 +27,11 @@ class ClientRollback {
         this.db   = db;
         this.util = util;
 
-        // IMPORTANT: These lists are copied from xchain-indexer/src/Rollback.js (lines 40-107).
-        // They MUST be kept in sync when new tables are added to the indexer.
+        // IMPORTANT: These lists mirror xchain-indexer/src/rollback.js. They MUST be kept
+        // in sync — any table the indexer rolls back AND xchain-sync replicates must also
+        // be rolled back here, or the replica keeps orphaned rows after a reorg and silently
+        // diverges from the source. test/unit/rollback-coverage.test.js guards this against
+        // drift by checking every table ServerPoller replicates is handled below.
 
         // Tables that store data using block_index
         this.blockTables = [
@@ -105,8 +108,22 @@ class ClientRollback {
             'deposits',
             'withdrawals',
             'attestation_requests',
-            'attestation_responses'
+            'attestation_responses',
+            'prices'
         ];
+
+        // ── Decoder-DB rollback (used by _rollbackDecoder) ──
+        // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
+        // are deleted before the block-scoped transactions row that gave them their
+        // tx_index scope. index_*/pubkeys/events are append-only and left untouched
+        // (the sync stream re-introduces them with INSERT IGNORE).
+
+        // Block-scoped tables, deleted by block_index. Order matters: transactions
+        // is listed before blocks (tx rows scope the tx-scoped tables above them).
+        this.decoderBlockTables = ['transactions', 'blocks'];
+
+        // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
+        this.decoderTxScopedTables = ['transaction_outputs', 'dispensers'];
     }
 
     // Roll back all data at or after the given block_index.
@@ -218,7 +235,7 @@ class ClientRollback {
 
             if(txIndexes.length > 0){
                 let placeholders = txIndexes.map(() => '?').join(',');
-                for(let t of ['transaction_outputs', 'dispensers']){
+                for(let t of this.decoderTxScopedTables){
                     try {
                         await this.db.doQuery("DELETE FROM `" + t + "` WHERE tx_index IN (" + placeholders + ")", txIndexes);
                     } catch(e){
@@ -229,8 +246,9 @@ class ClientRollback {
 
             // Block-scoped: transactions before blocks (no declared FK in
             // current schema, but kept in dependency order for clarity).
-            await this.db.doQuery("DELETE FROM transactions WHERE block_index >= ?", [block_index]);
-            await this.db.doQuery("DELETE FROM blocks       WHERE block_index >= ?", [block_index]);
+            for(let t of this.decoderBlockTables){
+                await this.db.doQuery("DELETE FROM `" + t + "` WHERE block_index >= ?", [block_index]);
+            }
 
             // index_addresses, index_transactions, pubkeys: append-only;
             // orphan rows are harmless (the sync stream uses INSERT IGNORE to
