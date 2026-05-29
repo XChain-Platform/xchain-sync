@@ -200,9 +200,13 @@ class SyncService {
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
-        // Start polling in background (don't await — runs indefinitely)
+        // Start polling in background (don't await — runs indefinitely).
+        // A throw here means this chain's poller is permanently dead, which is
+        // invisible at the /status endpoint (stale block_height, live timestamp).
+        // Log the full error and exit so the container restart policy surfaces it.
         poller.start().catch(e => {
-            console.error('Poller error for ' + key + ':', e.message);
+            console.error('Poller crashed for ' + key + ' — exiting for restart:', e);
+            process.exit(1);
         });
     }
 
@@ -225,9 +229,12 @@ class SyncService {
         let sync     = new ClientSync(cfg.coin, cfg.network, db, applier, rollback, this.hashVerifier, this.config, this.util);
         this.clientSyncs.set(key, sync);
 
-        // Start syncing in background
+        // Start syncing in background. A throw here means this chain's replica
+        // sync is permanently dead while the process still appears healthy.
+        // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
-            console.error('ClientSync error for ' + key + ':', e.message);
+            console.error('ClientSync crashed for ' + key + ' — exiting for restart:', e);
+            process.exit(1);
         });
     }
 

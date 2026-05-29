@@ -158,7 +158,13 @@ async function createDb(dbName, host, port, user, pass) {
         database: dbName,
         connectionLimit: 10,
         insertIdAsNumber: true,
-        bigIntAsNumber: true
+        bigIntAsNumber: true,
+        // Match src/db.js — without this, DATETIME/TIMESTAMP columns come back
+        // as JS Dates, JSON.stringify emits ISO format, and MariaDB rejects
+        // them on re-insert. Affects sync_meta.logged_at (which the poller
+        // writes in the background during e2e tests, so the column shows up
+        // in every snapshot).
+        dateStrings: true
     });
     return new TestDatabase(pool, dbName);
 }
