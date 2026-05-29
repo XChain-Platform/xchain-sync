@@ -222,8 +222,6 @@ class ClientSync {
             let snapshotData = JSON.parse(jsonStr.toString());
             await this.applier.applyIncrementalSnapshot(snapshotData);
             this.lastAppliedBlock = snapshotData.block_height;
-
-            console.log('Incremental catch-up complete at block ' + this.lastAppliedBlock);
         } catch(e){
             console.error('Incremental catch-up failed:', e.message);
         }
