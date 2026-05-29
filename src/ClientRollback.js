@@ -217,6 +217,7 @@ class ClientRollback {
                     GROUP BY address_id, tick_id
                     HAVING SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END) != 0`);
             } catch(e){
+                if(e.errno !== 1146) throw e;
                 console.error('Error rebuilding balances after rollback:', e.message);
             }
 
@@ -245,6 +246,7 @@ class ClientRollback {
                     GROUP BY contract_index, tick_id
                     HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
             } catch(e){
+                if(e.errno !== 1146) throw e;
                 // Tables may not exist on older replica schemas — skip
                 console.error('Error rebuilding contract_balances after rollback:', e.message);
             }

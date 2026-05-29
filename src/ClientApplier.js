@@ -106,6 +106,7 @@ class ClientApplier {
                 GROUP BY address_id, tick_id
                 HAVING SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END) != 0`);
         } catch(e){
+            if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
             // should prevent this from being reached, but the catch keeps the
             // applier's containing transaction from blowing up if it is.
@@ -133,6 +134,7 @@ class ClientApplier {
                 GROUP BY contract_index, tick_id
                 HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
         } catch(e){
+            if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
             // should prevent this from being reached, but the catch keeps the
             // applier's containing transaction from blowing up if it is.
