@@ -643,7 +643,7 @@ class Database {
 
     // Get all rows from a table (paginated)
     async getTablePage(table, limit, offset){
-        let query = "SELECT * FROM `" + table + "` LIMIT ? OFFSET ?";
+        let query = "SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?";
         return await this.doQuery(query, [limit, offset]);
     }
 

@@ -248,12 +248,12 @@ class SnapshotBuilder {
                         if(decoderSkip.has(table)){
                             continue;
                         } else if(decoderBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock]);
                         } else if(decoderTxScoped.has(table)){
                             rows = await db.doQuery(
                                 "SELECT t.* FROM `" + table + "` t " +
                                 "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
-                                "WHERE tx.block_index >= ?",
+                                "WHERE tx.block_index >= ? ORDER BY t.tx_index",
                                 [sinceBlock]
                             );
                         } else if(decoderFullDump.has(table)){
@@ -263,10 +263,10 @@ class SnapshotBuilder {
                         }
                     } else {
                         if(indexerBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ?", [sinceBlock]);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock]);
                         } else if(firstActionIndex !== null){
                             try {
-                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
+                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex]);
                             } catch(e){
                                 // Table doesn't have action_index — skip it for incremental
                                 continue;

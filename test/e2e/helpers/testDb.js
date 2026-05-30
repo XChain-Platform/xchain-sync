@@ -95,7 +95,7 @@ class TestDatabase {
     }
 
     async getTablePage(table, limit, offset) {
-        return await this.doQuery("SELECT * FROM `" + table + "` LIMIT ? OFFSET ?", [limit, offset]);
+        return await this.doQuery("SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?", [limit, offset]);
     }
 
     async getTableCount(table) {
