@@ -314,4 +314,42 @@ describe('ClientSync', function(){
             assert.strictEqual(sync.running, false);
         });
     });
+
+    describe('_verifyTableCounts (replica-completeness)', function(){
+        it('flags a table the source has rows in but the follower has zeroed', async function(){
+            // The core gap this guards: ledger/actions/contract hashes still agree,
+            // yet contract_stakes never replicated to the follower.
+            db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, contract_stakes: 0 })[t];
+            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 5000, contract_stakes: 7 });
+            assert.strictEqual(mismatches.length, 1);
+            assert.strictEqual(mismatches[0].table, 'contract_stakes');
+            assert.strictEqual(mismatches[0].sourceCount, 7);
+            assert.strictEqual(mismatches[0].localCount, 0);
+            assert.strictEqual(mismatches[0].delta, 7);
+        });
+
+        it('reports a table missing entirely from the follower as a full shortfall', async function(){
+            // getTableCount throws (table absent in this replica's schema) → treated as 0.
+            db.getTableCount = async () => { throw new Error('no such table'); };
+            let mismatches = await sync._verifyTableCounts({ attestation_requests: 3 });
+            assert.strictEqual(mismatches.length, 1);
+            assert.strictEqual(mismatches[0].table, 'attestation_requests');
+            assert.strictEqual(mismatches[0].localCount, 0);
+            assert.strictEqual(mismatches[0].delta, 3);
+        });
+
+        it('returns no mismatches when the follower is complete (local >= source)', async function(){
+            db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, contract_balances: 12 })[t];
+            // A follower legitimately ahead on a table is not flagged.
+            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 4999, contract_balances: 12 });
+            assert.strictEqual(mismatches.length, 0);
+        });
+
+        it('treats absent/invalid table_counts as nothing to check (older source builds)', async function(){
+            db.getTableCount = async () => 100;
+            assert.deepStrictEqual(await sync._verifyTableCounts(undefined), []);
+            assert.deepStrictEqual(await sync._verifyTableCounts(null), []);
+            assert.deepStrictEqual(await sync._verifyTableCounts({ blocks: 'not-a-number' }), []);
+        });
+    });
 });

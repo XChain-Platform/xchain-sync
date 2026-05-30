@@ -311,9 +311,55 @@ class ClientSync {
             } else {
                 console.log('Hash verification passed against ' + source);
             }
+
+            // Replica-completeness check (additive — never overrides the hash result).
+            //
+            // The committed ledger/actions/contract hashes are computed on the
+            // source during block processing and replicated verbatim, so a follower
+            // missing entire tables still agrees on every hash — the hashes describe
+            // the source's blockchain computation, not what actually landed
+            // downstream. The source now publishes per-table row counts on /status
+            // (api.buildStatusRow); compare them against our own to surface any table
+            // the source has rows in that we do not. A shortfall is logged as a
+            // health signal for operators — it does NOT reject the block, since a
+            // passing hash check is still a valid consensus result.
+            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
+            if(countMismatches.length){
+                console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+                    ' — follower may be missing replicated rows:');
+                console.error(JSON.stringify(countMismatches));
+            } else if(remoteStatus.table_counts){
+                console.log('Table-count verification passed against ' + source);
+            }
         } catch(e){
             console.error('Hash verification failed against ' + source + ':', e);
         }
+    }
+
+    // Compare the source's published per-table row counts against this replica's
+    // own counts. Returns an array of { table, sourceCount, localCount, delta } for
+    // every table the source has MORE rows in than the follower — a shortfall that
+    // indicates missing replicated data. Followers legitimately holding extra local
+    // rows are ignored: only source-ahead deltas signal incomplete replication.
+    // Best-effort — a table that can't be counted locally (absent in this replica's
+    // schema) is reported as a full shortfall rather than silently skipped.
+    async _verifyTableCounts(remoteCounts){
+        let mismatches = [];
+        if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
+        for(let table of Object.keys(remoteCounts)){
+            let remote = Number(remoteCounts[table]);
+            if(!Number.isFinite(remote)) continue;
+            let local;
+            try {
+                local = Number(await this.db.getTableCount(table));
+            } catch(e){
+                local = 0;
+            }
+            if(!Number.isFinite(local)) local = 0;
+            if(remote > local)
+                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
+        }
+        return mismatches;
     }
 
     // Connect WebSocket to all sources for live sync
