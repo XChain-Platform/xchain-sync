@@ -25,6 +25,10 @@ const zlib = require('zlib');
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
+// Tables holding operator-local bookkeeping state (fetch timestamps, retry counters) that
+// legitimately diverges between nodes and must not appear in consensus snapshots.
+const OPERATOR_LOCAL_TABLES = new Set(['icons', 'price_snapshots']);
+
 class SnapshotBuilder {
 
     constructor(util) {
@@ -53,7 +57,7 @@ class SnapshotBuilder {
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
             [db.dbName]
         );
-        let allTables = rows.map(r => r.table_name || r.TABLE_NAME);
+        let allTables = rows.map(r => r.table_name || r.TABLE_NAME).filter(t => !OPERATOR_LOCAL_TABLES.has(t));
 
         let prioritySet  = new Set(this.priorityTables);
         let trailingSet  = new Set(this.trailingTables);

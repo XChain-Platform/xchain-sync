@@ -353,7 +353,7 @@ class ClientSync {
                 this.lastKnownServerBlock = event.block_height;
             }
             // Check for gaps on status update
-            if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
+            if(this.lastAppliedBlock !== null && event.block_height >= this.lastAppliedBlock + 1){
                 console.log('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
@@ -367,13 +367,21 @@ class ClientSync {
         // Skip if we already have this block
         if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock) return;
 
-        // Verify chain continuity — indexer only (decoder has no synthetic chain hashes)
-        if(this.dbType === 'indexer' && this.lastAppliedBlock !== null){
-            let continuity = this.hashVerifier.verifyChainContinuity(
-                this.lastAppliedBlock, this.lastHashes, event
-            );
-            if(!continuity.valid){
-                console.error('Chain continuity error: ' + continuity.reason);
+        // Both dbTypes require block-height continuity: indexer uses chain hashes to detect
+        // gaps and forks; decoder has no synthetic hashes but still needs gap detection so
+        // blocks silently dropped between bootstrap and the first WS event are caught up.
+        if(this.lastAppliedBlock !== null){
+            if(this.dbType === 'indexer'){
+                let continuity = this.hashVerifier.verifyChainContinuity(
+                    this.lastAppliedBlock, this.lastHashes, event
+                );
+                if(!continuity.valid){
+                    console.error('Chain continuity error: ' + continuity.reason);
+                    await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+                    return;
+                }
+            } else if(blockIndex > this.lastAppliedBlock + 1){
+                console.log('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
                 return;
             }
