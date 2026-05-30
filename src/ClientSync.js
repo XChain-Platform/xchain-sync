@@ -444,8 +444,14 @@ class ClientSync {
                (this.lastKnownServerBlock === null || event.block_height > this.lastKnownServerBlock)){
                 this.lastKnownServerBlock = event.block_height;
             }
-            // Check for gaps on status update
-            if(this.lastAppliedBlock !== null && event.block_height >= this.lastAppliedBlock + 1){
+            // Check for gaps on status update. Use a strict '>' (not '>='): a
+            // server exactly one block ahead is the normal steady state — that
+            // next block arrives over the live WS stream — so only a shortfall of
+            // two or more blocks is a real gap worth an out-of-band catch-up. This
+            // mirrors the decoder gap check in _handleBlock and avoids firing a
+            // redundant incremental fetch on every status tick during live sync;
+            // a genuinely dropped block is still picked up on the next status tick.
+            if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
                 console.log('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
