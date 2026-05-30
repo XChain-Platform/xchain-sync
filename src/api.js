@@ -117,8 +117,8 @@ async function startApi(){
         }
         if(cfg['SYNC_MODE'] === 'server'){
             // Server is the source — these fields are not applicable
-            row.server_block  = null;
-            row.blocks_behind = null;
+            row.source_height = null;
+            row.lag_blocks    = null;
             // Expose per-subscriber applied-block lag so operators can see a
             // validator falling behind before the backpressure limit force-closes
             // it. appliedBlock/lag are null for subscribers that haven't sent a
@@ -127,10 +127,10 @@ async function startApi(){
             row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
         } else {
             let clientState  = syncService.getClientSyncState(chain, network, dbType);
-            let serverBlock  = clientState.lastKnownServerBlock;
-            row.server_block  = serverBlock;
-            row.blocks_behind = (serverBlock !== null && row.block_height !== null)
-                ? serverBlock - row.block_height
+            let sourceHeight = clientState.lastKnownServerBlock;
+            row.source_height = sourceHeight;
+            row.lag_blocks    = (sourceHeight !== null && row.block_height !== null)
+                ? Math.max(0, sourceHeight - row.block_height)
                 : null;
         }
         // Per-table row counts for replica-completeness verification.
