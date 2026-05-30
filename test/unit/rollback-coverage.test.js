@@ -69,17 +69,17 @@ const RECOMPUTED = ['balances', 'contract_balances'];
 // ride-along restores correct counts from the source (same model as markets).
 const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attestation_validator_stats'];
 
-// Tables ServerPoller names but that are NOT rolled back, each with a reason.
-// Several are intentional; two flag a known smell (see test below).
+// Tables that are NOT rolled back, each with a reason. All intentional:
+// snapshot-refreshed or append-only aggregates the thin replica can't recompute.
 const ROLLBACK_EXEMPT = {
     events:
         'Append-only operational log; no block_index/action_index cursor to scope ' +
         'a rollback. Never rolled back — matches the source indexer.',
     markets:
         'Derived OHLCV aggregate keyed by (tick1_id, tick2_id) — no action_index column. ' +
-        'ServerPoller lists it under actionScopedTables but getActionScopedRows JOINs ' +
-        'ON action_index, so the query errors and is swallowed: markets is NOT actually ' +
-        'streamed per-block (it only rides along in a full snapshot). The source indexer ' +
+        'ServerPoller deliberately omits it from actionScopedTables (it cannot ride the ' +
+        'per-block action_index join): markets is NOT streamed per-block (it only rides ' +
+        'along in a full snapshot). The source indexer ' +
         'recomputes it via getMarketInfo (last-trade / 24hr price-high-low-change-volume / ' +
         'bid / ask over orders/order_matches/dispenses), which the thin replica DB has no ' +
         'machinery to reproduce — replicating that math here would re-introduce exactly the ' +

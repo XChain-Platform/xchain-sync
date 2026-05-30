@@ -96,7 +96,12 @@ class ServerPoller {
                 'issues',
                 'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
                 'mappings_actions', 'mappings_files',
-                'markets', 'messages', 'mints',
+                // markets is intentionally NOT action-scoped: it has no action_index
+                // column (it's a derived OHLCV aggregate keyed by tick pair), so it can't
+                // ride the per-block action_index join. It is refreshed via full/incremental
+                // snapshots only; live per-block accuracy would require rebuilding it on the
+                // follower from order_matches/dispenses.
+                'messages', 'mints',
                 'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
                 'prices',
                 'reward_claims',
