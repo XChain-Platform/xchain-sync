@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The Docker image is now built with `npm ci` instead of `npm install`. The committed `package-lock.json` is copied into the build context and `npm ci` installs the exact dependency tree it records, failing the build if the lockfile is missing or out of sync with `package.json` rather than silently resolving newer transitive dependency versions.
+
+### Fixed
+- Regenerated `package-lock.json` so it matches `package.json`. The lockfile still pinned `axios@^1.6.7` while `package.json` had moved to `^1.16.0`, leaving the two out of sync. (Required for the `npm ci` build above to succeed.)
+
 ### Added
 - `test/unit/rollback-coverage.test.js` — a rollback-coverage guard. It reads the set of tables `ServerPoller` replicates (per dbType) and asserts every one is handled by `ClientRollback` on reorg (rolled back, recomputed, special-cased, or explicitly exempt with a reason), for both the `indexer` and `decoder` DB types. `ClientRollback`'s table lists are a hand-maintained mirror of `xchain-indexer/src/rollback.js` and have drifted before; this fails at CI time when a replicated table is left unhandled, instead of surfacing as silent replica divergence after a reorg.
 - `ClientRollback.js` — the decoder rollback table lists are now exposed as `decoderBlockTables` / `decoderTxScopedTables` constructor properties (a single source of truth `_rollbackDecoder` consumes), so the coverage guard can verify the decoder path. Behaviour is unchanged.
