@@ -198,4 +198,68 @@ describe('E2E: Transparency Log', function() {
             assert.strictEqual(Number(page2.data.results[0].block_index), 30);
         });
     });
+
+    describe('8.4 Merkle inclusion proof round-trip', function() {
+        it('proof validates against the root returned by /root/latest', async function() {
+            this.timeout(30000);
+
+            // Seed exactly 100 blocks — block 100 crosses the epoch boundary and
+            // triggers commitEpoch(1), making proofs available.
+            await fixtures.seedBlocks(sourceDb, 1, 100);
+
+            server = new ServerProcess(sourceDb, SERVER_PORT);
+            await server.start();
+            server.poller.lastPolledBlock = 0;
+            await server.poll();
+
+            // Wait until the epoch root is committed (root/latest returns non-null)
+            await waitFor(async () => {
+                let res = await axios.get(
+                    server.getUrl() + '/transparency/indexer/bitcoin/mainnet/root/latest',
+                    { timeout: 3000 }
+                );
+                return res.data.epoch !== null;
+            }, 15000);
+
+            // Fetch the latest root
+            let rootRes = await axios.get(
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/root/latest',
+                { timeout: 5000 }
+            );
+            assert.strictEqual(Number(rootRes.data.epoch), 1);
+            assert.ok(rootRes.data.merkle_root, 'should have a merkle_root');
+
+            // Fetch inclusion proof for an interior block
+            let proofRes = await axios.get(
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/proof/50',
+                { timeout: 5000 }
+            );
+            assert.strictEqual(proofRes.status, 200);
+            assert.strictEqual(proofRes.data.blockIndex, 50);
+            assert.strictEqual(proofRes.data.epoch, 1);
+            assert.ok(Array.isArray(proofRes.data.proof), 'proof should be an array');
+            assert.strictEqual(proofRes.data.verified, true);
+
+            // The proof's merkleRoot must match what /root/latest reports
+            assert.strictEqual(proofRes.data.merkleRoot, rootRes.data.merkle_root);
+        });
+    });
+
+    describe('8.5 Root/latest empty log', function() {
+        it('returns null epoch and merkle_root before any blocks are recorded', async function() {
+            this.timeout(15000);
+
+            // No blocks seeded — start server against an empty database
+            server = new ServerProcess(sourceDb, SERVER_PORT);
+            await server.start();
+
+            let res = await axios.get(
+                server.getUrl() + '/transparency/indexer/bitcoin/mainnet/root/latest',
+                { timeout: 5000 }
+            );
+            assert.strictEqual(res.status, 200);
+            assert.strictEqual(res.data.epoch, null);
+            assert.strictEqual(res.data.merkle_root, null);
+        });
+    });
 });

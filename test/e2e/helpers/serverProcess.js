@@ -166,6 +166,35 @@ class ServerProcess {
             }
         });
 
+        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', async (req, res) => {
+            if (req.params.dbType !== 'indexer')
+                return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            let { chain, network, block_index } = req.params;
+            if (chain !== this.chain || network !== this.network)
+                return res.status(404).json({ error: 'Chain/network not found' });
+            try {
+                let result = await this.log.getProof(block_index);
+                if (!result) return res.status(404).json({ error: 'Block not found' });
+                res.json(result);
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        app.get('/transparency/:dbType/:chain/:network/root/latest', async (req, res) => {
+            if (req.params.dbType !== 'indexer')
+                return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            let { chain, network } = req.params;
+            if (chain !== this.chain || network !== this.network)
+                return res.status(404).json({ error: 'Chain/network not found' });
+            try {
+                let result = await this.log.getLatestRoot();
+                res.json(result || { epoch: null, merkle_root: null });
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
         this.server = http.createServer(app);
         this.wss = new WebSocket.Server({ noServer: true });
 

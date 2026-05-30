@@ -20,6 +20,7 @@ const HUB_PORT = 19000;
 describe('Integration: REST API', function() {
 
     let sourceDb, mockHub, server, baseUrl, snapshotBuilder, log;
+    let testSyncMode = 'server';
 
     before(async function() {
         await setup.globalSetup();
@@ -120,6 +121,35 @@ describe('Integration: REST API', function() {
                 let limit = parseInt(req.query.limit) || 100;
                 let result = await log.getPage(page, limit);
                 res.json(result);
+            } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+
+        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', async (req, res) => {
+            if (testSyncMode !== 'server')
+                return res.status(403).json({ error: 'Transparency log only available in server mode' });
+            if (req.params.dbType !== 'indexer')
+                return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            let { chain, network, block_index } = req.params;
+            if (chain !== 'bitcoin' || network !== 'mainnet')
+                return res.status(404).json({ error: 'Chain/network not found' });
+            try {
+                let result = await log.getProof(block_index);
+                if (!result) return res.status(404).json({ error: 'Block not found' });
+                res.json(result);
+            } catch (e) { res.status(500).json({ error: e.message }); }
+        });
+
+        app.get('/transparency/:dbType/:chain/:network/root/latest', async (req, res) => {
+            if (testSyncMode !== 'server')
+                return res.status(403).json({ error: 'Transparency log only available in server mode' });
+            if (req.params.dbType !== 'indexer')
+                return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            let { chain, network } = req.params;
+            if (chain !== 'bitcoin' || network !== 'mainnet')
+                return res.status(404).json({ error: 'Chain/network not found' });
+            try {
+                let result = await log.getLatestRoot();
+                res.json(result || { epoch: null, merkle_root: null });
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
@@ -261,6 +291,108 @@ describe('Integration: REST API', function() {
             assert.strictEqual(res.data.results.length, 10);
             assert.strictEqual(res.data.page, 0);
             assert.strictEqual(res.data.limit, 10);
+        });
+    });
+
+    describe('GET /transparency/:dbType/:chain/:network/proof/:block_index', function() {
+        afterEach(function() {
+            testSyncMode = 'server';
+        });
+
+        it('returns Merkle inclusion proof for a committed block', async function() {
+            for (let i = 1; i <= 100; i++) {
+                await log.recordBlock(i, 1700000000 + i, 'lh' + i, 'ah' + i, 'ch' + i);
+            }
+
+            let res = await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/proof/50');
+            assert.strictEqual(res.status, 200);
+            assert.strictEqual(res.data.blockIndex, 50);
+            assert.strictEqual(res.data.epoch, 1);
+            assert.ok(res.data.merkleRoot, 'should have merkleRoot');
+            assert.ok(Array.isArray(res.data.proof), 'proof should be an array');
+            assert.strictEqual(res.data.verified, true);
+        });
+
+        it('returns 403 in client mode', async function() {
+            testSyncMode = 'client';
+            try {
+                await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/proof/50');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 403);
+            }
+        });
+
+        it('returns 400 for decoder dbType', async function() {
+            try {
+                await axios.get(baseUrl + '/transparency/decoder/bitcoin/mainnet/proof/50');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 400);
+            }
+        });
+
+        it('returns 404 for unknown chain/network', async function() {
+            try {
+                await axios.get(baseUrl + '/transparency/indexer/litecoin/mainnet/proof/50');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 404);
+            }
+        });
+    });
+
+    describe('GET /transparency/:dbType/:chain/:network/root/latest', function() {
+        afterEach(function() {
+            testSyncMode = 'server';
+        });
+
+        it('returns latest Merkle root after an epoch is committed', async function() {
+            for (let i = 1; i <= 100; i++) {
+                await log.recordBlock(i, 1700000000 + i, 'lh' + i, 'ah' + i, 'ch' + i);
+            }
+
+            let res = await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/root/latest');
+            assert.strictEqual(res.status, 200);
+            assert.strictEqual(Number(res.data.epoch), 1);
+            assert.ok(res.data.merkle_root, 'should have merkle_root');
+            assert.strictEqual(Number(res.data.start_block), 1);
+            assert.strictEqual(Number(res.data.end_block), 100);
+        });
+
+        it('returns null epoch and merkle_root when log is empty', async function() {
+            let res = await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/root/latest');
+            assert.strictEqual(res.status, 200);
+            assert.strictEqual(res.data.epoch, null);
+            assert.strictEqual(res.data.merkle_root, null);
+        });
+
+        it('returns 403 in client mode', async function() {
+            testSyncMode = 'client';
+            try {
+                await axios.get(baseUrl + '/transparency/indexer/bitcoin/mainnet/root/latest');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 403);
+            }
+        });
+
+        it('returns 400 for decoder dbType', async function() {
+            try {
+                await axios.get(baseUrl + '/transparency/decoder/bitcoin/mainnet/root/latest');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 400);
+            }
+        });
+
+        it('returns 404 for unknown chain/network', async function() {
+            try {
+                await axios.get(baseUrl + '/transparency/indexer/litecoin/mainnet/root/latest');
+                assert.fail('Should have thrown');
+            } catch (e) {
+                assert.strictEqual(e.response.status, 404);
+            }
         });
     });
 });
