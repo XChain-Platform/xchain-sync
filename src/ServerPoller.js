@@ -136,12 +136,15 @@ class ServerPoller {
         await this._updateStatus();
 
         while(this.running){
+            let blocksProcessed = 0;
             try {
-                await this._poll();
+                blocksProcessed = await this._poll() || 0;
             } catch(e){
                 console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ':', e.message);
             }
-            await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
+            // Skip sleep when the batch cap was hit — backlog likely remains
+            if(blocksProcessed < 100)
+                await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
         }
     }
 
@@ -201,7 +204,9 @@ class ServerPoller {
         }
 
         if(blocksProcessed > 0)
-            await this._updateStatus();
+            await this._updateStatus(currentBlock);
+
+        return blocksProcessed;
     }
 
     // Build a complete block payload for broadcasting.
@@ -363,12 +368,13 @@ class ServerPoller {
     }
 
     // Update the broadcaster's status data for this chain/network/dbType
-    async _updateStatus(){
+    async _updateStatus(sourceBlockHeight){
         let hashRow = this.lastPolledBlock ? await this.db.getBlockHashRow(this.lastPolledBlock) : null;
         let status = {
-            dbType:       this.dbType,
-            block_height: this.lastPolledBlock,
-            block_time:   hashRow ? Number(hashRow.block_time) : null
+            dbType:              this.dbType,
+            block_height:        this.lastPolledBlock,
+            block_time:          hashRow ? Number(hashRow.block_time) : null,
+            source_block_height: sourceBlockHeight != null ? sourceBlockHeight : (await this.db.getLastBlock())
         };
         if(this.dbType === 'decoder'){
             status.block_hash = hashRow ? hashRow.block_hash : null;
