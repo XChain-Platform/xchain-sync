@@ -85,16 +85,25 @@ class SyncService {
 
     // Wait for the hub to respond
     async _waitForHub(){
+        let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
+        if(maxWaitMs === undefined || maxWaitMs === null)
+            maxWaitMs = parseInt(process.env.MAX_HUB_WAIT_MS) || 300000;
+        let startedAt = Date.now();
         let attempts = 0;
         while(true){
+            if(Date.now() - startedAt >= maxWaitMs){
+                console.error('Hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+                    + ' was unreachable after ' + Math.round(maxWaitMs / 1000) + 's (MAX_HUB_WAIT_MS); exiting.');
+                process.exit(1);
+            }
             let alive = await this.hubClient.ping();
             if(alive){
                 console.log('Hub is reachable');
                 return;
             }
             attempts++;
-            if(attempts % 10 === 0)
-                console.log('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT'] + '...');
+            console.log('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+                + '... (attempt ' + attempts + ')');
             await this.util.sleep(3000);
         }
     }

@@ -54,6 +54,11 @@ module.exports = {
         config['HUB_API_HOST']   = process.env.HUB_API_HOST;
         config['HUB_PORT']       = parseIntMin1(process.env.HUB_PORT, 10000);
 
+        // Max time to wait for the hub at startup before giving up and
+        // exiting non-zero (so a process supervisor can restart/alert).
+        // Defaults to 5 minutes.
+        config['MAX_HUB_WAIT_MS'] = parseIntMin0(process.env.MAX_HUB_WAIT_MS, 300000);
+
         // CORS
         config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || false;
 
@@ -117,6 +122,9 @@ module.exports = {
 
         // Hash confirm timeout for cross-source verification (5 seconds)
         config['HASH_CONFIRM_TIMEOUT'] = 5000;
+
+        // Validator heartbeat TTL: entries not seen within this window (ms) are evicted
+        config['VALIDATOR_HEARTBEAT_TTL'] = parseIntMin1(process.env.VALIDATOR_HEARTBEAT_TTL, 60000);
 
         return config;
     }

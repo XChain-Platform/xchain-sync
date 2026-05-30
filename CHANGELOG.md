@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Docker image is now built with `npm ci` instead of `npm install`. The committed `package-lock.json` is copied into the build context and `npm ci` installs the exact dependency tree it records, failing the build if the lockfile is missing or out of sync with `package.json` rather than silently resolving newer transitive dependency versions.
 
 ### Fixed
+- `src/SyncService.js` / `src/config.js` — `_waitForHub()` now gives up after `MAX_HUB_WAIT_MS` (new env var, default 300000 = 5 min) instead of retrying forever. A fresh deploy against an unreachable hub previously hung silently in an unbounded `while(true)` ping loop with no timeout and no process exit, so a process supervisor saw a running-but-stuck service and never restarted or alerted. On expiry the loop logs a `console.error` naming the hub host/port and exits non-zero. The progress line also now fires every attempt (every 3s) instead of every tenth attempt (every 30s), so operators get prompt feedback. `MAX_HUB_WAIT_MS` is documented in the README `.env` examples; raise it for environments that intentionally bring the hub up after sync.
 - Regenerated `package-lock.json` so it matches `package.json`. The lockfile still pinned `axios@^1.6.7` while `package.json` had moved to `^1.16.0`, leaving the two out of sync. (Required for the `npm ci` build above to succeed.)
 
 ### Added

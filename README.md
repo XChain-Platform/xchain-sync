@@ -66,6 +66,11 @@ SYNC_API_PORT=3006
 
 HUB_API_HOST=localhost
 HUB_PORT=10000
+
+# Max time (ms) to wait for the hub at startup before exiting non-zero.
+# Defaults to 300000 (5 min). Raise it for environments that intentionally
+# bring the hub up after sync.
+# MAX_HUB_WAIT_MS=300000
 ```
 
 In server mode, database credentials are discovered automatically from the hub — no database environment variables are needed. The service calls `getallconfigs` on the hub and connects to every installed indexer database.
@@ -89,6 +94,11 @@ REPLICA_DB_PASS=your_password
 
 HUB_API_HOST=localhost
 HUB_PORT=10000
+
+# Max time (ms) to wait for the hub at startup before exiting non-zero.
+# Defaults to 300000 (5 min). Raise it for environments that intentionally
+# bring the hub up after sync.
+# MAX_HUB_WAIT_MS=300000
 ```
 
 Start the service:
