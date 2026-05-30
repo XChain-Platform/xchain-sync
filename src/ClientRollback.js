@@ -21,6 +21,8 @@
  *
  ********************************************************************/
 
+const balanceHelpers = require('./balance-helpers');
+
 class ClientRollback {
 
     constructor(db, util) {
@@ -205,53 +207,25 @@ class ClientRollback {
                 // Table may not exist on older replica schemas — skip
             }
 
-            // Recalculate balances from credits/debits
-            // After rollback, the new blocks will arrive via the sync stream and re-apply correct balances
-            // For now, we rebuild balances from the remaining credit/debit data
+            // Recalculate balances from the surviving credits/debits.
+            // SQL is shared with ClientApplier via balance-helpers to prevent divergence.
             try {
-                await this.db.doQuery("DELETE FROM balances");
-                await this.db.doQuery(`INSERT INTO balances (address_id, tick_id, amount)
-                    SELECT address_id, tick_id,
-                        CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END), 0) AS CHAR)
-                    FROM (
-                        SELECT address_id, tick_id, amount, 'credit' as type FROM credits
-                        UNION ALL
-                        SELECT address_id, tick_id, amount, 'debit' as type FROM debits
-                    ) t
-                    GROUP BY address_id, tick_id
-                    HAVING SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END) != 0`);
+                await balanceHelpers.rebuildBalances(this.db);
             } catch(e){
                 if(e.errno !== 1146) throw e;
                 console.error('Error rebuilding balances after rollback:', e.message);
             }
 
-            // Recalculate contract custody balances from credits/debits' contract
-            // analogue: deposits/withdrawals. contract_balances is a derived aggregate
-            // keyed by (contract_index, tick_id) with no action_index column, so it
-            // can't be deleted by the generic action-scoped loop above (and it isn't
-            // streamed per-block — the source poller's action_index JOIN errors for it).
-            // The source indexer recomputes it after rollback via updateContractBalances();
-            // the replica must do the equivalent or stale custody balances survive the
-            // reorg. deposits/withdrawals ARE rolled back + re-streamed, so a wholesale
-            // rebuild from the surviving 'valid' rows reproduces the source exactly.
-            // Mirrors the balances rebuild directly above.
+            // Recalculate contract custody balances from the surviving valid
+            // deposits/withdrawals.  contract_balances is a derived aggregate with
+            // no action_index column, so it can't be deleted by the action-scoped
+            // loop above and isn't streamed per-block.  A wholesale rebuild from the
+            // remaining rows reproduces the source indexer's updateContractBalances()
+            // exactly.  SQL shared with ClientApplier via balance-helpers.
             try {
-                await this.db.doQuery("DELETE FROM contract_balances");
-                await this.db.doQuery(`INSERT INTO contract_balances (contract_index, tick_id, amount)
-                    SELECT contract_index, tick_id,
-                        CAST(SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) AS CHAR)
-                    FROM (
-                        SELECT contract_index, tick_id, amount, 'deposit' as type FROM deposits
-                            WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
-                        UNION ALL
-                        SELECT contract_index, tick_id, amount, 'withdrawal' as type FROM withdrawals
-                            WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
-                    ) t
-                    GROUP BY contract_index, tick_id
-                    HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
+                await balanceHelpers.rebuildContractBalances(this.db);
             } catch(e){
                 if(e.errno !== 1146) throw e;
-                // Tables may not exist on older replica schemas — skip
                 console.error('Error rebuilding contract_balances after rollback:', e.message);
             }
 

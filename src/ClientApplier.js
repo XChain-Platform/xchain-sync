@@ -20,7 +20,8 @@
  *
  ********************************************************************/
 
-const validation = require('./validation');
+const validation     = require('./validation');
+const balanceHelpers = require('./balance-helpers');
 
 class ClientApplier {
 
@@ -89,22 +90,10 @@ class ClientApplier {
     }
 
     // Recompute the balances table from the current credits/debits rows.
-    // Shared with ClientRollback (which calls the same SQL inline). Kept
-    // local to ClientApplier because it has no business reaching into
-    // ClientRollback to invoke a helper.
+    // SQL lives in balance-helpers so ClientRollback uses the same query.
     async _rebuildBalances(){
         try {
-            await this.db.doQuery("DELETE FROM balances");
-            await this.db.doQuery(`INSERT INTO balances (address_id, tick_id, amount)
-                SELECT address_id, tick_id,
-                    CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN t.amount ELSE -t.amount END), 0) AS CHAR)
-                FROM (
-                    SELECT address_id, tick_id, amount, 'credit' as type FROM credits
-                    UNION ALL
-                    SELECT address_id, tick_id, amount, 'debit' as type FROM debits
-                ) t
-                GROUP BY address_id, tick_id
-                HAVING SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END) != 0`);
+            await balanceHelpers.rebuildBalances(this.db);
         } catch(e){
             if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
@@ -114,25 +103,11 @@ class ClientApplier {
     }
 
     // Recompute the contract_balances table from the current deposits/withdrawals
-    // rows (valid status only). Shared in spirit with ClientRollback, which runs the
-    // same SQL inline during a reorg. contract_balances has no action_index column,
-    // so — like balances — it can't be streamed/scoped per-block and must be derived
-    // from the surviving ledger rows. Indexer-shaped DBs only.
+    // rows (valid status only).  SQL lives in balance-helpers so ClientRollback
+    // uses the same query.  Indexer-shaped DBs only.
     async _rebuildContractBalances(){
         try {
-            await this.db.doQuery("DELETE FROM contract_balances");
-            await this.db.doQuery(`INSERT INTO contract_balances (contract_index, tick_id, amount)
-                SELECT contract_index, tick_id,
-                    CAST(SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) AS CHAR)
-                FROM (
-                    SELECT contract_index, tick_id, amount, 'deposit' as type FROM deposits
-                        WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
-                    UNION ALL
-                    SELECT contract_index, tick_id, amount, 'withdrawal' as type FROM withdrawals
-                        WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')
-                ) t
-                GROUP BY contract_index, tick_id
-                HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`);
+            await balanceHelpers.rebuildContractBalances(this.db);
         } catch(e){
             if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
