@@ -287,6 +287,15 @@ class SyncService {
         return chains;
     }
 
+    // Get client sync state for a chain/network/dbType (client mode only).
+    // Returns { lastKnownServerBlock } — null values when not yet observed.
+    getClientSyncState(chain, network, dbType){
+        let type = dbType || 'indexer';
+        let key  = chain + ':' + network + ':' + type;
+        let sync = this.clientSyncs.get(key);
+        return { lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null };
+    }
+
     // Get the transparency log for a chain/network. Always indexer-only —
     // the decoder DB does not maintain a transparency log (see decoder-DB
     // architecture decisions: skip TransparencyLog for decoder).

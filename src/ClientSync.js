@@ -48,8 +48,9 @@ class ClientSync {
         this.sources    = this.config['SYNC_SOURCES'].split(',').map(s => s.trim()).filter(s => s);
         this.running    = false;
         this.wsConns    = [];
-        this.lastAppliedBlock = null;
-        this.lastHashes = null;
+        this.lastAppliedBlock     = null;
+        this.lastHashes           = null;
+        this.lastKnownServerBlock = null;
 
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
@@ -337,10 +338,20 @@ class ClientSync {
     // Handle an incoming WebSocket event
     async _handleEvent(event, sourceIndex){
         if(event.type === 'block'){
+            // Track the server's advancing block height
+            if(typeof event.block_index === 'number' &&
+               (this.lastKnownServerBlock === null || event.block_index > this.lastKnownServerBlock)){
+                this.lastKnownServerBlock = event.block_index;
+            }
             await this._handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
             await this._handleReorg(event);
         } else if(event.type === 'status'){
+            // Track the server's current block height
+            if(typeof event.block_height === 'number' &&
+               (this.lastKnownServerBlock === null || event.block_height > this.lastKnownServerBlock)){
+                this.lastKnownServerBlock = event.block_height;
+            }
             // Check for gaps on status update
             if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
                 console.log('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);

@@ -99,8 +99,8 @@ async function startApi(){
         return null;
     }
 
-    // Build the status row for one (db, dbType) pair.
-    async function buildStatusRow(db, dbType){
+    // Build the status row for one (db, dbType, chain, network) tuple.
+    async function buildStatusRow(db, dbType, chain, network){
         let lastBlock = await db.getLastBlock();
         let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
         let row = {
@@ -114,6 +114,18 @@ async function startApi(){
             row.actions_hash  = hashRow ? hashRow.actions_hash : null;
             row.contract_hash = hashRow ? hashRow.contract_hash : null;
         }
+        if(cfg['SYNC_MODE'] === 'server'){
+            // Server is the source — these fields are not applicable
+            row.server_block  = null;
+            row.blocks_behind = null;
+        } else {
+            let clientState  = syncService.getClientSyncState(chain, network, dbType);
+            let serverBlock  = clientState.lastKnownServerBlock;
+            row.server_block  = serverBlock;
+            row.blocks_behind = (serverBlock !== null && row.block_height !== null)
+                ? serverBlock - row.block_height
+                : null;
+        }
         return row;
     }
 
@@ -124,7 +136,7 @@ async function startApi(){
         let promises = chains.map(async ({ coin, network, dbType }) => {
             let db = syncService.getDatabase(coin, network, dbType);
             if(!db) return;
-            let row = await buildStatusRow(db, dbType);
+            let row = await buildStatusRow(db, dbType, coin, network);
             if(!result[coin]) result[coin] = {};
             if(!result[coin][network]) result[coin][network] = {};
             result[coin][network][dbType] = row;
@@ -148,7 +160,7 @@ async function startApi(){
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
 
         try {
-            let row = await buildStatusRow(db, dbType);
+            let row = await buildStatusRow(db, dbType, chain, network);
             row.chain = chain;
             row.network = network;
             row.dbType = dbType;
