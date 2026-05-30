@@ -80,8 +80,10 @@ module.exports = {
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure limit
-        config['WS_BACKPRESSURE_LIMIT'] = 50;
+        // WebSocket backpressure limit (consecutive buffered sends before a slow
+        // subscriber is force-disconnected). Env-configurable so operators can tune
+        // tolerance for validators with heterogeneous replica DB speeds.
+        config['WS_BACKPRESSURE_LIMIT'] = parseIntMin1(process.env.WS_BACKPRESSURE_LIMIT, 50);
 
         // WebSocket status broadcast interval (60 seconds)
         config['WS_STATUS_INTERVAL'] = 60000;

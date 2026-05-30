@@ -118,6 +118,12 @@ async function startApi(){
             // Server is the source — these fields are not applicable
             row.server_block  = null;
             row.blocks_behind = null;
+            // Expose per-subscriber applied-block lag so operators can see a
+            // validator falling behind before the backpressure limit force-closes
+            // it. appliedBlock/lag are null for subscribers that haven't sent a
+            // heartbeat yet (e.g. older client builds).
+            let broadcaster = syncService.getBroadcaster();
+            row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
         } else {
             let clientState  = syncService.getClientSyncState(chain, network, dbType);
             let serverBlock  = clientState.lastKnownServerBlock;

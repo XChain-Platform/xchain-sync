@@ -88,9 +88,23 @@ class BlockBroadcaster {
         ws._syncBuffered = 0;
         ws._syncMode    = (syncMode === 'infra-only' && type === 'indexer') ? 'infra-only' : 'full';
 
+        // Per-subscriber applied-block tracking. _syncLastSentBlock is the highest
+        // block this server has pushed to the subscriber; _syncAppliedBlock is the
+        // highest block the subscriber reports having committed to its replica DB
+        // (via the heartbeat message handler below). The difference is the
+        // subscriber's lag, surfaced through getSubscribers()/the /status endpoint.
+        // Both stay null for legacy clients that never send heartbeats.
+        ws._syncLastSentBlock = null;
+        ws._syncAppliedBlock  = null;
+
         // Setup cleanup on close
         ws.on('close', () => this.removeSubscription(ws));
         ws.on('error', () => this.removeSubscription(ws));
+
+        // Inbound messages from the subscriber. The only message type understood
+        // is a heartbeat carrying the subscriber's last applied block height;
+        // anything else is ignored silently (the channel is otherwise push-only).
+        ws.on('message', (data) => this._handleClientMessage(ws, data));
 
         // Send initial status if available
         let status = this.statusData.get(key);
@@ -129,6 +143,23 @@ class BlockBroadcaster {
         ws._syncChain   = null;
         ws._syncNetwork = null;
         ws._syncDbType  = null;
+    }
+
+    // Handle an inbound message from a subscriber. Currently the only supported
+    // message is { type: 'heartbeat', appliedBlock: <number> }, which records how
+    // far the subscriber has applied blocks to its replica DB. Malformed JSON or
+    // unrecognised message types are ignored silently — this channel is otherwise
+    // server→client push only.
+    _handleClientMessage(ws, data){
+        let msg;
+        try {
+            msg = JSON.parse(typeof data === 'string' ? data : data.toString());
+        } catch(e){
+            return;
+        }
+        if(msg && msg.type === 'heartbeat' && typeof msg.appliedBlock === 'number'){
+            ws._syncAppliedBlock = msg.appliedBlock;
+        }
     }
 
     // Update status data for a chain/network/dbType
@@ -170,13 +201,41 @@ class BlockBroadcaster {
             infraMessage = JSON.stringify(infraEvent, bigIntReplacer);
         }
 
+        // Track the highest block height pushed to each subscriber, so /status can
+        // report per-subscriber lag against the applied height each one reports back.
+        // Only 'block' events advance this cursor (reorgs/status carry no applied
+        // progression). _send may evict a backpressured subscriber, but writing the
+        // field on an already-removed ws is harmless.
+        let sentBlock = (event && event.type === 'block' && typeof event.block_index === 'number')
+            ? event.block_index : null;
+
         for(let ws of subs){
             if(ws._syncMode === 'infra-only' && infraMessage){
                 this._send(ws, infraMessage, true);
             } else {
                 this._send(ws, fullMessage, true);
             }
+            if(sentBlock !== null)
+                ws._syncLastSentBlock = sentBlock;
         }
+    }
+
+    // Return per-subscriber lag info for a chain/network/dbType, used by /status.
+    // Each entry: { ip, lastSentBlock, appliedBlock, lag }. lastSentBlock is null
+    // until the first block is broadcast; appliedBlock is null until the subscriber
+    // sends its first heartbeat; lag (lastSentBlock - appliedBlock) is null whenever
+    // either side is unavailable.
+    getSubscribers(chain, network, dbType){
+        let subs = this.subscribers.get(this._key(chain, network, dbType));
+        if(!subs) return [];
+        let out = [];
+        for(let ws of subs){
+            let lastSent = (typeof ws._syncLastSentBlock === 'number') ? ws._syncLastSentBlock : null;
+            let applied  = (typeof ws._syncAppliedBlock === 'number')  ? ws._syncAppliedBlock  : null;
+            let lag = (lastSent !== null && applied !== null) ? lastSent - applied : null;
+            out.push({ ip: ws._syncIp || null, lastSentBlock: lastSent, appliedBlock: applied, lag });
+        }
+        return out;
     }
 
     // Broadcast status to all subscribers for a chain/network/dbType

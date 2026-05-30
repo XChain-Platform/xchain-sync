@@ -54,6 +54,14 @@ class ClientSync {
 
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
+
+        // Applied-block heartbeat state. After committing each live block we report
+        // our applied height back to the source servers so operators can observe
+        // this validator's lag via the server's /status endpoint. Debounced to avoid
+        // a round-trip per block under fast sync: flush every 10 blocks, or after 5s,
+        // whichever comes first.
+        this._hbLastSentBlock = null;
+        this._hbTimer         = null;
     }
 
     // Start the client sync loop
@@ -93,10 +101,48 @@ class ClientSync {
     // Stop the client sync
     stop(){
         this.running = false;
+        if(this._hbTimer){
+            clearTimeout(this._hbTimer);
+            this._hbTimer = null;
+        }
         for(let ws of this.wsConns){
             try { ws.close(); } catch(e){}
         }
         this.wsConns = [];
+    }
+
+    // Schedule an applied-block heartbeat (debounced). Flushes immediately once at
+    // least 10 blocks have been applied since the last report; otherwise arms a 5s
+    // timer so a trickle of blocks still gets reported without a per-block send.
+    _scheduleHeartbeat(){
+        if(this._hbLastSentBlock === null ||
+           (this.lastAppliedBlock - this._hbLastSentBlock) >= 10){
+            this._flushHeartbeat();
+        } else if(!this._hbTimer){
+            this._hbTimer = setTimeout(() => {
+                this._hbTimer = null;
+                this._flushHeartbeat();
+            }, 5000);
+        }
+    }
+
+    // Send the current applied height to every open source connection. Best-effort:
+    // a server running an older build simply ignores the message, and a failed send
+    // is swallowed (the next heartbeat will carry the latest height anyway).
+    _flushHeartbeat(){
+        if(this.lastAppliedBlock === null) return;
+        if(this._hbTimer){
+            clearTimeout(this._hbTimer);
+            this._hbTimer = null;
+        }
+        let msg = JSON.stringify({ type: 'heartbeat', appliedBlock: this.lastAppliedBlock });
+        for(let ws of this.wsConns){
+            try {
+                if(ws && ws.readyState === WebSocket.OPEN)
+                    ws.send(msg);
+            } catch(e){ /* best-effort */ }
+        }
+        this._hbLastSentBlock = this.lastAppliedBlock;
     }
 
     // Fetch and apply schema from a remote sync server
@@ -444,6 +490,8 @@ class ClientSync {
         try {
             await this.applier.applyBlock(event);
             this.lastAppliedBlock = event.block_index;
+            // Report our applied height back to the source(s), debounced.
+            this._scheduleHeartbeat();
             if(this.dbType === 'decoder'){
                 this.lastHashes = { block_hash: event.block_hash };
             } else {

@@ -200,6 +200,84 @@ describe('BlockBroadcaster', function(){
         });
     });
 
+    describe('applied-block tracking', function(){
+
+        // Retrieve the inbound 'message' handler addSubscription registered on a ws.
+        function messageHandler(ws){
+            let call = ws.on.getCalls().find(c => c.args[0] === 'message');
+            return call ? call.args[1] : null;
+        }
+
+        it('initialises _syncLastSentBlock and _syncAppliedBlock to null', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.1'), 'bitcoin', 'mainnet');
+            assert.strictEqual(ws._syncLastSentBlock, null);
+            assert.strictEqual(ws._syncAppliedBlock, null);
+        });
+
+        it('updates _syncAppliedBlock when a heartbeat message arrives', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.2'), 'bitcoin', 'mainnet');
+            let handler = messageHandler(ws);
+            assert.ok(handler, 'message handler should be registered');
+            handler(JSON.stringify({ type: 'heartbeat', appliedBlock: 42 }));
+            assert.strictEqual(ws._syncAppliedBlock, 42);
+        });
+
+        it('ignores malformed or unknown inbound messages', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.3'), 'bitcoin', 'mainnet');
+            let handler = messageHandler(ws);
+            handler('not json');
+            handler(JSON.stringify({ type: 'something-else', appliedBlock: 99 }));
+            handler(JSON.stringify({ type: 'heartbeat' })); // no appliedBlock
+            assert.strictEqual(ws._syncAppliedBlock, null);
+        });
+
+        it('updates _syncLastSentBlock to the block height on broadcast', function(){
+            let ws1 = mockWs(), ws2 = mockWs();
+            broadcaster.addSubscription(ws1, mockReq('7.7.7.4'), 'bitcoin', 'mainnet');
+            broadcaster.addSubscription(ws2, mockReq('7.7.7.5'), 'bitcoin', 'mainnet');
+            broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block', block_index: 850000 });
+            assert.strictEqual(ws1._syncLastSentBlock, 850000);
+            assert.strictEqual(ws2._syncLastSentBlock, 850000);
+        });
+
+        it('does not advance _syncLastSentBlock for non-block events', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.6'), 'bitcoin', 'mainnet');
+            broadcaster.broadcast('bitcoin', 'mainnet', { type: 'reorg', block_index: 850001 });
+            assert.strictEqual(ws._syncLastSentBlock, null);
+        });
+
+        it('reports null appliedBlock and lag for a subscriber with no heartbeat', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.7'), 'bitcoin', 'mainnet');
+            broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block', block_index: 100 });
+            let subs = broadcaster.getSubscribers('bitcoin', 'mainnet');
+            assert.strictEqual(subs.length, 1);
+            assert.strictEqual(subs[0].ip, '7.7.7.7');
+            assert.strictEqual(subs[0].lastSentBlock, 100);
+            assert.strictEqual(subs[0].appliedBlock, null);
+            assert.strictEqual(subs[0].lag, null);
+        });
+
+        it('reports lag = lastSentBlock - appliedBlock after a heartbeat', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.8'), 'bitcoin', 'mainnet');
+            broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block', block_index: 100 });
+            messageHandler(ws)(JSON.stringify({ type: 'heartbeat', appliedBlock: 97 }));
+            let subs = broadcaster.getSubscribers('bitcoin', 'mainnet');
+            assert.strictEqual(subs[0].lastSentBlock, 100);
+            assert.strictEqual(subs[0].appliedBlock, 97);
+            assert.strictEqual(subs[0].lag, 3);
+        });
+
+        it('returns an empty array for an unknown chain/network', function(){
+            assert.deepStrictEqual(broadcaster.getSubscribers('unknown', 'test'), []);
+        });
+    });
+
     describe('getSubscriberCount', function(){
         it('returns count for specific chain/network', function(){
             broadcaster.addSubscription(mockWs(), mockReq('a.a.a.1'), 'bitcoin', 'mainnet');
