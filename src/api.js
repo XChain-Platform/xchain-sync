@@ -57,7 +57,8 @@ async function startApi(){
     // Create Express app
     const app = express();
     app.use(helmet());
-    app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET'] }));
+    app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
+    app.use(express.json({ limit: '16kb' }));
     app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     // Rate limiters for snapshot endpoints
@@ -83,6 +84,14 @@ async function startApi(){
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Transparency endpoint rate limit exceeded. Try again later.' }
+    });
+
+    const heartbeatLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: 120,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: 'Heartbeat rate limit exceeded.' }
     });
 
     // Initialize the SyncService
@@ -157,6 +166,33 @@ async function startApi(){
         }
         return row;
     }
+
+    // GET /health — lightweight liveness + DB circuit-breaker visibility.
+    // /status reports per-chain block heights and lag, but not whether a
+    // database connection has tripped its circuit breaker open after repeated
+    // failures. When that happens the replicator stops applying blocks while the
+    // process stays up, so a bare liveness probe still looks fine. This endpoint
+    // surfaces the per-database circuit state so monitoring can tell a healthy
+    // replicator apart from one stalled on a database outage.
+    app.get('/health', (req, res) => {
+        let chains = syncService.getChains();
+        let databases = [];
+        let anyOpen = false;
+        for(let { coin, network, dbType } of chains){
+            let db = syncService.getDatabase(coin, network, dbType);
+            if(!db) continue;
+            let circuit = db.circuitState || null;
+            if(circuit === 'open') anyOpen = true;
+            databases.push({ chain: coin, network: network, dbType: dbType, circuit: circuit });
+        }
+        if(anyOpen) res.status(503);
+        res.json({
+            status:       anyOpen ? 'degraded' : 'healthy',
+            mode:         cfg['SYNC_MODE'],
+            databases:    databases,
+            last_updated: new Date().toISOString()
+        });
+    });
 
     // GET /status — all chains, nested by coin → network → dbType
     app.get('/status', (req, res) => {
@@ -282,6 +318,78 @@ async function startApi(){
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
+    });
+
+    // ── Validator heartbeat endpoints (server mode only) ──
+
+    // POST /validator-heartbeat/:dbType/:chain/:network
+    // Accepts { validator_id, applied_height, applied_block_time? } from a named validator.
+    // Stores the entry in BlockBroadcaster keyed by validator_id so operators can
+    // observe per-validator lag without requiring an active WebSocket connection.
+    app.post('/validator-heartbeat/:dbType/:chain/:network', heartbeatLimiter, (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Validator heartbeat only available in server mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+
+        let { validator_id, applied_height, applied_block_time } = req.body || {};
+
+        if(typeof validator_id !== 'string' || !validator_id.trim() || validator_id.length > 256)
+            return res.status(400).json({ error: 'validator_id must be a non-empty string (max 256 chars)' });
+        if(typeof applied_height !== 'number' || !Number.isInteger(applied_height) || applied_height < 0)
+            return res.status(400).json({ error: 'applied_height must be a non-negative integer' });
+        if(applied_block_time !== undefined && applied_block_time !== null && typeof applied_block_time !== 'number')
+            return res.status(400).json({ error: 'applied_block_time must be a number' });
+
+        let broadcaster = syncService.getBroadcaster();
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+
+        broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null);
+        res.json({ ok: true });
+    });
+
+    // GET /validator-status — all chains, nested by coin → network → dbType → validators
+    app.get('/validator-status', (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Validator status only available in server mode' });
+
+        let broadcaster = syncService.getBroadcaster();
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+
+        let chains = syncService.getChains();
+        let result = {};
+        for(let { coin, network, dbType } of chains){
+            let validators = broadcaster.getValidatorHeartbeats(coin, network, dbType);
+            if(!result[coin]) result[coin] = {};
+            if(!result[coin][network]) result[coin][network] = {};
+            result[coin][network][dbType] = { validators };
+        }
+        result.last_updated = new Date().toISOString();
+        res.json(result);
+    });
+
+    // GET /validator-status/:dbType/:chain/:network
+    app.get('/validator-status/:dbType/:chain/:network', (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Validator status only available in server mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+
+        let broadcaster = syncService.getBroadcaster();
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+
+        let validators = broadcaster.getValidatorHeartbeats(chain, network, dbType);
+        res.json({ chain, network, dbType, validators, last_updated: new Date().toISOString() });
     });
 
     // ── Transparency endpoints (indexer only) ──
@@ -450,6 +558,14 @@ async function startApi(){
                 broadcaster.broadcastStatus(coin, network, dbType);
             }
         }, cfg['WS_STATUS_INTERVAL']);
+
+        // Stale validator-heartbeat eviction — run every 30 seconds.
+        // Removes entries whose last_seen exceeds VALIDATOR_HEARTBEAT_TTL so the map
+        // does not accumulate dead entries after validators disconnect.
+        setInterval(() => {
+            let broadcaster = syncService.getBroadcaster();
+            if(broadcaster) broadcaster.evictStaleValidators(cfg['VALIDATOR_HEARTBEAT_TTL']);
+        }, 30000);
     }
 
     // Start the HTTP server

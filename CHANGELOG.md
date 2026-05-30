@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `src/api.js` — new `GET /health` endpoint. `/status` reports per-chain block heights and lag but not whether a replica database connection has tripped its circuit breaker open after repeated failures (which halts block application while the process stays up). `/health` lists each replicated database's circuit state and returns HTTP 503 when any is open, so monitoring can tell a healthy replicator apart from one stalled on a database outage.
+
 ### Changed
 - `WS_BACKPRESSURE_LIMIT` (consecutive buffered sends before a slow WebSocket subscriber is force-disconnected) is now env-configurable via `process.env.WS_BACKPRESSURE_LIMIT` (floored at 1), instead of being hardcoded to 50. Lets operators tune disconnect tolerance for validators with heterogeneous replica DB speeds. Default is unchanged at 50.
 - The Docker image is now built with `npm ci` instead of `npm install`. The committed `package-lock.json` is copied into the build context and `npm ci` installs the exact dependency tree it records, failing the build if the lockfile is missing or out of sync with `package.json` rather than silently resolving newer transitive dependency versions.
