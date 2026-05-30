@@ -21,6 +21,7 @@
  ********************************************************************/
 
 const zlib = require('zlib');
+const { SCHEMA_VERSION } = require('./schema-version');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -104,6 +105,7 @@ class SnapshotBuilder {
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);
+            res.setHeader('X-Snapshot-Schema-Version', SCHEMA_VERSION);
             if(hashRow){
                 res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
                 res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
@@ -114,7 +116,7 @@ class SnapshotBuilder {
             gzip.pipe(res);
 
             // Start JSON structure
-            gzip.write('{"block_height":' + lastBlock + ',"tables":{');
+            gzip.write('{"schema_version":' + SCHEMA_VERSION + ',"block_height":' + lastBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db);
             let first = true;
@@ -191,6 +193,7 @@ class SnapshotBuilder {
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);
             res.setHeader('X-Since-Block', sinceBlock);
+            res.setHeader('X-Snapshot-Schema-Version', SCHEMA_VERSION);
             if(hashRow){
                 if(dbType === 'decoder'){
                     res.setHeader('X-Block-Hash', hashRow.block_hash || '');
@@ -204,7 +207,7 @@ class SnapshotBuilder {
             let gzip = zlib.createGzip();
             gzip.pipe(res);
 
-            gzip.write('{"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
+            gzip.write('{"schema_version":' + SCHEMA_VERSION + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db);
             let first = true;

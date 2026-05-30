@@ -20,8 +20,9 @@
  *
  ********************************************************************/
 
-const validation     = require('./validation');
-const balanceHelpers = require('./balance-helpers');
+const validation          = require('./validation');
+const balanceHelpers      = require('./balance-helpers');
+const { SCHEMA_VERSION }  = require('./schema-version');
 
 class ClientApplier {
 
@@ -117,9 +118,16 @@ class ClientApplier {
     }
 
     // Apply a full snapshot (used for initial bootstrap)
-    // snapshotData: parsed JSON object with { tables: { tableName: [rows...] } }
+    // snapshotData: parsed JSON object with { schema_version, block_height, tables: { tableName: [rows...] } }
+    //
+    // On schema_version mismatch the validator must be restarted after the server is upgraded so
+    // that _fetchAndApplySchema re-runs against the new DDL before any rows are applied.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
+
+        if(snapshotData.schema_version !== SCHEMA_VERSION){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + SCHEMA_VERSION + ' — restart the validator after upgrading the server');
+        }
 
         console.log('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
         let timer = this.util.startTimer();
@@ -162,6 +170,10 @@ class ClientApplier {
     // Apply an incremental snapshot
     async applyIncrementalSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
+
+        if(snapshotData.schema_version !== SCHEMA_VERSION){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + SCHEMA_VERSION + ' — restart the validator after upgrading the server');
+        }
 
         console.log('Applying incremental snapshot (since block ' + snapshotData.since_block + ')...');
         let timer = this.util.startTimer();
