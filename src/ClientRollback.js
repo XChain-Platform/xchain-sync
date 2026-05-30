@@ -151,7 +151,11 @@ class ClientRollback {
             // Delete from contract_emissions first (references contract_executions)
             if(firstActionIndex !== null){
                 try {
-                    await this.db.doQuery("DELETE FROM contract_emissions WHERE execution_index >= ?", [firstActionIndex]);
+                    await this.db.doQuery(
+                        `DELETE FROM contract_emissions WHERE execution_index IN
+                            (SELECT action_index FROM contract_executions WHERE action_index >= ?)`,
+                        [firstActionIndex]
+                    );
                 } catch(e){
                     // Table may not exist — skip
                 }

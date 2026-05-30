@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Per-chain poller and client-sync background loops now log the full error object (with stack) and call `process.exit(1)` when their `start()` promise rejects, instead of logging only `error.message` and continuing. A crashed worker previously left the process running and the `/status` endpoint returning a stale `block_height` with a live timestamp, making the failure invisible to health checks; exiting lets the container restart policy surface it.
+- `ClientRollback.js` — the `_rollbackIndexer` `contract_emissions` delete now uses the FK-traversing subquery form (`execution_index IN (SELECT action_index FROM contract_executions WHERE action_index >= ?)`) instead of the direct `execution_index >= ?` comparison, matching `xchain-indexer/src/rollback.js`. Behaviour is identical today (`execution_index` is a non-nullable FK to `contract_executions.action_index`), but making the FK dependency explicit in the SQL keeps both rollback paths aligned so they evolve together if the schema or FK semantics ever change, rather than diverging silently.
 
 ## [1.7.0] - 2026-04-08
 
