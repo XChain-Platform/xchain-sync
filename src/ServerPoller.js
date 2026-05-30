@@ -31,6 +31,8 @@
  *
  ********************************************************************/
 
+const replicatedTables = require('./replicatedTables');
+
 class ServerPoller {
 
     constructor(chain, network, db, broadcaster, transparencyLog, config, util) {
@@ -46,73 +48,18 @@ class ServerPoller {
         this.lastPolledBlock = null;
         this.running = false;
 
+        // Per-block replicated table topology (single source of truth shared with
+        // the row-count completeness check — see src/replicatedTables.js).
+        let topo = replicatedTables.getTopology(this.dbType);
+        this.blockScopedTables  = topo.blockScoped;
+        this.txScopedTables     = topo.txScoped;
+        this.actionScopedTables = topo.actionScoped;
+        this.indexTables        = topo.index;
+
         if(this.dbType === 'decoder'){
-            // Decoder schema: 9 tables, much smaller surface area than indexer.
-            // mempool_transactions is intentionally excluded (non-deterministic
-            // across nodes — see xchain-sync-decoder-db-decisions).
-
-            // Block-scoped tables (key off block_index directly)
-            this.blockScopedTables = ['blocks', 'transactions'];
-
-            // Tx-scoped tables (key off tx_index → transactions.block_index)
-            this.txScopedTables = ['transaction_outputs', 'dispensers'];
-
-            // Decoder doesn't have action-scoped tables
-            this.actionScopedTables = [];
-
             // Decoder doesn't have cross-chain infrastructure tables
             this.infraTables = new Set();
-
-            // Append-only lookup tables that may grow as new blocks are processed.
-            // events is operational/logging — included so consumers see decoder activity.
-            this.indexTables = ['index_addresses', 'index_transactions', 'pubkeys', 'events'];
         } else {
-            // Indexer schema: full set of 60+ tables
-
-            // Tables that are scoped by block_index (not action_index)
-            // attestation_validator_signatures has no action_index column (only id PK +
-            // response_action_index + block_index), so it is block-scoped here.
-            // slash_events likewise keys off block_index (it has execution_index +
-            // block_index but no action_index), so it is block-scoped too.
-            this.blockScopedTables = ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events'];
-
-            this.txScopedTables = [];  // indexer joins via actions, not directly via tx_index
-
-            // Action-scoped tables to include in block payloads
-            this.actionScopedTables = [
-                'actions', 'addresses', 'airdrops',
-                'attestation_requests', 'attestation_responses',
-                'batches', 'broadcasts', 'callbacks',
-                'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
-                'contracts', 'contract_executions', 'contract_emissions', 'contract_balances',
-                'contract_stakes', 'contract_unstakes', 'contract_delegations',
-                'credits', 'debits', 'escrows',
-                'delegations',
-                'deposits', 'destroys',
-                'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
-                'dispenser_expires', 'dispenser_statuses', 'dispenses',
-                'dividends', 'events',
-                'fees', 'files', 'gated_files',
-                'issues',
-                'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
-                'mappings_actions', 'mappings_files',
-                // markets is intentionally NOT action-scoped: it has no action_index
-                // column (it's a derived OHLCV aggregate keyed by tick pair), so it can't
-                // ride the per-block action_index join. It is refreshed via full/incremental
-                // snapshots only; live per-block accuracy would require rebuilding it on the
-                // follower from order_matches/dispenses.
-                'messages', 'mints',
-                'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
-                'prices',
-                'reward_claims',
-                'sends', 'sleeps',
-                'stakes',
-                'swaps', 'swap_cancels', 'swap_edits', 'swap_expires', 'swap_matches', 'swap_statuses',
-                'sweeps', 'tokens', 'unstakes',
-                'withdrawals',
-                'balances'
-            ];
-
             // Infrastructure tables — always synced regardless of subscriber sync mode
             // These tables provide cross-chain state that every node needs (validator set,
             // rewards) or that participate in cross-chain queries (PRICE actions on any chain).
@@ -121,13 +68,6 @@ class ServerPoller {
                 'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
                 'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
             ]);
-
-            // Index tables that may have new entries per block
-            this.indexTables = [
-                'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
-                'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
-                'index_tickers', 'index_transactions'
-            ];
         }
     }
 
@@ -145,7 +85,7 @@ class ServerPoller {
             try {
                 blocksProcessed = await this._poll() || 0;
             } catch(e){
-                console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ':', e.message);
+                console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ':', e);
             }
             // Skip sleep when the batch cap was hit — backlog likely remains
             if(blocksProcessed < 100)

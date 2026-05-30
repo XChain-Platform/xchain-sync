@@ -45,7 +45,11 @@ class SnapshotBuilder {
         ];
 
         // Tables to put last (derived/computed — depend on everything else)
-        this.trailingTables = ['balances', 'sync_meta'];
+        // pubkeys trails index_addresses: pubkeys.sql declares a FK on index_addresses(id),
+        // so the reverse-delete path in applyFullSnapshot must drop pubkeys rows before
+        // index_addresses rows.  Appended after sync_meta because neither balances nor
+        // sync_meta carries a FK on pubkeys.
+        this.trailingTables = ['balances', 'sync_meta', 'pubkeys'];
 
         // Page size for paginated reads
         this.pageSize = 10000;
@@ -143,7 +147,7 @@ class SnapshotBuilder {
 
                     gzip.write(']');
                 } catch(e){
-                    console.error('Error reading table ' + table + ':', e.message);
+                    console.error('Error reading table ' + table + ':', e);
                 }
             }
 
@@ -285,7 +289,7 @@ class SnapshotBuilder {
 
                     gzip.write(']');
                 } catch(e){
-                    console.error('Error reading table ' + table + ' for incremental:', e.message);
+                    console.error('Error reading table ' + table + ' for incremental:', e);
                 }
             }
 

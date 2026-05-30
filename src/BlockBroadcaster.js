@@ -277,7 +277,7 @@ class BlockBroadcaster {
         try {
             ws.send(data);
         } catch(e){
-            console.log('WebSocket send error:', e.message);
+            console.log('WebSocket send error:', e);
             this.removeSubscription(ws);
         }
     }

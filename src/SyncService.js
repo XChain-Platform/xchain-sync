@@ -254,7 +254,7 @@ class SyncService {
                 if(newChains.length > 0)
                     console.log('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){
-                console.error('Hub re-poll error:', e.message);
+                console.error('Hub re-poll error:', e);
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
     }

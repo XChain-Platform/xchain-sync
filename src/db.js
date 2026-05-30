@@ -91,7 +91,7 @@ class Database {
                 await db.end();
                 return results.length > 0;
             } catch (e){
-                console.error('Error checking if database ' + this.dbName + ' exists: ' + e.message, e)
+                console.error('Error checking if database ' + this.dbName + ' exists:', e)
                 await this.util.sleep(5000);
             }
         }
@@ -116,7 +116,7 @@ class Database {
                 await db.end();
                 return true;
             } catch(e){
-                console.error('Error creating database ' + this.dbName + ': ' + e.message, e)
+                console.error('Error creating database ' + this.dbName + ':', e)
                 await this.util.sleep(5000);
             }
         }
@@ -209,7 +209,7 @@ class Database {
                 console.log('Added column ' + col + ' to ' + tableName);
                 added++;
             } catch(e){
-                console.error('Failed to add column ' + col + ' to ' + tableName + ': ' + (e.message || e));
+                console.error('Failed to add column ' + col + ' to ' + tableName + ':', e);
             }
         }
         return added;
@@ -275,7 +275,7 @@ class Database {
                 created++;
             } catch(e){
                 // Table may reference another table not yet created — retry later
-                console.log('Deferred: ' + tableName + ' (' + (e.message || e) + ')');
+                console.log('Deferred: ' + tableName + ':', e);
             }
         }
 
@@ -309,7 +309,7 @@ class Database {
                     await this.doQuery(createSql);
                     console.log('Created table ' + tableName + ' (retry)');
                 } catch(e){
-                    console.error('Failed to create table ' + tableName + ':', e.message || e);
+                    console.error('Failed to create table ' + tableName + ':', e);
                 }
             }
         }
@@ -400,7 +400,7 @@ class Database {
                     this.util.throwError('Could not connect to MariaDB after ' + maxAttempts + ' attempts');
                 let delay = Math.min(baseDelay * Math.pow(2, attempts - 1), maxDelay);
                 let jitter = Math.floor(Math.random() * delay * 0.3);
-                console.error('MariaDB connection attempt ' + attempts + '/' + maxAttempts + ' failed: ' + e.message + '. Retrying in ' + (delay + jitter) + 'ms...', e)
+                console.error('MariaDB connection attempt ' + attempts + '/' + maxAttempts + ' failed. Retrying in ' + (delay + jitter) + 'ms...', e)
                 connection = null;
                 await this.util.sleep(delay + jitter);
             }
@@ -452,7 +452,7 @@ class Database {
                 this.transactionConnection = null;
                 return true;
             } catch (e){
-                console.error('Error committing transaction: ' + e.message, e)
+                console.error('Error committing transaction:', e)
                 try {
                     await this.transactionConnection.rollback();
                 } finally {
@@ -664,7 +664,7 @@ class Database {
         try {
             await this.pool.end();
         } catch(e){
-            console.log('Error closing database pool:', e.message);
+            console.log('Error closing database pool:', e);
         }
     }
 }

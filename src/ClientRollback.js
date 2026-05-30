@@ -213,7 +213,7 @@ class ClientRollback {
                 await balanceHelpers.rebuildBalances(this.db);
             } catch(e){
                 if(e.errno !== 1146) throw e;
-                console.error('Error rebuilding balances after rollback:', e.message);
+                console.error('Error rebuilding balances after rollback:', e);
             }
 
             // Recalculate contract custody balances from the surviving valid
@@ -226,7 +226,7 @@ class ClientRollback {
                 await balanceHelpers.rebuildContractBalances(this.db);
             } catch(e){
                 if(e.errno !== 1146) throw e;
-                console.error('Error rebuilding contract_balances after rollback:', e.message);
+                console.error('Error rebuilding contract_balances after rollback:', e);
             }
 
             await this.db.commitTransaction();
@@ -234,7 +234,7 @@ class ClientRollback {
 
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Indexer rollback failed:', e.message);
+            console.error('Indexer rollback failed:', e);
             throw e;
         }
     }
@@ -285,7 +285,7 @@ class ClientRollback {
 
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Decoder rollback failed:', e.message);
+            console.error('Decoder rollback failed:', e);
             throw e;
         }
     }

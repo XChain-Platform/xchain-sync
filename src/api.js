@@ -35,6 +35,7 @@ const rateLimit   = require('express-rate-limit');
 const config      = require('./config');
 const SyncService = require('./SyncService');
 const { createApiKeyMiddleware } = require('./middleware');
+const { getReplicatedTables }    = require('./replicatedTables');
 
 // Parse .env
 dotenv.config();
@@ -132,6 +133,28 @@ async function startApi(){
                 ? serverBlock - row.block_height
                 : null;
         }
+        // Per-table row counts for replica-completeness verification.
+        //
+        // The committed ledger/actions/contract hashes are computed on the source
+        // during block processing and replicated verbatim, so a follower missing
+        // entire tables still agrees on every hash — the hashes describe the
+        // source's blockchain computation, not what actually landed downstream.
+        // Publishing row counts gives followers an independent completeness
+        // signal: ClientSync._verifyAgainstSource compares these against its own
+        // counts and flags any table the source has rows in but the follower does
+        // not. Scoped to the per-block replicated set (see replicatedTables.js) so
+        // legitimately-divergent snapshot-only / operator-local tables don't raise
+        // false alarms. COUNT(*) per table is acceptable here — /status is an
+        // operator-polled endpoint, not a hot path.
+        row.table_counts = {};
+        for(let table of getReplicatedTables(dbType)){
+            try {
+                row.table_counts[table] = await db.getTableCount(table);
+            } catch(e){
+                // Table absent in this schema (older replica, or decoder vs
+                // indexer split) — omit it rather than fail the whole status.
+            }
+        }
         return row;
     }
 
@@ -173,7 +196,7 @@ async function startApi(){
             row.last_updated = new Date().toISOString();
             res.json(row);
         } catch(e){
-            console.error('[API error] /status/:dbType/:chain/:network:', e.message);
+            console.error('[API error] /status/:dbType/:chain/:network:', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
@@ -204,7 +227,7 @@ async function startApi(){
             }
             res.json({ chain, network, dbType, tables: schema });
         } catch(e){
-            console.error('[API error] /schema/:dbType/:chain/:network:', e.message);
+            console.error('[API error] /schema/:dbType/:chain/:network:', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
@@ -227,7 +250,7 @@ async function startApi(){
         try {
             await builder.streamFullSnapshot(db, res);
         } catch(e){
-            console.error('[API error] /snapshot/:dbType/:chain/:network:', e.message);
+            console.error('[API error] /snapshot/:dbType/:chain/:network:', e);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
@@ -255,7 +278,7 @@ async function startApi(){
         try {
             await builder.streamIncrementalSnapshot(db, sinceBlock, res);
         } catch(e){
-            console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e.message);
+            console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
@@ -283,7 +306,7 @@ async function startApi(){
             let result = await log.getPage(page, limit);
             res.json(result);
         } catch(e){
-            console.error('[API error] /transparency/:dbType/:chain/:network/roots:', e.message);
+            console.error('[API error] /transparency/:dbType/:chain/:network/roots:', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
@@ -304,7 +327,7 @@ async function startApi(){
             if(!result) return res.status(404).json({ error: 'Block not found' });
             res.json(result);
         } catch(e){
-            console.error('[API error] /transparency/.../proof/' + block_index + ':', e.message);
+            console.error('[API error] /transparency/.../proof/' + block_index + ':', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });
@@ -324,7 +347,7 @@ async function startApi(){
             let result = await log.getLatestRoot();
             res.json(result || { epoch: null, merkle_root: null });
         } catch(e){
-            console.error('[API error] /transparency/.../root/latest:', e.message);
+            console.error('[API error] /transparency/.../root/latest:', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });

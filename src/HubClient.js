@@ -45,7 +45,7 @@ class HubClient {
                 if(response.data && response.data.result !== undefined)
                     return response.data.result;
             } catch(err){
-                console.warn('Hub endpoint ' + url + ' failed: ' + (err.message || err));
+                console.warn('Hub endpoint ' + url + ' failed: ', err);
             }
         }
         return null;

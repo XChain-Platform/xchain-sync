@@ -195,7 +195,7 @@ class ClientSync {
                 console.log('Schema applied from ' + source);
             }
         } catch(e){
-            console.error('Failed to fetch schema from ' + source + ':', e.message);
+            console.error('Failed to fetch schema from ' + source + ':', e);
         }
     }
 
@@ -243,7 +243,7 @@ class ClientSync {
 
             console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
         } catch(e){
-            console.error('Bootstrap failed:', e.message);
+            console.error('Bootstrap failed:', e);
             // Try next source, but only if we haven't exhausted all sources
             if(this.sources.length > 1 && attempt < this.sources.length - 1){
                 console.log('Trying secondary source...');
@@ -279,7 +279,7 @@ class ClientSync {
             await this.applier.applyIncrementalSnapshot(snapshotData);
             this.lastAppliedBlock = snapshotData.block_height;
         } catch(e){
-            console.error('Incremental catch-up failed:', e.message);
+            console.error('Incremental catch-up failed:', e);
         }
     }
 
@@ -312,7 +312,7 @@ class ClientSync {
                 console.log('Hash verification passed against ' + source);
             }
         } catch(e){
-            console.error('Hash verification failed against ' + source + ':', e.message);
+            console.error('Hash verification failed against ' + source + ':', e);
         }
     }
 
@@ -337,7 +337,7 @@ class ClientSync {
         try {
             ws = new WebSocket(wsUrl, { maxPayload: this.config['WS_MAX_PAYLOAD'] });
         } catch(e){
-            console.error('WebSocket connection error:', e.message);
+            console.error('WebSocket connection error:', e);
             this._scheduleReconnect(source, sourceIndex);
             return;
         }
@@ -356,7 +356,7 @@ class ClientSync {
                 }
                 await this._handleEvent(event, sourceIndex);
             } catch(e){
-                console.error('Error handling WebSocket message:', e.message);
+                console.error('Error handling WebSocket message:', e);
             }
         });
 
@@ -508,7 +508,7 @@ class ClientSync {
                     this.pendingHashes.delete(key);
             }
         } catch(e){
-            console.error('Error applying block ' + event.block_index + ':', e.message);
+            console.error('Error applying block ' + event.block_index + ':', e);
         }
     }
 
@@ -533,7 +533,7 @@ class ClientSync {
             else
                 this.lastHashes = null;
         } catch(e){
-            console.error('Reorg rollback failed:', e.message);
+            console.error('Reorg rollback failed:', e);
         }
     }
 }

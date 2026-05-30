@@ -85,7 +85,7 @@ class ClientApplier {
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying block ' + payload.block_index + ':', e.message);
+            console.error('Error applying block ' + payload.block_index + ':', e);
             throw e;
         }
     }
@@ -162,7 +162,7 @@ class ClientApplier {
             console.log('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying full snapshot:', e.message);
+            console.error('Error applying full snapshot:', e);
             throw e;
         }
     }
@@ -205,7 +205,7 @@ class ClientApplier {
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying incremental snapshot:', e.message);
+            console.error('Error applying incremental snapshot:', e);
             throw e;
         }
     }

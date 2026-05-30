@@ -43,7 +43,7 @@ class TransparencyLog {
         if (block_index > 0 && block_index % this.epochSize === 0) {
             let epoch = Math.floor(block_index / this.epochSize);
             await this.commitEpoch(epoch).catch(e =>
-                console.error('Error committing Merkle epoch ' + epoch + ':', e.message)
+                console.error('Error committing Merkle epoch ' + epoch + ':', e)
             );
         }
     }
