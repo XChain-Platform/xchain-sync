@@ -42,6 +42,11 @@ describe('SyncService', function(){
         service = new SyncService(config);
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
+        // _startPollerForChain / _startClientSyncForChain run start() as an unawaited
+        // background promise whose .catch calls process.exit(1) on crash (for container
+        // restart). With mocked deps those promises reject after the test moves on; stub
+        // exit so a background crash can't tear down the mocha process mid-run.
+        sinon.stub(process, 'exit');
     });
 
     afterEach(function(){

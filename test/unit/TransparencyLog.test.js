@@ -13,13 +13,15 @@ describe('TransparencyLog', function(){
 
     describe('recordBlock', function(){
         it('calls doQuery with INSERT IGNORE and correct params', async function(){
-            await log.recordBlock(100, 1700000000, 'lhash', 'ahash', 'chash');
+            // Use a non-epoch-boundary block (epochSize=100) so recordBlock makes exactly
+            // one doQuery; block 100 would also trigger a commitEpoch insert.
+            await log.recordBlock(101, 1700000000, 'lhash', 'ahash', 'chash');
             assert.strictEqual(db.doQuery.calledOnce, true);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.includes('INSERT IGNORE'));
             assert.ok(query.includes('sync_meta'));
             let args = db.doQuery.firstCall.args[1];
-            assert.deepStrictEqual(args, [100, 1700000000, 'lhash', 'ahash', 'chash']);
+            assert.deepStrictEqual(args, [101, 1700000000, 'lhash', 'ahash', 'chash']);
         });
     });
 

@@ -38,7 +38,7 @@ class Utility {
     // Throw an error and log to console
     throwError(error){
         console.error('throwError:', error);
-        throw error;
+        throw new Error(error);
     }
 
     // Log an error to console
