@@ -29,6 +29,7 @@
   "scripts": {
     "api": "node ./src/api.js",
     "test": "mocha --timeout 5000 --recursive 'test/unit/**/*.test.js'",
+    "ci": "mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
     "test:e2e": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
