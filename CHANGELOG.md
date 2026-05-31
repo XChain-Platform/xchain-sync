@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `src/HubClient.js` — the hub JSON-RPC client now remembers the last endpoint that answered and starts each call there (wrapping through the remaining endpoints), instead of always trying the configured endpoints in fixed order. Previously, when the first endpoint was degraded enough to hit the request timeout, every call paid the full timeout penalty before falling back — and then retried that same endpoint first on the next call. At a 60s refresh interval with a 5s timeout the worst-case overhead was `N × 5s` per interval (N = endpoint count). The client now sticks to a known-good endpoint until it too fails, then rotates to the next responder.
+
 ### Security
 - Pinned `ajv` to `^8.18.0` via `overrides` in `package.json`. The mutation-testing toolchain (`@stryker-mutator/core`) pulled in `ajv@8.17.1` transitively, which `npm audit` flagged for a moderate ReDoS in the `$data` schema option (GHSA-2g4f-4pwh-qvx6, fixed in 8.18.0). The dependency is dev-only and the affected code path is not exercised, but the override forces the patched 8.20.0 line so `npm audit` reports zero vulnerabilities and CI audit gates pass. No production code or `@stryker-mutator/core` declarations changed.
 
