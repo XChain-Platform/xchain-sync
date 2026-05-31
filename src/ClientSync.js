@@ -60,8 +60,13 @@ class ClientSync {
         // this validator's lag via the server's /status endpoint. Debounced to avoid
         // a round-trip per block under fast sync: flush every 10 blocks, or after 5s,
         // whichever comes first.
-        this._hbLastSentBlock = null;
-        this._hbTimer         = null;
+        this._hbLastSentBlock   = null;
+        this._hbTimer           = null;
+        this.lastAppliedBlockTime = null;
+
+        // Stable identifier for this validator, used in POST /validator-heartbeat.
+        // Operators set VALIDATOR_ID explicitly; we fall back to the system hostname.
+        this.validatorId = process.env.VALIDATOR_ID || require('os').hostname() || 'unknown';
     }
 
     // Start the client sync loop
@@ -129,6 +134,7 @@ class ClientSync {
     // Send the current applied height to every open source connection. Best-effort:
     // a server running an older build simply ignores the message, and a failed send
     // is swallowed (the next heartbeat will carry the latest height anyway).
+    // Also fires a REST POST /validator-heartbeat for named-validator tracking.
     _flushHeartbeat(){
         if(this.lastAppliedBlock === null) return;
         if(this._hbTimer){
@@ -143,6 +149,26 @@ class ClientSync {
             } catch(e){ /* best-effort */ }
         }
         this._hbLastSentBlock = this.lastAppliedBlock;
+
+        // REST heartbeat — fire-and-forget to each configured source.
+        for(let source of this.sources){
+            this._sendRestHeartbeat(source).catch(() => {});
+        }
+    }
+
+    // POST the current applied height to a source server's /validator-heartbeat endpoint.
+    // Best-effort: errors are suppressed at the call site.
+    async _sendRestHeartbeat(source){
+        let url = source + '/validator-heartbeat/' + this.dbType + '/' + this.chain + '/' + this.network;
+        let body = {
+            validator_id:       this.validatorId,
+            applied_height:     this.lastAppliedBlock,
+            applied_block_time: this.lastAppliedBlockTime
+        };
+        let headers = {};
+        let apiKey  = this.config['SYNC_API_KEY'];
+        if(apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+        await axios.post(url, body, { timeout: 5000, headers });
     }
 
     // Fetch and apply schema from a remote sync server
@@ -541,7 +567,8 @@ class ClientSync {
     async _applyBlockEvent(event){
         try {
             await this.applier.applyBlock(event);
-            this.lastAppliedBlock = event.block_index;
+            this.lastAppliedBlock     = event.block_index;
+            this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
             // Report our applied height back to the source(s), debounced.
             this._scheduleHeartbeat();
             if(this.dbType === 'decoder'){

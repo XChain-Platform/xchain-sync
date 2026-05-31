@@ -328,6 +328,7 @@ class ServerPoller {
             status.actions_hash  = hashRow ? hashRow.actions_hash : null;
             status.contract_hash = hashRow ? hashRow.contract_hash : null;
         }
+        status.subscriber_count = this.broadcaster.getSubscribers(this.chain, this.network, this.dbType).length;
         this.broadcaster.updateStatus(this.chain, this.network, status);
     }
 }

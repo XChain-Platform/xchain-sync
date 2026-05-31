@@ -40,6 +40,11 @@ class BlockBroadcaster {
 
         // Status data per chain/network/dbType for periodic broadcasts
         this.statusData = new Map();
+
+        // Named-validator REST heartbeat state.
+        // Map<"chain:network:dbType", Map<validatorId, { applied_height, applied_block_time, last_seen }>>
+        // Populated by POST /validator-heartbeat; evicted by evictStaleValidators().
+        this.validatorHeartbeats = new Map();
     }
 
     // Get the key for a chain/network/dbType triple
@@ -279,6 +284,58 @@ class BlockBroadcaster {
         } catch(e){
             console.log('WebSocket send error:', e);
             this.removeSubscription(ws);
+        }
+    }
+
+    // Record a named-validator REST heartbeat for a chain/network/dbType.
+    // Called by POST /validator-heartbeat in api.js.
+    recordValidatorHeartbeat(chain, network, dbType, validatorId, appliedHeight, appliedBlockTime){
+        let key = this._key(chain, network, dbType);
+        if(!this.validatorHeartbeats.has(key))
+            this.validatorHeartbeats.set(key, new Map());
+        this.validatorHeartbeats.get(key).set(validatorId, {
+            applied_height:     appliedHeight,
+            applied_block_time: appliedBlockTime != null ? appliedBlockTime : null,
+            last_seen:          Date.now()
+        });
+    }
+
+    // Return per-validator heartbeat state for a chain/network/dbType.
+    // Each entry includes lag_blocks = source block_height - applied_height (or null when unknown).
+    getValidatorHeartbeats(chain, network, dbType){
+        let key = this._key(chain, network, dbType);
+        let map = this.validatorHeartbeats.get(key);
+        if(!map || map.size === 0) return {};
+
+        let statusData   = this.statusData.get(key);
+        let sourceHeight = (statusData && typeof statusData.block_height === 'number')
+            ? statusData.block_height : null;
+
+        let result = {};
+        for(let [id, entry] of map){
+            result[id] = {
+                applied_height:     entry.applied_height,
+                applied_block_time: entry.applied_block_time,
+                last_seen:          new Date(entry.last_seen).toISOString(),
+                lag_blocks: (sourceHeight !== null && entry.applied_height !== null)
+                    ? Math.max(0, sourceHeight - entry.applied_height)
+                    : null
+            };
+        }
+        return result;
+    }
+
+    // Evict named-validator entries whose last_seen is older than thresholdMs.
+    // Called on a periodic interval from api.js (server mode only).
+    evictStaleValidators(thresholdMs){
+        let now = Date.now();
+        for(let [key, map] of this.validatorHeartbeats){
+            for(let [id, entry] of map){
+                if(now - entry.last_seen > thresholdMs)
+                    map.delete(id);
+            }
+            if(map.size === 0)
+                this.validatorHeartbeats.delete(key);
         }
     }
 

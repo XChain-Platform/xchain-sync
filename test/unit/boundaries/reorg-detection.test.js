@@ -21,7 +21,7 @@ describe('Boundary: Reorg Detection', function(){
 
     beforeEach(function(){
         db = createMockDb();
-        broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub() };
+        broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]) };
         let log = { recordBlock: sinon.stub().resolves() };
         poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, new Utility());
         db.getBlockHashRow.callsFake(async (idx) => ({

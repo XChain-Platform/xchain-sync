@@ -59,7 +59,10 @@ describe('Boundary: Circuit Breaker', function(){
 
             await assert.rejects(
                 () => db.getConnection(),
-                (err) => err.message.includes('Circuit breaker opened')
+                (err) => {
+                    let msg = (err && err.message) ? err.message : String(err);
+                    return msg.includes('Circuit breaker opened');
+                }
             );
             assert.strictEqual(db.circuitState, 'open');
             assert.strictEqual(db.circuitFailures, 10);
@@ -84,7 +87,10 @@ describe('Boundary: Circuit Breaker', function(){
 
             await assert.rejects(
                 () => db.getConnection(),
-                (err) => err.message.includes('Circuit breaker open')
+                (err) => {
+                    let msg = (err && err.message) ? err.message : String(err);
+                    return msg.includes('Circuit breaker open');
+                }
             );
         });
     });
@@ -144,7 +150,10 @@ describe('Boundary: Circuit Breaker', function(){
 
             await assert.rejects(
                 () => db.getConnection(),
-                (err) => err.message.includes('30 attempts')
+                (err) => {
+                    let msg = (err && err.message) ? err.message : String(err);
+                    return msg.includes('30 attempts');
+                }
             );
             assert.strictEqual(callCount, 30);
         });

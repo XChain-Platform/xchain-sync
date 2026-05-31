@@ -100,6 +100,7 @@ describe('ClientApplier', function(){
 
         it('clears tables in reverse order and inserts in forward order', async function(){
             let snapshot = {
+                schema_version: 1,
                 block_height: 10,
                 tables: {
                     tableA: [{ id: 1 }],
@@ -120,7 +121,7 @@ describe('ClientApplier', function(){
 
         it('rolls back on error', async function(){
             db.doQuery.rejects(new Error('truncate fail'));
-            let snapshot = { block_height: 10, tables: { t: [{ id: 1 }] } };
+            let snapshot = { schema_version: 1, block_height: 10, tables: { t: [{ id: 1 }] } };
             await assert.rejects(() => applier.applyFullSnapshot(snapshot));
             assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
@@ -129,6 +130,7 @@ describe('ClientApplier', function(){
     describe('applyIncrementalSnapshot', function(){
         it('inserts rows without truncation', async function(){
             let snapshot = {
+                schema_version: 1,
                 block_height: 20,
                 since_block: 10,
                 tables: { blocks: [{ block_index: 11 }] }
