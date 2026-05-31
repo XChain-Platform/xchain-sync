@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `src/db.js` — the MariaDB connection pool now sets `queryTimeout: parseInt(process.env.DB_QUERY_TIMEOUT) || 30000`. Without a query timeout a slow or lock-blocked statement had no upper bound and could hang a pooled connection indefinitely, stalling replica DB application with no timeout-based recovery. A query now aborts after the configured timeout (30s default, overridable via `DB_QUERY_TIMEOUT`) instead of hanging. Matches the pattern already used by `xchain-hub`.
 - `src/api.js` — new `GET /health` endpoint. `/status` reports per-chain block heights and lag but not whether a replica database connection has tripped its circuit breaker open after repeated failures (which halts block application while the process stays up). `/health` lists each replicated database's circuit state and returns HTTP 503 when any is open, so monitoring can tell a healthy replicator apart from one stalled on a database outage.
 
 ### Changed

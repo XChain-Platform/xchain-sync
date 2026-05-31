@@ -61,7 +61,8 @@ class Database {
             // dispensers.expiration; indexer schemas use INTEGER timestamps,
             // so this is a no-op there.
             dateStrings:        true,
-            minDelayValidation: 3000
+            minDelayValidation: 3000,
+            queryTimeout:       parseInt(process.env.DB_QUERY_TIMEOUT) || 30000
         };
 
         // Setup pool of connections
