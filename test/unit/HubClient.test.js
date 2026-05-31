@@ -18,7 +18,7 @@ describe('HubClient', function(){
 
     describe('constructor', function(){
         it('builds the correct URL', function(){
-            assert.strictEqual(hub.url, 'http://localhost:10000');
+            assert.strictEqual(hub.urls[0], 'http://localhost:10000');
         });
     });
 
