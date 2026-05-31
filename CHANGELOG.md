@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Pinned `ajv` to `^8.18.0` via `overrides` in `package.json`. The mutation-testing toolchain (`@stryker-mutator/core`) pulled in `ajv@8.17.1` transitively, which `npm audit` flagged for a moderate ReDoS in the `$data` schema option (GHSA-2g4f-4pwh-qvx6, fixed in 8.18.0). The dependency is dev-only and the affected code path is not exercised, but the override forces the patched 8.20.0 line so `npm audit` reports zero vulnerabilities and CI audit gates pass. No production code or `@stryker-mutator/core` declarations changed.
+
 ### Added
 - `.env.example` — added a configuration template enumerating every environment variable the service reads (server/client mode, hub coordination, replica database, WebSocket and snapshot tuning), with safe defaults and inline comments. Also added `.env` to `.gitignore` so a populated local `.env` is never committed.
 - `src/db.js` — the MariaDB connection pool now sets `queryTimeout: parseInt(process.env.DB_QUERY_TIMEOUT) || 30000`. Without a query timeout a slow or lock-blocked statement had no upper bound and could hang a pooled connection indefinitely, stalling replica DB application with no timeout-based recovery. A query now aborts after the configured timeout (30s default, overridable via `DB_QUERY_TIMEOUT`) instead of hanging. Matches the pattern already used by `xchain-hub`.
