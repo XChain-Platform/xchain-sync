@@ -23,6 +23,27 @@
 
 const axios = require('axios');
 
+// Fold a getallconfigs delta (only the rows that changed since our cursor) into
+// the cached nested config map, mutating and returning `base`. The hub's configs
+// table is upsert-only — rows are never deleted — so applying successive deltas
+// reconstructs exactly the tree a full fetch would have produced.
+function mergeConfigDelta(base, delta){
+    for(let coin in delta){
+        if(!base[coin]) base[coin] = {};
+        for(let network in delta[coin]){
+            if(!base[coin][network]) base[coin][network] = {};
+            for(let module in delta[coin][network]){
+                if(!base[coin][network][module]) base[coin][network][module] = {};
+                let params = delta[coin][network][module];
+                for(let param in params){
+                    base[coin][network][module][param] = params[param];
+                }
+            }
+        }
+    }
+    return base;
+}
+
 class HubClient {
 
     // Accept an array of endpoint URLs, or legacy (host, port, protocol) for backward compat
@@ -39,6 +60,15 @@ class HubClient {
         // answered, so a degraded first endpoint isn't retried first every call
         // (which would cost the full timeout per call before falling back).
         this._lastGoodIdx = 0;
+        // Cached full config tree + its high-water mark (epoch seconds). The mark
+        // is sent back as `since_updated_at` so the hub returns only rows changed
+        // since the previous poll; the delta is merged into this cache and the
+        // full map returned, so _extractDbConfigs is unaffected. 0 (initial /
+        // post-restart / old hub) requests the full tree. The client is long-lived
+        // (one per SyncService), so the cursor persists across poll cycles — and
+        // getIndexerConfigs + getDecoderConfigs within one cycle share the cache.
+        this.configs       = null;
+        this.lastWatermark = 0;
     }
 
     // Internal: call a JSON-RPC method, trying each endpoint starting from the
@@ -76,13 +106,59 @@ class HubClient {
     // is 0 against an old hub. (Sync discovers DBs at startup, so the seq is tracked
     // for completeness rather than used for invalidation here.)
     async getallconfigs(){
-        let result = await this._call({ jsonrpc: '2.0', method: 'getallconfigs', id: 1 }, 10000);
+        let result = await this._call({
+            jsonrpc: '2.0',
+            method:  'getallconfigs',
+            // Echo the high-water mark so the hub returns only rows changed since
+            // our last poll; 0 requests the full tree (initial fetch / old hub).
+            params:  { since_updated_at: this.lastWatermark },
+            id:      1
+        }, 10000);
+        // _call returns null when every endpoint failed; preserve that signal so
+        // _extractDbConfigs (which treats null as "no configs") stays unchanged.
+        if(result === null) return null;
+        this.configs = this._applyConfigResult(result);
+        return this.configs;
+    }
+
+    // Fold a getallconfigs result into this.configs and return the full nested
+    // map. Newer hubs wrap the payload as { configs, seq, watermark }: when a
+    // watermark is present the payload is a delta (only rows changed since the
+    // cursor we sent), so we MERGE it into the cache and advance the cursor.
+    // Older hubs return the bare map (or a { configs, seq } wrapper without a
+    // watermark) — those are the full tree, so we REPLACE. _extractDbConfigs sees
+    // the same full-map shape regardless of hub version. seq is 0 against an old
+    // hub. The configs table is upsert-only (no row deletes), so merging
+    // successive deltas reconstructs exactly what a full fetch would have returned.
+    _applyConfigResult(result){
+        let payload, seq, watermark;
         if(result && typeof result === 'object' && result.configs && typeof result.configs === 'object' && ('seq' in result)){
-            this.lastSeq = Number(result.seq) || 0;
-            return result.configs;
+            payload   = result.configs;
+            seq       = Number(result.seq) || 0;
+            watermark = ('watermark' in result) ? result.watermark : undefined;
+        } else {
+            payload   = result;
+            seq       = 0;
+            watermark = undefined;
         }
-        this.lastSeq = 0;
-        return result;
+        this.lastSeq = seq;
+
+        if(watermark === undefined || watermark === null){
+            // Hub doesn't report a watermark — payload is the full tree. Reset the
+            // cursor so the next poll also requests in full.
+            this.lastWatermark = 0;
+            return payload;
+        }
+
+        let sentCursor = this.lastWatermark > 0;
+        this.lastWatermark = Number(watermark) || 0;
+
+        if(sentCursor && this.configs){
+            // Delta against the cursor we sent: merge changed rows into the cache.
+            return mergeConfigDelta(this.configs, payload || {});
+        }
+        // First fetch (or post-restart) — payload is the full tree.
+        return payload;
     }
 
     // Extract indexer database configs from the hub response.

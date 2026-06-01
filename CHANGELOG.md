@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `src/HubClient.js` — `getallconfigs()` now polls the hub incrementally: it echoes the hub's `watermark` back as `since_updated_at` and merges the returned delta into a cached config map, so each 5-minute discovery cycle transfers near-nothing once chains are known instead of pulling the full config tree twice (once for `getIndexerConfigs`, once for `getDecoderConfigs`). The merge is exact because the hub's config table is upsert-only (rows are never deleted); `_extractDbConfigs` still receives the same full map. The client is long-lived (one per `SyncService`), so the cursor persists across cycles and the second call within a cycle reuses the first call's advance. Falls back to a full fetch on the first call, after a restart, or against an older hub that reports no watermark.
 - `package.json` — aligned the `mariadb` driver to the `^3.5.2` range used across the platform. The driver was previously pinned to `~3.4.5` (a patch-only range, one minor line behind the `xchain-dashboard` host); the caret range now tracks 3.x minor releases consistently with every other service, removing the version drift and the mix of `~`/`^` range operators across the platform. No source changes.
 
 ### Fixed
