@@ -64,7 +64,7 @@ async function startApi(){
     // Rate limiters for snapshot endpoints
     const fullSnapshotLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
-        max: cfg['SNAPSHOT_RATE_FULL'],
+        limit: cfg['SNAPSHOT_RATE_FULL'],
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Full snapshot rate limit exceeded. Try again later.' }
@@ -72,7 +72,7 @@ async function startApi(){
 
     const incrSnapshotLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
-        max: cfg['SNAPSHOT_RATE_INCR'],
+        limit: cfg['SNAPSHOT_RATE_INCR'],
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Incremental snapshot rate limit exceeded. Try again later.' }
@@ -80,7 +80,7 @@ async function startApi(){
 
     const transparencyLimiter = rateLimit({
         windowMs: 60 * 1000,
-        max: cfg['TRANSPARENCY_RATE_LIMIT'] || 10,
+        limit: cfg['TRANSPARENCY_RATE_LIMIT'] || 10,
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Transparency endpoint rate limit exceeded. Try again later.' }
@@ -88,7 +88,7 @@ async function startApi(){
 
     const heartbeatLimiter = rateLimit({
         windowMs: 60 * 1000,
-        max: 120,
+        limit: 120,
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Heartbeat rate limit exceeded.' }
