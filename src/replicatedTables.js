@@ -64,18 +64,19 @@ const TOPOLOGY = {
     // Indexer schema: full set of 60+ tables
     indexer: {
         // Tables scoped by block_index (not action_index).
-        // attestation_validator_signatures has no action_index column (only id PK +
-        // response_action_index + block_index), so it is block-scoped here.
-        // slash_events likewise keys off block_index (it has execution_index +
-        // block_index but no action_index), so it is block-scoped too.
-        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events'],
+        // slash_events keys off block_index (it has execution_index +
+        // block_index but no action_index), so it is block-scoped.
+        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events'],
 
         txScoped:     [],  // indexer joins via actions, not directly via tx_index
 
         // Action-scoped tables to include in block payloads
         actionScoped: [
             'actions', 'addresses', 'airdrops',
-            'attestation_requests', 'attestation_responses',
+            // attests is the consolidated ATTEST table: one row per ATTEST
+            // action_index (v0 request, v1 response, v2 expire), so it rides the
+            // per-block action_index join like any other action-scoped table.
+            'attests',
             'batches', 'broadcasts', 'callbacks',
             'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
             'contracts', 'contract_executions', 'contract_emissions', 'contract_balances',

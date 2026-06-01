@@ -52,16 +52,14 @@ describe('ServerPoller', function(){
         it('has block-scoped tables', function(){
             assert.ok(poller.blockScopedTables.includes('blocks'));
             assert.ok(poller.blockScopedTables.includes('transactions'));
-            assert.ok(poller.blockScopedTables.includes('attestation_validator_signatures'));
             assert.ok(poller.blockScopedTables.includes('slash_events'));
-            assert.strictEqual(poller.blockScopedTables.length, 6);
+            assert.strictEqual(poller.blockScopedTables.length, 5);
         });
 
         it('has action-scoped tables', function(){
             assert.ok(poller.actionScopedTables.length > 40);
             assert.ok(poller.actionScopedTables.includes('actions'));
-            assert.ok(poller.actionScopedTables.includes('attestation_requests'));
-            assert.ok(poller.actionScopedTables.includes('attestation_responses'));
+            assert.ok(poller.actionScopedTables.includes('attests'));
             assert.ok(poller.actionScopedTables.includes('gated_files'));
             assert.ok(poller.actionScopedTables.includes('contract_stakes'));
             assert.ok(poller.actionScopedTables.includes('contract_unstakes'));

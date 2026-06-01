@@ -9,7 +9,7 @@ describe('replicatedTables', function(){
 
         it('covers the core block/action tables a follower must hold', function(){
             for(let t of ['blocks', 'transactions', 'actions', 'contract_balances',
-                          'contract_stakes', 'attestation_requests']){
+                          'contract_stakes', 'attests']){
                 assert.ok(tables.includes(t), 'expected replicated set to include ' + t);
             }
         });

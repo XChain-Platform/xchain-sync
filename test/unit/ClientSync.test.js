@@ -331,9 +331,9 @@ describe('ClientSync', function(){
         it('reports a table missing entirely from the follower as a full shortfall', async function(){
             // getTableCount throws (table absent in this replica's schema) → treated as 0.
             db.getTableCount = async () => { throw new Error('no such table'); };
-            let mismatches = await sync._verifyTableCounts({ attestation_requests: 3 });
+            let mismatches = await sync._verifyTableCounts({ attests: 3 });
             assert.strictEqual(mismatches.length, 1);
-            assert.strictEqual(mismatches[0].table, 'attestation_requests');
+            assert.strictEqual(mismatches[0].table, 'attests');
             assert.strictEqual(mismatches[0].localCount, 0);
             assert.strictEqual(mismatches[0].delta, 3);
         });

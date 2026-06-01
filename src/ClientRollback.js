@@ -41,7 +41,6 @@ class ClientRollback {
             'transactions',
             'validator_rewards',
             'contract_state',
-            'attestation_validator_signatures',
             'slash_events'
         ];
 
@@ -109,8 +108,7 @@ class ClientRollback {
             'contract_executions',
             'deposits',
             'withdrawals',
-            'attestation_requests',
-            'attestation_responses',
+            'attests',
             'prices'
         ];
 

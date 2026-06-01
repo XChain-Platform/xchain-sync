@@ -227,8 +227,8 @@ class SnapshotBuilder {
             // Indexer block-scoped set. These tables carry a block_index but no
             // action_index, so the action_index branch below cannot reach them —
             // they must be filtered by block_index here to appear in incremental
-            // snapshots. attestation_validator_signatures and slash_events are
-            // block-scoped for the same reason (see ServerPoller.blockScopedTables).
+            // snapshots. slash_events is block-scoped for the same reason
+            // (see ServerPoller.blockScopedTables).
             //
             // Tables with neither a block_index nor an action_index cursor —
             // icons (token-icon processing state, keyed by token_id),
@@ -238,7 +238,7 @@ class SnapshotBuilder {
             // are intentionally omitted. They ride along in the full snapshot only;
             // for price_snapshots, live convergence is handled by the hub DB sync
             // mirror, not this block stream.
-            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'attestation_validator_signatures', 'slash_events', 'sync_meta']);
+            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'sync_meta']);
             let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
 
             for(let table of tableOrder){
