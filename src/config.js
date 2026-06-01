@@ -76,8 +76,8 @@ module.exports = {
         config['REPLICA_DB_USER'] = process.env.REPLICA_DB_USER;
         config['REPLICA_DB_PASS'] = process.env.REPLICA_DB_PASS;
 
-        // Hub re-poll interval (5 minutes)
-        config['HUB_REPOLL_INTERVAL'] = 300000;
+        // Hub re-poll interval (default 5 minutes; override via HUB_REPOLL_INTERVAL)
+        config['HUB_REPOLL_INTERVAL'] = parseIntMin0(process.env.HUB_REPOLL_INTERVAL, 300000);
 
         // Merkle tree epoch size (blocks per epoch)
         config['MERKLE_EPOCH_SIZE'] = parseInt(process.env.MERKLE_EPOCH_SIZE) || 100;
@@ -90,11 +90,11 @@ module.exports = {
         // tolerance for validators with heterogeneous replica DB speeds.
         config['WS_BACKPRESSURE_LIMIT'] = parseIntMin1(process.env.WS_BACKPRESSURE_LIMIT, 50);
 
-        // WebSocket status broadcast interval (60 seconds)
-        config['WS_STATUS_INTERVAL'] = 60000;
+        // WebSocket status broadcast interval (default 60 seconds; override via WS_STATUS_INTERVAL)
+        config['WS_STATUS_INTERVAL'] = parseIntMin0(process.env.WS_STATUS_INTERVAL, 60000);
 
-        // WebSocket ping interval (30 seconds)
-        config['WS_PING_INTERVAL'] = 30000;
+        // WebSocket ping interval (default 30 seconds; override via WS_PING_INTERVAL)
+        config['WS_PING_INTERVAL'] = parseIntMin0(process.env.WS_PING_INTERVAL, 30000);
 
         // Security: API key authentication (disabled when not set)
         config['SYNC_API_KEY'] = process.env.SYNC_API_KEY || '';
@@ -117,11 +117,11 @@ module.exports = {
         // Security: Max HTTP response size for snapshot downloads in bytes (default 512 MB)
         config['SNAPSHOT_MAX_CONTENT'] = parseIntMin1(process.env.SNAPSHOT_MAX_CONTENT, 536870912);
 
-        // Client reconnect delay (5 seconds)
-        config['CLIENT_RECONNECT_DELAY'] = 5000;
+        // Client reconnect delay (default 5 seconds; override via CLIENT_RECONNECT_DELAY)
+        config['CLIENT_RECONNECT_DELAY'] = parseIntMin0(process.env.CLIENT_RECONNECT_DELAY, 5000);
 
-        // Hash confirm timeout for cross-source verification (5 seconds)
-        config['HASH_CONFIRM_TIMEOUT'] = 5000;
+        // Hash confirm timeout for cross-source verification (default 5 seconds; override via HASH_CONFIRM_TIMEOUT)
+        config['HASH_CONFIRM_TIMEOUT'] = parseIntMin0(process.env.HASH_CONFIRM_TIMEOUT, 5000);
 
         // Validator heartbeat TTL: entries not seen within this window (ms) are evicted
         config['VALIDATOR_HEARTBEAT_TTL'] = parseIntMin1(process.env.VALIDATOR_HEARTBEAT_TTL, 60000);

@@ -126,7 +126,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
         it('truncates in reverse table order', function () {
             return fc.assert(fc.asyncProperty(
                 fc.array(
-                    fc.stringOf(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), { minLength: 1, maxLength: 15 }),
+                    fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), minLength: 1, maxLength: 15 }),
                     { minLength: 2, maxLength: 8 }
                 ).filter(names => new Set(names).size === names.length),
                 async (tableNames) => {
@@ -179,7 +179,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
 
         it('never throws for any table name and row array', function () {
             return fc.assert(fc.asyncProperty(
-                fc.stringOf(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), { minLength: 1, maxLength: 30 }),
+                fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), minLength: 1, maxLength: 30 }),
                 mixedRows(),
                 async (table, rows) => {
                     await applier._insertRows(table, rows);

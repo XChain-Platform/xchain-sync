@@ -125,7 +125,7 @@ function genericDataRow() {
     return fc.integer({ min: 1, max: 8 }).chain(count =>
         fc.array(
             fc.tuple(
-                fc.stringOf(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), { minLength: 1, maxLength: 20 })
+                fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), minLength: 1, maxLength: 20 })
                     .filter(s => /^[a-z]/.test(s)),
                 fc.oneof(amountString(), bigIntLikeValue(), textValue())
             ),
