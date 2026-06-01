@@ -160,6 +160,32 @@ describe('Rollback coverage guard @regression', function(){
         );
     });
 
+    it('attests is rolled back on the replica under its consolidated name, not the phantom split names', function(){
+        // The ATTEST tables were consolidated into a single `attests` table
+        // (one row per ATTEST action_index: v0 request / v1 response / v2 expire).
+        // ClientRollback previously listed the phantom split names
+        // `attestation_requests` / `attestation_responses`, which exist in no
+        // replica schema, so the DELETEs silently no-op'd and orphaned ATTEST
+        // rows from dead-chain blocks survived every reorg (exposed via the
+        // explorer's public attestation REST + WS APIs). Guard the consolidated
+        // name in, and the phantom split names out.
+        assert.ok(
+            rollback.dataTables.includes('attests'),
+            'attests is the consolidated ATTEST table (replicated action-scoped + rolled back by the ' +
+            'source indexer); it must be in ClientRollback.dataTables or reorged ATTEST rows linger on every replica.'
+        );
+        assert.ok(
+            !rollback.dataTables.includes('attestation_requests'),
+            'attestation_requests is a phantom split name that exists in no replica schema; ' +
+            'its DELETE silently no-ops and never cleans the consolidated attests table.'
+        );
+        assert.ok(
+            !rollback.dataTables.includes('attestation_responses'),
+            'attestation_responses is a phantom split name that exists in no replica schema; ' +
+            'its DELETE silently no-ops and never cleans the consolidated attests table.'
+        );
+    });
+
     it('balances is recomputed, not blindly deleted by index', function(){
         assert.ok(!rollback.dataTables.includes('balances'));
         assert.ok(!rollback.blockTables.includes('balances'));
