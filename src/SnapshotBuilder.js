@@ -23,6 +23,7 @@
 const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { encodeRow } = require('./wireCodec');
+const replicatedTables = require('./replicatedTables');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -255,6 +256,19 @@ class SnapshotBuilder {
             // for price_snapshots, live convergence is handled by the hub DB sync
             // mirror, not this block stream.
             let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'sync_meta']);
+
+            // Append-only lookup/dedup tables (index_actions, index_addresses,
+            // index_transactions, …). They carry neither a block_index nor an
+            // action_index cursor, so they can't be range-scoped — but a follower that
+            // heals a gap via incremental still needs the index_* rows those blocks
+            // reference, or it is left short on them (row-count + ledger-hash mismatch
+            // after the heal — blocks/transactions carry *_hash_id FKs into
+            // index_transactions, so even action-less blocks need it). They are
+            // therefore re-dumped in full; the client applies index_* with INSERT
+            // IGNORE (ClientApplier.ignoreTables), so re-sending existing rows is a
+            // no-op. Mirrors the decoder full-dump path. Sourced from the replicated
+            // topology so it can't drift from the per-block streamed set.
+            let indexerFullDump    = new Set(replicatedTables.getTopology('indexer').index);
             let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
 
             for(let table of tableOrder){
@@ -280,6 +294,8 @@ class SnapshotBuilder {
                     } else {
                         if(indexerBlockScoped.has(table)){
                             rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock]);
+                        } else if(indexerFullDump.has(table)){
+                            rows = await db.doQuery("SELECT * FROM `" + table + "`");
                         } else if(firstActionIndex !== null){
                             try {
                                 rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex]);

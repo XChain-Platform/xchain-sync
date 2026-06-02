@@ -293,10 +293,48 @@ class ClientSync {
         }
     }
 
-    // Incremental catch-up from a given block
+    // Incremental catch-up.
+    //
+    // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
+    // is intentionally ignored: catch-up always resumes from the replica's actual
+    // committed tip (re-read from the DB), never from the in-memory cursor, which
+    // can lag a concurrently-applied block. And a single in-flight guard coalesces
+    // overlapping calls — two status/gap triggers firing under fault would
+    // otherwise fetch overlapping ranges and re-insert already-applied rows,
+    // crashing on keyed tables (blocks.id, tx_index) or silently duplicating
+    // keyless ones (credits/debits). Together these guarantee each applied range
+    // begins strictly above committed data, so the non-IGNORE INSERTs never
+    // collide. (applyIncrementalSnapshot is itself atomic — one transaction — so a
+    // failed catch-up leaves the committed tip unchanged and the next attempt
+    // re-reads the same resume point.)
     async _incrementalCatchUp(sinceBlock){
+        // Serialize catch-ups so two never apply overlapping ranges. A request that
+        // arrives while one is in flight is not dropped — it sets a pending flag, and
+        // the in-flight runner loops once more after it finishes. That closes any
+        // residual gap (e.g. the source advanced mid-catch-up) without ever running
+        // two catch-ups concurrently, so it fixes the duplication race AND avoids
+        // leaving the replica a block short when triggers coalesce.
+        if(this._catchUpInFlight){
+            this._catchUpPending = true;
+            return this._catchUpInFlight;
+        }
+        this._catchUpInFlight = (async () => {
+            do {
+                this._catchUpPending = false;
+                await this._runIncrementalCatchUp();
+            } while(this._catchUpPending && this.running);
+        })().finally(() => { this._catchUpInFlight = null; });
+        return this._catchUpInFlight;
+    }
+
+    async _runIncrementalCatchUp(){
         let source = this.sources[0];
         if(!source) return;
+
+        // Resume from the committed tip + 1 (the server's since/ bound is inclusive),
+        // re-read here so a lagging in-memory cursor can never re-request applied rows.
+        let dbTip = await this.db.getLastBlock();
+        let sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
 
         console.log('Incremental catch-up from block ' + sinceBlock + '...');
         try {
@@ -315,7 +353,8 @@ class ClientSync {
 
             let snapshotData = JSON.parse(jsonStr.toString());
             await this.applier.applyIncrementalSnapshot(snapshotData);
-            this.lastAppliedBlock = snapshotData.block_height;
+            if(typeof snapshotData.block_height === 'number')
+                this.lastAppliedBlock = snapshotData.block_height;
         } catch(e){
             console.error('Incremental catch-up failed:', e);
         }

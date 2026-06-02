@@ -271,6 +271,43 @@ describe('SnapshotBuilder', function(){
             assert.ok(parsed.tables.events, 'events table present in incremental snapshot');
             assert.strictEqual(parsed.tables.events.length, 2, 'all events rows re-dumped');
         });
+
+        // Regression: indexer index_* lookup tables have no block_index/action_index
+        // cursor, so they previously fell through to the action_index branch, threw on
+        // the missing column, and were skipped — an incremental gap-heal left the
+        // follower short on index rows (row-count + ledger-hash mismatch). They must be
+        // re-dumped in full (the client applies them with INSERT IGNORE).
+        it('indexer: re-dumps index_* lookup tables in full on incremental', async function(){
+            let db = createMockDb();   // dbType defaults to indexer
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getFirstActionIndex.resolves(500);
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema'))
+                    return [{ table_name: 'index_addresses' }];
+                // Full-dump query has no WHERE clause (whole table). If the code instead
+                // tried the action_index branch the query would carry a WHERE and this
+                // would not match, so the table would come back empty and the assert below
+                // would fail — exactly the bug being guarded against.
+                if(/SELECT \* FROM `index_addresses`\s*$/.test(query))
+                    return [{ id: 1, address: 'a1' }, { id: 2, address: 'a2' }, { id: 3, address: 'a3' }];
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamIncrementalSnapshot(db, 80, res);
+            });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.ok(parsed.tables.index_addresses, 'index_addresses present in incremental snapshot');
+            assert.strictEqual(parsed.tables.index_addresses.length, 3, 'all index_addresses rows re-dumped');
+        });
     });
 
     // The snapshot must be read inside a single REPEATABLE READ transaction so
