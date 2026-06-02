@@ -319,10 +319,23 @@ class ClientSync {
             return this._catchUpInFlight;
         }
         this._catchUpInFlight = (async () => {
-            do {
+            let keepGoing = true;
+            while(keepGoing){
                 this._catchUpPending = false;
+                let before = this.lastAppliedBlock;
                 await this._runIncrementalCatchUp();
-            } while(this._catchUpPending && this.running);
+                // Always make the first pass; re-run only if another trigger arrived
+                // during this pass AND the pass actually advanced the tip AND we're
+                // still live. The progress gate is essential: without it, a catch-up
+                // that keeps failing (e.g. a 404 while the source is transiently behind
+                // `since` during a reorg) under a flood of gap-detection status events
+                // would re-set the pending flag every pass and spin forever. On no
+                // progress we stop and let the next status/block event re-trigger a
+                // fresh catch-up once the source has actually advanced. (`this.running`
+                // gates only the re-run, not the initial pass — callers invoke catch-up
+                // directly before start() sets running.)
+                keepGoing = this._catchUpPending && (this.lastAppliedBlock !== before) && this.running;
+            }
         })().finally(() => { this._catchUpInFlight = null; });
         return this._catchUpInFlight;
     }

@@ -190,16 +190,35 @@ async function createDatabase(dbName, host, port, user, pass) {
     return await createDb(dbName, h, p, u, pw);
 }
 
+// The schema-seed SQL lives on the REDACTED-LOCAL-PATH Parallels share, which
+// intermittently blips ENOENT on an existing file/dir between calls (see the
+// project's parallels-fs-enoent-race note). A bare readdirSync/readFileSync here
+// would crash a whole chaos/e2e suite's `before all` hook and cascade-fail every
+// test under it. Retry the read a few times on ENOENT only; any other error (or a
+// genuinely missing path after retries) still throws.
+async function _fsReadRetry(fn) {
+    let lastErr;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        try { return fn(); }
+        catch (e) {
+            if (e.code !== 'ENOENT') throw e;
+            lastErr = e;
+            await new Promise(r => setTimeout(r, 300));
+        }
+    }
+    throw lastErr;
+}
+
 async function seedSchema(db) {
     let sqlDir = path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
-    let files = fs.readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
+    let files = (await _fsReadRetry(() => fs.readdirSync(sqlDir))).filter(f => f.endsWith('.sql')).sort();
 
     let indexFiles = files.filter(f => f.startsWith('index_'));
     let otherFiles = files.filter(f => !f.startsWith('index_'));
     let ordered = [...indexFiles, ...otherFiles];
 
     for (let file of ordered) {
-        let data = fs.readFileSync(path.join(sqlDir, file), 'utf8');
+        let data = await _fsReadRetry(() => fs.readFileSync(path.join(sqlDir, file), 'utf8'));
         let queries = splitSqlStatements(data);
         for (let query of queries) {
             try { await db.doQuery(query); } catch (e) {}
@@ -209,8 +228,9 @@ async function seedSchema(db) {
     // Sync-service-owned tables (sync_meta, merkle_epochs). Idempotent: in e2e
     // the spawned server also creates these via db.js#verifyTables at startup.
     let syncSqlDir = path.join(__dirname, '..', '..', '..', 'src', 'sql');
-    for (let file of fs.readdirSync(syncSqlDir).filter(f => f.endsWith('.sql')).sort()) {
-        let sql = fs.readFileSync(path.join(syncSqlDir, file), 'utf8');
+    let syncFiles = (await _fsReadRetry(() => fs.readdirSync(syncSqlDir))).filter(f => f.endsWith('.sql')).sort();
+    for (let file of syncFiles) {
+        let sql = await _fsReadRetry(() => fs.readFileSync(path.join(syncSqlDir, file), 'utf8'));
         for (let query of splitSqlStatements(sql)) {
             try { await db.doQuery(query); } catch (e) {}
         }
