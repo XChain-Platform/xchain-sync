@@ -262,9 +262,21 @@ class ClientSync {
             await this.applier.applyFullSnapshot(snapshotData);
             this.lastAppliedBlock = snapshotData.block_height;
 
-            // Verify against second source if available
-            if(this.sources.length > 1 && this.config['VERIFY_HASHES']){
-                await this._verifyAgainstSource(this.sources[1], this.lastAppliedBlock);
+            // Verify against second source if available.
+            if(this.sources.length > 1){
+                if(this.dbType === 'indexer'){
+                    // Indexer cross-source hash + table-count check, gated on VERIFY_HASHES.
+                    if(this.config['VERIFY_HASHES'])
+                        await this._verifyAgainstSource(this.sources[1], this.lastAppliedBlock);
+                } else {
+                    // Decoder has no synthetic chain-of-state hashes to compare, but a full
+                    // snapshot can still arrive truncated (network cut mid-stream) or stale.
+                    // Cross-check the source's published per-table row counts so an incomplete
+                    // bootstrap fails loudly instead of being accepted as complete. This runs
+                    // independent of VERIFY_HASHES — row counts need no synthetic hashes, so the
+                    // indexer-only hash gate does not apply here.
+                    await this._verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
+                }
             }
 
             console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
@@ -359,6 +371,34 @@ class ClientSync {
             }
         } catch(e){
             console.error('Hash verification failed against ' + source + ':', e);
+        }
+    }
+
+    // Cross-check decoder snapshot completeness against a source's published
+    // per-table row counts. Decoder has no synthetic ledger/actions/contract
+    // hashes to compare, but a truncated or stale full snapshot still leaves the
+    // follower with fewer rows than the source — _verifyAgainstSource (indexer-only)
+    // never runs for decoder, so this is the only completeness signal at bootstrap.
+    // Best-effort and additive: a shortfall is logged loudly so operators see an
+    // incomplete bootstrap; a transient /status fetch failure is swallowed so it
+    // doesn't abort an otherwise-good snapshot.
+    async _verifyDecoderCompleteness(source, blockHeight){
+        if(this.dbType !== 'decoder') return;
+        try {
+            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+            let response = await axios.get(url, { timeout: 10000 });
+            let remoteStatus = response.data;
+
+            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
+            if(countMismatches.length){
+                console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+                    ' — decoder snapshot may be truncated or incomplete:');
+                console.error(JSON.stringify(countMismatches));
+            } else if(remoteStatus.table_counts){
+                console.log('Table-count verification passed against ' + source);
+            }
+        } catch(e){
+            console.error('Decoder completeness check failed against ' + source + ':', e);
         }
     }
 

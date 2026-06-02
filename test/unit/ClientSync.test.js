@@ -1,5 +1,6 @@
 const assert = require('assert');
 const sinon  = require('sinon');
+const axios  = require('axios');
 const ClientSync = require('../../src/ClientSync');
 const Utility = require('../../src/utility');
 const HashVerifier = require('../../src/HashVerifier');
@@ -350,6 +351,98 @@ describe('ClientSync', function(){
             assert.deepStrictEqual(await sync._verifyTableCounts(undefined), []);
             assert.deepStrictEqual(await sync._verifyTableCounts(null), []);
             assert.deepStrictEqual(await sync._verifyTableCounts({ blocks: 'not-a-number' }), []);
+        });
+    });
+
+    describe('decoder bootstrap completeness', function(){
+        // Regression guard: a truncated/stale decoder full snapshot must not be
+        // accepted silently. The indexer-only hash path (_verifyAgainstSource)
+        // short-circuits for decoder, so bootstrap must run a row-count cross-check
+        // against the second source independent of the VERIFY_HASHES flag.
+
+        function decoderSync(cfg){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier, cfg, util);
+            return { s, decoderDb };
+        }
+
+        describe('_verifyDecoderCompleteness', function(){
+            it('flags a truncated snapshot loudly when the source has more rows', async function(){
+                let { s, decoderDb } = decoderSync(config);
+                decoderDb.getTableCount = async (t) => ({ blocks: 100, transactions: 0 })[t];
+                sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 100, transactions: 4200 } } });
+
+                await s._verifyDecoderCompleteness('http://source2:3006', 500);
+
+                // The shortfall must surface as a loud TABLE_COUNT_MISMATCH, not be swallowed.
+                let logged = console.error.getCalls().some(c =>
+                    typeof c.args[0] === 'string' && c.args[0].indexOf('TABLE_COUNT_MISMATCH') !== -1);
+                assert.strictEqual(logged, true);
+            });
+
+            it('passes quietly when the follower is complete', async function(){
+                let { s, decoderDb } = decoderSync(config);
+                decoderDb.getTableCount = async (t) => ({ blocks: 100, transactions: 4200 })[t];
+                sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 100, transactions: 4200 } } });
+
+                await s._verifyDecoderCompleteness('http://source2:3006', 500);
+
+                let mismatch = console.error.getCalls().some(c =>
+                    typeof c.args[0] === 'string' && c.args[0].indexOf('TABLE_COUNT_MISMATCH') !== -1);
+                assert.strictEqual(mismatch, false);
+            });
+
+            it('is a no-op for non-decoder dbType', async function(){
+                // sync is the default indexer instance from the outer beforeEach.
+                sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 9 } } });
+                await sync._verifyDecoderCompleteness('http://source2:3006', 500);
+                assert.strictEqual(axios.get.called, false);
+            });
+        });
+
+        describe('_bootstrapFromSnapshot wiring', function(){
+            it('runs the decoder completeness check even when VERIFY_HASHES is false', async function(){
+                let cfg = Object.assign({}, config, { VERIFY_HASHES: false });
+                let { s } = decoderSync(cfg);
+                sinon.stub(s, '_fetchAndApplySchema').resolves();
+                sinon.stub(s, '_verifyDecoderCompleteness').resolves();
+                sinon.stub(s, '_verifyAgainstSource').resolves();
+                sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
+
+                await s._bootstrapFromSnapshot();
+
+                assert.strictEqual(s._verifyDecoderCompleteness.calledOnce, true,
+                    'decoder completeness check must run regardless of VERIFY_HASHES');
+                assert.strictEqual(s._verifyDecoderCompleteness.firstCall.args[0], 'http://source2:3006');
+                assert.strictEqual(s._verifyDecoderCompleteness.firstCall.args[1], 500);
+                // The indexer-only hash path must never run for decoder.
+                assert.strictEqual(s._verifyAgainstSource.called, false);
+            });
+
+            it('does not run the decoder check in single-source mode', async function(){
+                let cfg = Object.assign({}, config, { SYNC_SOURCES: 'http://source1:3006' });
+                let { s } = decoderSync(cfg);
+                sinon.stub(s, '_fetchAndApplySchema').resolves();
+                sinon.stub(s, '_verifyDecoderCompleteness').resolves();
+                sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
+
+                await s._bootstrapFromSnapshot();
+
+                assert.strictEqual(s._verifyDecoderCompleteness.called, false);
+            });
+
+            it('takes the indexer hash path (not the decoder check) for indexer dbType', async function(){
+                sinon.stub(sync, '_fetchAndApplySchema').resolves();
+                sinon.stub(sync, '_verifyAgainstSource').resolves();
+                sinon.stub(sync, '_verifyDecoderCompleteness').resolves();
+                sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
+
+                await sync._bootstrapFromSnapshot();
+
+                assert.strictEqual(sync._verifyAgainstSource.calledOnce, true);
+                assert.strictEqual(sync._verifyDecoderCompleteness.called, false);
+            });
         });
     });
 });
