@@ -301,8 +301,12 @@ class ServerPoller {
                             payload.data[table] = rows;
                     }
                 }
-                // events: decoder-only — operational log, not block-scoped; skip per-block sync
-                // (full/incremental snapshots will catch them up)
+                // events: decoder-only — operational log with no block_index/tx_index
+                // cursor, so it can't be scoped per-block; it is intentionally skipped
+                // here. It converges via snapshots instead: both the full snapshot and
+                // every incremental snapshot re-dump the events table in full (the client
+                // applies them with INSERT IGNORE on the AUTO_INCREMENT id PK, so repeated
+                // dumps are idempotent). See SnapshotBuilder.streamIncrementalSnapshot.
                 // For other index tables, we skip per-block extraction (they're included in full/incremental snapshots)
             } catch(e){
                 // Skip silently

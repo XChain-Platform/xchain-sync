@@ -238,6 +238,39 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(parsed.block_height, 100);
             assert.strictEqual(parsed.since_block, 80);
         });
+
+        // Regression: events has no block_index/tx_index cursor, so a decoder
+        // incremental snapshot must re-dump it in full. Previously events sat in
+        // decoderSkip and was never emitted incrementally, leaving an
+        // incrementally-caught-up follower silently drifted behind the source.
+        it('decoder: re-dumps the events table in full on incremental', async function(){
+            let db = createMockDb('decoder_db');
+            db.dbType = 'decoder';
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ block_hash: 'h' });
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema'))
+                    return [{ table_name: 'events' }];
+                // events full-dump query has no WHERE clause (whole table)
+                if(/SELECT \* FROM `events`\s*$/.test(query))
+                    return [{ id: 1, code: 'x', data: 'y' }, { id: 2, code: 'z', data: 'w' }];
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamIncrementalSnapshot(db, 80, res);
+            });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.ok(parsed.tables.events, 'events table present in incremental snapshot');
+            assert.strictEqual(parsed.tables.events.length, 2, 'all events rows re-dumped');
+        });
     });
 
     // The snapshot must be read inside a single REPEATABLE READ transaction so

@@ -171,8 +171,12 @@ class SnapshotBuilder {
     //   - decoder: block-scoped tables filtered by block_index, tx-scoped tables
     //     joined through transactions, and the small append-only index_* / pubkeys
     //     tables included in full (the client uses INSERT IGNORE on those).
-    //     `events` is skipped — it has no block cursor and no monotonic id we
-    //     can scope by (see decoder review Finding D).
+    //     `events` (operational log) has no block cursor to scope by, so it is
+    //     re-dumped in full each increment — its AUTO_INCREMENT `id` PK rides the
+    //     payload and the client applies incremental rows with INSERT IGNORE, so a
+    //     repeated full dump is idempotent (existing ids no-op, new ones insert).
+    //     Without this, an incrementally-caught-up follower would never receive
+    //     events rows for the gap and would silently drift behind the source.
     async streamIncrementalSnapshot(db, sinceBlock, res){
         // Same REPEATABLE READ snapshot discipline as streamFullSnapshot: the
         // anchor, hash headers, and all per-table reads must observe one block
@@ -219,10 +223,15 @@ class SnapshotBuilder {
             // Scoping rules per dbType.
             // Decoder full-dump tables: index_* and pubkeys are small + append-only;
             //   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
+            //   `events` is full-dumped too: it carries no block_index/tx_index cursor
+            //   to scope incrementally, so the only way an incrementally-caught-up
+            //   follower converges its events table is a complete re-dump. It is safe
+            //   to re-send because events has an AUTO_INCREMENT `id` PK and the client
+            //   applies all incremental rows with INSERT IGNORE — existing ids no-op.
             let decoderBlockScoped = new Set(['blocks', 'transactions']);
             let decoderTxScoped    = new Set(['transaction_outputs', 'dispensers']);
-            let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys']);
-            let decoderSkip        = new Set(['events', 'mempool_transactions']);
+            let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys', 'events']);
+            let decoderSkip        = new Set(['mempool_transactions']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
             // action_index, so the action_index branch below cannot reach them —
