@@ -38,6 +38,9 @@
  *   - attestation_validator_stats     running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
+ *   - dispensers (decoder)            live-pruned each block; the block stream
+ *                                     carries only inserts, so its count would
+ *                                     diverge upward forever — full-snapshot only
  *
  ********************************************************************/
 
@@ -52,8 +55,16 @@ const TOPOLOGY = {
     decoder: {
         // Block-scoped tables (key off block_index directly)
         blockScoped:  ['blocks', 'transactions'],
-        // Tx-scoped tables (key off tx_index → transactions.block_index)
-        txScoped:     ['transaction_outputs', 'dispensers'],
+        // Tx-scoped tables (key off tx_index → transactions.block_index).
+        // dispensers is deliberately excluded: per-block replication captures only
+        // rows *inserted* in a block (via the tx_index→block_index join), but the
+        // decoder prunes expired dispensers every block with a count-reducing
+        // DELETE (deleteOpenDispensers) that the block stream cannot represent.
+        // Streaming inserts alone would let a follower's dispensers count grow
+        // monotonically above the source forever and publish a /status count no
+        // complete replica could ever match. It converges via the full snapshot
+        // instead (SnapshotBuilder.streamFullSnapshot dumps current rows in full).
+        txScoped:     ['transaction_outputs'],
         // Decoder doesn't have action-scoped tables
         actionScoped: [],
         // Append-only lookup tables that may grow as new blocks are processed.

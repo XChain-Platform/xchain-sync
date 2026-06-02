@@ -40,9 +40,19 @@ describe('replicatedTables', function(){
         it('covers the decoder per-block set', function(){
             let tables = getReplicatedTables('decoder');
             for(let t of ['blocks', 'transactions', 'transaction_outputs',
-                          'dispensers', 'index_transactions']){
+                          'index_transactions']){
                 assert.ok(tables.includes(t), 'expected decoder set to include ' + t);
             }
+        });
+
+        it('excludes dispensers (live-pruned each block; full-snapshot only)', function(){
+            // The decoder prunes expired dispensers every block with a
+            // count-reducing DELETE that the insert-only per-block stream cannot
+            // represent, so a per-block-replicated count would diverge upward
+            // forever. dispensers converges via the full snapshot instead and is
+            // therefore deliberately absent from the per-block replicated set.
+            assert.ok(!getReplicatedTables('decoder').includes('dispensers'),
+                      'expected decoder set to exclude dispensers');
         });
 
         it('has no action-scoped tables', function(){
