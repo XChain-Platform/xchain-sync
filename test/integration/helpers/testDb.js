@@ -2,6 +2,7 @@ const path = require('path');
 const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
 const Utility = require('../../../src/utility');
+const { splitSqlStatements } = require('../../../src/sqlUtil');
 
 const TEST_DB_HOST = process.env.TEST_DB_HOST || '192.168.2.5';
 const TEST_DB_PORT = parseInt(process.env.TEST_DB_PORT) || 3306;
@@ -24,7 +25,9 @@ class TestDatabase {
     async doQuery(query, args) {
         if (Array.isArray(args)) {
             for (let i = 0; i < args.length; i++) {
-                if (args[i] !== null && args[i] !== undefined && typeof args[i] === 'object')
+                // Mirror src/db.js: Buffers (binary columns) must reach the driver
+                // intact — toString() would UTF-8-decode and corrupt them.
+                if (args[i] !== null && args[i] !== undefined && typeof args[i] === 'object' && !Buffer.isBuffer(args[i]))
                     args[i] = args[i].toString();
             }
         }
@@ -180,17 +183,21 @@ async function seedSchema(db) {
 
     for (let file of ordered) {
         let data = fs.readFileSync(path.join(sqlDir, file), 'utf8');
-        let queries = data.split(';').map(q => q.trim()).filter(q => q);
+        let queries = splitSqlStatements(data);
         for (let query of queries) {
             try { await db.doQuery(query); } catch (e) {}
         }
     }
 
-    // Also create sync_meta
-    let syncMetaSql = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'sql', 'sync_meta.sql'), 'utf8');
-    let queries = syncMetaSql.split(';').map(q => q.trim()).filter(q => q);
-    for (let query of queries) {
-        try { await db.doQuery(query); } catch (e) {}
+    // Also create the sync-service-owned tables (sync_meta, merkle_epochs).
+    // In production these are created by db.js#verifyTables at startup; the
+    // integration harness builds the app manually, so seed them here.
+    let syncSqlDir = path.join(__dirname, '..', '..', '..', 'src', 'sql');
+    for (let file of fs.readdirSync(syncSqlDir).filter(f => f.endsWith('.sql')).sort()) {
+        let sql = fs.readFileSync(path.join(syncSqlDir, file), 'utf8');
+        for (let query of splitSqlStatements(sql)) {
+            try { await db.doQuery(query); } catch (e) {}
+        }
     }
 }
 

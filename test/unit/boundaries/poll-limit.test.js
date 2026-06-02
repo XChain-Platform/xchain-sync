@@ -16,7 +16,7 @@ function createMockDb(){
 }
 
 function createMockBroadcaster(){
-    return { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]) };
+    return { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
 }
 
 function createMockLog(){

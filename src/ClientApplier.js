@@ -23,6 +23,7 @@
 const validation          = require('./validation');
 const balanceHelpers      = require('./balance-helpers');
 const { SCHEMA_VERSION }  = require('./schema-version');
+const { decodeValue }     = require('./wireCodec');
 
 class ClientApplier {
 
@@ -249,7 +250,10 @@ class ClientApplier {
             for(let row of batch){
                 valueClauses.push('(' + placeholders + ')');
                 for(let col of columns){
-                    args.push(row[col] !== undefined ? row[col] : null);
+                    // decodeValue restores base64 binary sentinels back to Buffers
+                    // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
+                    // encoding); non-binary values pass through unchanged.
+                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
                 }
             }
 

@@ -11,6 +11,7 @@
 const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { splitSqlStatements } = require('../../../src/sqlUtil');
 
 // Apply the decoder schema (from xchain-decoder/src/sql/) to a database.
 // Skips mempool_transactions per the xchain-sync decoder decisions (not synced).
@@ -25,7 +26,7 @@ async function seedDecoderSchema(db){
 
     for(let file of ordered){
         let data = fs.readFileSync(path.join(sqlDir, file), 'utf8');
-        let queries = data.split(';').map(q => q.trim()).filter(q => q);
+        let queries = splitSqlStatements(data);
         for(let q of queries){
             try { await db.doQuery(q); } catch(e){}
         }

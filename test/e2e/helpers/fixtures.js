@@ -85,6 +85,15 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
     for (let block of blocks) {
         let meta = block._meta;
 
+        // Idempotent seed: skip a block that already exists. The chaos suites
+        // reuse one long-lived source DB across describe blocks and re-seed
+        // overlapping ranges; a plain re-INSERT of blocks/transactions would
+        // throw a duplicate-key and abort the test. Reorg tests call
+        // deleteBlocksFrom() first, so a genuinely-rolled-back block is absent
+        // here and is re-inserted with fresh content as intended.
+        let existing = await db.doQuery("SELECT 1 FROM blocks WHERE block_index = ? LIMIT 1", [meta.blockIndex]);
+        if (existing.length > 0) continue;
+
         for (let addr of block.index_addresses)
             await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [addr.address]);
         for (let tx of block.index_transactions)

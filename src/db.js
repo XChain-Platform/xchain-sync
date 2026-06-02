@@ -29,6 +29,7 @@ const mariadb    = require('mariadb');
 const fs         = require('fs');
 const path       = require('path');
 const validation = require('./validation');
+const { splitSqlStatements } = require('./sqlUtil');
 
 class Database {
 
@@ -152,11 +153,9 @@ class Database {
         let dir     = path.join(__dirname, 'sql');
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
         let table   = file.substring(0, file.indexOf('.sql'));
-        let queries = data.split(';');
+        let queries = splitSqlStatements(data);
         console.log('Creating ' + table + ' table and indexes...');
         for(let query of queries){
-            query = query.trim();
-            if(query === '') continue;
             await this.doQuery(query);
         }
     }
@@ -496,7 +495,10 @@ class Database {
         if(!this.util.isNull(query)){
             if(Array.isArray(args)){
                 for(let i = 0; i < args.length; i++){
-                    if(args[i] !== null && args[i] !== undefined && typeof args[i] === 'object')
+                    // Buffers (binary/blob column values) must reach the driver intact —
+                    // toString() would UTF-8-decode and corrupt them. Other objects keep
+                    // the legacy stringify coercion.
+                    if(args[i] !== null && args[i] !== undefined && typeof args[i] === 'object' && !Buffer.isBuffer(args[i]))
                         args[i] = args[i].toString();
                 }
             }

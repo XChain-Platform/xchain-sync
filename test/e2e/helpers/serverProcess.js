@@ -208,7 +208,17 @@ class ServerProcess {
             });
         });
 
-        await new Promise(resolve => this.server.listen(this.port, resolve));
+        await new Promise((resolve, reject) => {
+            // Without an error handler a failed bind (EADDRINUSE when a prior
+            // server on the same port hasn't fully released it) would never
+            // resolve, hanging start() until the test times out. Reject instead.
+            let onError = (err) => reject(err);
+            this.server.once('error', onError);
+            this.server.listen(this.port, () => {
+                this.server.removeListener('error', onError);
+                resolve();
+            });
+        });
 
         // Initialize poller state — match production semantics: lastPolledBlock
         // starts at the current chain tip, so the poll loop only streams *new*
@@ -243,6 +253,14 @@ class ServerProcess {
         }
 
         if (this.server) {
+            // close() only stops accepting new connections and waits for existing
+            // ones to drain. A live-follow client reconnecting (CLIENT_RECONNECT_DELAY)
+            // keeps opening sockets, so close() can hang and the port is never
+            // released — the next start() on the same port then hits EADDRINUSE.
+            // Force-close lingering sockets so close() completes promptly.
+            if (typeof this.server.closeAllConnections === 'function') {
+                this.server.closeAllConnections();
+            }
             await new Promise(resolve => this.server.close(resolve));
         }
     }

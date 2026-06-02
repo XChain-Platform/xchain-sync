@@ -23,7 +23,8 @@ describe('Integration: ServerPoller', function() {
 
         broadcaster = {
             broadcast: sinon.stub(),
-            updateStatus: sinon.stub()
+            updateStatus: sinon.stub(),
+            getSubscriberCount: sinon.stub().returns(0)
         };
         transparencyLog = {
             recordBlock: sinon.stub().resolves()

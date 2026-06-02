@@ -5,6 +5,7 @@ const express  = require('express');
 const cors     = require('cors');
 const WebSocket = require('ws');
 const Utility  = require('../../src/utility');
+const { splitSqlStatements } = require('../../src/sqlUtil');
 const ClientApplier   = require('../../src/ClientApplier');
 const ClientRollback  = require('../../src/ClientRollback');
 const ClientSync      = require('../../src/ClientSync');
@@ -68,13 +69,13 @@ describe('Smoke: Client Mode', function() {
         let otherFiles = files.filter(f => !f.startsWith('index_'));
         for (let file of [...indexFiles, ...otherFiles]) {
             let data = fs.readFileSync(path.join(sqlDir, file), 'utf8');
-            for (let q of data.split(';').map(s => s.trim()).filter(s => s)) {
+            for (let q of splitSqlStatements(data)) {
                 try { await sourceDb.doQuery(q); } catch (e) {}
                 try { await replicaDb.doQuery(q); } catch (e) {}
             }
         }
         let syncSql = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'sql', 'sync_meta.sql'), 'utf8');
-        for (let q of syncSql.split(';').map(s => s.trim()).filter(s => s)) {
+        for (let q of splitSqlStatements(syncSql)) {
             try { await sourceDb.doQuery(q); } catch (e) {}
             try { await replicaDb.doQuery(q); } catch (e) {}
         }

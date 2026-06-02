@@ -8,6 +8,7 @@ const zlib      = require('zlib');
 const WebSocket = require('ws');
 const config    = require('../../src/config');
 const Utility   = require('../../src/utility');
+const { splitSqlStatements } = require('../../src/sqlUtil');
 const ServerPoller     = require('../../src/ServerPoller');
 const BlockBroadcaster = require('../../src/BlockBroadcaster');
 const TransparencyLog  = require('../../src/TransparencyLog');
@@ -63,13 +64,13 @@ describe('Smoke: Server Mode', function() {
         let otherFiles = files.filter(f => !f.startsWith('index_'));
         for (let file of [...indexFiles, ...otherFiles]) {
             let data = fs.readFileSync(path.join(sqlDir, file), 'utf8');
-            for (let q of data.split(';').map(s => s.trim()).filter(s => s)) {
+            for (let q of splitSqlStatements(data)) {
                 try { await db.doQuery(q); } catch (e) {}
             }
         }
         // sync_meta
         let syncSql = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'sql', 'sync_meta.sql'), 'utf8');
-        for (let q of syncSql.split(';').map(s => s.trim()).filter(s => s)) {
+        for (let q of splitSqlStatements(syncSql)) {
             try { await db.doQuery(q); } catch (e) {}
         }
 

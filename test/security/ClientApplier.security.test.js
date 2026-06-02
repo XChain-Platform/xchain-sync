@@ -6,6 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const ClientApplier = proxyquire('../../src/ClientApplier', {
     './validation': require('../../src/validation')
 });
+const { SCHEMA_VERSION } = require('../../src/schema-version');
 
 function createMockDb(){
     return {
@@ -135,6 +136,7 @@ describe('ClientApplier security', function(){
 
         it('truncates valid table names', async function(){
             let snapshotData = {
+                schema_version: SCHEMA_VERSION,
                 block_height: 100,
                 tables: {
                     blocks: [{ block_index: 1 }],
@@ -142,12 +144,13 @@ describe('ClientApplier security', function(){
                 }
             };
             await applier.applyFullSnapshot(snapshotData);
-            assert.strictEqual(db.truncateTable.calledWith('blocks'), true);
-            assert.strictEqual(db.truncateTable.calledWith('transactions'), true);
+            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `blocks`'), true);
+            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `transactions`'), true);
         });
 
         it('skips truncate for invalid table name', async function(){
             let snapshotData = {
+                schema_version: SCHEMA_VERSION,
                 block_height: 100,
                 tables: {
                     'evil;DROP TABLE': [{ id: 1 }],
@@ -155,26 +158,31 @@ describe('ClientApplier security', function(){
                 }
             };
             await applier.applyFullSnapshot(snapshotData);
-            // evil table should NOT be truncated
-            for(let call of db.truncateTable.getCalls()){
-                assert.notStrictEqual(call.args[0], 'evil;DROP TABLE');
+            // evil table should NOT be cleared — no DELETE issued referencing it
+            for(let call of db.doQuery.getCalls()){
+                assert.strictEqual(call.args[0].includes('evil'), false);
             }
             assert.strictEqual(console.error.called, true);
         });
 
         it('skips truncate for path traversal table name', async function(){
             let snapshotData = {
+                schema_version: SCHEMA_VERSION,
                 block_height: 100,
                 tables: {
                     '../etc': [{ id: 1 }]
                 }
             };
             await applier.applyFullSnapshot(snapshotData);
-            assert.strictEqual(db.truncateTable.called, false);
+            // path-traversal name must never reach a DELETE
+            for(let call of db.doQuery.getCalls()){
+                assert.strictEqual(call.args[0].includes('../etc'), false);
+            }
         });
 
         it('valid tables not affected by one invalid table in same snapshot', async function(){
             let snapshotData = {
+                schema_version: SCHEMA_VERSION,
                 block_height: 100,
                 tables: {
                     blocks: [{ block_index: 1 }],
@@ -183,8 +191,8 @@ describe('ClientApplier security', function(){
                 }
             };
             await applier.applyFullSnapshot(snapshotData);
-            assert.strictEqual(db.truncateTable.calledWith('blocks'), true);
-            assert.strictEqual(db.truncateTable.calledWith('transactions'), true);
+            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `blocks`'), true);
+            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `transactions`'), true);
         });
     });
 

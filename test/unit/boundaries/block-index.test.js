@@ -38,7 +38,7 @@ describe('Boundary: Block Index Values', function(){
             // Simulate: rows[0].block_index is 0, which is not null
             // The db.js code: rows[0].block_index !== null → Number(0) = 0
             // We verify the logic via ServerPoller
-            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]) };
+            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
             let log = { recordBlock: sinon.stub().resolves() };
             let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, util);
 
@@ -73,7 +73,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('block_index = 1 (typical first block)', function(){
         it('poller processes block 1 from initial state', async function(){
-            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]) };
+            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
             let log = { recordBlock: sinon.stub().resolves() };
             let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, util);
 
@@ -122,7 +122,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('reorg boundary at block 1', function(){
         it('reorg from 10 to 0 — reorg event at block_index 1', async function(){
-            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]) };
+            let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
             let log = { recordBlock: sinon.stub().resolves() };
             let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, util);
 

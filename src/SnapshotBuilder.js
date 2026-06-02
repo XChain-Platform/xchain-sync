@@ -22,6 +22,7 @@
 
 const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('./schema-version');
+const { encodeRow } = require('./wireCodec');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -140,7 +141,7 @@ class SnapshotBuilder {
                         for(let row of rows){
                             if(!firstRow) gzip.write(',');
                             firstRow = false;
-                            gzip.write(JSON.stringify(row, bigIntReplacer));
+                            gzip.write(JSON.stringify(encodeRow(row), bigIntReplacer));
                         }
                         offset += this.pageSize;
                     }
@@ -229,9 +230,15 @@ class SnapshotBuilder {
             //   to re-send because events has an AUTO_INCREMENT `id` PK and the client
             //   applies all incremental rows with INSERT IGNORE — existing ids no-op.
             let decoderBlockScoped = new Set(['blocks', 'transactions']);
-            let decoderTxScoped    = new Set(['transaction_outputs', 'dispensers']);
+            let decoderTxScoped    = new Set(['transaction_outputs']);
             let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys', 'events']);
-            let decoderSkip        = new Set(['mempool_transactions']);
+            // dispensers is skipped here for the same reason it is excluded from the
+            // per-block replicated topology: the decoder prunes expired dispensers
+            // every block, so an insert-only incremental delta (the tx_index→
+            // block_index join) would re-introduce the upward count divergence on
+            // any follower that catches up incrementally. dispensers converges via
+            // the full snapshot only (streamFullSnapshot dumps current rows).
+            let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
             // action_index, so the action_index branch below cannot reach them —
@@ -293,7 +300,7 @@ class SnapshotBuilder {
 
                     for(let i = 0; i < rows.length; i++){
                         if(i > 0) gzip.write(',');
-                        gzip.write(JSON.stringify(rows[i], bigIntReplacer));
+                        gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
                     }
 
                     gzip.write(']');

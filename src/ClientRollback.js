@@ -123,7 +123,12 @@ class ClientRollback {
         this.decoderBlockTables = ['transactions', 'blocks'];
 
         // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
-        this.decoderTxScopedTables = ['transaction_outputs', 'dispensers'];
+        // dispensers is intentionally absent: it is no longer per-block replicated
+        // (the decoder live-prunes it, which the block stream can't model — see
+        // replicatedTables.js), so it converges via the full snapshot only. Deleting
+        // its rows on a reorg would corrupt that full-snapshot state with no live
+        // stream to restore them, so a reorg leaves dispensers untouched.
+        this.decoderTxScopedTables = ['transaction_outputs'];
     }
 
     // Roll back all data at or after the given block_index.

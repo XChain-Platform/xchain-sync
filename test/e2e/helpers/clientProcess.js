@@ -38,8 +38,12 @@ class ClientProcess {
         }
     }
 
-    // Start live WebSocket sync (non-blocking)
+    // Start live WebSocket sync (non-blocking). Mirror ClientSync.start():
+    // `running` must be true or _scheduleReconnect() bails out (if(!this.running)
+    // return), which would silently disable reconnect-after-disconnect — the very
+    // behavior the recovery tests exercise.
     connectLive() {
+        this.sync.running = true;
         this.sync._connectWebSockets();
     }
 

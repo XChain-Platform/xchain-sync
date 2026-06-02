@@ -109,7 +109,8 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
         const res = await httpGet('/status', { baseUrl: server.getUrl() });
         expect(res.statusCode).to.equal(200);
         const status = JSON.parse(res.body);
-        expect(status.bitcoin.mainnet.block_height).to.equal(20);
+        // /status nests per-dbType after the Phase-3 :dbType migration.
+        expect(status.bitcoin.mainnet.indexer.block_height).to.equal(20);
     });
 
     it('server process remains alive while source DB is completely down', async function () {

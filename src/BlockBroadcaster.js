@@ -23,6 +23,7 @@
  ********************************************************************/
 
 const WebSocket = require('ws');
+const { encodeTables } = require('./wireCodec');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -185,7 +186,14 @@ class BlockBroadcaster {
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
-        let fullMessage = JSON.stringify(event, bigIntReplacer);
+        // Encode binary (Buffer) columns to the base64 wire sentinel before
+        // serializing — block payloads carry rows under `data`. Without this,
+        // JSON.stringify mangles Buffers and the replica's blob columns corrupt
+        // (see src/wireCodec.js).
+        let wireEvent = (event && event.data)
+            ? Object.assign({}, event, { data: encodeTables(event.data) })
+            : event;
+        let fullMessage = JSON.stringify(wireEvent, bigIntReplacer);
         let infraMessage = null;
 
         // Pre-build the infra-only filtered message if any subscriber needs it.
@@ -202,7 +210,7 @@ class BlockBroadcaster {
                     filteredTables[tbl] = event.tables[tbl];
                 }
             }
-            let infraEvent = Object.assign({}, event, { tables: filteredTables, sync_mode: 'infra-only' });
+            let infraEvent = Object.assign({}, event, { tables: encodeTables(filteredTables), sync_mode: 'infra-only' });
             infraMessage = JSON.stringify(infraEvent, bigIntReplacer);
         }
 
