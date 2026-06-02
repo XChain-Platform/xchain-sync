@@ -226,10 +226,14 @@ class BlockBroadcaster {
     }
 
     // Return per-subscriber lag info for a chain/network/dbType, used by /status.
-    // Each entry: { ip, lastSentBlock, appliedBlock, lag }. lastSentBlock is null
-    // until the first block is broadcast; appliedBlock is null until the subscriber
-    // sends its first heartbeat; lag (lastSentBlock - appliedBlock) is null whenever
-    // either side is unavailable.
+    // Each entry: { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived }.
+    // lastSentBlock is null until the first block is broadcast; appliedBlock is null
+    // until the subscriber sends its first heartbeat; lag (lastSentBlock - appliedBlock)
+    // is null whenever either side is unavailable. heartbeatReceived is true once the
+    // subscriber has reported an applied block at least once — it lets callers tell a
+    // caught-up subscriber (lag 0) apart from one that has never reported (lag null
+    // because it is unknown, not because it is in sync). Clients that never send a
+    // heartbeat — legacy builds, third-party validators — stay heartbeatReceived:false.
     getSubscribers(chain, network, dbType){
         let subs = this.subscribers.get(this._key(chain, network, dbType));
         if(!subs) return [];
@@ -238,7 +242,13 @@ class BlockBroadcaster {
             let lastSent = (typeof ws._syncLastSentBlock === 'number') ? ws._syncLastSentBlock : null;
             let applied  = (typeof ws._syncAppliedBlock === 'number')  ? ws._syncAppliedBlock  : null;
             let lag = (lastSent !== null && applied !== null) ? lastSent - applied : null;
-            out.push({ ip: ws._syncIp || null, lastSentBlock: lastSent, appliedBlock: applied, lag });
+            out.push({
+                ip: ws._syncIp || null,
+                lastSentBlock: lastSent,
+                appliedBlock: applied,
+                lag,
+                heartbeatReceived: ws._syncAppliedBlock !== null
+            });
         }
         return out;
     }

@@ -260,6 +260,7 @@ describe('BlockBroadcaster', function(){
             assert.strictEqual(subs[0].lastSentBlock, 100);
             assert.strictEqual(subs[0].appliedBlock, null);
             assert.strictEqual(subs[0].lag, null);
+            assert.strictEqual(subs[0].heartbeatReceived, false);
         });
 
         it('reports lag = lastSentBlock - appliedBlock after a heartbeat', function(){
@@ -271,6 +272,19 @@ describe('BlockBroadcaster', function(){
             assert.strictEqual(subs[0].lastSentBlock, 100);
             assert.strictEqual(subs[0].appliedBlock, 97);
             assert.strictEqual(subs[0].lag, 3);
+            assert.strictEqual(subs[0].heartbeatReceived, true);
+        });
+
+        it('reports heartbeatReceived true even when caught up (lag 0)', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.9'), 'bitcoin', 'mainnet');
+            broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block', block_index: 100 });
+            messageHandler(ws)(JSON.stringify({ type: 'heartbeat', appliedBlock: 100 }));
+            let subs = broadcaster.getSubscribers('bitcoin', 'mainnet');
+            // lag 0 (caught up) must be distinguishable from lag null (unknown):
+            // heartbeatReceived is the signal that disambiguates the two.
+            assert.strictEqual(subs[0].lag, 0);
+            assert.strictEqual(subs[0].heartbeatReceived, true);
         });
 
         it('returns an empty array for an unknown chain/network', function(){
