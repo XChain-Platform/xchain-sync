@@ -115,6 +115,7 @@ async function seedDecoderBlocks(db, startBlock, endBlock, opts){
 // Order is child-table-first so referenced rows can be removed cleanly.
 async function truncateAll(db){
     let tables = ['transaction_outputs', 'dispensers', 'pubkeys',
+                  'mempool_transactions',
                   'transactions', 'blocks',
                   'events',
                   'index_addresses', 'index_transactions'];
