@@ -1,5 +1,7 @@
 node_modules/
 .env
+coverage/
+.nyc_output/
 
 # Mutation testing output
 reports/mutation/*.html

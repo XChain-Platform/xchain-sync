@@ -1,6 +1,6 @@
 {
   "name": "xchain-sync",
-  "description": "Database replication service for the XChain Platform \u2014 syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
+  "description": "Database replication service for the XChain Platform — syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
   "version": "1.7.1",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@stryker-mutator/core": "^8.7.1",
     "@stryker-mutator/mocha-runner": "^8.7.1",
+    "c8": "^11.0.0",
     "chai": "^4.5.0",
     "fast-check": "^4.6.0",
     "mocha": "^11.7.5",
@@ -30,6 +31,7 @@
     "api": "node ./src/api.js",
     "test": "mocha --timeout 5000 --recursive 'test/unit/**/*.test.js'",
     "ci": "mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
+    "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
     "test:e2e": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
