@@ -38,11 +38,23 @@ class ClientProcess {
         }
     }
 
-    // Start live WebSocket sync (non-blocking). Mirror ClientSync.start():
-    // `running` must be true or _scheduleReconnect() bails out (if(!this.running)
-    // return), which would silently disable reconnect-after-disconnect — the very
-    // behavior the recovery tests exercise.
-    connectLive() {
+    // Start live WebSocket sync. Mirror ClientSync.start():
+    //  - `running` must be true or _scheduleReconnect() bails out (if(!this.running)
+    //    return), which would silently disable reconnect-after-disconnect — the very
+    //    behavior the recovery tests exercise.
+    //  - lastAppliedBlock must be initialized from the replica DB when resuming
+    //    without a fresh bootstrap. Gap detection in _handleEvent/_handleBlock guards
+    //    on `lastAppliedBlock !== null`; a resumed client whose replica already holds
+    //    blocks but whose cursor is still null never detects the gap and can't catch
+    //    up (ClientSync.start() does this init before connecting — connectLive must
+    //    too). Skip when a preceding bootstrap() already set it.
+    async connectLive() {
+        if (this.sync.lastAppliedBlock === null) {
+            this.sync.lastAppliedBlock = await this.replicaDb.getLastBlock();
+            if (this.sync.lastAppliedBlock !== null) {
+                this.sync.lastHashes = await this.replicaDb.getBlockHashRow(this.sync.lastAppliedBlock);
+            }
+        }
         this.sync.running = true;
         this.sync._connectWebSockets();
     }
@@ -50,7 +62,7 @@ class ClientProcess {
     // Bootstrap and start live sync
     async start() {
         await this.bootstrap();
-        this.connectLive();
+        await this.connectLive();
     }
 
     // Stop all WebSocket connections

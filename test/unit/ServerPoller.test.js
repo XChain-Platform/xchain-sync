@@ -191,6 +191,37 @@ describe('ServerPoller', function(){
             assert.ok(payload.data);
         });
 
+        it('includes a sync_meta transparency row in the indexer payload', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
+            });
+            let payload = await poller._buildBlockPayload(100);
+
+            assert.ok(payload.data['sync_meta'], 'sync_meta present in indexer payload');
+            assert.strictEqual(payload.data['sync_meta'].length, 1);
+            let row = payload.data['sync_meta'][0];
+            assert.strictEqual(row.block_index, 100);
+            assert.strictEqual(row.block_time, 1700000000);
+            assert.strictEqual(row.ledger_hash, 'lh');
+            assert.strictEqual(row.actions_hash, 'ah');
+            assert.strictEqual(row.contract_hash, 'ch');
+        });
+
+        it('omits sync_meta from the decoder payload', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000, block_hash: 'bh'
+            });
+            // Decoder has no transparency log.
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+
+            let payload = await decoderPoller._buildBlockPayload(100);
+            assert.strictEqual(payload.data['sync_meta'], undefined, 'decoder payload has no sync_meta');
+            assert.strictEqual(payload.block_hash, 'bh');
+        });
+
         it('includes block-scoped table rows in data', async function(){
             db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,

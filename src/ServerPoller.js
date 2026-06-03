@@ -179,6 +179,24 @@ class ServerPoller {
             payload.ledger_hash   = hashRow.ledger_hash;
             payload.actions_hash  = hashRow.actions_hash;
             payload.contract_hash = hashRow.contract_hash;
+
+            // Replicate the per-block transparency-log row (sync_meta) live. The
+            // table is otherwise only carried by snapshots (SnapshotBuilder includes
+            // it; ClientRollback prunes it on reorg), so without this the replica's
+            // sync_meta drifts behind the source between snapshots. Built inline from
+            // the hashes rather than read from the table: the server's
+            // transparencyLog.recordBlock runs AFTER this payload is built (see
+            // _poll), so the row isn't in sync_meta yet at this point. id/logged_at
+            // are node-local and intentionally omitted (the client assigns its own);
+            // the client applies sync_meta with INSERT IGNORE on the unique
+            // block_index, so re-sends are idempotent.
+            payload.data['sync_meta'] = [{
+                block_index:   payload.block_index,
+                block_time:    payload.block_time,
+                ledger_hash:   hashRow.ledger_hash,
+                actions_hash:  hashRow.actions_hash,
+                contract_hash: hashRow.contract_hash
+            }];
         }
 
         // Block-scoped tables (both indexer and decoder)

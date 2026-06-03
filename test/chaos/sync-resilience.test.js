@@ -177,7 +177,7 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
 
         // Don't do full bootstrap — just connect live sync
         // The client's replica already has blocks 1-30
-        client.connectLive();
+        await client.connectLive();
 
         // Status event from server reports block_height=50
         // Client detects gap (local=30, remote=50) → incrementalCatchUp(31)

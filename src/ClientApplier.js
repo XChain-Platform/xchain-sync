@@ -39,7 +39,12 @@ class ClientApplier {
             'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
             'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
             'index_tickers', 'index_transactions',
-            'pubkeys'
+            'pubkeys',
+            // sync_meta (transparency log) has a UNIQUE index on block_index. It is
+            // now streamed live per block AND carried by snapshots; INSERT IGNORE
+            // makes a row already present (bootstrap snapshot, or a catch-up/live
+            // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
+            'sync_meta'
         ]);
     }
 

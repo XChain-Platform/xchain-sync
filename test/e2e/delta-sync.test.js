@@ -148,7 +148,7 @@ describe('E2E: Delta Synchronization', function() {
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
 
             // Connect live — should not trigger catch-up
-            client.connectLive();
+            await client.connectLive();
             await new Promise(r => setTimeout(r, 2000));
 
             // Still at block 20

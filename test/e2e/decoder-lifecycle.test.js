@@ -417,7 +417,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
 
             client = makeClient();
             await client.bootstrap();
-            client.connectLive();
+            await client.connectLive();
 
             // Wait for WS to attach.
             await new Promise(r => setTimeout(r, 500));
