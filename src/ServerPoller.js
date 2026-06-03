@@ -325,9 +325,59 @@ class ServerPoller {
                 // every incremental snapshot re-dump the events table in full (the client
                 // applies them with INSERT IGNORE on the AUTO_INCREMENT id PK, so repeated
                 // dumps are idempotent). See SnapshotBuilder.streamIncrementalSnapshot.
-                // For other index tables, we skip per-block extraction (they're included in full/incremental snapshots)
+                // For other index tables, the generic _id-reference pass below
+                // (indexer only) extracts them; see the comment there.
             } catch(e){
                 // Skip silently
+            }
+        }
+
+        // Indexer only: extract the remaining interned-lookup index tables
+        // (index_actions, index_statuses, index_tickers, index_fiats, index_coins,
+        // index_memos, index_mime_types, index_pubkeys). Each is an append-only
+        // string-interning table referenced by `*_id` columns scattered across
+        // dozens of action/block-scoped tables — and the references are NOT a clean
+        // suffix convention (e.g. lists.item_id and orders.give_tick_id/get_coin_id
+        // all point at index_tickers/index_coins). Hardcoding every referencing
+        // column would silently drop a brand-new interned value the first time a new
+        // action type appears mid-stream, until the next snapshot backfilled it —
+        // the exact completeness gap this closes. Instead, pool every `*_id` value
+        // present in this block's already-assembled payload and fetch the matching
+        // rows from each remaining index table. Over-fetch is harmless: the rows
+        // exist on the source, the client applies them INSERT IGNORE on the PK
+        // (ClientApplier.ignoreTables), so the replica's index_* set stays a subset
+        // of the source's and never overshoots the row-count completeness check.
+        // index_transactions/index_addresses are handled explicitly above.
+        if(this.dbType !== 'decoder'){
+            let refIds = new Set();
+            for(let t in payload.data){
+                let rows = payload.data[t];
+                if(!Array.isArray(rows)) continue;
+                for(let row of rows){
+                    for(let col in row){
+                        if(col.length > 3 && col.slice(-3) === '_id'){
+                            let v = row[col];
+                            if(v !== null && v !== undefined) refIds.add(v);
+                        }
+                    }
+                }
+            }
+            if(refIds.size > 0){
+                let idList = [...refIds];
+                let placeholders = idList.map(() => '?').join(',');
+                for(let table of this.indexTables){
+                    // Explicitly-handled above (they carry block-hash/tx-hash IDs the
+                    // generic _id scan can't see, so leave their precise joins intact).
+                    if(table === 'index_transactions' || table === 'index_addresses') continue;
+                    if(payload.data[table]) continue;  // defensive: already populated
+                    try {
+                        let rows = await this.db.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + placeholders + ")", idList);
+                        if(rows && rows.length > 0)
+                            payload.data[table] = rows;
+                    } catch(e){
+                        // Table may not exist in older schemas — skip silently
+                    }
+                }
             }
         }
 

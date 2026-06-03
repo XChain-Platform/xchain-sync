@@ -290,6 +290,62 @@ describe('ServerPoller', function(){
             // Should deduplicate source_ids: [10, 20]
             assert.strictEqual(addrCall.args[1].length, 2);
         });
+
+        it('extracts the remaining indexer index tables from referenced _id columns', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 1, block_time: 100,
+                ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
+            });
+            db.getBlockScopedRows.resolves([]);
+            db.getTransactions.resolves([{ tx_index: 1, source_id: 10 }]);
+            // An action interning a brand-new action name (action_id) + status (status_id),
+            // and a send interning a new ticker (tick_id) — the mid-stream "new value" case.
+            db.getActions.resolves([{ action_index: 1, action_id: 7, status_id: 3 }]);
+            db.getActionScopedRows.callsFake(async (table) => {
+                if(table === 'sends') return [{ action_index: 1, tick_id: 42, get_coin_id: 5 }];
+                return [];
+            });
+            // Return a row only for the index tables actually queried by the generic pass.
+            db.doQuery.callsFake(async (sql, params) => {
+                if(sql.includes('index_actions'))   return [{ id: 7, action: 'NEWACTION' }];
+                if(sql.includes('index_statuses'))  return [{ id: 3, status: 'valid' }];
+                if(sql.includes('index_tickers'))   return [{ id: 42, tick: 'NEWTICK' }];
+                if(sql.includes('index_coins'))     return [{ id: 5, coin: 'litecoin' }];
+                return [];
+            });
+
+            let payload = await poller._buildBlockPayload(1);
+
+            // The new interned rows ride the live block payload (previously snapshot-only).
+            assert.deepStrictEqual(payload.data['index_actions'],  [{ id: 7, action: 'NEWACTION' }]);
+            assert.deepStrictEqual(payload.data['index_statuses'], [{ id: 3, status: 'valid' }]);
+            assert.deepStrictEqual(payload.data['index_tickers'],  [{ id: 42, tick: 'NEWTICK' }]);
+            assert.deepStrictEqual(payload.data['index_coins'],    [{ id: 5, coin: 'litecoin' }]);
+
+            // The generic pass must skip the two explicitly-handled tables (no double extraction).
+            let genericTables = db.doQuery.getCalls()
+                .map(c => c.args[0])
+                .filter(sql => /WHERE id IN/.test(sql));
+            assert.ok(!genericTables.some(sql => sql.includes('`index_transactions`')),
+                'generic pass should not re-query index_transactions');
+            assert.ok(!genericTables.some(sql => sql.includes('`index_addresses`')),
+                'generic pass should not re-query index_addresses');
+        });
+
+        it('does not run the generic index pass for the decoder', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getBlockHashRow.resolves({ block_index: 1, block_time: 100, block_hash: 'bh' });
+            decoderDb.getTransactions.resolves([{ tx_index: 1, source_id: 10 }]);
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+
+            await decoderPoller._buildBlockPayload(1);
+
+            // Decoder must never query the indexer-only interning tables.
+            let touchedIndexerOnly = decoderDb.doQuery.getCalls().some(c =>
+                /index_(actions|statuses|tickers|fiats|coins|memos|mime_types|pubkeys)/.test(c.args[0]));
+            assert.ok(!touchedIndexerOnly, 'decoder payload must not touch indexer-only index tables');
+        });
     });
 
     describe('_updateStatus', function(){
