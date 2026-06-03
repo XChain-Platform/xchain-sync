@@ -69,7 +69,9 @@ const TOPOLOGY = {
         actionScoped: [],
         // Append-only lookup tables that may grow as new blocks are processed.
         // events is operational/logging — included so consumers see decoder activity.
-        index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events']
+        index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
+        // Decoder has no transparency log (sync_meta), so nothing here.
+        special:      []
     },
 
     // Indexer schema: full set of 60+ tables
@@ -124,7 +126,23 @@ const TOPOLOGY = {
             'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
             'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
             'index_tickers', 'index_transactions'
-        ]
+        ],
+
+        // Replicated for completeness-counting but NOT extracted by ServerPoller's
+        // per-scope loops. sync_meta (the transparency log) is streamed inline by
+        // ServerPoller — _buildBlockPayload builds the row from the block hashes —
+        // and carried by snapshots (SnapshotBuilder discovers tables via
+        // information_schema), so it never rides the blockScoped getBlockScopedRows
+        // path. Listing it HERE rather than in blockScoped puts it in the /status
+        // row-count completeness check (getReplicatedTables) without tripping the
+        // record-after-build ordering trap: TransparencyLog.recordBlock writes the
+        // source's sync_meta row AFTER _buildBlockPayload runs (see ServerPoller._poll),
+        // so a blockScoped read would always see the current block's row missing.
+        // The replica replicates the source's actual sync_meta rows (not derived from
+        // blocks), so source and replica counts track each other and the check is
+        // meaningful — a persistent shortfall means the replica genuinely dropped
+        // transparency rows the source streamed.
+        special:      ['sync_meta']
     }
 };
 
@@ -140,7 +158,10 @@ function getTopology(dbType){
 // client verifier.
 function getReplicatedTables(dbType){
     let t = getTopology(dbType);
-    let all = [].concat(t.blockScoped, t.txScoped, t.actionScoped, t.index);
+    // `special` carries replicated-but-not-per-scope-extracted tables (sync_meta) so
+    // they join the completeness count check without being read by ServerPoller's
+    // per-scope loops. Guarded with `|| []` for forward-compat with older topologies.
+    let all = [].concat(t.blockScoped, t.txScoped, t.actionScoped, t.index, t.special || []);
     return [...new Set(all)];
 }
 

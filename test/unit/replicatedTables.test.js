@@ -14,6 +14,21 @@ describe('replicatedTables', function(){
             }
         });
 
+        it('includes the transparency log (sync_meta) in the completeness check', function(){
+            // sync_meta is streamed inline by ServerPoller (not via the blockScoped
+            // extraction loop) and carried by snapshots, so it belongs in the
+            // /status row-count check even though it is not in the per-scope lists.
+            assert.ok(tables.includes('sync_meta'),
+                      'expected replicated set to include sync_meta for completeness counting');
+            // ...but it must NOT leak into the per-scope lists ServerPoller iterates,
+            // or _buildBlockPayload would read the not-yet-recorded row (ordering trap).
+            let topo = getTopology('indexer');
+            for(let scope of ['blockScoped', 'txScoped', 'actionScoped', 'index']){
+                assert.ok(!topo[scope].includes('sync_meta'),
+                          'sync_meta must not be in the extracted ' + scope + ' list');
+            }
+        });
+
         it('excludes snapshot-only / operator-local / non-deterministic tables', function(){
             // These converge via other channels (full snapshot, hub mirror) and
             // legitimately diverge between nodes — comparing their counts would
@@ -30,7 +45,7 @@ describe('replicatedTables', function(){
 
         it('is the union of every per-scope list in the topology', function(){
             let topo = getTopology('indexer');
-            let union = new Set([].concat(topo.blockScoped, topo.txScoped, topo.actionScoped, topo.index));
+            let union = new Set([].concat(topo.blockScoped, topo.txScoped, topo.actionScoped, topo.index, topo.special));
             assert.strictEqual(tables.length, union.size);
             for(let t of union) assert.ok(tables.includes(t));
         });
