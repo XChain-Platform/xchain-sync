@@ -105,13 +105,15 @@ class SnapshotBuilder {
                 return;
             }
 
+            let dbType  = (db && db.dbType) || 'indexer';
+            let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock);
 
             // Set response headers
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);
-            res.setHeader('X-Snapshot-Schema-Version', SCHEMA_VERSION);
+            res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
             if(hashRow){
                 res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
                 res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
@@ -122,7 +124,7 @@ class SnapshotBuilder {
             gzip.pipe(res);
 
             // Start JSON structure
-            gzip.write('{"schema_version":' + SCHEMA_VERSION + ',"block_height":' + lastBlock + ',"tables":{');
+            gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db);
             let first = true;
@@ -196,6 +198,7 @@ class SnapshotBuilder {
             }
 
             let dbType  = (db && db.dbType) || 'indexer';
+            let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock);
 
             // Set response headers
@@ -203,7 +206,7 @@ class SnapshotBuilder {
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);
             res.setHeader('X-Since-Block', sinceBlock);
-            res.setHeader('X-Snapshot-Schema-Version', SCHEMA_VERSION);
+            res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
             if(hashRow){
                 if(dbType === 'decoder'){
                     res.setHeader('X-Block-Hash', hashRow.block_hash || '');
@@ -217,7 +220,7 @@ class SnapshotBuilder {
             let gzip = zlib.createGzip();
             gzip.pipe(res);
 
-            gzip.write('{"schema_version":' + SCHEMA_VERSION + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
+            gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db);
             let first = true;

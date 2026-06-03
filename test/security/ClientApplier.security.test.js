@@ -136,7 +136,7 @@ describe('ClientApplier security', function(){
 
         it('truncates valid table names', async function(){
             let snapshotData = {
-                schema_version: SCHEMA_VERSION,
+                schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
                 tables: {
                     blocks: [{ block_index: 1 }],
@@ -150,7 +150,7 @@ describe('ClientApplier security', function(){
 
         it('skips truncate for invalid table name', async function(){
             let snapshotData = {
-                schema_version: SCHEMA_VERSION,
+                schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
                 tables: {
                     'evil;DROP TABLE': [{ id: 1 }],
@@ -167,7 +167,7 @@ describe('ClientApplier security', function(){
 
         it('skips truncate for path traversal table name', async function(){
             let snapshotData = {
-                schema_version: SCHEMA_VERSION,
+                schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
                 tables: {
                     '../etc': [{ id: 1 }]
@@ -182,7 +182,7 @@ describe('ClientApplier security', function(){
 
         it('valid tables not affected by one invalid table in same snapshot', async function(){
             let snapshotData = {
-                schema_version: SCHEMA_VERSION,
+                schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
                 tables: {
                     blocks: [{ block_index: 1 }],

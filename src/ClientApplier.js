@@ -131,8 +131,10 @@ class ClientApplier {
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
-        if(snapshotData.schema_version !== SCHEMA_VERSION){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + SCHEMA_VERSION + ' — restart the validator after upgrading the server');
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        let expectedVersion = SCHEMA_VERSION[dbType];
+        if(snapshotData.schema_version !== expectedVersion){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + ' — restart the validator after upgrading the server');
         }
 
         console.log('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
@@ -177,8 +179,10 @@ class ClientApplier {
     async applyIncrementalSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
-        if(snapshotData.schema_version !== SCHEMA_VERSION){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + SCHEMA_VERSION + ' — restart the validator after upgrading the server');
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        let expectedVersion = SCHEMA_VERSION[dbType];
+        if(snapshotData.schema_version !== expectedVersion){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + ' — restart the validator after upgrading the server');
         }
 
         console.log('Applying incremental snapshot (since block ' + snapshotData.since_block + ')...');
