@@ -293,6 +293,27 @@ class ClientSync {
         }
     }
 
+    // Serialize all replica-mutating operations (live block apply, incremental
+    // catch-up apply, reorg rollback) so two write transactions never overlap on
+    // the replica DB. The in-flight guard on catch-up only serializes
+    // catch-up-vs-catch-up; this also covers catch-up-vs-live and live-vs-live
+    // (multiple sources). Without it, a catch-up and a concurrent live block race
+    // on the same rows — e.g. both INSERT the same block's sync_meta — and one
+    // transaction blocks the other until innodb_lock_wait_timeout (~50s), stalling
+    // recovery (observed as ER_LOCK_WAIT_TIMEOUT on sync_meta during a source-DB
+    // outage recovery). Simple promise-chain mutex; a failing op still releases.
+    async _withApplyLock(fn){
+        let prev = this._applyLock || Promise.resolve();
+        let release;
+        this._applyLock = new Promise(r => { release = r; });
+        await prev.catch(() => {});
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+
     // Incremental catch-up.
     //
     // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
@@ -365,7 +386,7 @@ class ClientSync {
             }
 
             let snapshotData = JSON.parse(jsonStr.toString());
-            await this.applier.applyIncrementalSnapshot(snapshotData);
+            await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
         } catch(e){
@@ -658,7 +679,7 @@ class ClientSync {
     // Apply a verified block event
     async _applyBlockEvent(event){
         try {
-            await this.applier.applyBlock(event);
+            await this._withApplyLock(() => this.applier.applyBlock(event));
             this.lastAppliedBlock     = event.block_index;
             this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
             // Report our applied height back to the source(s), debounced.
@@ -697,7 +718,7 @@ class ClientSync {
         }
 
         try {
-            await this.rollback.rollback(event.block_index);
+            await this._withApplyLock(() => this.rollback.rollback(event.block_index));
             this.lastAppliedBlock = event.block_index - 1;
             if(this.lastAppliedBlock > 0)
                 this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
