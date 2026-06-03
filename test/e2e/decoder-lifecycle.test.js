@@ -17,12 +17,10 @@
  *     transactions + transaction_outputs match source.
  *   - Live sync: new source blocks reach replica via WebSocket; payload
  *     carries block_hash and no ledger/actions/contract_hash.
- *
- * Out of scope (would require Findings A + B fixes from the API path
- * migration review):
- *   - Decoder incremental snapshot completeness (SnapshotBuilder
- *     incremental path is indexer-shaped).
- *   - Decoder rollback (ClientRollback only knows indexer tables).
+ *   - Incremental snapshot: replica catches up from a since-block,
+ *     including tx-scoped tables (transaction_outputs).
+ *   - Reorg / rollback: blocks + tx-scoped rows roll back while
+ *     append-only index tables stay intact.
  *
  ********************************************************************/
 
