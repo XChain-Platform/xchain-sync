@@ -601,8 +601,28 @@ class ClientSync {
     async _handleBlock(event, sourceIndex){
         let blockIndex = event.block_index;
 
-        // Skip if we already have this block
-        if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock) return;
+        // Skip if we already have this block — but first guard against a fork at the
+        // current head. A block re-delivered at our committed tip with a DIFFERENT
+        // block_hash than the one we stored means the source replaced that block (a
+        // short reorg we never observed on the live stream). Silently skipping it
+        // would pin this replica to an orphaned tip, so treat it as a continuity
+        // error and catch up — symmetric with the indexer's hash-continuity check
+        // below, which catches the same class of fault via its chain hashes. Decoder
+        // events carry only the block's own block_hash (no replicated previous-hash
+        // link), so a head re-delivery is the one fork the stored hash can detect
+        // without hash-chain math.
+        if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock){
+            if(this.dbType === 'decoder' &&
+               blockIndex === this.lastAppliedBlock &&
+               this.lastHashes && this.lastHashes.block_hash &&
+               event.block_hash && event.block_hash !== this.lastHashes.block_hash){
+                console.error('Chain continuity error (decoder): fork at head block ' + blockIndex +
+                    ' — stored block_hash ' + this.lastHashes.block_hash +
+                    ' != incoming ' + event.block_hash + '; triggering catch-up');
+                await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+            }
+            return;
+        }
 
         // Both dbTypes require block-height continuity: indexer uses chain hashes to detect
         // gaps and forks; decoder has no synthetic hashes but still needs gap detection so

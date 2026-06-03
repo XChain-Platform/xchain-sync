@@ -243,6 +243,55 @@ describe('ClientSync', function(){
                 assert.strictEqual(applier.applyBlock.calledOnce, true);
             });
         });
+
+        describe('decoder fork guard', function(){
+            // The decoder path stores only the block's own block_hash (no replicated
+            // previous-hash link). A block re-delivered at the committed tip with a
+            // DIFFERENT block_hash signals a short reorg the client never observed
+            // live; it must trigger catch-up rather than being silently dropped by the
+            // already-applied skip. Mirrors the indexer's hash-continuity guard.
+            function decoderSync(){
+                let decoderDb = createMockDb();
+                decoderDb.dbType = 'decoder';
+                let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier, config, util);
+                s.lastAppliedBlock = 100;
+                s.lastHashes = { block_hash: 'hash100' };
+                return s;
+            }
+
+            it('triggers catch-up when the head block is re-delivered with a different hash', async function(){
+                let s = decoderSync();
+                sinon.stub(s, '_incrementalCatchUp').resolves();
+
+                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'FORKED' }, 0);
+
+                assert.strictEqual(s._incrementalCatchUp.calledOnce, true);
+                assert.strictEqual(s._incrementalCatchUp.firstCall.args[0], 101);
+                // The forked head must NOT be silently applied.
+                assert.strictEqual(applier.applyBlock.called, false);
+            });
+
+            it('does not trigger catch-up when the head block re-arrives with the same hash', async function(){
+                let s = decoderSync();
+                sinon.stub(s, '_incrementalCatchUp').resolves();
+
+                // Normal multi-source duplicate of the current tip — plain skip, no catch-up.
+                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'hash100' }, 0);
+
+                assert.strictEqual(s._incrementalCatchUp.called, false);
+                assert.strictEqual(applier.applyBlock.called, false);
+            });
+
+            it('does not false-trigger before any block_hash is stored (fresh boot)', async function(){
+                let s = decoderSync();
+                s.lastHashes = null;
+                sinon.stub(s, '_incrementalCatchUp').resolves();
+
+                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'whatever' }, 0);
+
+                assert.strictEqual(s._incrementalCatchUp.called, false);
+            });
+        });
     });
 
     describe('_applyBlockEvent', function(){
