@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- `test/e2e/helpers/decoderFixtures.js` — `truncateAll()` now also clears `mempool_transactions`. The reset helper deleted from every other decoder table but omitted this one, so rows seeded into `mempool_transactions` during one test leaked into the next, risking non-deterministic cross-test state. Inserted in the child-table-first ordering ahead of the `index_*` tables it references.
-
 ### Changed
 - `src/api.js` — migrated all four `rateLimit()` limiters (full-snapshot, incremental-snapshot, transparency, heartbeat) from the deprecated `max` option to its canonical `limit` replacement (renamed in `express-rate-limit` v8, which this service already runs). `max` remains a backward-compatible alias today, so this is a behavior-preserving rename that forward-protects against a future major release dropping it.
 - `src/HubClient.js` — `getallconfigs()` now polls the hub incrementally: it echoes the hub's `watermark` back as `since_updated_at` and merges the returned delta into a cached config map, so each 5-minute discovery cycle transfers near-nothing once chains are known instead of pulling the full config tree twice (once for `getIndexerConfigs`, once for `getDecoderConfigs`). The merge is exact because the hub's config table is upsert-only (rows are never deleted); `_extractDbConfigs` still receives the same full map. The client is long-lived (one per `SyncService`), so the cursor persists across cycles and the second call within a cycle reuses the first call's advance. Falls back to a full fetch on the first call, after a restart, or against an older hub that reports no watermark.
