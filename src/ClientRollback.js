@@ -186,6 +186,22 @@ class ClientRollback {
                 }
             }
 
+            // price_snapshots anchors each round to a block via reference_block
+            // (its equivalent of block_index) rather than block_index itself, so
+            // it falls outside the generic blockTables loop above and needs its
+            // own delete — mirroring the source indexer's rollback. Live
+            // convergence on this table is hub-driven (the hub DB sync mirror
+            // delivers row:deleted events), but that propagation lags the local
+            // reorg, leaving the replica serving finalized rows for orphaned
+            // rounds until the hub catches up. Deleting them here closes that
+            // staleness window; any later hub-driven delete of an already-gone
+            // row is a harmless SQL no-op.
+            try {
+                await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_block >= ?", [block_index]);
+            } catch(e){
+                // Table may not exist on older replica schemas — skip
+            }
+
             // Delete from sync_meta transparency log
             try {
                 await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);

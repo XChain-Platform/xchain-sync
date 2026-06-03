@@ -67,7 +67,14 @@ const RECOMPUTED = ['balances', 'contract_balances'];
 // can't recompute (no capability/governance machinery for missed_count); on
 // reorg _rollbackIndexer drops its orphaned-range rows and the next full-snapshot
 // ride-along restores correct counts from the source (same model as markets).
-const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attestation_validator_stats'];
+// price_snapshots anchors each round to a block via reference_block (not
+// block_index/action_index), so it falls outside both generic delete loops and
+// is removed by its own bespoke DELETE in _rollbackIndexer — mirroring the
+// source indexer. Live convergence is also hub-driven (the hub DB sync mirror
+// delivers row:deleted events), but that lags the local reorg; the bespoke
+// delete closes the staleness window so the replica never serves finalized rows
+// for orphaned rounds while the hub catches up.
+const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attestation_validator_stats', 'price_snapshots'];
 
 // Tables that are NOT rolled back, each with a reason. All intentional:
 // snapshot-refreshed or append-only aggregates the thin replica can't recompute.
@@ -89,9 +96,6 @@ const ROLLBACK_EXEMPT = {
     icons:
         'Token-icon processing state keyed by token_id — no block/action cursor. ' +
         'Full-snapshot ride-along only (SnapshotBuilder), not block-streamed.',
-    price_snapshots:
-        'Mirrored from the hub price channel (round_number/coin_pair); live convergence ' +
-        'is handled by the hub DB sync mirror, not this block stream.',
 };
 
 describe('Rollback coverage guard @regression', function(){
