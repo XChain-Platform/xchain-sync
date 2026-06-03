@@ -41,12 +41,38 @@ class TestDatabase {
                     args[i] = args[i].toString();
             }
         }
-        let conn = this.transactionConnection || await this.pool.getConnection();
-        try {
-            return await conn.query(query, args);
-        } finally {
-            if (!this.transactionConnection) conn.release();
+        // Non-transaction queries retry once on a fatal connection error. The chaos
+        // suite disables/re-enables the DB proxy (toxiproxy) to simulate outages,
+        // which leaves dead connections in the pool; a stale one handed out here
+        // throws "Cannot execute new commands: connection closed" and would otherwise
+        // spuriously fail a test — frequently the NEXT test's setup, since the pool is
+        // reused across the describe. Re-acquiring discards the dead connection and
+        // gets a fresh one. Transaction connections are not retried (a broken
+        // transaction can't be resumed).
+        // Retry enough to drain a whole pool of dead connections (connectionLimit is
+        // 10): each stale connection is destroyed so the pool replaces it with a fresh
+        // one, and only a query-level connection error is retried — a real outage makes
+        // getConnection() itself throw (outside the try) and propagates immediately, so
+        // this never spins on a genuinely-down DB.
+        let maxAttempts = this.transactionConnection ? 1 : 12;
+        let lastErr;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            let conn = this.transactionConnection || await this.pool.getConnection();
+            let deadConn = false;
+            try {
+                return await conn.query(query, args);
+            } catch (e) {
+                lastErr = e;
+                let isConnErr = e.fatal === true || /connection (closed|reset|lost)|ECONNRESET|socket/i.test(e.message || '');
+                deadConn = !this.transactionConnection && isConnErr;
+                if (!deadConn || attempt >= maxAttempts) throw e;
+            } finally {
+                if (!this.transactionConnection) {
+                    try { if (deadConn && conn.destroy) conn.destroy(); else conn.release(); } catch (_) {}
+                }
+            }
         }
+        throw lastErr;
     }
 
     async getLastBlock() {
