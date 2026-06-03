@@ -60,6 +60,10 @@ class HubClient {
         // answered, so a degraded first endpoint isn't retried first every call
         // (which would cost the full timeout per call before falling back).
         this._lastGoodIdx = 0;
+        // Per-endpoint failure detail from the most recent _call(). Populated with
+        // "url → code|message" strings for each unreachable endpoint so callers
+        // can report exactly what was tried and why, instead of a bare null.
+        this.lastFailures = [];
         // Cached full config tree + its high-water mark (epoch seconds). The mark
         // is sent back as `since_updated_at` so the hub returns only rows changed
         // since the previous poll; the delta is merged into this cache and the
@@ -74,6 +78,7 @@ class HubClient {
     // Internal: call a JSON-RPC method, trying each endpoint starting from the
     // last one that succeeded and wrapping around through the rest.
     async _call(data, timeout = 5000){
+        this.lastFailures = [];
         for(let i = 0; i < this.urls.length; i++){
             let idx = (this._lastGoodIdx + i) % this.urls.length;
             let url = this.urls[idx];
@@ -84,6 +89,7 @@ class HubClient {
                     return response.data.result;
                 }
             } catch(err){
+                this.lastFailures.push(url + ' → ' + (err.code || err.message));
                 console.warn('Hub endpoint ' + url + ' failed: ', err);
             }
         }
