@@ -1,0 +1,21 @@
+-- Transparency-log reorg markers (xchain-sync, server-side / indexer only).
+--
+-- One row per committed merkle_epoch invalidated by a chain reorg. On a reorg the
+-- source prunes + re-derives sync_meta and merkle_epochs over the canonical chain
+-- (see TransparencyLog.pruneFrom); this table is the append-only audit record of
+-- that change. old_root is the root committed before the reorg; new_root is
+-- backfilled with the root recomputed over the canonical chain when the epoch
+-- re-commits, giving an auditable old->new trail for every root that changed.
+
+CREATE TABLE merkle_reorgs (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    reorg_block  BIGINT NOT NULL,            -- canonical tip rewound to; blocks >= this were orphaned
+    epoch        BIGINT NOT NULL,            -- the committed epoch invalidated
+    start_block  BIGINT NOT NULL,
+    end_block    BIGINT NOT NULL,
+    old_root     VARCHAR(64) NOT NULL,       -- root committed before the reorg
+    new_root     VARCHAR(64) DEFAULT NULL,   -- root after re-commit (NULL until the epoch re-crosses its boundary)
+    detected_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
+
+CREATE INDEX merkle_reorgs_epoch ON merkle_reorgs (epoch);

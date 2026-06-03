@@ -86,8 +86,73 @@ class TransparencyLog {
             [epoch, rows[0].block_index, rows[rows.length - 1].block_index, tree.root, leaves.length]
         );
 
+        // If this epoch was previously invalidated by a reorg, backfill its audit
+        // marker with the freshly recomputed root to complete the old->new trail.
+        // No-op when the epoch was never reorged; tolerant of an older schema with
+        // no merkle_reorgs table.
+        await this.db.doQuery(
+            "UPDATE merkle_reorgs SET new_root = ? WHERE epoch = ? AND new_root IS NULL",
+            [tree.root, epoch]
+        ).catch(e => console.error('Error backfilling reorg marker for epoch ' + epoch + ':', e));
+
         console.log('Merkle: Epoch ' + epoch + ' committed (blocks ' + startBlock + '-' + endBlock +
             ', root: ' + tree.root.substring(0, 16) + '...)');
+    }
+
+    // Prune the transparency log on a server-side reorg to `block_index` — the new
+    // canonical tip + 1, so every block >= block_index was orphaned. The source's
+    // own sync_meta / merkle_epochs are sync-service-owned tables that nothing else
+    // rolls back (the indexer rolls back its data tables, not these), and
+    // recordBlock writes sync_meta with INSERT IGNORE on a UNIQUE block_index — so
+    // without this, re-added blocks keep their pre-reorg hashes (the new hashes
+    // silently dropped) and the node serves wrong Merkle proofs. Mirrors and
+    // completes the client's sync_meta prune in ClientRollback, on the source side.
+    //
+    // Policy (operator decision): track the canonical chain. Capture every
+    // committed merkle_epoch the reorg invalidates as an append-only audit marker
+    // (old_root), delete those epochs so they re-commit from the canonical chain
+    // when the boundary is re-crossed (commitEpoch backfills new_root), and delete
+    // the orphaned sync_meta rows so recordBlock re-inserts fresh hashes.
+    //
+    // Deliberately uses plain doQuery (no beginTransaction) — like recordBlock and
+    // the rest of the poll loop. A transaction here drives db.transactionConnection,
+    // the single shared field the snapshot-read path (beginReadSnapshot) also uses;
+    // adding the poll loop's first transaction races that field under fault. Instead
+    // the steps are ordered so a partial failure self-heals on the next poll's retry
+    // (the reorg branch leaves lastPolledBlock un-rewound until this completes), and
+    // every step is idempotent: the marker insert is guarded against duplicates and
+    // both DELETEs are range-deletes that no-op once the rows are gone. If any step
+    // throws (DB fault), it propagates so the poll loop retries the whole prune.
+    async pruneFrom(block_index){
+        // Committed epochs whose block range overlaps the orphaned suffix.
+        let invalidated = await this.db.doQuery(
+            `SELECT epoch, start_block, end_block, merkle_root
+             FROM merkle_epochs WHERE end_block >= ?`,
+            [block_index]
+        );
+        for(let e of invalidated){
+            // Idempotent: skip if a pending (not-yet-re-committed) marker for this
+            // epoch already exists, so a retry after a mid-prune fault can't pile up
+            // duplicate audit rows during a sustained outage.
+            let pending = await this.db.doQuery(
+                "SELECT id FROM merkle_reorgs WHERE epoch = ? AND new_root IS NULL LIMIT 1", [e.epoch]
+            );
+            if(pending.length === 0){
+                await this.db.doQuery(
+                    `INSERT INTO merkle_reorgs (reorg_block, epoch, start_block, end_block, old_root)
+                     VALUES (?, ?, ?, ?, ?)`,
+                    [block_index, e.epoch, e.start_block, e.end_block, e.merkle_root]
+                );
+            }
+        }
+        // Epochs before sync_meta: if we fault between, the retry re-reads
+        // merkle_epochs (now empty for this range, so no duplicate marker) and still
+        // prunes sync_meta. Both are idempotent range-deletes.
+        await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
+        await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
+        if(invalidated.length > 0)
+            console.log('Transparency log pruned at reorg to block ' + block_index + ': ' +
+                invalidated.length + ' committed epoch(s) invalidated (will re-commit from canonical chain)');
     }
 
     // Generate an inclusion proof for a specific block

@@ -20,7 +20,7 @@ function createMockBroadcaster(){
 }
 
 function createMockLog(){
-    return { recordBlock: sinon.stub().resolves() };
+    return { recordBlock: sinon.stub().resolves(), pruneFrom: sinon.stub().resolves() };
 }
 
 describe('Boundary: Poll Loop Limit (100 blocks)', function(){

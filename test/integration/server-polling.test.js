@@ -27,7 +27,8 @@ describe('Integration: ServerPoller', function() {
             getSubscriberCount: sinon.stub().returns(0)
         };
         transparencyLog = {
-            recordBlock: sinon.stub().resolves()
+            recordBlock: sinon.stub().resolves(),
+            pruneFrom:   sinon.stub().resolves()
         };
         config = { BLOCK_POLL_INTERVAL: 100 };
 

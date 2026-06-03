@@ -113,6 +113,17 @@ class ServerPoller {
         // Detect reorgs: if current block is less than last polled, a rollback occurred
         if(currentBlock < this.lastPolledBlock){
             console.log('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock);
+
+            // Prune the source's own transparency log first (indexer only — decoder
+            // has no transparencyLog). The indexer rolls back its data tables on a
+            // reorg but not these sync-service-owned tables, and recordBlock's
+            // INSERT IGNORE would otherwise keep the orphaned blocks' stale hashes
+            // and drop the re-added blocks' new ones, serving wrong Merkle proofs.
+            // Throwing here leaves lastPolledBlock un-rewound so the next poll
+            // re-detects the reorg and retries (prune + broadcast stay together).
+            if(this.transparencyLog)
+                await this.transparencyLog.pruneFrom(currentBlock + 1);
+
             this.broadcaster.broadcast(this.chain, this.network, {
                 type: 'reorg',
                 chain: this.chain,

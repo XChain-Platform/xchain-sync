@@ -81,4 +81,78 @@ describe('TransparencyLog', function(){
             assert.strictEqual(result.page, 0);
         });
     });
+
+    describe('pruneFrom', function(){
+        it('records an audit marker and prunes sync_meta + merkle_epochs for an invalidated epoch', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT epoch, start_block/)).resolves([
+                { epoch: 3, start_block: 201, end_block: 300, merkle_root: 'OLDROOT' }
+            ]);
+            // No pending marker yet → the guard SELECT returns empty.
+            db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_reorgs/)).resolves([]);
+
+            await log.pruneFrom(250);
+
+            // Marker captures the pre-reorg root before the epoch is deleted.
+            let ins = db.doQuery.getCalls().find(c => /INSERT INTO merkle_reorgs/.test(c.args[0]));
+            assert.ok(ins, 'inserts a merkle_reorgs audit marker');
+            assert.deepStrictEqual(ins.args[1], [250, 3, 201, 300, 'OLDROOT']);
+
+            // Both tables pruned from the reorg point.
+            assert.ok(db.doQuery.getCalls().some(c =>
+                /DELETE FROM merkle_epochs WHERE end_block >= /.test(c.args[0]) && c.args[1][0] === 250));
+            assert.ok(db.doQuery.getCalls().some(c =>
+                /DELETE FROM sync_meta WHERE block_index >= /.test(c.args[0]) && c.args[1][0] === 250));
+        });
+
+        it('does not duplicate the audit marker when one is already pending (retry-safe)', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT epoch, start_block/)).resolves([
+                { epoch: 3, start_block: 201, end_block: 300, merkle_root: 'OLDROOT' }
+            ]);
+            // A pending marker already exists from a prior (faulted) attempt.
+            db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_reorgs/)).resolves([{ id: 1 }]);
+
+            await log.pruneFrom(250);
+
+            assert.ok(!db.doQuery.getCalls().some(c => /INSERT INTO merkle_reorgs/.test(c.args[0])),
+                'no duplicate marker insert when one is already pending');
+            // Prune still proceeds.
+            assert.ok(db.doQuery.getCalls().some(c => /DELETE FROM merkle_epochs/.test(c.args[0])));
+            assert.ok(db.doQuery.getCalls().some(c => /DELETE FROM sync_meta/.test(c.args[0])));
+        });
+
+        it('still prunes sync_meta when no committed epoch is invalidated', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT epoch, start_block/)).resolves([]);
+
+            await log.pruneFrom(42);
+
+            assert.ok(!db.doQuery.getCalls().some(c => /INSERT INTO merkle_reorgs/.test(c.args[0])),
+                'no audit marker when nothing committed is invalidated');
+            assert.ok(db.doQuery.getCalls().some(c => /DELETE FROM sync_meta/.test(c.args[0])));
+        });
+
+        it('propagates a DB error so the poll loop retries (no transaction state to corrupt)', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT epoch, start_block/)).rejects(new Error('boom'));
+
+            await assert.rejects(() => log.pruneFrom(10), /boom/);
+        });
+    });
+
+    describe('commitEpoch reorg-marker backfill', function(){
+        it('backfills a pending reorg marker new_root when the epoch re-commits', async function(){
+            // Not yet committed.
+            db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_epochs/)).resolves([]);
+            // Epoch blocks present in sync_meta (re-synced canonical chain).
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves([
+                { block_index: 1, ledger_hash: 'a', actions_hash: 'b', contract_hash: 'c' },
+                { block_index: 2, ledger_hash: 'd', actions_hash: 'e', contract_hash: 'f' }
+            ]);
+
+            await log.commitEpoch(1);
+
+            let upd = db.doQuery.getCalls().find(c => /UPDATE merkle_reorgs SET new_root/.test(c.args[0]));
+            assert.ok(upd, 'updates merkle_reorgs with the recomputed root');
+            assert.strictEqual(upd.args[1][1], 1); // epoch param
+            assert.ok(/AND new_root IS NULL/.test(upd.args[0]), 'only backfills the pending marker');
+        });
+    });
 });

@@ -26,7 +26,8 @@ function createMockBroadcaster(){
 
 function createMockLog(){
     return {
-        recordBlock: sinon.stub().resolves()
+        recordBlock: sinon.stub().resolves(),
+        pruneFrom:   sinon.stub().resolves()
     };
 }
 
@@ -147,6 +148,35 @@ describe('ServerPoller', function(){
             assert.strictEqual(event.type, 'reorg');
             assert.strictEqual(event.block_index, 96); // currentBlock + 1
             assert.strictEqual(poller.lastPolledBlock, 95);
+        });
+
+        it('prunes the source transparency log on reorg (to currentBlock + 1)', async function(){
+            poller.lastPolledBlock = 100;
+            db.getLastBlock.resolves(95);
+            db.getBlockHashRow.resolves({
+                block_index: 95, block_time: 100,
+                ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
+            });
+
+            await poller._poll();
+
+            assert.strictEqual(log.pruneFrom.calledOnce, true);
+            assert.strictEqual(log.pruneFrom.firstCall.args[0], 96); // orphaned suffix starts here
+        });
+
+        it('does not attempt a transparency prune on reorg for the decoder (no log)', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getLastBlock.resolves(95);
+            decoderDb.getBlockHashRow.resolves({ block_index: 95, block_time: 100, block_hash: 'bh' });
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+            decoderPoller.lastPolledBlock = 100;
+
+            await decoderPoller._poll();  // must not throw despite transparencyLog === null
+
+            // The reorg is still broadcast to subscribers.
+            assert.strictEqual(broadcaster.broadcast.calledOnce, true);
+            assert.strictEqual(broadcaster.broadcast.firstCall.args[2].type, 'reorg');
         });
 
         it('processes multiple sequential blocks', async function(){
