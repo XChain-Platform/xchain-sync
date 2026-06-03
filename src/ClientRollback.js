@@ -193,7 +193,7 @@ class ClientRollback {
                 // Skip if table doesn't exist
             }
 
-            // attestation_validator_stats: running per-validator aggregate counters
+            // attest_validator_stats: running per-validator aggregate counters
             // (fulfilled/missed/slashed). This table is NOT block-streamed to
             // replicas — it only arrives via full-snapshot ride-along — and the thin
             // replica DB has none of the capability/governance machinery the source
@@ -205,7 +205,7 @@ class ClientRollback {
             // — and let the next full-snapshot ride-along restore correct counts
             // from the (now reorg-safe) source. Same recovery model as markets.
             try {
-                await this.db.doQuery("DELETE FROM `attestation_validator_stats` WHERE last_updated_block >= ?", [block_index]);
+                await this.db.doQuery("DELETE FROM `attest_validator_stats` WHERE last_updated_block >= ?", [block_index]);
             } catch(e){
                 // Table may not exist on older replica schemas — skip
             }

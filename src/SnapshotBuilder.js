@@ -249,7 +249,7 @@ class SnapshotBuilder {
             //
             // Tables with neither a block_index nor an action_index cursor —
             // icons (token-icon processing state, keyed by token_id),
-            // attestation_validator_stats (running per-validator aggregates), and
+            // attest_validator_stats (running per-validator aggregates), and
             // price_snapshots (mirrored from the cross-chain hub's price channel,
             // keyed by round_number/coin_pair) — cannot be scoped incrementally and
             // are intentionally omitted. They ride along in the full snapshot only;

@@ -35,7 +35,7 @@
  * diverge between nodes and comparing them would raise false incompleteness
  * alarms instead of catching real ones:
  *   - icons, price_snapshots          operator-local / hub-mirrored
- *   - attestation_validator_stats     running aggregate, full-snapshot only
+ *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
  *   - dispensers (decoder)            live-pruned each block; the block stream
