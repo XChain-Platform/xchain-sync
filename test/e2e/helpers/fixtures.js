@@ -4,6 +4,20 @@ function blockHash(blockIndex, label) {
     return crypto.createHash('sha256').update(label + ':' + blockIndex).digest('hex');
 }
 
+// Get-or-create an index_actions row, mirroring the real indexer's db.createAction.
+// index_actions carries only a NON-unique index on `action`, so a blind
+// `INSERT IGNORE` does NOT dedup — it inserts one duplicate row per call. The real
+// indexer SELECTs first and inserts only when absent, so a given action type is a
+// single row referenced by actions.action_id. Without this, the fixtures pile up an
+// unreferenced duplicate index_actions row per block (nothing points at their id);
+// those rows can only sync via snapshot, so a live-synced replica legitimately ends
+// up with fewer index_actions than the source and the integrity check fails.
+async function ensureIndexAction(db, action) {
+    let rows = await db.doQuery("SELECT id FROM index_actions WHERE action = ? LIMIT 1", [action]);
+    if (rows.length === 0)
+        await db.doQuery("INSERT INTO index_actions (action) VALUES (?)", [action]);
+}
+
 function buildBlock(blockIndex, opts = {}) {
     let txIndex     = opts.txIndex || blockIndex * 10;
     let actionIndex = opts.actionIndex || blockIndex * 100;
@@ -101,7 +115,7 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
         for (let tick of block.index_tickers)
             await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tick.tick]);
         for (let act of block.index_actions)
-            await db.doQuery("INSERT IGNORE INTO index_actions (action) VALUES (?)", [act.action]);
+            await ensureIndexAction(db, act.action);
 
         let addrRows = await db.doQuery("SELECT id FROM index_addresses WHERE address = ?", [meta.sourceAddr]);
         let addrId = addrRows[0].id;
@@ -221,7 +235,7 @@ async function seedLargeBlock(db, blockIndex, actionCount) {
     await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [contractHash]);
     await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [txHash]);
     await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tickName]);
-    await db.doQuery("INSERT IGNORE INTO index_actions (action) VALUES (?)", ['SEND']);
+    await ensureIndexAction(db, 'SEND');
 
     let addrRows = await db.doQuery("SELECT id FROM index_addresses WHERE address = ?", [sourceAddr]);
     let addrId = addrRows[0].id;
