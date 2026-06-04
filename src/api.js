@@ -364,10 +364,11 @@ async function startApi(){
         let chains = syncService.getChains();
         let result = {};
         for(let { coin, network, dbType } of chains){
-            let validators = broadcaster.getValidatorHeartbeats(coin, network, dbType);
+            // getValidatorHeartbeats returns { validators, total, unknown_count };
+            // surface it directly so unknown_count rides each leaf of the tree.
             if(!result[coin]) result[coin] = {};
             if(!result[coin][network]) result[coin][network] = {};
-            result[coin][network][dbType] = { validators };
+            result[coin][network][dbType] = broadcaster.getValidatorHeartbeats(coin, network, dbType);
         }
         result.last_updated = new Date().toISOString();
         res.json(result);
@@ -388,8 +389,10 @@ async function startApi(){
         let broadcaster = syncService.getBroadcaster();
         if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
 
-        let validators = broadcaster.getValidatorHeartbeats(chain, network, dbType);
-        res.json({ chain, network, dbType, validators, last_updated: new Date().toISOString() });
+        // getValidatorHeartbeats returns { validators, total, unknown_count } — spread
+        // it so total/unknown_count sit alongside the validators map in the response.
+        let vstatus = broadcaster.getValidatorHeartbeats(chain, network, dbType);
+        res.json({ chain, network, dbType, ...vstatus, last_updated: new Date().toISOString() });
     });
 
     // ── Transparency endpoints (indexer only) ──

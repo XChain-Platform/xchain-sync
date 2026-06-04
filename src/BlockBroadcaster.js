@@ -234,7 +234,7 @@ class BlockBroadcaster {
     }
 
     // Return per-subscriber lag info for a chain/network/dbType, used by /status.
-    // Each entry: { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived }.
+    // Each entry: { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived, lagStatus }.
     // lastSentBlock is null until the first block is broadcast; appliedBlock is null
     // until the subscriber sends its first heartbeat; lag (lastSentBlock - appliedBlock)
     // is null whenever either side is unavailable. heartbeatReceived is true once the
@@ -250,12 +250,21 @@ class BlockBroadcaster {
             let lastSent = (typeof ws._syncLastSentBlock === 'number') ? ws._syncLastSentBlock : null;
             let applied  = (typeof ws._syncAppliedBlock === 'number')  ? ws._syncAppliedBlock  : null;
             let lag = (lastSent !== null && applied !== null) ? lastSent - applied : null;
+            let heartbeatReceived = ws._syncAppliedBlock !== null;
             out.push({
                 ip: ws._syncIp || null,
                 lastSentBlock: lastSent,
                 appliedBlock: applied,
                 lag,
-                heartbeatReceived: ws._syncAppliedBlock !== null
+                heartbeatReceived,
+                // lagStatus is an explicit machine-readable signal so an operator or
+                // alerting script does not have to interpret what a null `lag` means.
+                // 'known'   — a heartbeat established a baseline, so `lag` is a real
+                //             number (including a genuine 0 = caught up).
+                // 'unknown' — no heartbeat yet, so `lag` is null because it is
+                //             undetermined, NOT because the subscriber is in sync.
+                //             Scanning only for non-zero `lag` would silently skip these.
+                lagStatus: heartbeatReceived ? 'known' : 'unknown'
             });
         }
         return out;
@@ -319,28 +328,51 @@ class BlockBroadcaster {
     }
 
     // Return per-validator heartbeat state for a chain/network/dbType.
-    // Each entry includes lag_blocks = source block_height - applied_height (or null when unknown).
+    //
+    // Shape: { validators: { <id>: {...} }, total, unknown_count }.
+    //   validators    — map keyed by validator_id; each entry carries
+    //                    lag_blocks = source block_height - applied_height (null when
+    //                    undeterminable) and a `status` of 'known' | 'unknown'.
+    //   total         — number of validators with a heartbeat on record.
+    //   unknown_count — how many of those have lag_blocks === null (source height not
+    //                   yet known), i.e. their lag is genuinely unknown rather than 0.
+    //
+    // The per-entry `status` and `unknown_count` give operators and alerting scripts a
+    // count of validators whose lag cannot be determined versus those genuinely caught
+    // up, instead of leaving a null `lag_blocks` to be misread as healthy.
+    //
+    // NOTE: this can only report on validators that have POST'd at least once — this
+    // service holds no roster of *expected* validators, so a validator that has never
+    // sent a single REST heartbeat cannot be enumerated here (there is nothing to diff
+    // against). Surfacing those would require an external expected-validator set, which
+    // lives outside xchain-sync.
     getValidatorHeartbeats(chain, network, dbType){
         let key = this._key(chain, network, dbType);
         let map = this.validatorHeartbeats.get(key);
-        if(!map || map.size === 0) return {};
+        if(!map || map.size === 0) return { validators: {}, total: 0, unknown_count: 0 };
 
         let statusData   = this.statusData.get(key);
         let sourceHeight = (statusData && typeof statusData.block_height === 'number')
             ? statusData.block_height : null;
 
-        let result = {};
+        let validators = {};
+        let unknownCount = 0;
         for(let [id, entry] of map){
-            result[id] = {
+            let lagBlocks = (sourceHeight !== null && entry.applied_height !== null)
+                ? Math.max(0, sourceHeight - entry.applied_height)
+                : null;
+            if(lagBlocks === null) unknownCount++;
+            validators[id] = {
                 applied_height:     entry.applied_height,
                 applied_block_time: entry.applied_block_time,
                 last_seen:          new Date(entry.last_seen).toISOString(),
-                lag_blocks: (sourceHeight !== null && entry.applied_height !== null)
-                    ? Math.max(0, sourceHeight - entry.applied_height)
-                    : null
+                lag_blocks:         lagBlocks,
+                // 'unknown' when lag_blocks could not be computed (source height not yet
+                // known), so the validator's distance from the tip is undetermined, not 0.
+                status:             lagBlocks === null ? 'unknown' : 'known'
             };
         }
-        return result;
+        return { validators, total: map.size, unknown_count: unknownCount };
     }
 
     // Evict named-validator entries whose last_seen is older than thresholdMs.
