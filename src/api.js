@@ -190,6 +190,10 @@ async function startApi(){
             status:       anyOpen ? 'degraded' : 'healthy',
             mode:         cfg['SYNC_MODE'],
             databases:    databases,
+            // Age of the last successful hub-config fetch (null until the first success).
+            // Sync rediscovers chains from hub config on a timer; a climbing age here while
+            // status stays healthy means the hub is unreachable and the chain set is stale.
+            hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
             last_updated: new Date().toISOString()
         });
     });

@@ -73,6 +73,12 @@ class HubClient {
         // getIndexerConfigs + getDecoderConfigs within one cycle share the cache.
         this.configs       = null;
         this.lastWatermark = 0;
+        // Epoch ms of the last successful getallconfigs() fetch (null until the first
+        // success). sync rediscovers chains from this config on a timer; if the hub goes
+        // dark this timestamp stops advancing while sync keeps replicating against the last
+        // chain set it saw, so exposing its age in /health lets an operator notice the hub
+        // view has gone stale.
+        this.lastSuccessfulFetchAt = null;
     }
 
     // Internal: call a JSON-RPC method, trying each endpoint starting from the
@@ -124,6 +130,9 @@ class HubClient {
         // _extractDbConfigs (which treats null as "no configs") stays unchanged.
         if(result === null) return null;
         this.configs = this._applyConfigResult(result);
+        // A non-null result means at least one endpoint answered — record the fetch time
+        // even on a delta poll that changed nothing, so the age reflects last hub contact.
+        this.lastSuccessfulFetchAt = Date.now();
         return this.configs;
     }
 

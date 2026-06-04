@@ -287,6 +287,14 @@ class SyncService {
         return entry ? entry.db : null;
     }
 
+    // Seconds since the hub last returned config to us (drives chain discovery), or null
+    // if it has never succeeded. Exposed on /health so an operator can see when the hub
+    // view sync replicates against has gone stale during a hub outage.
+    getHubConfigAgeSeconds(){
+        let at = this.hubClient ? this.hubClient.lastSuccessfulFetchAt : null;
+        return (at != null) ? Math.floor((Date.now() - at) / 1000) : null;
+    }
+
     // Get all discovered chain/network/dbType triples
     getChains(){
         let chains = [];
