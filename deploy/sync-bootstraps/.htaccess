@@ -1,0 +1,24 @@
+# sync.xchain.io — bootstrap "latest" alias
+#
+# Deploy to:  /var/www/virtual/sync.xchain.io/bootstraps/.htaccess
+#
+# A request for any   <service>/<coin>/<network>/latest.tgz
+# is resolved by latest.php to a 302 redirect at the newest published
+# <network>-<service>-<YYYYMMDD_HHMMSS>.tar.gz in that directory.
+# Just drop new archives into the directory — no symlink/cron needed.
+#
+# Requires: mod_rewrite + PHP enabled for this vhost, and the vhost <Directory>
+# must set "AllowOverride FileInfo" (or All). FollowSymLinks is inherited from
+# the vhost, so this file needs no Options override.
+
+RewriteEngine On
+RewriteBase /bootstraps/
+
+# Resolve latest.tgz only when a real file by that name isn't present
+# (so a manually-dropped real latest.tgz would still win).
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.+)/latest\.tgz$ latest.php?dir=$1&type=tgz [L,QSA]
+
+# Companion checksum, if an external <archive>.sha256 was published.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.+)/latest\.tgz\.sha256$ latest.php?dir=$1&type=sha256 [L,QSA]
