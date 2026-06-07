@@ -178,8 +178,18 @@ class SyncService {
                 // absent or already current.
                 await db.ensureReplicatedColumns();
             } else {
-                // Server mode: connect to the authoritative DB using hub-provided credentials
-                db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
+                // Server mode: connect to the DB this server polls + serves.
+                // Default: the authoritative DB at the hub-provided coordinates.
+                // Override: when REPLICA_DB_HOST is set, serve from a LOCAL replica
+                // (same db_name from the hub) using REPLICA_DB_* creds instead of the
+                // hub's coordinates. This lets a box that pulled the DBs as a client
+                // (e.g. sync.xchain.io) re-serve those local replicas to downstream
+                // clients, while still enumerating chains/db_names from the hub.
+                if(this.config['REPLICA_DB_HOST']){
+                    db = new Database(this.config['REPLICA_DB_HOST'], this.config['REPLICA_DB_PORT'], cfg.db_name, this.config['REPLICA_DB_USER'], this.config['REPLICA_DB_PASS'], this.util, cfg.dbType);
+                } else {
+                    db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
+                }
                 // sync_meta table (for transparency log) is indexer-only — skip for decoder
                 if(cfg.dbType === 'indexer'){
                     await db.verifySyncTables();
