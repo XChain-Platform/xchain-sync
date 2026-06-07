@@ -336,7 +336,16 @@ class SyncService {
         let type = dbType || 'indexer';
         let key  = chain + ':' + network + ':' + type;
         let sync = this.clientSyncs.get(key);
-        return { lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null };
+        return {
+            lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null,
+            halted:   sync ? sync.isHalted() : false,
+            haltInfo: (sync && sync.isHalted()) ? sync.getHaltInfo() : null
+        };
+    }
+
+    // Resolve a live ClientSync (for the operator halt-clear endpoint).
+    getClientSync(chain, network, dbType){
+        return this.clientSyncs.get(chain + ':' + network + ':' + (dbType || 'indexer')) || null;
     }
 
     // Get the transparency log for a chain/network. Always indexer-only —

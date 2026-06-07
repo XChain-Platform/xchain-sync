@@ -118,6 +118,13 @@ module.exports = {
         // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
         config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
 
+        // Consensus safety: on a CONFIRMED cross-source hash divergence (two honest
+        // sources committed different ledger/actions/contract hashes for the same
+        // block — one is on a forked/Byzantine chain), HALT durably instead of just
+        // logging and silently stalling. Default ON. Set HALT_ON_DIVERGENCE=false to
+        // revert to log-only (not recommended for validators).
+        config['HALT_ON_DIVERGENCE'] = (process.env.HALT_ON_DIVERGENCE || 'true').toLowerCase() !== 'false';
+
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
 

@@ -149,6 +149,11 @@ async function startApi(){
             row.lag_blocks    = (sourceHeight !== null && row.block_height !== null)
                 ? Math.max(0, sourceHeight - row.block_height)
                 : null;
+            // Consensus-divergence halt: a halted client has STOPPED applying and
+            // requires operator clearance. Surfaced so the dashboard monitor and
+            // peers see a forked/Byzantine validator immediately.
+            row.halted = clientState.halted || false;
+            if(clientState.halted) row.halt = clientState.haltInfo;
         }
         // Per-table row counts for replica-completeness verification.
         //
@@ -516,6 +521,35 @@ async function startApi(){
             res.json(result || { epoch: null, merkle_root: null });
         } catch(e){
             console.error('[API error] /transparency/.../root/latest:', e);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    // POST /halt/clear/:dbType/:chain/:network — operator acknowledges an
+    // investigated consensus-divergence halt and lets the client resume. Never
+    // automatic: a halted validator must not self-resume onto a contested chain.
+    // Bearer-authenticated (SYNC_API_KEY). Restart the service afterwards for a
+    // clean catch-up of any blocks missed during the halt.
+    app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
+        let apiKey = cfg['SYNC_API_KEY'];
+        if(apiKey && req.headers['authorization'] !== 'Bearer ' + apiKey)
+            return res.status(401).json({ error: 'Unauthorized' });
+        if(cfg['SYNC_MODE'] === 'server')
+            return res.status(403).json({ error: 'Halt clearing only applies to client mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        let { chain, network } = req.params;
+
+        let client = syncService.getClientSync(chain, network, dbType);
+        if(!client) return res.status(404).json({ error: 'Chain/network/dbType client not found' });
+        if(!client.isHalted()) return res.json({ ok: true, halted: false, message: 'Client was not halted' });
+
+        try {
+            let was = await client.clearHalt();
+            res.json({ ok: true, cleared: true, was, note: 'Restart the sync service for a clean catch-up.' });
+        } catch(e){
+            console.error('[API error] /halt/clear:', e);
             res.status(500).json({ error: 'Internal server error' });
         }
     });

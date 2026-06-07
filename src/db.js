@@ -549,6 +549,38 @@ class Database {
     // Indexer: joins to index_transactions for the synthetic ledger/actions/contract hashes.
     // Decoder: simpler — decoder DB has no synthetic chain-of-state hashes; only the
     // blockchain block hash itself (via block_hash_id → index_transactions).
+    // --- Divergence halt (sync_halt) ------------------------------------------
+    // Durably record a confirmed cross-source consensus divergence so a halted
+    // client does not silently resume onto a contested chain after a restart.
+
+    async recordHalt(dbType, blockIndex, reason, mismatches, sources){
+        // Idempotent: don't stack duplicate active halts for the same block.
+        let existing = await this.getActiveHalt(dbType);
+        if(existing && Number(existing.block_index) === Number(blockIndex)) return existing;
+        await this.doQuery(
+            "INSERT INTO sync_halt (db_type, block_index, reason, mismatches, sources) VALUES (?, ?, ?, ?, ?)",
+            [dbType, blockIndex, String(reason || 'divergence').slice(0, 64),
+             JSON.stringify(mismatches || []), JSON.stringify(sources || [])]
+        );
+        return await this.getActiveHalt(dbType);
+    }
+
+    async getActiveHalt(dbType){
+        let rows = await this.doQuery(
+            "SELECT * FROM sync_halt WHERE db_type=? AND cleared_at IS NULL ORDER BY id DESC LIMIT 1",
+            [dbType]
+        );
+        return (rows && rows.length) ? rows[0] : null;
+    }
+
+    async clearHalt(dbType){
+        let res = await this.doQuery(
+            "UPDATE sync_halt SET cleared_at=NOW() WHERE db_type=? AND cleared_at IS NULL",
+            [dbType]
+        );
+        return res ? res.affectedRows : 0;
+    }
+
     async getBlockHashRow(block_index){
         let query;
         if(this.dbType === 'decoder'){

@@ -66,12 +66,39 @@ class ClientSync {
         // Stable identifier for this validator, used in POST /validator-heartbeat.
         // Operators set VALIDATOR_ID explicitly; we fall back to the system hostname.
         this.validatorId = process.env.VALIDATOR_ID || require('os').hostname() || 'unknown';
+
+        // Divergence halt. Set (in-memory + durably in sync_halt) when a confirmed
+        // cross-source consensus-hash divergence is detected. Once halted the client
+        // applies NO further blocks and stays halted across restarts until an
+        // operator clears it. null = healthy.
+        this._halted = null; // { blockIndex, reason, mismatches, sources, at }
     }
 
     // Start the client sync loop
     async start(){
         this.running = true;
         console.log('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+
+        // A divergence halt is durable: if a prior run recorded an uncleared halt,
+        // stay halted (do NOT catch up / apply) until an operator clears it. A
+        // halted validator must never silently resume onto a contested chain.
+        try {
+            let prior = await this.db.getActiveHalt(this.dbType);
+            if(prior){
+                this._halted = {
+                    blockIndex: Number(prior.block_index), reason: prior.reason,
+                    mismatches: this._safeParse(prior.mismatches), sources: this._safeParse(prior.sources),
+                    at: prior.detected_at
+                };
+                console.error('ClientSync is HALTED on a prior consensus divergence at block ' +
+                    prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
+                    '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+                // Stay alive but idle so /status can report the halt.
+                while(this.running && this._halted){ await this.util.sleep(5000); }
+                if(!this._halted) return this.start(); // cleared at runtime → restart cleanly
+                return;
+            }
+        } catch(e){ console.error('halt-state check failed (continuing):', e); }
 
         // Check local replica state
         this.lastAppliedBlock = await this.db.getLastBlock();
@@ -682,10 +709,16 @@ class ClientSync {
             let hashB = pending[sourceIndices[1]];
             let result = this.hashVerifier.compareBlockHashes(blockIndex, hashA, hashB);
             if(!result.match){
+                this.pendingHashes.delete(blockIndex);
+                if(this.config['HALT_ON_DIVERGENCE']){
+                    // Durable, alerting halt — one source is on a forked/Byzantine chain.
+                    await this._haltOnDivergence(blockIndex, result.mismatches,
+                        [this.sources[sourceIndices[0]], this.sources[sourceIndices[1]]], 'cross-source-divergence');
+                    return;
+                }
                 console.error('DISCREPANCY ALERT: Hash mismatch at block ' + blockIndex);
                 console.error('Mismatches:', JSON.stringify(result.mismatches));
-                this.pendingHashes.delete(blockIndex);
-                return; // Don't apply contested blocks
+                return; // Don't apply contested blocks (log-only mode)
             }
 
             this.pendingHashes.delete(blockIndex);
@@ -695,8 +728,58 @@ class ClientSync {
         await this._applyBlockEvent(event);
     }
 
+    // Durable HALT on a confirmed cross-source consensus divergence. Two honest
+    // sources committed different ledger/actions/contract hashes for the SAME
+    // block → one is on a forked/Byzantine chain. We must NOT pick one and apply
+    // it (that risks replicating a forked chain), and must NOT silently stall.
+    // Stop applying, record the halt durably (survives restart), and alert loudly
+    // until an operator investigates and clears it.
+    async _haltOnDivergence(blockIndex, mismatches, sources, reason){
+        if(this._halted) return; // already halted
+        this._halted = {
+            blockIndex, reason: reason || 'cross-source-divergence',
+            mismatches: mismatches || [], sources: sources || [],
+            at: new Date().toISOString()
+        };
+        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
+        catch(e){ console.error('CRITICAL: failed to persist divergence halt (still halting in-memory):', e); }
+        console.error('================================================================');
+        console.error('CONSENSUS DIVERGENCE HALT — ' + this.chain + '/' + this.network + '/' + this.dbType);
+        console.error('block ' + blockIndex + ': sources disagree on the consensus hash — one is on a');
+        console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
+        console.error('investigate and clear before this validator can resume.');
+        console.error('mismatches: ' + JSON.stringify(mismatches));
+        console.error('sources: ' + JSON.stringify(sources));
+        console.error('================================================================');
+        // Stop the live apply path; pending cross-source hashes are now moot.
+        this.pendingHashes.clear();
+    }
+
+    isHalted(){ return this._halted !== null; }
+    getHaltInfo(){ return this._halted; }
+    _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }
+
+    // Operator clear — acknowledge an investigated divergence and allow resume.
+    // Never automatic: a halted validator must not self-resume onto a contested
+    // chain. Caller is responsible for restarting the sync loop afterwards.
+    async clearHalt(){
+        try { await this.db.clearHalt(this.dbType); } catch(e){ console.error('clearHalt persistence failed:', e); }
+        const was = this._halted;
+        this._halted = null;
+        console.log('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
+            (was ? ' (was halted at block ' + was.blockIndex + ')' : ''));
+        return was;
+    }
+
     // Apply a verified block event
     async _applyBlockEvent(event){
+        // Refuse to apply anything once halted on a divergence — never replicate
+        // onto a chain we could not agree with the fleet on.
+        if(this._halted){
+            console.error('Refusing to apply block ' + (event && event.block_index) +
+                ' — client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
+            return;
+        }
         try {
             await this._withApplyLock(() => this.applier.applyBlock(event));
             this.lastAppliedBlock     = event.block_index;
