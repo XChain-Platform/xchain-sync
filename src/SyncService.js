@@ -64,6 +64,16 @@ class SyncService {
         // Wait for hub to be available
         await this._waitForHub();
 
+        // Server-mode shared components must exist BEFORE discovery: _discoverChains()
+        // starts a ServerPoller per chain, and each poller captures this.broadcaster at
+        // construction. Creating them later (in _startServerMode, after discovery) left
+        // every poller with a null broadcaster and crashed on the first _updateStatus
+        // (TypeError: Cannot read properties of null (reading 'getSubscriberCount')).
+        if(this.config['SYNC_MODE'] === 'server'){
+            this.broadcaster     = new BlockBroadcaster(this.config);
+            this.snapshotBuilder = new SnapshotBuilder(this.util);
+        }
+
         // Discover chains and create DB pools
         await this._discoverChains();
 
@@ -193,8 +203,11 @@ class SyncService {
 
     // Start server mode components
     async _startServerMode(){
-        this.broadcaster     = new BlockBroadcaster(this.config);
-        this.snapshotBuilder = new SnapshotBuilder(this.util);
+        // Idempotent: these are normally created in start() before _discoverChains()
+        // so pollers can capture a live broadcaster. Guard so a direct call (or future
+        // refactor) still works without clobbering the instance the pollers already hold.
+        if(!this.broadcaster)     this.broadcaster     = new BlockBroadcaster(this.config);
+        if(!this.snapshotBuilder) this.snapshotBuilder = new SnapshotBuilder(this.util);
 
         // Start a poller for each discovered DB (both indexer and decoder).
         // ServerPoller reads dbType from db.dbType and switches table lists +
