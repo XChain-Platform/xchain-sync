@@ -152,7 +152,11 @@ class SyncService {
                 // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
                 try {
                     let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
-                    let sourceExists = await sourceDb.verifyDatabase();
+                    // Single-attempt probe: a node-internal source DB host is often
+                    // unreachable from the replica box, and verifyDatabase() would
+                    // retry forever — hanging discovery instead of falling through to
+                    // the server /schema fetch below.
+                    let sourceExists = await sourceDb.verifyDatabaseOnce();
                     if(sourceExists){
                         await db.replicateSchema(sourceDb);
                     }

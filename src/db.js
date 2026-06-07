@@ -98,6 +98,28 @@ class Database {
         }
     }
 
+    // Single-attempt existence check that THROWS on failure instead of retrying
+    // forever (unlike verifyDatabase). Used to probe a SOURCE DB during client
+    // discovery: when the source is unreachable (e.g. a node-internal DB host that
+    // doesn't resolve from the replica box), the caller needs a thrown error so it
+    // can fall back to the server /schema endpoint instead of blocking forever.
+    async verifyDatabaseOnce(){
+        let connectionParams = {
+            host:           this.host,
+            user:           this.user,
+            password:       this.pass,
+            port:           this.port,
+            connectTimeout: 5000
+        };
+        let db = await mariadb.createConnection(connectionParams);
+        try {
+            let results = await db.query("SELECT * FROM information_schema.schemata WHERE schema_name = ?", [this.dbName]);
+            return results.length > 0;
+        } finally {
+            await db.end();
+        }
+    }
+
     // Create a database if it doesn't exist
     async createDatabase(){
         let connectionParams = {
