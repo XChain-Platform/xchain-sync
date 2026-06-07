@@ -84,6 +84,15 @@ const TOPOLOGY = {
 
         // Action-scoped tables to include in block payloads
         actionScoped: [
+            // NOTE: balances, contract_balances, and events are intentionally NOT
+            // listed here. None has an action_index column, so the per-block
+            // `INNER JOIN actions a ON (a.action_index = t.action_index)` in
+            // db.getActionScopedRows() throws ER_BAD_FIELD_ERROR on every poll.
+            // balances and contract_balances are derived aggregates the follower
+            // recomputes from credits/debits and deposits/withdrawals
+            // (ClientApplier._rebuildBalances / _rebuildContractBalances), so they
+            // must not ride the per-block payload. events is an unscoped operational
+            // log carried by full snapshots only — same rationale as markets below.
             'actions', 'addresses', 'airdrops',
             // attests is the consolidated ATTEST table: one row per ATTEST
             // action_index (v0 request, v1 response, v2 expire), so it rides the
@@ -91,14 +100,14 @@ const TOPOLOGY = {
             'attests',
             'batches', 'broadcasts', 'callbacks',
             'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
-            'contracts', 'contract_executions', 'contract_emissions', 'contract_balances',
+            'contracts', 'contract_executions', 'contract_emissions',
             'contract_stakes', 'contract_unstakes', 'contract_delegations',
             'credits', 'debits', 'escrows',
             'delegations',
             'deposits', 'destroys',
             'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
             'dispenser_expires', 'dispenser_statuses', 'dispenses',
-            'dividends', 'events',
+            'dividends',
             'fees', 'files', 'gated_files',
             'issues',
             'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
@@ -116,8 +125,7 @@ const TOPOLOGY = {
             'stakes',
             'swaps', 'swap_cancels', 'swap_edits', 'swap_expires', 'swap_matches', 'swap_statuses',
             'sweeps', 'tokens', 'unstakes',
-            'withdrawals',
-            'balances'
+            'withdrawals'
         ],
 
         // Index tables that may have new entries per block
