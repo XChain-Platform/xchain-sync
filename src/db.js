@@ -678,6 +678,19 @@ class Database {
         return Number(rows[0].cnt);
     }
 
+    // Per-database size + table-count stats for every replicated XChain_* DB on this
+    // server. information_schema is server-wide, so one connection reports them all.
+    // Used by the /catalog endpoint. Rows: {db_name, tables, data_bytes, index_bytes}.
+    async getDatabaseStats(){
+        let query = "SELECT table_schema AS db_name, COUNT(*) AS tables, " +
+                    "COALESCE(SUM(data_length),0) AS data_bytes, " +
+                    "COALESCE(SUM(index_length),0) AS index_bytes " +
+                    "FROM information_schema.tables " +
+                    "WHERE table_type='BASE TABLE' AND table_schema LIKE 'XChain\\_%' " +
+                    "GROUP BY table_schema";
+        return await this.doQuery(query);
+    }
+
     // Truncate a table
     async truncateTable(table){
         await this.doQuery("TRUNCATE TABLE `" + table + "`");

@@ -249,6 +249,51 @@ async function startApi(){
         }
     });
 
+    // GET /catalog — the databases this server offers to sync, with sizes + tips.
+    // Open/read-only. One server-wide information_schema query (cached ~30s) so
+    // page loads don't hammer the DB. Powers the sync.xchain.io "Browse databases" UI.
+    let _catalogCache = { at: 0, payload: null };
+    app.get('/catalog', async (req, res) => {
+        try {
+            let now = Date.now();
+            if(_catalogCache.payload && (now - _catalogCache.at) < 30000){
+                return res.json(_catalogCache.payload);
+            }
+            let chains = syncService.getChains();
+            let statsByName = {};
+            if(chains.length){
+                let anyDb = syncService.getDatabase(chains[0].coin, chains[0].network, chains[0].dbType);
+                if(anyDb){
+                    for(let s of await anyDb.getDatabaseStats()) statsByName[s.db_name] = s;
+                }
+            }
+            let databases = await Promise.all(chains.map(async ({ coin, network, dbType }) => {
+                let db = syncService.getDatabase(coin, network, dbType);
+                let dbName = db ? db.dbName : null;
+                let blockHeight = null;
+                try { if(db) blockHeight = await db.getLastBlock(); } catch(e){}
+                let st = (dbName && statsByName[dbName]) || {};
+                let dataBytes  = Number(st.data_bytes || 0);
+                let indexBytes = Number(st.index_bytes || 0);
+                return {
+                    coin, network, dbType,
+                    db_name:      dbName,
+                    block_height: blockHeight,
+                    table_count:  Number(st.tables || 0),
+                    data_bytes:   dataBytes,
+                    index_bytes:  indexBytes,
+                    total_bytes:  dataBytes + indexBytes
+                };
+            }));
+            let payload = { generated_at: new Date().toISOString(), databases };
+            _catalogCache = { at: now, payload };
+            res.json(payload);
+        } catch(e){
+            console.error('[API error] /catalog:', e);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
     // GET /schema/:dbType/:chain/:network — table DDLs for schema replication (server mode)
     app.get('/schema/:dbType/:chain/:network', async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
