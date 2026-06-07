@@ -39,6 +39,12 @@ class ClientApplier {
             'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
             'index_tickers', 'index_transactions',
             'pubkeys',
+            // events is an append-only operational log that incremental snapshots
+            // re-dump in full (it has no block_index/action_index cursor to scope by).
+            // Its AUTO_INCREMENT id PK collides on already-applied rows on every
+            // catch-up; without INSERT IGNORE the whole catch-up transaction fails
+            // with "Duplicate entry for PRIMARY". IGNORE makes the re-dump idempotent.
+            'events',
             // sync_meta (transparency log) has a UNIQUE index on block_index. It is
             // now streamed live per block AND carried by snapshots; INSERT IGNORE
             // makes a row already present (bootstrap snapshot, or a catch-up/live
