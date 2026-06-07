@@ -61,9 +61,17 @@ async function startApi(){
     app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     // Rate limiters for snapshot endpoints
+    // Key snapshot limits per (client IP + chain/network/dbType), NOT per IP alone.
+    // A single replica bootstraps every chain it follows from one IP, so a global
+    // per-IP bucket would let one chain's snapshot exhaust the budget and 429 all the
+    // others. block-height (incremental /since/:blockHeight) is intentionally excluded
+    // so the bucket is stable per resource across catch-ups.
+    const snapshotKey = (req) => req.ip + '|' + req.params.dbType + '/' + req.params.chain + '/' + req.params.network;
+
     const fullSnapshotLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
         limit: cfg['SNAPSHOT_RATE_FULL'],
+        keyGenerator: snapshotKey,
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Full snapshot rate limit exceeded. Try again later.' }
@@ -72,6 +80,7 @@ async function startApi(){
     const incrSnapshotLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
         limit: cfg['SNAPSHOT_RATE_INCR'],
+        keyGenerator: snapshotKey,
         standardHeaders: true,
         legacyHeaders: false,
         message: { error: 'Incremental snapshot rate limit exceeded. Try again later.' }

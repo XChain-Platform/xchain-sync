@@ -64,8 +64,12 @@ module.exports = {
         // Server mode settings
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
         config['WS_MAX_PER_IP']       = parseIntMin1(process.env.WS_MAX_PER_IP, 3);
-        config['SNAPSHOT_RATE_FULL']  = parseIntMin0(process.env.SNAPSHOT_RATE_FULL, 1);
-        config['SNAPSHOT_RATE_INCR']  = parseIntMin0(process.env.SNAPSHOT_RATE_INCR, 10);
+        // Per-resource (IP + chain/network/dbType) limits — see snapshotKey in api.js.
+        // Defaults give a multi-chain replica headroom for bootstrap retries (full) and
+        // frequent gap catch-ups (incremental) instead of a single global-per-IP bucket
+        // that starves other chains.
+        config['SNAPSHOT_RATE_FULL']  = parseIntMin0(process.env.SNAPSHOT_RATE_FULL, 12);
+        config['SNAPSHOT_RATE_INCR']  = parseIntMin0(process.env.SNAPSHOT_RATE_INCR, 600);
 
         // Client mode settings
         config['SYNC_SOURCES']   = process.env.SYNC_SOURCES || '';
