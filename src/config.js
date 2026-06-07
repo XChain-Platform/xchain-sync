@@ -63,7 +63,11 @@ module.exports = {
 
         // Server mode settings
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
-        config['WS_MAX_PER_IP']       = parseIntMin1(process.env.WS_MAX_PER_IP, 3);
+        // A replica/validator follows EVERY chain a server hosts over its own WS, all
+        // from one IP — node-host-b alone serves 12 chain/network/dbType streams. The old
+        // default of 3 closed 9 of them with 1008 "Too many connections", causing a
+        // permanent reconnect storm that also broke gap-detection-driven catch-up.
+        config['WS_MAX_PER_IP']       = parseIntMin1(process.env.WS_MAX_PER_IP, 100);
         // Per-resource (IP + chain/network/dbType) limits — see snapshotKey in api.js.
         // Defaults give a multi-chain replica headroom for bootstrap retries (full) and
         // frequent gap catch-ups (incremental) instead of a single global-per-IP bucket
