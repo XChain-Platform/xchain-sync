@@ -125,6 +125,15 @@ module.exports = {
         // revert to log-only (not recommended for validators).
         config['HALT_ON_DIVERGENCE'] = (process.env.HALT_ON_DIVERGENCE || 'true').toLowerCase() !== 'false';
 
+        // Validator track: independently RECOMPUTE each indexer block's consensus
+        // hashes (ledger/actions/contract) from the replicated raw rows and confirm
+        // they match the committed hash. Catches a replica whose DATA does not hash
+        // to the committed hash (replication corruption / partial apply / a source
+        // serving rows inconsistent with its committed hash) — which the verbatim
+        // hash comparison cannot. A mismatch HALTs durably. Default ON. Set
+        // VERIFY_RECOMPUTE=false to skip (lower per-block DB cost for plain replicas).
+        config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
+
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
 

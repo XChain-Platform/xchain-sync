@@ -26,10 +26,11 @@
  *
  ********************************************************************/
 
-const WebSocket  = require('ws');
-const axios      = require('axios');
-const zlib       = require('zlib');
-const validation = require('./validation');
+const WebSocket   = require('ws');
+const axios       = require('axios');
+const zlib        = require('zlib');
+const validation  = require('./validation');
+const BlockHasher = require('./BlockHasher');
 
 class ClientSync {
 
@@ -43,6 +44,10 @@ class ClientSync {
         this.hashVerifier = hashVerifier;
         this.config       = config;
         this.util         = util;
+        // Independent block-hash recomputation (true byzantine / replication-
+        // integrity detection — verifies the replicated raw rows actually hash to
+        // the committed hash, rather than trusting verbatim-replicated hashes).
+        this.blockHasher  = new BlockHasher(db, util);
 
         this.sources    = this.config['SYNC_SOURCES'].split(',').map(s => s.trim()).filter(s => s);
         this.running    = false;
@@ -449,6 +454,24 @@ class ClientSync {
                 console.log('Hash verification passed against ' + source);
             }
 
+            // Independent recomputation (validator track): the comparison above is a
+            // transport check (verbatim-replicated local hash vs the source's
+            // published hash). Additionally recompute the LOCAL committed hash from
+            // the LOCAL replicated raw rows — this catches a catch-up snapshot whose
+            // DATA does not match its committed hash, which the verbatim comparison
+            // cannot. (The live per-block path does the same in _applyBlockEvent.)
+            if(this.config['VERIFY_RECOMPUTE']){
+                let recomputeMismatches = await this._verifyRecompute({ block_index: blockHeight }, {
+                    ledger_hash:   localHashes.ledger_hash,
+                    actions_hash:  localHashes.actions_hash,
+                    contract_hash: localHashes.contract_hash
+                });
+                if(recomputeMismatches){
+                    await this._haltOnDivergence(blockHeight, recomputeMismatches, [source], 'local-recompute-divergence');
+                    return;
+                }
+            }
+
             // Replica-completeness check (additive — never overrides the hash result).
             //
             // The committed ledger/actions/contract hashes are computed on the
@@ -755,6 +778,37 @@ class ClientSync {
         this.pendingHashes.clear();
     }
 
+    // Recompute a block's consensus hashes from the replica's raw rows and compare
+    // to the committed hashes (carried in the live block event, or read locally).
+    // Returns an array of mismatches [{field, computed, committed}] or null on a
+    // clean match. Indexer-only (decoder has no synthetic chain hashes).
+    //
+    // A recompute ERROR (transient DB hiccup, schema gap) is logged loudly and
+    // treated as a non-halt: a local infrastructure fault must not fork this
+    // validator off the chain (halts are reserved for genuine DATA divergence).
+    async _verifyRecompute(event, committedOverride){
+        if(this.dbType !== 'indexer') return null;
+        let computed;
+        try {
+            computed = await this.blockHasher.computeBlockHashes(event.block_index);
+        } catch(e){
+            console.error('Recompute verification errored at block ' +
+                (event && event.block_index) + ' (NOT halting on a recompute error):', e);
+            return null;
+        }
+        let committed = committedOverride || {
+            ledger_hash:   event.ledger_hash,
+            actions_hash:  event.actions_hash,
+            contract_hash: event.contract_hash
+        };
+        let mismatches = [];
+        ['ledger_hash','actions_hash','contract_hash'].forEach(f => {
+            if(computed[f] !== committed[f])
+                mismatches.push({ field: f, computed: computed[f], committed: committed[f] });
+        });
+        return mismatches.length ? mismatches : null;
+    }
+
     isHalted(){ return this._halted !== null; }
     getHaltInfo(){ return this._halted; }
     _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }
@@ -782,6 +836,21 @@ class ClientSync {
         }
         try {
             await this._withApplyLock(() => this.applier.applyBlock(event));
+            // Independent recomputation (validator track). The block's raw rows are
+            // now in the replica; recompute its consensus hashes and confirm they
+            // match the committed hashes the source published for it. A mismatch
+            // means the replicated DATA does not hash to the committed hash —
+            // replication corruption, a partial apply, or a source serving rows
+            // inconsistent with its own committed hash — so HALT durably rather
+            // than advance onto unverifiable state.
+            if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
+                let mismatches = await this._verifyRecompute(event);
+                if(mismatches){
+                    await this._haltOnDivergence(event.block_index, mismatches,
+                        this.sources.slice(0, 1), 'local-recompute-divergence');
+                    return; // halted — do not advance lastAppliedBlock
+                }
+            }
             this.lastAppliedBlock     = event.block_index;
             this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
             // Report our applied height back to the source(s), debounced.

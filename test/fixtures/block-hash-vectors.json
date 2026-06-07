@@ -1,0 +1,106 @@
+{
+  "block_index": 1000,
+  "results": [
+    [
+      {
+        "action_index": 1,
+        "address_id": 10,
+        "tick_id": 2,
+        "amount": "1000"
+      },
+      {
+        "action_index": 3,
+        "address_id": 11,
+        "tick_id": 2,
+        "amount": "500"
+      }
+    ],
+    [
+      {
+        "action_index": 1,
+        "address_id": 9,
+        "tick_id": 2,
+        "amount": "1500"
+      }
+    ],
+    [],
+    [
+      {
+        "action_index": 1,
+        "tx_index": 1,
+        "action_id": 5
+      },
+      {
+        "action_index": 2,
+        "tx_index": 1,
+        "action_id": 7
+      },
+      {
+        "action_index": 3,
+        "tx_index": 2,
+        "action_id": 5
+      }
+    ],
+    [
+      {
+        "action_index": 2,
+        "source_id": 9,
+        "code_hash": "deadbeefcafe",
+        "status_id": 1
+      }
+    ],
+    [
+      {
+        "contract_index": 2,
+        "state_key": "counter",
+        "state_value": "42"
+      },
+      {
+        "contract_index": 2,
+        "state_key": "owner",
+        "state_value": "abc"
+      }
+    ],
+    [
+      {
+        "action_index": 3,
+        "contract_index": 2,
+        "caller_id": 11,
+        "gas_used": "12345",
+        "status_id": 1,
+        "emitted_count": 1
+      }
+    ],
+    [
+      {
+        "execution_index": 3,
+        "emitted_action": 99,
+        "action_index": 3,
+        "position": 0
+      }
+    ],
+    [
+      {
+        "action_index": 1,
+        "contract_index": 2,
+        "source_id": 10,
+        "tick_id": 2,
+        "amount": "1000",
+        "status_id": 1
+      }
+    ],
+    [],
+    [
+      {
+        "ledger": "prevLedgerHash",
+        "actions": "prevActionsHash",
+        "contracts": "prevContractsHash"
+      }
+    ]
+  ],
+  "expected": {
+    "ledger_hash": "b5e3dbcc878fa979f9a507872d1c2c9a20bdee89f372f8000e88360caee4142d",
+    "actions_hash": "e5a8d007919e7ef4281c8692d6de6e3ffed6c478007ea032fa5ec5fa50d3bde9",
+    "contract_hash": "fe7fd20e974edda29020b5bdcd50e581117e1d16c7b6d53f50d0a9db95d73865"
+  }
+}
