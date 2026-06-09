@@ -93,9 +93,9 @@ describe('Boundary: Config Parsing', function(){
             assert.strictEqual(config.getConfig().SYNC_API_PORT, 3006);
         });
 
-        it('WS_MAX_PER_IP=xyz defaults to 3', function(){
+        it('WS_MAX_PER_IP=xyz defaults to 100', function(){
             process.env.WS_MAX_PER_IP = 'xyz';
-            assert.strictEqual(config.getConfig().WS_MAX_PER_IP, 3);
+            assert.strictEqual(config.getConfig().WS_MAX_PER_IP, 100);
         });
 
         it('HUB_PORT="" defaults to 10000', function(){

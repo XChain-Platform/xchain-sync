@@ -18,7 +18,10 @@ describe('replicatedTables', function(){
         before(function(){ tables = getReplicatedTables('indexer'); });
 
         it('covers the core block/action tables a follower must hold', function(){
-            for(let t of ['blocks', 'transactions', 'actions', 'contract_balances',
+            // contract_balances is intentionally NOT replicated per-block — it is a
+            // derived aggregate the follower recomputes locally (see replicatedTables.js
+            // and rollback-coverage.test.js RECOMPUTED). So it must NOT appear here.
+            for(let t of ['blocks', 'transactions', 'actions',
                           'contract_stakes', 'attests']){
                 assert.ok(tables.includes(t), 'expected replicated set to include ' + t);
             }

@@ -46,9 +46,9 @@ describe('config', function(){
             assert.strictEqual(cfg.HUB_PORT, 10000);
             assert.strictEqual(cfg.CORS_ORIGIN, false);
             assert.strictEqual(cfg.BLOCK_POLL_INTERVAL, 3000);
-            assert.strictEqual(cfg.WS_MAX_PER_IP, 3);
-            assert.strictEqual(cfg.SNAPSHOT_RATE_FULL, 1);
-            assert.strictEqual(cfg.SNAPSHOT_RATE_INCR, 10);
+            assert.strictEqual(cfg.WS_MAX_PER_IP, 100);
+            assert.strictEqual(cfg.SNAPSHOT_RATE_FULL, 12);
+            assert.strictEqual(cfg.SNAPSHOT_RATE_INCR, 600);
             assert.strictEqual(cfg.SYNC_SOURCES, '');
             assert.strictEqual(cfg.VERIFY_HASHES, true);
             assert.strictEqual(cfg.REPLICA_DB_PORT, 3306);
