@@ -77,6 +77,36 @@ class ClientSync {
         // applies NO further blocks and stays halted across restarts until an
         // operator clears it. null = healthy.
         this._halted = null; // { blockIndex, reason, mismatches, sources, at }
+
+        // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
+        // testnet, which mints blocks at ~10/sec and is tens of millions of
+        // blocks high) the replica perpetually trails the live tip, so every
+        // incoming block while behind would otherwise emit a "block gap" /
+        // "continuity" line — thousands per minute, burying real faults in the
+        // journal. Trailing-while-catching-up is a NORMAL condition, not an
+        // error: we log the first occurrence, then at most one summary line per
+        // _gapLogIntervalMs, folding the suppressed count into it.
+        this._gapLogIntervalMs = Number(this.config['GAP_LOG_INTERVAL_MS'] || 30000);
+        this._gapLogLastAt     = 0;
+        this._gapLogSuppressed = 0;
+    }
+
+    // Throttled logger for normal catch-up lag (see constructor). Collapses the
+    // per-block gap/continuity flood into one summary line per window. `now` is
+    // injected by tests; production omits it and uses the wall clock.
+    _logGap(message, now){
+        now = (typeof now === 'number') ? now : Date.now();
+        if(this._gapLogLastAt && (now - this._gapLogLastAt) < this._gapLogIntervalMs){
+            this._gapLogSuppressed++;
+            return;
+        }
+        let suffix = this._gapLogSuppressed > 0
+            ? ' (+' + this._gapLogSuppressed + ' similar in last ' +
+              Math.round((now - this._gapLogLastAt) / 1000) + 's)'
+            : '';
+        console.log(message + suffix);
+        this._gapLogLastAt = now;
+        this._gapLogSuppressed = 0;
     }
 
     // Start the client sync loop
@@ -640,7 +670,7 @@ class ClientSync {
             // redundant incremental fetch on every status tick during live sync;
             // a genuinely dropped block is still picked up on the next status tick.
             if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
-                console.log('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
+                this._logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
         }
@@ -682,12 +712,15 @@ class ClientSync {
                     this.lastAppliedBlock, this.lastHashes, event
                 );
                 if(!continuity.valid){
-                    console.error('Chain continuity error: ' + continuity.reason);
+                    // Normal trailing-tip lag on a fast chain (server ahead of our
+                    // committed height) — not a fault. Log throttled at info level;
+                    // a genuine fork at our head is caught separately above as an error.
+                    this._logGap('Catch-up lag (indexer): ' + continuity.reason);
                     await this._incrementalCatchUp(this.lastAppliedBlock + 1);
                     return;
                 }
             } else if(blockIndex > this.lastAppliedBlock + 1){
-                console.log('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
+                this._logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
                 return;
             }

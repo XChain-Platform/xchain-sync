@@ -84,6 +84,40 @@ describe('ClientSync', function(){
         });
     });
 
+    describe('_logGap throttling', function(){
+        // On a fast chain (e.g. Dogecoin testnet) the replica trails the tip and
+        // would log a gap line per block — thousands/min. _logGap collapses that
+        // into one line per window, folding in a suppressed count.
+        it('logs the first occurrence immediately', function(){
+            sync._gapLogIntervalMs = 30000;
+            sync._logGap('gap', 1000);
+            assert.strictEqual(console.log.calledOnce, true);
+            assert.match(console.log.firstCall.args[0], /^gap/);
+        });
+
+        it('suppresses repeats within the window, then emits one summary with the count', function(){
+            sync._gapLogIntervalMs = 30000;
+            sync._logGap('gap', 1000);           // emits
+            sync._logGap('gap', 5000);           // suppressed
+            sync._logGap('gap', 10000);          // suppressed
+            assert.strictEqual(console.log.callCount, 1);
+
+            sync._logGap('gap', 40000);          // past window → emits summary
+            assert.strictEqual(console.log.callCount, 2);
+            assert.match(console.log.secondCall.args[0], /\+2 similar/);
+        });
+
+        it('resets the suppressed count after emitting a summary', function(){
+            sync._gapLogIntervalMs = 30000;
+            sync._logGap('gap', 1000);           // emits
+            sync._logGap('gap', 5000);           // suppressed (+1)
+            sync._logGap('gap', 40000);          // emits with (+1)
+            sync._logGap('gap', 80000);          // emits, no leftover count
+            assert.strictEqual(console.log.callCount, 3);
+            assert.doesNotMatch(console.log.thirdCall.args[0], /similar/);
+        });
+    });
+
     describe('start', function(){
         it('passes lastAppliedBlock + 1 to incremental catch-up when resuming a populated replica', async function(){
             db.getLastBlock.resolves(100);
