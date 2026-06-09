@@ -12,6 +12,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientRollback = require('../../src/ClientRollback');
 const Utility = require('../../src/utility');
+const balanceHelpers = require('../../src/balance-helpers');
 
 function createMockDb(){
     return {
@@ -148,6 +149,107 @@ describe('ClientRollback', function(){
             // Should not throw — individual table errors are caught
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        it('swallows missing-table errors on every bespoke optional delete', async function(){
+            // Make each individually-guarded optional delete throw; rollback must
+            // still complete (each has its own try/catch).
+            db.doQuery.callsFake(async (query) => {
+                if(/contract_emissions|price_snapshots|sync_meta|attest_validator_stats/.test(query))
+                    throw new Error('Table does not exist');
+                if(/DELETE FROM `blocks`/.test(query))
+                    throw new Error('Table does not exist'); // a blockTables-loop catch
+                return [];
+            });
+            await rollback.rollback(100);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+    });
+
+    describe('balance-rebuild error handling', function(){
+        it('logs (does not rethrow) a 1146 error from rebuildBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances')
+                .rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            await rollback.rollback(100); // must not throw
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        it('rethrows a non-1146 error from rebuildBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances')
+                .rejects(Object.assign(new Error('real db error'), { errno: 2002 }));
+            await assert.rejects(() => rollback.rollback(100), { message: 'real db error' });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+        });
+
+        it('logs (does not rethrow) a 1146 error from rebuildContractBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            sinon.stub(balanceHelpers, 'rebuildContractBalances')
+                .rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            await rollback.rollback(100);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        it('rethrows a non-1146 error from rebuildContractBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            sinon.stub(balanceHelpers, 'rebuildContractBalances')
+                .rejects(Object.assign(new Error('real cb error'), { errno: 2002 }));
+            await assert.rejects(() => rollback.rollback(100), { message: 'real cb error' });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+        });
+    });
+
+    describe('_rollbackDecoder', function(){
+        let decoderDb, decoderRollback;
+
+        beforeEach(function(){
+            decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderRollback = new ClientRollback(decoderDb, util);
+        });
+
+        it('routes a decoder DB through _rollbackDecoder', async function(){
+            let spy = sinon.spy(decoderRollback, '_rollbackDecoder');
+            await decoderRollback.rollback(50);
+            assert.strictEqual(spy.calledOnceWith(50), true);
+        });
+
+        it('deletes tx-scoped tables by tx_index, then block-scoped tables by block_index', async function(){
+            decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/))
+                .resolves([{ tx_index: 7 }, { tx_index: 9 }]);
+            await decoderRollback.rollback(50);
+
+            let txDelete = decoderDb.doQuery.getCalls().find(c => /DELETE FROM `transaction_outputs`/.test(c.args[0]));
+            assert.ok(txDelete, 'deletes the tx-scoped table');
+            assert.ok(/tx_index IN \(\?,\?\)/.test(txDelete.args[0]));
+            assert.deepStrictEqual(txDelete.args[1], [7, 9]);
+
+            assert.ok(decoderDb.doQuery.getCalls().some(c =>
+                /DELETE FROM `transactions` WHERE block_index >= /.test(c.args[0]) && c.args[1][0] === 50));
+            assert.ok(decoderDb.doQuery.getCalls().some(c =>
+                /DELETE FROM `blocks` WHERE block_index >= /.test(c.args[0]) && c.args[1][0] === 50));
+            assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
+        });
+
+        it('skips tx-scoped deletes when no transactions are in range', async function(){
+            decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/)).resolves([]);
+            await decoderRollback.rollback(50);
+            assert.ok(!decoderDb.doQuery.getCalls().some(c => /transaction_outputs/.test(c.args[0])),
+                'no tx-scoped delete when nothing is in range');
+            assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
+        });
+
+        it('swallows a missing tx-scoped table error and still completes', async function(){
+            decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/)).resolves([{ tx_index: 1 }]);
+            decoderDb.doQuery.withArgs(sinon.match(/transaction_outputs/)).rejects(new Error('no table'));
+            await decoderRollback.rollback(50);
+            assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
+        });
+
+        it('rolls back and rethrows when a block-scoped delete fails', async function(){
+            decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/)).resolves([]);
+            decoderDb.doQuery.withArgs(sinon.match(/DELETE FROM `transactions`/)).rejects(new Error('decoder boom'));
+            await assert.rejects(() => decoderRollback.rollback(50), { message: 'decoder boom' });
+            assert.strictEqual(decoderDb.rollbackTransaction.calledOnce, true);
         });
     });
 });

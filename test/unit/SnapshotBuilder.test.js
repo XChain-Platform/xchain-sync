@@ -396,4 +396,185 @@ describe('SnapshotBuilder', function(){
             assert.ok(db.commitTransaction.calledOnce, 'snapshot released on 404');
         });
     });
+
+    describe('branch coverage', function(){
+        // gzip.pipe(res) needs a REAL writable stream (removeListener etc.), so use a
+        // genuine PassThrough with a setHeader stub + chunk collection — the plain
+        // createMockRes() object only works on the early-return (404) paths.
+        function streamRes(){
+            let res = new PassThrough();
+            let headers = {};
+            res.setHeader = (k, v) => { headers[k] = v; };
+            res.status = sinon.stub().returnsThis();
+            res.json = sinon.stub();
+            res._headers = headers;
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.getCollectedData = () => Buffer.concat(chunks);
+            return res;
+        }
+        // Attach the finish listener BEFORE starting the stream, then resolve once
+        // gzip.end() flushes through the PassThrough (mirrors the pattern above).
+        function run(start, res){ return new Promise(r => { res.on('finish', r); start(); }); }
+
+        describe('_getOrderedTables', function(){
+            it('drops operator-local tables and tolerates the uppercase TABLE_NAME variant', async function(){
+                let db = createMockDb();
+                db.doQuery.resolves([
+                    { TABLE_NAME: 'icons' },          // operator-local → dropped
+                    { table_name: 'price_snapshots' },// operator-local → dropped
+                    { TABLE_NAME: 'middle_upper' },   // uppercase fallback, middle
+                    { table_name: 'blocks' }          // priority
+                ]);
+                let ordered = await builder._getOrderedTables(db);
+                assert.ok(!ordered.includes('icons'));
+                assert.ok(!ordered.includes('price_snapshots'));
+                assert.ok(ordered.includes('middle_upper'));
+                assert.strictEqual(ordered[0], 'blocks');
+            });
+        });
+
+        describe('streamFullSnapshot', function(){
+            it('writes empty hash headers when the hashRow lacks fields, comma-joins tables/rows, and serializes BigInt', async function(){
+                let db = createMockDb();
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves({}); // present but no ledger/actions/contract fields → '' fallbacks
+                db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'actions' }]);
+                db.getTableCount.resolves(2);
+                // Two rows (exercise the inter-row comma) incl. a BigInt (exercise bigIntReplacer).
+                db.getTablePage.resolves([{ id: 1n, n: 'a' }, { id: 2n, n: 'b' }]);
+                let res = streamRes();
+                await run(() => builder.streamFullSnapshot(db, res), res);
+                assert.strictEqual(res._headers['X-Ledger-Hash'], '');
+                assert.strictEqual(res._headers['X-Actions-Hash'], '');
+                assert.strictEqual(res._headers['X-Contract-Hash'], '');
+                assert.ok(db.commitTransaction.calledOnce);
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.deepStrictEqual(Object.keys(out.tables), ['blocks', 'actions']);
+                assert.strictEqual(out.tables.blocks[0].id, '1'); // BigInt → string
+            });
+
+            it('skips zero-count tables and swallows a per-table read error', async function(){
+                let db = createMockDb();
+                db.getLastBlock.resolves(10);
+                db.getBlockHashRow.resolves(null);
+                db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'actions' }]);
+                db.getTableCount.withArgs('blocks').resolves(0);          // skipped (count 0)
+                db.getTableCount.withArgs('actions').rejects(new Error('boom')); // caught
+                let res = streamRes();
+                await run(() => builder.streamFullSnapshot(db, res), res);
+                assert.ok(console.error.getCalls().some(c => /Error reading table actions/.test(c.args[0])));
+                assert.ok(db.commitTransaction.calledOnce);
+            });
+
+            it('rolls back and rethrows when the snapshot read throws', async function(){
+                let db = createMockDb();
+                db.getLastBlock.rejects(new Error('read fail'));
+                let res = createMockRes();
+                await assert.rejects(() => builder.streamFullSnapshot(db, res), { message: 'read fail' });
+                assert.ok(db.rollbackTransaction.calledOnce);
+            });
+        });
+
+        describe('streamIncrementalSnapshot', function(){
+            it('decoder: emits X-Block-Hash and scopes skip/block/tx/full-dump tables correctly', async function(){
+                let db = createMockDb();
+                db.dbType = 'decoder';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves({ block_hash: 'BH' });
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql))
+                        return [
+                            { table_name: 'mempool_transactions' }, // decoderSkip
+                            { table_name: 'blocks' },               // decoderBlockScoped
+                            { table_name: 'transaction_outputs' },  // decoderTxScoped
+                            { table_name: 'pubkeys' },              // decoderFullDump
+                            { table_name: 'random_other' }          // else → continue
+                        ];
+                    if(/`blocks`/.test(sql)) return [{ block_index: 5 }];
+                    if(/`transaction_outputs`/.test(sql)) return [{ tx_index: 1 }];
+                    if(/`pubkeys`/.test(sql)) return [{ address_id: 1 }];
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                assert.strictEqual(res._headers['X-Block-Hash'], 'BH');
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.deepStrictEqual(Object.keys(out.tables).sort(), ['blocks', 'pubkeys', 'transaction_outputs']);
+                assert.ok(!('mempool_transactions' in out.tables));
+                assert.ok(!('random_other' in out.tables));
+            });
+
+            it('indexer: emits empty hash headers, dumps full + action-scoped tables, and comma-joins them', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves({}); // missing fields → '' fallbacks
+                db.getFirstActionIndex.resolves(500);
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql))
+                        return [{ table_name: 'blocks' }, { table_name: 'index_actions' },
+                                { table_name: 'sends' }, { table_name: 'no_action_col' }];
+                    if(/`blocks`/.test(sql)) return [{ block_index: 7 }];          // block-scoped
+                    if(/`index_actions`/.test(sql)) return [{ id: 1 }];            // full dump
+                    if(/`sends`/.test(sql) && /action_index/.test(sql)) return [{ action_index: 501 }]; // action-scoped
+                    // A table reached via the action_index branch that has no such column:
+                    // the inner try/catch swallows it and skips the table.
+                    if(/`no_action_col`/.test(sql)) throw new Error('Unknown column action_index');
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                assert.strictEqual(res._headers['X-Ledger-Hash'], '');
+                assert.strictEqual(res._headers['X-Actions-Hash'], '');
+                assert.strictEqual(res._headers['X-Contract-Hash'], '');
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.ok('blocks' in out.tables && 'index_actions' in out.tables && 'sends' in out.tables);
+                assert.ok(!('no_action_col' in out.tables), 'action_index-less table is skipped');
+            });
+
+            it('indexer: skips middle tables when there is no firstActionIndex (no actions since the cursor)', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(null); // no actions at/after sinceBlock → else-continue
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql))
+                        return [{ table_name: 'blocks' }, { table_name: 'sends' }];
+                    if(/`blocks`/.test(sql)) return [{ block_index: 7 }]; // block-scoped still emitted
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.ok('blocks' in out.tables);
+                assert.ok(!('sends' in out.tables), 'action-scoped table skipped when firstActionIndex is null');
+            });
+
+            it('swallows a per-table read error during incremental', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(500);
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'blocks' }];
+                    throw new Error('table boom');
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                assert.ok(console.error.getCalls().some(c => /Error reading table blocks for incremental/.test(c.args[0])));
+                assert.ok(db.commitTransaction.calledOnce);
+            });
+
+            it('rolls back and rethrows when the incremental read throws before streaming', async function(){
+                let db = createMockDb();
+                db.getLastBlock.rejects(new Error('inc read fail'));
+                let res = createMockRes();
+                await assert.rejects(() => builder.streamIncrementalSnapshot(db, 3, res), { message: 'inc read fail' });
+                assert.ok(db.rollbackTransaction.calledOnce);
+            });
+        });
+    });
 });

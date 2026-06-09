@@ -22,10 +22,21 @@ const mariadbStub = {
     createConnection: sinon.stub().resolves({ query: sinon.stub().resolves([]), end: sinon.stub().resolves() })
 };
 
-const SyncService = proxyquire('../../src/SyncService', {
-    './db': proxyquire('../../src/db', { 'mariadb': mariadbStub })
-});
+// Capture the proxyquired Database so tests can stub its prototype directly,
+// rather than driving _discoverChains' internal `new Database()` calls through
+// the raw mariadb stub (whose pooled connection.query returns undefined).
+const Database = proxyquire('../../src/db', { 'mariadb': mariadbStub });
+const SyncService = proxyquire('../../src/SyncService', { './db': Database });
 const TransparencyLog = require('../../src/TransparencyLog');
+const ClientSync   = require('../../src/ClientSync');
+const ServerPoller = require('../../src/ServerPoller');
+
+function indexerCfg(over){
+    return Object.assign({
+        coin: 'bitcoin', network: 'mainnet', dbType: 'indexer',
+        db_host: 'srchost', db_port: 3306, db_name: 'btc_idx', db_user: 'u', db_pass: 'p'
+    }, over || {});
+}
 
 describe('SyncService', function(){
 
@@ -182,6 +193,74 @@ describe('SyncService', function(){
             let newChains = await service._discoverChains();
             assert.strictEqual(newChains.length, 0);
         });
+
+        it('client mode (source reachable): replicates schema, verifies tables, starts a ClientSync', async function(){
+            config.SYNC_MODE = 'client';
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            sinon.stub(Database.prototype, 'createDatabase').resolves(true);
+            sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
+            let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
+            sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'close').resolves();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            let newChains = await service._discoverChains();
+            assert.strictEqual(newChains.length, 1);
+            assert.strictEqual(service.databases.size, 1);
+            assert.strictEqual(repl.calledOnce, true);
+            assert.strictEqual(startSync.calledOnce, true);
+        });
+
+        it('client mode (source unreachable): falls through to server /schema fetch; skips verifySyncTables for decoder', async function(){
+            config.SYNC_MODE = 'client';
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([indexerCfg({ dbType: 'decoder', db_name: 'btc_dec' })]);
+            sinon.stub(Database.prototype, 'createDatabase').resolves(true);
+            sinon.stub(Database.prototype, 'verifyDatabaseOnce').rejects(new Error('unreachable'));
+            let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
+            let vst  = sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'close').resolves();
+            sinon.stub(service, '_startClientSyncForChain');
+
+            await service._discoverChains();
+            assert.strictEqual(repl.called, false, 'no schema replication when the source DB is unreachable');
+            assert.strictEqual(vst.called, false, 'verifySyncTables is indexer-only — skipped for decoder');
+            assert.strictEqual(service.databases.size, 1);
+        });
+
+        it('server mode with REPLICA_DB_HOST re-serves from the local replica', async function(){
+            config.SYNC_MODE = 'server';
+            config.REPLICA_DB_HOST = 'localreplica';
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            let startPoller = sinon.stub(service, '_startPollerForChain');
+
+            await service._discoverChains();
+            let entry = service.databases.get('bitcoin:mainnet:indexer');
+            assert.strictEqual(entry.db.host, 'localreplica');
+            assert.strictEqual(startPoller.calledOnce, true);
+        });
+
+        it('server mode without REPLICA_DB_HOST connects to the hub-provided coordinates', async function(){
+            config.SYNC_MODE = 'server';
+            delete config.REPLICA_DB_HOST;
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(service, '_startPollerForChain');
+
+            await service._discoverChains();
+            let entry = service.databases.get('bitcoin:mainnet:indexer');
+            assert.strictEqual(entry.db.host, 'srchost');
+        });
     });
 
     describe('_startServerMode', function(){
@@ -189,6 +268,45 @@ describe('SyncService', function(){
             await service._startServerMode();
             assert.ok(service.broadcaster);
             assert.ok(service.snapshotBuilder);
+        });
+
+        it('starts a poller for each discovered database', async function(){
+            let startPoller = sinon.stub(service, '_startPollerForChain');
+            service.databases.set('a:b:indexer', { db: {}, config: indexerCfg() });
+            service.databases.set('c:d:decoder', { db: {}, config: indexerCfg({ dbType: 'decoder' }) });
+            await service._startServerMode();
+            assert.strictEqual(startPoller.callCount, 2);
+        });
+    });
+
+    describe('_startClientMode', function(){
+        it('starts a ClientSync for each discovered database', async function(){
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+            service.databases.set('a:b:indexer', { db: {}, config: indexerCfg() });
+            service.databases.set('c:d:indexer', { db: {}, config: indexerCfg({ coin: 'litecoin' }) });
+            await service._startClientMode();
+            assert.strictEqual(startSync.callCount, 2);
+        });
+    });
+
+    describe('_startClientSyncForChain', function(){
+        it('creates a ClientSync once and is idempotent on the same key', function(){
+            sinon.stub(ClientSync.prototype, 'start').resolves();
+            let db  = { dbType: 'indexer' };
+            let cfg = indexerCfg();
+            service._startClientSyncForChain('bitcoin:mainnet:indexer', db, cfg);
+            assert.strictEqual(service.clientSyncs.size, 1);
+            service._startClientSyncForChain('bitcoin:mainnet:indexer', db, cfg);
+            assert.strictEqual(service.clientSyncs.size, 1);
+        });
+
+        it('exits the process when the background ClientSync crashes', async function(){
+            let err = new Error('sync crash');
+            sinon.stub(ClientSync.prototype, 'start').rejects(err);
+            service._startClientSyncForChain('bitcoin:mainnet:indexer', { dbType: 'indexer' }, indexerCfg());
+            // Let the unawaited .catch run.
+            await new Promise(r => setImmediate(r));
+            assert.ok(process.exit.calledWith(1));
         });
     });
 
@@ -204,6 +322,14 @@ describe('SyncService', function(){
             service._startPollerForChain('bitcoin:mainnet', db, cfg);
             assert.strictEqual(service.pollers.size, 1);
         });
+
+        it('exits the process when the background poller crashes', async function(){
+            sinon.stub(ServerPoller.prototype, 'start').rejects(new Error('poller crash'));
+            service.broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub() };
+            service._startPollerForChain('bitcoin:mainnet:indexer', { dbType: 'indexer' }, indexerCfg());
+            await new Promise(r => setImmediate(r));
+            assert.ok(process.exit.calledWith(1));
+        });
     });
 
     describe('_scheduleHubRepoll', function(){
@@ -211,6 +337,85 @@ describe('SyncService', function(){
             let clock = sinon.useFakeTimers();
             service._scheduleHubRepoll();
             clock.restore();
+        });
+
+        it('re-discovers chains on each interval tick and logs new chains', async function(){
+            let clock = sinon.useFakeTimers();
+            let disc = sinon.stub(service, '_discoverChains').resolves([{ key: 'x' }]);
+            service._scheduleHubRepoll();
+            await clock.tickAsync(config.HUB_REPOLL_INTERVAL);
+            assert.strictEqual(disc.calledOnce, true);
+            clock.restore();
+        });
+
+        it('logs (does not throw) when a re-poll fails', async function(){
+            let clock = sinon.useFakeTimers();
+            sinon.stub(service, '_discoverChains').rejects(new Error('repoll boom'));
+            service._scheduleHubRepoll();
+            await clock.tickAsync(config.HUB_REPOLL_INTERVAL);
+            assert.ok(console.error.getCalls().some(c => /Hub re-poll error/.test(c.args[0])));
+            clock.restore();
+        });
+    });
+
+    describe('_waitForHub timeout', function(){
+        it('exits the process after MAX_HUB_WAIT_MS with no hub', async function(){
+            config.MAX_HUB_WAIT_MS = 0;
+            service = new SyncService(config);
+            // process.exit is already stubbed in beforeEach — reconfigure it to throw so
+            // the otherwise-infinite while(true) loop unwinds after the timeout branch.
+            process.exit.callsFake(() => { throw new Error('PROC_EXIT'); });
+            sinon.stub(service.hubClient, 'ping').resolves(false);
+            sinon.stub(service.util, 'sleep').resolves();
+            await assert.rejects(() => service._waitForHub(), /PROC_EXIT/);
+            assert.ok(process.exit.calledWith(1));
+        });
+    });
+
+    describe('getHubConfigAgeSeconds', function(){
+        it('returns null when the hub has never answered', function(){
+            service.hubClient.lastSuccessfulFetchAt = null;
+            assert.strictEqual(service.getHubConfigAgeSeconds(), null);
+        });
+        it('returns whole seconds since the last successful fetch', function(){
+            service.hubClient.lastSuccessfulFetchAt = Date.now() - 5000;
+            let age = service.getHubConfigAgeSeconds();
+            assert.ok(age >= 5 && age <= 6);
+        });
+    });
+
+    describe('getClientSyncState', function(){
+        it('returns nulls/false when no sync exists for the key', function(){
+            assert.deepStrictEqual(service.getClientSyncState('bitcoin', 'mainnet'),
+                { lastKnownServerBlock: null, halted: false, haltInfo: null });
+        });
+        it('reports a live sync, including halt info when halted', function(){
+            let fakeSync = {
+                lastKnownServerBlock: 42,
+                isHalted: () => true,
+                getHaltInfo: () => ({ blockIndex: 42, reason: 'divergence' })
+            };
+            service.clientSyncs.set('bitcoin:mainnet:indexer', fakeSync);
+            let state = service.getClientSyncState('bitcoin', 'mainnet');
+            assert.strictEqual(state.lastKnownServerBlock, 42);
+            assert.strictEqual(state.halted, true);
+            assert.deepStrictEqual(state.haltInfo, { blockIndex: 42, reason: 'divergence' });
+        });
+        it('omits halt info for a healthy sync', function(){
+            service.clientSyncs.set('bitcoin:mainnet:indexer',
+                { lastKnownServerBlock: 7, isHalted: () => false, getHaltInfo: () => ({}) });
+            let state = service.getClientSyncState('bitcoin', 'mainnet');
+            assert.strictEqual(state.halted, false);
+            assert.strictEqual(state.haltInfo, null);
+        });
+    });
+
+    describe('getClientSync', function(){
+        it('returns the live sync or null', function(){
+            assert.strictEqual(service.getClientSync('bitcoin', 'mainnet'), null);
+            let sync = {};
+            service.clientSyncs.set('bitcoin:mainnet:decoder', sync);
+            assert.strictEqual(service.getClientSync('bitcoin', 'mainnet', 'decoder'), sync);
         });
     });
 

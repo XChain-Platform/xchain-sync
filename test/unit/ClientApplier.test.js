@@ -13,6 +13,7 @@ const sinon  = require('sinon');
 const ClientApplier = require('../../src/ClientApplier');
 const Utility = require('../../src/utility');
 const { SCHEMA_VERSION } = require('../../src/schema-version');
+const balanceHelpers = require('../../src/balance-helpers');
 
 function createMockDb(){
     return {
@@ -96,6 +97,49 @@ describe('ClientApplier', function(){
             // Only 1 INSERT for transactions (blocks is empty)
             assert.strictEqual(db.doQuery.callCount, 1);
         });
+
+        it('rebuilds balances when an indexer payload touches credits/debits', async function(){
+            db.dbType = 'indexer';
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: { credits: [{ id: 1 }] } });
+            assert.strictEqual(rb.calledOnce, true);
+        });
+
+        it('rebuilds contract_balances when a payload touches deposits/withdrawals', async function(){
+            db.dbType = 'indexer';
+            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: { withdrawals: [{ id: 1 }] } });
+            assert.strictEqual(rcb.calledOnce, true);
+        });
+
+        it('does NOT rebuild balances on a decoder replica', async function(){
+            db.dbType = 'decoder';
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: { credits: [{ id: 1 }] } });
+            assert.strictEqual(rb.called, false);
+        });
+    });
+
+    describe('_rebuildBalances / _rebuildContractBalances error handling', function(){
+        it('swallows a 1146 (table-missing) error on rebuildBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            await applier._rebuildBalances(); // must not throw
+        });
+
+        it('rethrows a non-1146 error on rebuildBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('real'), { errno: 1234 }));
+            await assert.rejects(() => applier._rebuildBalances(), { message: 'real' });
+        });
+
+        it('swallows a 1146 error on rebuildContractBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildContractBalances').rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            await applier._rebuildContractBalances();
+        });
+
+        it('rethrows a non-1146 error on rebuildContractBalances', async function(){
+            sinon.stub(balanceHelpers, 'rebuildContractBalances').rejects(Object.assign(new Error('real'), { errno: 1234 }));
+            await assert.rejects(() => applier._rebuildContractBalances(), { message: 'real' });
+        });
     });
 
     describe('applyFullSnapshot', function(){
@@ -136,6 +180,25 @@ describe('ClientApplier', function(){
             await assert.rejects(() => applier.applyFullSnapshot(snapshot));
             assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
+
+        it('throws on a schema-version mismatch before opening a transaction', async function(){
+            let snapshot = { schema_version: 'v0-wrong', block_height: 10, tables: { t: [{ id: 1 }] } };
+            await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Schema version mismatch/);
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('skips clearing an invalid table name but still proceeds', async function(){
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { 'bad-name;drop': [{ id: 1 }], good: [{ id: 2 }] }
+            };
+            await applier.applyFullSnapshot(snapshot);
+            let deletes = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /^DELETE FROM/.test(q));
+            // Only the valid table is cleared; the invalid one is skipped.
+            assert.deepStrictEqual(deletes, ['DELETE FROM `good`']);
+            assert.ok(console.error.getCalls().some(c => /invalid table/.test(c.args[0])));
+        });
     });
 
     describe('applyIncrementalSnapshot', function(){
@@ -155,6 +218,39 @@ describe('ClientApplier', function(){
         it('skips null snapshot', async function(){
             await applier.applyIncrementalSnapshot(null);
             assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('skips a snapshot without tables', async function(){
+            await applier.applyIncrementalSnapshot({ since_block: 1 });
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('throws on a schema-version mismatch', async function(){
+            await assert.rejects(
+                () => applier.applyIncrementalSnapshot({ schema_version: 'wrong', tables: { t: [{ id: 1 }] } }),
+                /Schema version mismatch/);
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('rebuilds balances + contract_balances when the catch-up touches them', async function(){
+            db.dbType = 'indexer';
+            let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
+            await applier.applyIncrementalSnapshot({
+                schema_version: SCHEMA_VERSION.indexer,
+                since_block: 10,
+                tables: { debits: [{ id: 1 }], deposits: [{ id: 2 }] }
+            });
+            assert.strictEqual(rb.calledOnce, true);
+            assert.strictEqual(rcb.calledOnce, true);
+        });
+
+        it('rolls back on error', async function(){
+            db.doQuery.rejects(new Error('inc fail'));
+            await assert.rejects(() => applier.applyIncrementalSnapshot({
+                schema_version: SCHEMA_VERSION.indexer, since_block: 1, tables: { blocks: [{ id: 1 }] }
+            }), { message: 'inc fail' });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
     });
 
@@ -205,6 +301,18 @@ describe('ClientApplier', function(){
             await applier._insertRows('blocks', [{ 'block_index': 1 }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.includes('`block_index`'));
+        });
+
+        it('rejects an invalid table name without querying', async function(){
+            await applier._insertRows('bad;name', [{ id: 1 }]);
+            assert.strictEqual(db.doQuery.called, false);
+            assert.ok(console.error.getCalls().some(c => /Rejected table name/.test(c.args[0])));
+        });
+
+        it('rejects an invalid column name without querying', async function(){
+            await applier._insertRows('blocks', [{ 'bad-col': 1 }]);
+            assert.strictEqual(db.doQuery.called, false);
+            assert.ok(console.error.getCalls().some(c => /Rejected column name/.test(c.args[0])));
         });
     });
 });

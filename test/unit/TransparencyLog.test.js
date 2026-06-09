@@ -11,6 +11,7 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const TransparencyLog = require('../../src/TransparencyLog');
+const MerkleTree = require('../../src/MerkleTree');
 
 describe('TransparencyLog', function(){
 
@@ -33,7 +34,112 @@ describe('TransparencyLog', function(){
             let args = db.doQuery.firstCall.args[1];
             assert.deepStrictEqual(args, [101, 1700000000, 'lhash', 'ahash', 'chash']);
         });
+
+        it('commits a Merkle epoch when an epoch boundary is crossed', async function(){
+            // block 100 with epochSize 100 → epoch 1 boundary → commitEpoch(1).
+            let commit = sinon.stub(log, 'commitEpoch').resolves();
+            await log.recordBlock(100, 1700000000, 'l', 'a', 'c');
+            assert.strictEqual(commit.calledOnceWith(1), true);
+        });
+
+        it('swallows a commitEpoch error so recordBlock still resolves', async function(){
+            sinon.stub(console, 'error');
+            sinon.stub(log, 'commitEpoch').rejects(new Error('epoch boom'));
+            await log.recordBlock(200, 1700000000, 'l', 'a', 'c'); // epoch 2 boundary
+            assert.strictEqual(console.error.calledOnce, true);
+            assert.match(console.error.firstCall.args[0], /Error committing Merkle epoch 2/);
+        });
+
+        it('does not commit an epoch for block 0', async function(){
+            let commit = sinon.stub(log, 'commitEpoch').resolves();
+            await log.recordBlock(0, 1700000000, 'l', 'a', 'c');
+            assert.strictEqual(commit.called, false);
+        });
     });
+
+    describe('commitEpoch early returns', function(){
+        it('returns early when the epoch is already committed', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_epochs/)).resolves([{ id: 7 }]);
+            await log.commitEpoch(1);
+            assert.ok(!db.doQuery.getCalls().some(c => /INSERT INTO merkle_epochs/.test(c.args[0])),
+                'no insert when epoch already committed');
+        });
+
+        it('returns early when no blocks exist for the epoch', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_epochs/)).resolves([]);
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves([]);
+            await log.commitEpoch(1);
+            assert.ok(!db.doQuery.getCalls().some(c => /INSERT INTO merkle_epochs/.test(c.args[0])),
+                'no insert when no epoch blocks');
+        });
+    });
+
+    describe('getProof', function(){
+        function epochRows(blocks){
+            return blocks.map((b, i) => ({
+                block_index: i + 1,
+                ledger_hash: 'l' + i, actions_hash: 'a' + i, contract_hash: 'c' + i
+            }));
+        }
+
+        it('returns null for a non-numeric or < 1 block index', async function(){
+            assert.strictEqual(await log.getProof('abc'), null);
+            assert.strictEqual(await log.getProof(0), null);
+            assert.strictEqual(await log.getProof(-3), null);
+        });
+
+        it('returns an error object when the epoch is not yet committed', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/)).resolves([]);
+            assert.deepStrictEqual(await log.getProof(5), { error: 'epoch not yet committed' });
+        });
+
+        it('returns null when the epoch is committed but sync_meta has no rows', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
+                .resolves([{ start_block: 1, end_block: 100, merkle_root: 'r' }]);
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves([]);
+            assert.strictEqual(await log.getProof(3), null);
+        });
+
+        it('returns an error when the block is not present in the epoch range', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
+                .resolves([{ start_block: 1, end_block: 100, merkle_root: 'r' }]);
+            // sync_meta has blocks 1..3 but we ask for block 50.
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves(epochRows([0,0,0]));
+            assert.deepStrictEqual(await log.getProof(50), { error: 'block not found in epoch' });
+        });
+
+        it('returns a verifiable inclusion proof for a present block', async function(){
+            let rows = epochRows([0,0,0,0]); // blocks 1..4
+            let leaves = rows.map(r => MerkleTree.computeLeaf(r.ledger_hash, r.actions_hash, r.contract_hash));
+            let tree = MerkleTree.buildTree(leaves);
+
+            db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
+                .resolves([{ start_block: 1, end_block: 100, merkle_root: tree.root }]);
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves(rows);
+
+            let result = await log.getProof(2);
+            assert.strictEqual(result.blockIndex, 2);
+            assert.strictEqual(result.leaf, leaves[1]);
+            assert.strictEqual(result.merkleRoot, tree.root);
+            assert.strictEqual(result.verified, true);
+            assert.ok(Array.isArray(result.proof));
+        });
+    });
+
+    describe('getLatestRoot', function(){
+        it('returns the most recent committed epoch row', async function(){
+            let row = { epoch: 9, merkle_root: 'ROOT9' };
+            db.doQuery.resolves([row]);
+            assert.deepStrictEqual(await log.getLatestRoot(), row);
+        });
+
+        it('returns null when no epoch has been committed', async function(){
+            db.doQuery.resolves([]);
+            assert.strictEqual(await log.getLatestRoot(), null);
+        });
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('getPage', function(){
         it('returns paginated results', async function(){
