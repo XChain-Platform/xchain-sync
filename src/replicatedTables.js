@@ -93,7 +93,12 @@ const TOPOLOGY = {
             // (ClientApplier._rebuildBalances / _rebuildContractBalances), so they
             // must not ride the per-block payload. events is an unscoped operational
             // log carried by full snapshots only — same rationale as markets below.
+            // state_checkpoints is also intentionally NOT here: it is hub-mirrored
+            // (hub_db_sync, like price_snapshots), not produced by block processing.
             'actions', 'addresses', 'airdrops',
+            // anchor_actions holds the parsed DOGE-only ANCHOR rows (one per
+            // action_index), so it rides the per-block action_index join.
+            'anchor_actions',
             // attests is the consolidated ATTEST table: one row per ATTEST
             // action_index (v0 request, v1 response, v2 expire), so it rides the
             // per-block action_index join like any other action-scoped table.

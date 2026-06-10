@@ -107,6 +107,7 @@ class ClientRollback {
             'contract_executions',
             'deposits',
             'withdrawals',
+            'anchor_actions',
             'attests',
             'prices'
         ];
