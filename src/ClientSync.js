@@ -110,9 +110,39 @@ class ClientSync {
     }
 
     // Start the client sync loop
+    // Surface the replica's data-integrity posture at startup. The only defense
+    // that actually REJECTS fabricated content is cross-source hash divergence
+    // (2+ sources, VERIFY_HASHES, HALT_ON_DIVERGENCE). With a single source the
+    // independent recompute only re-derives the local rows and compares them to
+    // the hashes published by that same server — a server serving internally
+    // consistent fake rows + matching fake hashes passes. The decoder path has
+    // no hash rejection at all (completeness is row-count advisory only). None
+    // of this is silently unsafe — but it is a trust assumption operators must
+    // make deliberately, so say it out loud rather than burying it in docs.
+    _warnTrustPosture(){
+        if(this.sources.length < 2){
+            console.warn(
+                'SECURITY: ' + this.dbType + ' replica is running SINGLE-SOURCE (' +
+                (this.sources[0] || '<none>') + '). Content integrity rests entirely on TLS trust ' +
+                'of that one server — cross-source divergence detection is INACTIVE, and the local ' +
+                'recompute only checks rows against hashes published by the same server. Configure ' +
+                '2+ independent SYNC_SOURCES for Byzantine integrity.'
+            );
+        }
+        if(this.dbType === 'decoder'){
+            console.warn(
+                'SECURITY: decoder replication has no hash-based rejection — completeness is ' +
+                'row-count advisory only (a shortfall is logged, never rejected). A decoder replica ' +
+                'trusts its source(s) for row content. Treat decoder sources as trusted infrastructure.'
+            );
+        }
+    }
+
     async start(){
         this.running = true;
         console.log('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+
+        this._warnTrustPosture();
 
         // A divergence halt is durable: if a prior run recorded an uncleared halt,
         // stay halted (do NOT catch up / apply) until an operator clears it. A

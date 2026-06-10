@@ -84,6 +84,37 @@ describe('ClientSync', function(){
         });
     });
 
+    describe('_warnTrustPosture', function(){
+        it('warns when running single-source (no cross-source rejection)', function(){
+            config.SYNC_SOURCES = 'http://only-source:3006';
+            let s = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
+            let warn = sinon.stub(console, 'warn');
+            s._warnTrustPosture();
+            assert.ok(warn.getCalls().some(c => /SINGLE-SOURCE/.test(c.args[0])));
+        });
+
+        it('does not warn about single-source with 2+ sources', function(){
+            // default config has two sources
+            let warn = sinon.stub(console, 'warn');
+            sync._warnTrustPosture();
+            assert.ok(!warn.getCalls().some(c => /SINGLE-SOURCE/.test(c.args[0])));
+        });
+
+        it('warns that the decoder path has no hash rejection', function(){
+            let decoderDb = createMockDb(); decoderDb.dbType = 'decoder';
+            let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier, config, util);
+            let warn = sinon.stub(console, 'warn');
+            s._warnTrustPosture();
+            assert.ok(warn.getCalls().some(c => /decoder replication has no hash-based rejection/.test(c.args[0])));
+        });
+
+        it('indexer with 2+ sources emits no trust warnings', function(){
+            let warn = sinon.stub(console, 'warn');
+            sync._warnTrustPosture();
+            assert.strictEqual(warn.callCount, 0);
+        });
+    });
+
     describe('_logGap throttling', function(){
         // On a fast chain (e.g. Dogecoin testnet) the replica trails the tip and
         // would log a gap line per block — thousands/min. _logGap collapses that
