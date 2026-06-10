@@ -30,6 +30,18 @@ const path       = require('path');
 const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
 
+// Guard for the few queries that must interpolate a table name into a
+// backtick-quoted identifier (COUNT(*), pagination, TRUNCATE) — parameter
+// binding can't carry identifiers. Some callers pass server-supplied names
+// (e.g. a sync source's `table_counts` keys), so a stray backtick or
+// metacharacter here would break out of the quoting. Reject anything that
+// isn't a plain [A-Za-z0-9_] identifier before it reaches the query string.
+function assertValidIdentifier(table){
+    const check = validation.validateIdentifier(table);
+    if(!check.valid)
+        throw new Error('Refusing to query unsafe table identifier: ' + check.reason);
+}
+
 class Database {
 
     constructor(host, port, dbName, user, pass, util, dbType) {
@@ -699,12 +711,14 @@ class Database {
 
     // Get all rows from a table (paginated)
     async getTablePage(table, limit, offset){
+        assertValidIdentifier(table);
         let query = "SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?";
         return await this.doQuery(query, [limit, offset]);
     }
 
     // Get total row count for a table
     async getTableCount(table){
+        assertValidIdentifier(table);
         let query = "SELECT COUNT(*) as cnt FROM `" + table + "`";
         let rows = await this.doQuery(query);
         return Number(rows[0].cnt);
@@ -725,6 +739,7 @@ class Database {
 
     // Truncate a table
     async truncateTable(table){
+        assertValidIdentifier(table);
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
     }
 

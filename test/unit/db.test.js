@@ -1494,3 +1494,40 @@ describe('Database.replicateSchema()', function () {
         assert.ok(logCalls.some(s => typeof s === 'string' && s.includes('retry')));
     });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Table-identifier guard (getTableCount / getTablePage / truncateTable)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Database — table identifier guard', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    const EVIL = 'blocks` WHERE 1=1 UNION SELECT 1 -- ';
+
+    it('getTableCount rejects an unsafe identifier before querying', async function () {
+        let spy = sinon.stub(db, 'doQuery').resolves([{ cnt: 0 }]);
+        await assert.rejects(() => db.getTableCount(EVIL), /unsafe table identifier/);
+        assert.ok(spy.notCalled, 'doQuery must not run for an unsafe identifier');
+    });
+
+    it('getTablePage rejects an unsafe identifier before querying', async function () {
+        let spy = sinon.stub(db, 'doQuery').resolves([]);
+        await assert.rejects(() => db.getTablePage(EVIL, 10, 0), /unsafe table identifier/);
+        assert.ok(spy.notCalled);
+    });
+
+    it('truncateTable rejects an unsafe identifier before querying', async function () {
+        let spy = sinon.stub(db, 'doQuery').resolves([]);
+        await assert.rejects(() => db.truncateTable(EVIL), /unsafe table identifier/);
+        assert.ok(spy.notCalled);
+    });
+
+    it('allows a normal table name through to the query', async function () {
+        let spy = sinon.stub(db, 'doQuery').resolves([{ cnt: 42 }]);
+        let n = await db.getTableCount('contract_stakes');
+        assert.strictEqual(n, 42);
+        assert.ok(spy.calledOnce);
+        assert.ok(spy.firstCall.args[0].includes('`contract_stakes`'));
+    });
+});

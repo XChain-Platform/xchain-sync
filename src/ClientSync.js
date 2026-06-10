@@ -565,6 +565,16 @@ class ClientSync {
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
         for(let table of Object.keys(remoteCounts)){
+            // table names here come straight from the remote source's /status
+            // payload — validate before they reach getTableCount's identifier
+            // interpolation, mirroring the schema-application loop above. Skip
+            // (don't fault) an invalid key so one bad name can't manufacture a
+            // false count mismatch and trip a needless recompute/halt.
+            let idCheck = validation.validateIdentifier(table);
+            if(!idCheck.valid){
+                console.error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
+                continue;
+            }
             let remote = Number(remoteCounts[table]);
             if(!Number.isFinite(remote)) continue;
             let local;

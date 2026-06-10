@@ -445,6 +445,21 @@ describe('ClientSync', function(){
             assert.deepStrictEqual(await sync._verifyTableCounts(null), []);
             assert.deepStrictEqual(await sync._verifyTableCounts({ blocks: 'not-a-number' }), []);
         });
+
+        it('skips a malicious table name without passing it to getTableCount', async function(){
+            // A hostile/MITM'd source could put a backtick-injection payload in a
+            // table_counts key. It must be rejected at the boundary, never reaching
+            // the identifier interpolation in getTableCount, and must not manufacture
+            // a false mismatch.
+            let queried = [];
+            db.getTableCount = async (t) => { queried.push(t); return 0; };
+            let evilKey = 'blocks` WHERE 1=1 UNION SELECT password FROM mysql.user -- ';
+            let mismatches = await sync._verifyTableCounts({ [evilKey]: 999, blocks: 100 });
+
+            assert.ok(!queried.includes(evilKey), 'malicious key must never reach getTableCount');
+            assert.deepStrictEqual(queried, ['blocks'], 'only the valid identifier is queried');
+            assert.ok(!mismatches.some(m => m.table === evilKey), 'malicious key produces no mismatch');
+        });
     });
 
     describe('decoder bootstrap completeness', function(){
