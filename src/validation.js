@@ -86,10 +86,19 @@ function extractColumnNames(ddl){
 // for use as the body of `ALTER TABLE ... ADD COLUMN`. Returns the
 // backtick-quoted name plus its type/attributes (e.g.
 // "`new_col` varchar(255) DEFAULT NULL") with any trailing comma stripped.
-// Returns null if the column cannot be cleanly located, or if the line
-// contains a semicolon (defends against a malformed/hostile DDL smuggling
-// a second statement past validateDdl into the ALTER) — callers should
-// treat null as "skip this column" rather than aborting.
+// Returns null if the column cannot be cleanly located, or if the
+// definition would smuggle additional actions into the ALTER. Two guards:
+//   1. Reject any line containing a semicolon (a hostile DDL could end the
+//      column line with "; DROP TABLE ...", slipping a second statement
+//      past validateDdl into the ALTER).
+//   2. Reject any line carrying a bare comma at parenthesis-depth 0 (after
+//      the trailing comma is stripped). MariaDB treats a single
+//      "ADD COLUMN `c` int, DROP COLUMN victim" ALTER as ONE valid
+//      statement — no semicolon, so guard 1 and multipleStatements:false
+//      both miss it. Commas inside parentheses (decimal(18,8),
+//      enum('a','b'), etc.) are part of the type and must survive, so the
+//      scan only trips on a comma at depth 0.
+// Callers should treat null as "skip this column" rather than aborting.
 function extractColumnDefinition(ddl, columnName){
     if(typeof ddl !== 'string' || typeof columnName !== 'string')
         return null;
@@ -101,6 +110,13 @@ function extractColumnDefinition(ddl, columnName){
         if(trimmed.substring(1, endTick) !== columnName) continue;
         let def = trimmed.replace(/,\s*$/, '');
         if(def.indexOf(';') !== -1) return null;
+        let depth = 0;
+        for(let i = 0; i < def.length; i++){
+            let ch = def.charAt(i);
+            if(ch === '(') depth++;
+            else if(ch === ')') depth--;
+            else if(ch === ',' && depth <= 0) return null;
+        }
         return def;
     }
     return null;

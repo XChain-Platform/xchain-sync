@@ -211,6 +211,51 @@ describe('ClientSync security', function(){
             });
             assert.strictEqual(createCalls.length, 1);
         });
+
+        // A compromised/MITM'd sync server returns a CREATE TABLE for an
+        // already-existing table whose new-column line embeds a bare comma:
+        //   `evil` int DEFAULT 0, DROP COLUMN balance,
+        // No semicolon, valid column name, single MariaDB statement — it slips
+        // past validateDdl, validateIdentifier, and multipleStatements:false.
+        // The schema-catch-up path (addMissingColumns) must skip the column
+        // rather than splice it into a multi-action ALTER TABLE.
+        it('does not splice a bare-comma multi-action ALTER on schema catch-up', async function(){
+            const Database = require('../../src/db');
+            // Real Db so the production addMissingColumns splice path runs;
+            // only doQuery is stubbed so no real connection is opened.
+            let realDb = new Database('localhost', 3306, 'test_db', 'u', 'p', util, 'indexer');
+            let queries = [];
+            sinon.stub(realDb, 'doQuery').callsFake(async function(sql){
+                queries.push(sql);
+                if(typeof sql === 'string' && sql.includes('information_schema.tables'))
+                    return [{ table_name: 'balances' }];          // table already exists
+                if(typeof sql === 'string' && sql.includes('information_schema.columns'))
+                    return [{ column_name: 'id' }, { column_name: 'balance' }];
+                return [];
+            });
+
+            let config = createConfig();
+            let sync = new ClientSync('bitcoin', 'mainnet', realDb, applier, rollback, hashVerifier, config, util);
+
+            let hostileDdl = [
+                'CREATE TABLE `balances` (',
+                '  `id` int(11) NOT NULL,',
+                "  `balance` decimal(30,8) NOT NULL DEFAULT '0',",
+                '  `evil` int DEFAULT 0, DROP COLUMN balance,',
+                '  PRIMARY KEY (`id`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+
+            axiosStub.get.resolves({ data: { tables: { balances: hostileDdl } } });
+
+            await sync._fetchAndApplySchema('http://source1.local');
+
+            // No ALTER TABLE must have been issued for the injected column.
+            let alterCalls = queries.filter(s => typeof s === 'string' && s.includes('ALTER TABLE'));
+            assert.strictEqual(alterCalls.length, 0, 'injected column must not produce an ALTER');
+            let dropCalls = queries.filter(s => typeof s === 'string' && s.includes('DROP COLUMN'));
+            assert.strictEqual(dropCalls.length, 0, 'no DROP COLUMN must reach the database');
+        });
     });
 
     // ── _handleReorg — max rollback depth ──

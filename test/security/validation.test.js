@@ -415,6 +415,49 @@ describe('validation', function(){
             assert.strictEqual(validation.extractColumnDefinition(hostile, 'x'), null);
         });
 
+        it('rejects a multi-action ALTER smuggled via a bare comma (DROP COLUMN)', function(){
+            let hostile = [
+                'CREATE TABLE `t` (',
+                '  `evil` int DEFAULT 0, DROP COLUMN balance,',
+                '  PRIMARY KEY (`id`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+            assert.strictEqual(validation.extractColumnDefinition(hostile, 'evil'), null);
+        });
+
+        it('rejects a bare comma smuggling ADD COLUMN', function(){
+            let hostile = [
+                'CREATE TABLE `t` (',
+                '  `evil` int DEFAULT 0, ADD COLUMN extra INT,',
+                '  PRIMARY KEY (`id`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+            assert.strictEqual(validation.extractColumnDefinition(hostile, 'evil'), null);
+        });
+
+        it('rejects a bare comma smuggling RENAME COLUMN', function(){
+            let hostile = [
+                'CREATE TABLE `t` (',
+                '  `evil` int DEFAULT 0, RENAME COLUMN x TO y,',
+                '  PRIMARY KEY (`id`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+            assert.strictEqual(validation.extractColumnDefinition(hostile, 'evil'), null);
+        });
+
+        it('still accepts a precision type whose only commas are inside parens', function(){
+            let ddl = [
+                'CREATE TABLE `t` (',
+                "  `amount` decimal(18,8) NOT NULL DEFAULT '0',",
+                '  PRIMARY KEY (`id`)',
+                ') ENGINE=InnoDB'
+            ].join('\n');
+            assert.strictEqual(
+                validation.extractColumnDefinition(ddl, 'amount'),
+                "`amount` decimal(18,8) NOT NULL DEFAULT '0'"
+            );
+        });
+
         it('returns null for non-string input', function(){
             assert.strictEqual(validation.extractColumnDefinition(null, 'x'), null);
             assert.strictEqual(validation.extractColumnDefinition(SAMPLE_DDL, null), null);
