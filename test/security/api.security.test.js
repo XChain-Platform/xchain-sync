@@ -45,16 +45,19 @@ describe('API security', function(){
 
     describe('createApiKeyMiddleware', function(){
 
-        it('passes through when API key is not set (empty string)', function(done){
+        // Open-access mode: no key provisioned (single-host / regtest / managed
+        // deployments). api.js warns at startup; /halt/clear stays disabled.
+        it('passes through when no API key is configured (empty string) — open mode', function(done){
             let middleware = createApiKeyMiddleware('');
             let req = createMockReq();
             let res = createMockRes();
             middleware(req, res, function(){
+                assert.strictEqual(res._statusCode, null);
                 done(); // next() was called
             });
         });
 
-        it('passes through when API key is null', function(done){
+        it('passes through when no API key is configured (null) — open mode', function(done){
             let middleware = createApiKeyMiddleware(null);
             let req = createMockReq();
             let res = createMockRes();
@@ -63,7 +66,7 @@ describe('API security', function(){
             });
         });
 
-        it('passes through when API key is undefined', function(done){
+        it('passes through when no API key is configured (undefined) — open mode', function(done){
             let middleware = createApiKeyMiddleware(undefined);
             let req = createMockReq();
             let res = createMockRes();

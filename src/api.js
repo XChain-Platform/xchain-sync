@@ -51,6 +51,15 @@ for(const key of REQUIRED_ENV){
 // Get configuration
 const cfg = config.getConfig();
 
+// SYNC_API_KEY is optional, matching the other services: unset leaves the
+// REST/WS replication endpoints open (single-host / regtest / managed
+// deployments — xchain-node injects no key) and is warned about loudly below;
+// when configured, every endpoint fails closed (401) without it. The
+// destructive /halt/clear admin route additionally refuses to run at all
+// while no key is configured.
+if(!cfg['SYNC_API_KEY'])
+    console.warn('WARNING: SYNC_API_KEY is not set — the REST/WS API is UNAUTHENTICATED and /halt/clear is disabled. Set a key for any shared or public-facing deployment.');
+
 async function startApi(){
 
     // Create Express app
@@ -528,11 +537,14 @@ async function startApi(){
     // POST /halt/clear/:dbType/:chain/:network — operator acknowledges an
     // investigated consensus-divergence halt and lets the client resume. Never
     // automatic: a halted validator must not self-resume onto a contested chain.
-    // Bearer-authenticated (SYNC_API_KEY). Restart the service afterwards for a
-    // clean catch-up of any blocks missed during the halt.
+    // Bearer-authenticated (SYNC_API_KEY) and ALWAYS fails closed: unlike the
+    // replication endpoints, this route is rejected outright when no key is
+    // configured — resuming a halted validator must never be reachable
+    // unauthenticated. Restart the service afterwards for a clean catch-up of
+    // any blocks missed during the halt.
     app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
         let apiKey = cfg['SYNC_API_KEY'];
-        if(apiKey && req.headers['authorization'] !== 'Bearer ' + apiKey)
+        if(!apiKey || req.headers['authorization'] !== 'Bearer ' + apiKey)
             return res.status(401).json({ error: 'Unauthorized' });
         if(cfg['SYNC_MODE'] === 'server')
             return res.status(403).json({ error: 'Halt clearing only applies to client mode' });
@@ -563,7 +575,10 @@ async function startApi(){
 
     // Handle WebSocket upgrade requests
     server.on('upgrade', (request, socket, head) => {
-        // API key authentication for WebSocket connections
+        // API key authentication for WebSocket connections (enforced only when
+        // a key is configured — see the SYNC_API_KEY note at the top; managed
+        // validators replicate keyless, so an unconditional reject here would
+        // sever their streaming sync).
         let apiKey = cfg['SYNC_API_KEY'];
         if(apiKey){
             let authHeader = request.headers['authorization'];
