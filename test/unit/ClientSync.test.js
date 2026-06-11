@@ -397,6 +397,77 @@ describe('ClientSync', function(){
             // Should not throw — error is caught and logged
             assert.strictEqual(console.error.called, true);
         });
+
+        it('re-applies the source schema when the apply hits a missing table', async function(){
+            applier.applyBlock.rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            let heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
+            await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            assert.strictEqual(heal.calledOnce, true);
+            assert.strictEqual(heal.firstCall.args[0], 'http://source1:3006');
+        });
+    });
+
+    describe('_healSchemaIfStale', function(){
+        let heal;
+        beforeEach(function(){
+            heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        });
+
+        it('heals on missing table (1146) and missing column (1054)', async function(){
+            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), true);
+            sync._lastSchemaHeal = null; // reset the debounce between cases
+            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1054 }), true);
+            assert.strictEqual(heal.callCount, 2);
+        });
+
+        it('ignores non-schema errors and null errors', async function(){
+            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1062 }), false);
+            assert.strictEqual(await sync._healSchemaIfStale(new Error('plain')), false);
+            assert.strictEqual(await sync._healSchemaIfStale(null), false);
+            assert.strictEqual(heal.called, false);
+        });
+
+        it('debounces to one heal per minute', async function(){
+            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), true);
+            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), false);
+            assert.strictEqual(heal.callCount, 1);
+        });
+    });
+
+    describe('_runIncrementalCatchUp schema self-heal', function(){
+        it('heals and retries ONCE when the catch-up apply hits a missing table', async function(){
+            db.getLastBlock.resolves(5);
+            let snapshot = { schema_version: 'x', block_height: 9, tables: {} };
+            let gz = require('zlib').gzipSync(JSON.stringify(snapshot));
+            sinon.stub(axios, 'get').resolves({ data: gz });
+            // First apply fails on the schema gap, the post-heal retry succeeds.
+            applier.applyIncrementalSnapshot
+                .onFirstCall().rejects(Object.assign(new Error('no table'), { errno: 1146 }))
+                .onSecondCall().resolves();
+            let heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
+
+            await sync._runIncrementalCatchUp();
+
+            assert.strictEqual(heal.calledOnce, true);
+            assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 2);
+            assert.strictEqual(sync.lastAppliedBlock, 9, 'retry applied the snapshot');
+        });
+
+        it('does not retry when the retry would hit the heal debounce', async function(){
+            db.getLastBlock.resolves(5);
+            let snapshot = { schema_version: 'x', block_height: 9, tables: {} };
+            let gz = require('zlib').gzipSync(JSON.stringify(snapshot));
+            sinon.stub(axios, 'get').resolves({ data: gz });
+            // Persistent schema-gap failure (e.g. the DDL was rejected): the
+            // first failure heals + retries, the second failure is debounced —
+            // exactly two apply attempts, no spin.
+            applier.applyIncrementalSnapshot.rejects(Object.assign(new Error('no table'), { errno: 1146 }));
+            sinon.stub(sync, '_fetchAndApplySchema').resolves();
+
+            await sync._runIncrementalCatchUp();
+
+            assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 2);
+        });
     });
 
     describe('_handleReorg', function(){

@@ -316,6 +316,27 @@ class ClientSync {
         }
     }
 
+    // A missing table (errno 1146) or missing column (1054) during an apply
+    // means the source's schema moved ahead of this replica AFTER bootstrap —
+    // _fetchAndApplySchema only runs at bootstrap, so a server-side table
+    // addition wedges every already-bootstrapped replica on the first snapshot
+    // carrying rows for it (live case: anchor_actions, added server-side while
+    // the replicas pre-dated it). Re-apply the source schema — it CREATEs
+    // missing tables and ALTERs in missing columns — so the next apply attempt
+    // can proceed. Debounced to one heal per minute so a failure the schema
+    // can't fix (e.g. rejected DDL) can't hammer the /schema endpoint.
+    async _healSchemaIfStale(e){
+        let errno = e ? e.errno : null;
+        if(errno !== 1146 && errno !== 1054) return false;
+        let now = Date.now();
+        if(this._lastSchemaHeal && (now - this._lastSchemaHeal) < 60000) return false;
+        this._lastSchemaHeal = now;
+        console.log('Apply failed on a schema gap (errno ' + errno + ') for ' +
+            this.chain + '/' + this.network + ' — re-applying source schema');
+        await this._fetchAndApplySchema(this.sources[0]);
+        return true;
+    }
+
     // Bootstrap from a full snapshot
     // attempt tracks recursion depth to prevent infinite retries when all sources fail
     async _bootstrapFromSnapshot(attempt){
@@ -482,6 +503,11 @@ class ClientSync {
                 this.lastAppliedBlock = snapshotData.block_height;
         } catch(e){
             console.error('Incremental catch-up failed:', e);
+            // Schema-gap failures are fixable right now: heal and retry once.
+            // The heal's debounce bounds the recursion — a second schema-gap
+            // failure inside the window returns false and falls through.
+            if(await this._healSchemaIfStale(e))
+                return this._runIncrementalCatchUp();
         }
     }
 
@@ -945,6 +971,10 @@ class ClientSync {
             }
         } catch(e){
             console.error('Error applying block ' + event.block_index + ':', e);
+            // Heal a schema gap but don't re-apply the block inline — the
+            // skipped block leaves a gap that the next status event's gap
+            // detection closes via incremental catch-up, post-heal.
+            await this._healSchemaIfStale(e);
         }
     }
 
