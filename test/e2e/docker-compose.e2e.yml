@@ -10,7 +10,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: test
       MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: XChain4life
+      MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
       - "23306:3306"
     tmpfs:
@@ -28,7 +28,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: test
       MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: XChain4life
+      MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
       - "23307:3306"
     tmpfs:
@@ -46,7 +46,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: test
       MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: XChain4life
+      MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
       - "23308:3306"
     tmpfs:

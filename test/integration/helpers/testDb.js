@@ -14,10 +14,15 @@ const { getMariadb } = require('./mariadbLoader');
 const Utility = require('../../../src/utility');
 const { splitSqlStatements } = require('../../../src/sqlUtil');
 
-const TEST_DB_HOST = process.env.TEST_DB_HOST || '192.168.2.5';
+// These suites connect to a REAL MariaDB — credentials come from the
+// environment only. No fallback value: a committed default is a published
+// password the moment the repo is public.
+const TEST_DB_HOST = process.env.TEST_DB_HOST || '127.0.0.1';
 const TEST_DB_PORT = parseInt(process.env.TEST_DB_PORT) || 3306;
-const TEST_DB_USER = process.env.TEST_DB_USER || 'xchain-node';
-const TEST_DB_PASS = process.env.TEST_DB_PASS || 'XChain4life';
+const TEST_DB_USER = process.env.TEST_DB_USER || 'root';
+const TEST_DB_PASS = process.env.TEST_DB_PASS;
+if (TEST_DB_PASS === undefined)
+    throw new Error('TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed suites');
 
 const SOURCE_DB_NAME  = 'xchain_sync_test_source';
 const REPLICA_DB_NAME = 'xchain_sync_test_replica';

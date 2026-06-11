@@ -8,7 +8,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: test
       MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: XChain4life
+      MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
       - "33065:3306"   # Direct access for admin seeding (bypasses toxiproxy)
     networks:
@@ -28,7 +28,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: test
       MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: XChain4life
+      MARIADB_PASSWORD: xchain-fixture-throwaway
     networks:
       - chaos-net
     tmpfs:

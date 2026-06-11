@@ -63,7 +63,7 @@ const SOURCE_PORT  = parseInt(process.env.E2E_DB_PORT) || 23306;
 const REPLICA_HOST = process.env.E2E_REPLICA_DB_HOST  || '127.0.0.1';
 const REPLICA_PORT = parseInt(process.env.E2E_REPLICA_DB_PORT) || 23307;
 const DB_USER      = process.env.E2E_DB_USER          || 'xchain-node';
-const DB_PASS      = process.env.E2E_DB_PASS          || 'XChain4life';
+const DB_PASS      = process.env.E2E_DB_PASS          || 'xchain-fixture-throwaway';
 
 const SOURCE_DB_NAME  = 'xchain_e2e_decoder_source';
 const REPLICA_DB_NAME = 'xchain_e2e_decoder_replica';

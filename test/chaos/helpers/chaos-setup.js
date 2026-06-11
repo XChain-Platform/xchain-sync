@@ -42,7 +42,7 @@ const SOURCE_PROXY_PORT  = parseInt(process.env.SOURCE_PROXY_PORT  || '33060', 1
 const REPLICA_PROXY_PORT = parseInt(process.env.REPLICA_PROXY_PORT || '33061', 10);
 const SOURCE_DIRECT_PORT = parseInt(process.env.SOURCE_DIRECT_PORT || '33065', 10);
 const CHAOS_DB_USER      = 'xchain-node';
-const CHAOS_DB_PASS      = 'XChain4life';
+const CHAOS_DB_PASS      = 'xchain-fixture-throwaway';
 
 const SOURCE_DB_NAME  = 'xchain_chaos_source';
 const REPLICA_DB_NAME = 'xchain_chaos_replica';

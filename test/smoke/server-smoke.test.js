@@ -33,10 +33,12 @@ const SMOKE_DB_NAME = 'xchain_smoke_test';
 const SERVER_PORT   = 19600;
 const HUB_PORT      = 19601;
 
-const TEST_DB_HOST = process.env.TEST_DB_HOST || '192.168.2.5';
+const TEST_DB_HOST = process.env.TEST_DB_HOST || '127.0.0.1';
 const TEST_DB_PORT = parseInt(process.env.TEST_DB_PORT) || 3306;
-const TEST_DB_USER = process.env.TEST_DB_USER || 'xchain-node';
-const TEST_DB_PASS = process.env.TEST_DB_PASS || 'XChain4life';
+const TEST_DB_USER = process.env.TEST_DB_USER || 'root';
+const TEST_DB_PASS = process.env.TEST_DB_PASS;
+if (TEST_DB_PASS === undefined)
+    throw new Error('TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed smoke suite');
 
 describe('Smoke: Server Mode', function() {
 
