@@ -24,6 +24,11 @@ const balanceHelpers      = require('./balance-helpers');
 const { SCHEMA_VERSION }  = require('./schema-version');
 const { decodeValue }     = require('./wireCodec');
 
+// Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
+// being worth it (and a catch-up that touched that much of the table is close
+// to a full recompute anyway) — fall back to the unscoped rebuild.
+const MAX_SCOPED_REBUILD_IDS = 1000;
+
 class ClientApplier {
 
     constructor(db, util) {
@@ -78,11 +83,12 @@ class ClientApplier {
             // action-scoped JOIN (the balances table has no action_index
             // column), so the only way the replica's balances table can stay
             // consistent with credits/debits during live sync is to recompute
-            // it from the (now-updated) credit/debit data. Indexer-shaped DBs
-            // only — decoder has no balances/credits/debits tables.
+            // it from the (now-updated) credit/debit data — scoped to the ids
+            // the new rows touched where possible. Indexer-shaped DBs only —
+            // decoder has no balances/credits/debits tables.
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer' && (data.credits || data.debits)){
-                await this._rebuildBalances();
+                await this._rebuildBalancesTouchedBy(data.credits, data.debits);
             }
             // contract_balances is the deposits/withdrawals analogue of balances:
             // a derived aggregate with no action_index column, so the source poller
@@ -91,7 +97,7 @@ class ClientApplier {
             // for balances above — otherwise replica custody balances stay stale until
             // the next full snapshot.
             if(dbType === 'indexer' && (data.deposits || data.withdrawals)){
-                await this._rebuildContractBalances();
+                await this._rebuildContractBalancesTouchedBy(data.deposits, data.withdrawals);
             }
             await this.db.commitTransaction();
         } catch(e){
@@ -101,11 +107,51 @@ class ClientApplier {
         }
     }
 
+    // Collect the distinct (keyField, tick_id) ids touched by freshly applied
+    // rows so the derived-aggregate rebuild can be limited to them. Returns
+    // null when the rows can't be scoped — a row missing either id (NULL ids
+    // can't be matched by an IN-list), or more distinct ids than an IN-list
+    // should carry — in which case the caller falls back to the full rebuild.
+    _collectRebuildScope(rowArrays, keyField){
+        let keys  = new Set();
+        let ticks = new Set();
+        for(let rows of rowArrays){
+            for(let row of (rows || [])){
+                let k = row ? row[keyField] : undefined;
+                let t = row ? row.tick_id   : undefined;
+                if(k === undefined || k === null || t === undefined || t === null) return null;
+                keys.add(k);
+                ticks.add(t);
+                if(keys.size > MAX_SCOPED_REBUILD_IDS || ticks.size > MAX_SCOPED_REBUILD_IDS) return null;
+            }
+        }
+        return { keys: Array.from(keys), ticks: Array.from(ticks) };
+    }
+
+    // Rebuild balances scoped to the ids the given credit/debit rows touched;
+    // unscopable rows fall back to the full rebuild, empty arrays touch
+    // nothing and skip the rebuild entirely.
+    async _rebuildBalancesTouchedBy(credits, debits){
+        let scope = this._collectRebuildScope([credits, debits], 'address_id');
+        if(scope && !scope.keys.length) return;
+        await this._rebuildBalances(scope);
+    }
+
+    // deposits/withdrawals analogue of _rebuildBalancesTouchedBy.
+    async _rebuildContractBalancesTouchedBy(deposits, withdrawals){
+        let scope = this._collectRebuildScope([deposits, withdrawals], 'contract_index');
+        if(scope && !scope.keys.length) return;
+        await this._rebuildContractBalances(scope);
+    }
+
     // Recompute the balances table from the current credits/debits rows.
     // SQL lives in balance-helpers so ClientRollback uses the same query.
-    async _rebuildBalances(){
+    // scope (optional): { keys, ticks } from _collectRebuildScope; null/absent
+    // recomputes the whole table.
+    async _rebuildBalances(scope){
         try {
-            await balanceHelpers.rebuildBalances(this.db);
+            await balanceHelpers.rebuildBalances(this.db,
+                scope ? { addressIds: scope.keys, tickIds: scope.ticks } : undefined);
         } catch(e){
             if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
@@ -117,9 +163,10 @@ class ClientApplier {
     // Recompute the contract_balances table from the current deposits/withdrawals
     // rows (valid status only).  SQL lives in balance-helpers so ClientRollback
     // uses the same query.  Indexer-shaped DBs only.
-    async _rebuildContractBalances(){
+    async _rebuildContractBalances(scope){
         try {
-            await balanceHelpers.rebuildContractBalances(this.db);
+            await balanceHelpers.rebuildContractBalances(this.db,
+                scope ? { contractIndexes: scope.keys, tickIds: scope.ticks } : undefined);
         } catch(e){
             if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
@@ -208,13 +255,13 @@ class ClientApplier {
             // Indexer-shaped DBs only — decoder has no balances table.
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer' && (snapshotData.tables.credits || snapshotData.tables.debits)){
-                await this._rebuildBalances();
+                await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
             }
             // Same rationale as applyBlock: contract_balances is a derived aggregate
             // with no action_index cursor, so refresh it from deposits/withdrawals
             // whenever the incremental catch-up touched either.
             if(dbType === 'indexer' && (snapshotData.tables.deposits || snapshotData.tables.withdrawals)){
-                await this._rebuildContractBalances();
+                await this._rebuildContractBalancesTouchedBy(snapshotData.tables.deposits, snapshotData.tables.withdrawals);
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');

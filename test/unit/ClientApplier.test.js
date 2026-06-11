@@ -142,6 +142,67 @@ describe('ClientApplier', function(){
         });
     });
 
+    describe('scoped balance rebuilds', function(){
+        beforeEach(function(){ db.dbType = 'indexer'; });
+
+        it('passes the distinct touched (address_id, tick_id) ids to rebuildBalances', async function(){
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: {
+                credits: [{ address_id: 7, tick_id: 3, amount: '1' }, { address_id: 7, tick_id: 3, amount: '2' }],
+                debits:  [{ address_id: 9, tick_id: 3, amount: '1' }]
+            }});
+            assert.strictEqual(rb.calledOnce, true);
+            assert.deepStrictEqual(rb.firstCall.args[1], { addressIds: [7, 9], tickIds: [3] });
+        });
+
+        it('passes the touched (contract_index, tick_id) ids to rebuildContractBalances', async function(){
+            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: {
+                deposits:    [{ contract_index: 4, tick_id: 1, amount: '1' }],
+                withdrawals: [{ contract_index: 4, tick_id: 2, amount: '1' }]
+            }});
+            assert.strictEqual(rcb.calledOnce, true);
+            assert.deepStrictEqual(rcb.firstCall.args[1], { contractIndexes: [4], tickIds: [1, 2] });
+        });
+
+        it('falls back to the FULL rebuild when a row is missing its ids', async function(){
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: {
+                credits: [{ address_id: 7, tick_id: 3 }, { address_id: null, tick_id: 3 }]
+            }});
+            assert.strictEqual(rb.calledOnce, true);
+            assert.strictEqual(rb.firstCall.args[1], undefined);
+        });
+
+        it('falls back to the FULL rebuild when the touched-id set exceeds the IN-list cap', async function(){
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            let credits = [];
+            for(let i = 0; i < 1001; i++) credits.push({ address_id: i + 1, tick_id: 1, amount: '1' });
+            await applier.applyBlock({ block_index: 5, data: { credits } });
+            assert.strictEqual(rb.calledOnce, true);
+            assert.strictEqual(rb.firstCall.args[1], undefined);
+        });
+
+        it('skips the rebuild entirely when the touched tables are empty arrays', async function(){
+            let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
+            await applier.applyBlock({ block_index: 5, data: { credits: [], deposits: [], blocks: [{ block_index: 5 }] } });
+            assert.strictEqual(rb.called, false);
+            assert.strictEqual(rcb.called, false);
+        });
+
+        it('scopes the incremental catch-up rebuild the same way', async function(){
+            let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+            await applier.applyIncrementalSnapshot({
+                schema_version: SCHEMA_VERSION.indexer,
+                since_block: 10,
+                tables: { debits: [{ address_id: 12, tick_id: 5, amount: '3' }] }
+            });
+            assert.strictEqual(rb.calledOnce, true);
+            assert.deepStrictEqual(rb.firstCall.args[1], { addressIds: [12], tickIds: [5] });
+        });
+    });
+
     describe('applyFullSnapshot', function(){
         it('skips null snapshot', async function(){
             await applier.applyFullSnapshot(null);
