@@ -165,10 +165,11 @@ class SyncService {
                     // Source DB not reachable — schema will be fetched from server via /schema endpoint
                     console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + ' — schema will be fetched from sync server');
                 }
-                // sync_meta table (for transparency log) is indexer-only — skip for decoder
-                if(cfg.dbType === 'indexer'){
-                    await db.verifySyncTables();
-                }
+                // Sync-owned tables: verifySyncTables is dbType-aware — indexer
+                // replicas get the full set (sync_meta/merkle_epochs/sync_halt),
+                // decoder replicas get only sync_halt (the durable divergence
+                // halt applies to both shapes; the transparency log does not).
+                await db.verifySyncTables();
                 // Self-heal column drift on a pre-existing replica before any row
                 // data is accepted. Runs regardless of which schema path applied
                 // above (direct replicateSchema or, when the source DB is
@@ -190,10 +191,9 @@ class SyncService {
                 } else {
                     db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                 }
-                // sync_meta table (for transparency log) is indexer-only — skip for decoder
-                if(cfg.dbType === 'indexer'){
-                    await db.verifySyncTables();
-                }
+                // Sync-owned tables (dbType-aware: indexer = full set, decoder =
+                // sync_halt only) — same rationale as the client branch above.
+                await db.verifySyncTables();
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });

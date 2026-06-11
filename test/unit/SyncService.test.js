@@ -214,7 +214,7 @@ describe('SyncService', function(){
             assert.strictEqual(startSync.calledOnce, true);
         });
 
-        it('client mode (source unreachable): falls through to server /schema fetch; skips verifySyncTables for decoder', async function(){
+        it('client mode (source unreachable): falls through to server /schema fetch; still verifies sync tables for decoder', async function(){
             config.SYNC_MODE = 'client';
             service = new SyncService(config);
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([]);
@@ -229,7 +229,10 @@ describe('SyncService', function(){
 
             await service._discoverChains();
             assert.strictEqual(repl.called, false, 'no schema replication when the source DB is unreachable');
-            assert.strictEqual(vst.called, false, 'verifySyncTables is indexer-only — skipped for decoder');
+            // verifySyncTables runs for decoder replicas too (it is dbType-aware
+            // internally: decoder gets sync_halt only) — without it the halt
+            // table never exists and every client start logs a 1146 probe error.
+            assert.strictEqual(vst.called, true, 'verifySyncTables runs for decoder replicas');
             assert.strictEqual(service.databases.size, 1);
         });
 

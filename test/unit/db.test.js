@@ -613,6 +613,31 @@ describe('Database.verifySyncTables()', function () {
         assert.ok(doQueryStub.calledOnce);
     });
 
+    it('decoder dbType: creates ONLY sync_halt (transparency log is indexer-only)', async function () {
+        let dec = makeDb('decoder');
+        sinon.stub(fs, 'readdirSync').returns(['merkle_epochs.sql', 'sync_halt.sql', 'sync_meta.sql']);
+        let conn = { query: sinon.stub().resolves([]), release: sinon.stub().resolves() };
+        sinon.stub(dec, 'getConnection').resolves(conn);
+        sinon.stub(fs, 'readFileSync').returns('CREATE TABLE sync_halt (id INT);');
+        let doQueryStub = sinon.stub(dec, 'doQuery').resolves([]);
+        let result = await dec.verifySyncTables();
+        assert.strictEqual(result, true);
+        // Only sync_halt is probed and created — one information_schema check,
+        // one CREATE; sync_meta/merkle_epochs never touched on a decoder DB.
+        assert.strictEqual(conn.query.callCount, 1);
+        assert.strictEqual(doQueryStub.callCount, 1);
+        await dec.close();
+    });
+
+    it('indexer dbType: applies the full sync-owned set including sync_halt', async function () {
+        sinon.stub(fs, 'readdirSync').returns(['merkle_epochs.sql', 'sync_halt.sql', 'sync_meta.sql']);
+        let conn = fakeConn([{ TABLE_NAME: 'x' }]);
+        sinon.stub(db, 'getConnection').resolves(conn);
+        let result = await db.verifySyncTables();
+        assert.strictEqual(result, true);
+        assert.strictEqual(conn.query.callCount, 3, 'all three sync-owned tables probed');
+    });
+
     it('throws (via util.throwError) when query fails', async function () {
         sinon.stub(fs, 'readdirSync').returns(['sync_meta.sql']);
         let conn = {

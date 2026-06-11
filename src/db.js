@@ -157,8 +157,13 @@ class Database {
         }
     }
 
-    // Verify sync-service-owned tables exist (only sync_meta — indexer tables
-    // are replicated dynamically via replicateSchema, not from local SQL files)
+    // Verify sync-service-owned tables exist (replicated tables are created
+    // dynamically via replicateSchema / the /schema fetch, not from local SQL
+    // files). Which sync-owned tables apply depends on the DB shape: the
+    // transparency log (sync_meta + merkle_epochs) is indexer-only, but the
+    // durable divergence halt (sync_halt) applies to BOTH db types —
+    // ClientSync checks and records halts for decoder replicas too, and
+    // without the table every decoder client start logged a 1146 probe error.
     async verifySyncTables(){
         let dir  = path.join(__dirname, 'sql');
         let files = fs.readdirSync(dir);
@@ -166,6 +171,7 @@ class Database {
         for(let file of files){
             if(file.indexOf('.sql') !== -1){
                 let table = file.substring(0, file.indexOf('.sql'));
+                if(this.dbType !== 'indexer' && table !== 'sync_halt') continue;
                 console.log('Verifying ' + table + ' table exists...');
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
