@@ -40,7 +40,22 @@ const COLUMN_EXCLUSIONS = {
 //     the shortfall as a count-based health signal, not an error
 //     (ClientSync._verifyTableCounts). A row the replica has that the source
 //     does NOT, or one that differs byte-wise, is still a hard failure.
-const SUBSET_TABLES = new Set(['sync_meta']);
+//   - index_* dedup tables: the indexer's rollback NEVER deletes index rows
+//     (they're in neither blockTables nor dataTables — append-only dedup), so
+//     after a reorg the SOURCE retains residue rows created by orphaned
+//     blocks. Block payloads deliver index rows BY REFERENCED ID
+//     (ServerPoller._buildBlockPayload), so a replica that never received the
+//     orphan blocks legitimately never receives their residue — and that is
+//     safe: any later block that dedups onto a residue row re-delivers it by
+//     reference (ClientApplier INSERT IGNOREs it). Content of every
+//     REFERENCED row is still verified — the per-block recompute joins
+//     through these tables, and the strict data tables pin the ids.
+const SUBSET_TABLES = new Set([
+    'sync_meta',
+    'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
+    'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
+    'index_tickers', 'index_transactions',
+]);
 
 // Derived aggregates the follower REBUILDS rather than receives. They are not
 // in the per-block replicated set, but a complete replica must still hold
