@@ -130,8 +130,16 @@ module.exports = {
         // they match the committed hash. Catches a replica whose DATA does not hash
         // to the committed hash (replication corruption / partial apply / a source
         // serving rows inconsistent with its committed hash) — which the verbatim
-        // hash comparison cannot. A mismatch HALTs durably. Default ON. Set
-        // VERIFY_RECOMPUTE=false to skip (lower per-block DB cost for plain replicas).
+        // hash comparison cannot. A mismatch HALTs durably. Default ON.
+        //
+        // VERIFY_RECOMPUTE=false is DECLARED UNSAFE (operator decision 2026-06-12)
+        // for any consensus-relevant replica: the recompute is the ONLY mechanism
+        // that verifies the catch-up JOIN block, so with it off a reorg that
+        // happens while this client is disconnected/restarting is stitched onto
+        // the orphaned pre-reorg tip and the replica SILENTLY follows the forked
+        // chain, keeping the orphaned blocks forever (proven by the
+        // parity-interleave e2e property suite). Disable only for throwaway,
+        // read-only convenience mirrors whose state nothing downstream trusts.
         config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
 
         // Security: WebSocket max incoming message size in bytes (default 1 MB)

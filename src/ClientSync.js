@@ -49,6 +49,23 @@ class ClientSync {
         // the committed hash, rather than trusting verbatim-replicated hashes).
         this.blockHasher  = new BlockHasher(db, util);
 
+        // VERIFY_RECOMPUTE=false is DECLARED UNSAFE for consensus-relevant
+        // replicas (operator decision 2026-06-12): the recompute is the only
+        // verification of the catch-up JOIN block, so without it a reorg that
+        // crosses a disconnect/restart silently forks this replica onto the new
+        // chain while it keeps the orphaned blocks. Warn loudly at construction
+        // so the operator sees it once per client session, on every entry path.
+        if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] === false){
+            console.error('================================================================');
+            console.error('WARNING: VERIFY_RECOMPUTE is DISABLED for ' + this.chain + '/' +
+                this.network + '/indexer — this mode is UNSAFE for consensus-relevant');
+            console.error('replicas: a reorg occurring while this client is disconnected or');
+            console.error('restarting will be stitched onto the orphaned tip UNVERIFIED and');
+            console.error('the replica will silently follow the forked chain. Use only for');
+            console.error('throwaway read-only mirrors whose state nothing downstream trusts.');
+            console.error('================================================================');
+        }
+
         this.sources    = this.config['SYNC_SOURCES'].split(',').map(s => s.trim()).filter(s => s);
         this.running    = false;
         this.wsConns    = [];

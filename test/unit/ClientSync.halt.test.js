@@ -198,3 +198,31 @@ describe('ClientSync — independent recompute halt @regression', function(){
         assert.strictEqual(sync.lastAppliedBlock, vectors.block_index, 'block still advances on a recompute error');
     });
 });
+
+describe('ClientSync — VERIFY_RECOMPUTE=false is declared unsafe @regression', function(){
+    // Operator decision 2026-06-12: the recompute is the only verification of
+    // the catch-up JOIN block, so disabling it lets a reorg that crosses a
+    // disconnect silently fork the replica. The constructor must warn loudly.
+    afterEach(function(){ sinon.restore(); });
+
+    function build(config){
+        const db = { dbType: 'indexer', doQuery: sinon.stub().resolves([]) };
+        const applier = { applyBlock: sinon.stub().resolves() };
+        return new ClientSync('bitcoin', 'mainnet', db, applier,
+            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
+    }
+
+    it('warns UNSAFE at construction when explicitly disabled', function(){
+        const err = sinon.stub(console, 'error');
+        build({ SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: false });
+        assert.ok(err.getCalls().some(c => /UNSAFE/.test(String(c.args[0]))),
+            'constructor must emit the UNSAFE warning when VERIFY_RECOMPUTE is false');
+    });
+
+    it('stays quiet when recompute is enabled', function(){
+        const err = sinon.stub(console, 'error');
+        build({ SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true });
+        assert.ok(!err.getCalls().some(c => /UNSAFE/.test(String(c.args[0]))),
+            'no UNSAFE warning when recompute is on');
+    });
+});
