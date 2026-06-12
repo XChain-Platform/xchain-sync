@@ -240,8 +240,21 @@ class ServerProcess {
         await this.poller._updateStatus();
 
         // Start polling loop
-        this.pollInterval = setInterval(async () => {
-            try { await this.poller._poll(); } catch (e) {}
+        // Serialize poll cycles. Production's ServerPoller.start() is a
+        // sequential while-loop — one _poll() can never overlap the next. A
+        // bare setInterval breaks that invariant whenever a cycle runs longer
+        // than the interval (easy against a remote/loaded MariaDB): two
+        // concurrent _poll()s race the cursor and broadcast blocks out of
+        // order. Skip the tick if the previous cycle is still in flight, and
+        // remember the in-flight promise so stop() can drain it — an
+        // un-awaited zombie poll outliving stop() kept writing to the shared
+        // test DB across test boundaries.
+        this.pollInterval = setInterval(() => {
+            if (this._pollInFlight) return;
+            this._pollInFlight = (async () => {
+                try { await this.poller._poll(); } catch (e) {}
+                finally { this._pollInFlight = null; }
+            })();
         }, this.config.BLOCK_POLL_INTERVAL);
 
         // Start status broadcast loop
@@ -254,6 +267,9 @@ class ServerProcess {
         if (this.pollInterval)   clearInterval(this.pollInterval);
         if (this.statusInterval) clearInterval(this.statusInterval);
         if (this.poller)         this.poller.stop();
+        // Drain an in-flight poll cycle — clearInterval stops future ticks but
+        // not one already running against the (shared) test DB.
+        if (this._pollInFlight)  await this._pollInFlight;
 
         // Close all WebSocket connections
         if (this.wss) {
@@ -275,9 +291,16 @@ class ServerProcess {
         }
     }
 
-    // Force a poll cycle (useful for tests that need immediate response)
+    // Force a poll cycle (useful for tests that need immediate response).
+    // Serialized with the background loop — a manual poll overlapping a
+    // background cycle is the same cursor race the loop guard prevents.
     async poll() {
-        await this.poller._poll();
+        while (this._pollInFlight) await this._pollInFlight;
+        this._pollInFlight = (async () => {
+            try { await this.poller._poll(); }
+            finally { this._pollInFlight = null; }
+        })();
+        await this._pollInFlight;
     }
 
     getUrl() {

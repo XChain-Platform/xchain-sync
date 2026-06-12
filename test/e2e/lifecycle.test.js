@@ -16,7 +16,7 @@ const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
 const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
-const { assertReplicaMatchesSource, assertBlockExists, assertBalancesConsistent, assertHashesMatch } = require('./helpers/assertions');
+const { assertReplicaByteIdentical, assertBlockExists, assertBalancesConsistent, assertHashesMatch } = require('./helpers/assertions');
 
 const SERVER_PORT = 29100;
 
@@ -72,9 +72,8 @@ describe('E2E: Full Lifecycle', function() {
             await assertHashesMatch(sourceDb, replicaDb, 50);
 
             // Verify credits synced
-            let sourceCreditCount = await testDb.getRowCount(sourceDb, 'credits');
-            let replicaCreditCount = await testDb.getRowCount(replicaDb, 'credits');
-            assert.strictEqual(replicaCreditCount, sourceCreditCount);
+            // Full parity oracle: byte-identical tables + recompute conformance
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -129,7 +128,7 @@ describe('E2E: Full Lifecycle', function() {
 
             let replicaBlock = await replicaDb.getLastBlock();
             assert.strictEqual(replicaBlock, 60);
-            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 60);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -179,6 +178,7 @@ describe('E2E: Full Lifecycle', function() {
 
             await waitForReplicaBlock(replicaDb, 15);
             assert.strictEqual(await replicaDb.getLastBlock(), 15);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 });

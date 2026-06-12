@@ -16,7 +16,7 @@ const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
 const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
-const { assertBlockExists, assertBalancesConsistent } = require('./helpers/assertions');
+const { assertBlockExists, assertBalancesConsistent, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29400;
 
@@ -81,6 +81,7 @@ describe('E2E: Error Handling & Recovery', function() {
             assert.strictEqual(await replicaDb.getLastBlock(), 15);
             await assertBlockExists(replicaDb, 11);
             await assertBlockExists(replicaDb, 15);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -107,7 +108,7 @@ describe('E2E: Error Handling & Recovery', function() {
             await client.incrementalCatchUp(21);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 40);
-            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 40);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 

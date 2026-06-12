@@ -16,7 +16,7 @@ const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
 const { waitForReplicaBlock } = require('./helpers/waitFor');
-const { assertBlockExists, assertBlockNotExists, assertReplicaMatchesSource } = require('./helpers/assertions');
+const { assertBlockExists, assertBlockNotExists, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29200;
 
@@ -79,6 +79,8 @@ describe('E2E: Delta Synchronization', function() {
             let postCredits = await testDb.getRowCount(replicaDb, 'credits');
             assert.ok(postCredits > preCredits, 'Credits should have increased');
             assert.strictEqual(postCredits, 40); // 1 credit per block
+            // Resume parity: the catch-up replica must be byte-identical
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -102,7 +104,7 @@ describe('E2E: Delta Synchronization', function() {
             await client.incrementalCatchUp(11);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 210);
-            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 210);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 

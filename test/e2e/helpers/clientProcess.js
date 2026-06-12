@@ -25,6 +25,11 @@ class ClientProcess {
         this.config = {
             SYNC_SOURCES: opts.syncSources || serverUrl,
             VERIFY_HASHES: opts.verifyHashes !== undefined ? opts.verifyHashes : false,
+            // Production defaults VERIFY_RECOMPUTE on; the e2e tier runs it too
+            // now that fixtures commit REAL computed hashes (a fabricated hash
+            // would halt every client here). Tests that deliberately apply
+            // hash-inconsistent data can pass { verifyRecompute: false }.
+            VERIFY_RECOMPUTE: opts.verifyRecompute !== undefined ? opts.verifyRecompute : true,
             CLIENT_RECONNECT_DELAY: opts.reconnectDelay || 500,
             HASH_CONFIRM_TIMEOUT: opts.hashConfirmTimeout || 2000
         };

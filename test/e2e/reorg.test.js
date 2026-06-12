@@ -16,7 +16,7 @@ const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
 const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
-const { assertBlockExists, assertBlockNotExists, assertBalancesConsistent, assertHashesMatch } = require('./helpers/assertions');
+const { assertBlockExists, assertBlockNotExists, assertBalancesConsistent, assertHashesMatch, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29300;
 
@@ -93,6 +93,8 @@ describe('E2E: Reorg Propagation', function() {
             for (let row of newCredits) {
                 assert.strictEqual(row.amount, '5555');
             }
+            // Post-reorg parity: rolled-back replica must re-converge byte-identically
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -128,6 +130,7 @@ describe('E2E: Reorg Propagation', function() {
 
             // Verify balances are consistent
             await assertBalancesConsistent(replicaDb);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -160,7 +163,7 @@ describe('E2E: Reorg Propagation', function() {
             await waitForReplicaBlock(replicaDb, 35);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 35);
-            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 35);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -188,6 +191,7 @@ describe('E2E: Reorg Propagation', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 22);
             await assertBlockNotExists(replicaDb, 23);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 
@@ -241,6 +245,7 @@ describe('E2E: Reorg Propagation', function() {
             }
 
             await assertBalancesConsistent(replicaDb);
+            await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
 });

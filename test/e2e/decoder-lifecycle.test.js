@@ -180,18 +180,24 @@ describe('E2E: Decoder DB Lifecycle', function() {
     before(async function() {
         this.timeout(30000);
 
-        // Create both databases via root BEFORE constructing any src/db.js
-        // Database — that class' constructor eagerly opens a pool bound to the
-        // database name, and if the DB doesn't exist yet the pool drives a
-        // retry storm that exhausts MariaDB's connection slots. The MARIADB_USER
-        // user has no global CREATE/GRANT privilege, so we use root (the
-        // compose declares MARIADB_ROOT_PASSWORD=test for both DBs).
+        // Create both databases via an admin account BEFORE constructing any
+        // src/db.js Database — that class' constructor eagerly opens a pool
+        // bound to the database name, and if the DB doesn't exist yet the pool
+        // drives a retry storm that exhausts MariaDB's connection slots. The
+        // MARIADB_USER user has no global CREATE/GRANT privilege; defaults
+        // match the compose containers (root / MARIADB_ROOT_PASSWORD=test),
+        // overridable with E2E_DB_ADMIN_USER / E2E_DB_ADMIN_PASS like
+        // helpers/testDb.js createDatabase.
         let mariadb = await getMariadb();
+        let adminUser = process.env.E2E_DB_ADMIN_USER || 'root';
+        let adminPass = process.env.E2E_DB_ADMIN_PASS !== undefined ? process.env.E2E_DB_ADMIN_PASS : 'test';
         let provisionFor = async (host, port, dbName) => {
-            let conn = await mariadb.createConnection({ host, port, user: 'root', password: 'test' });
+            let conn = await mariadb.createConnection({ host, port, user: adminUser, password: adminPass });
             await conn.query("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
-            await conn.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + DB_USER + "`@'%'");
-            await conn.query("FLUSH PRIVILEGES");
+            if (DB_USER !== adminUser) {
+                await conn.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + DB_USER + "`@'%'");
+                await conn.query("FLUSH PRIVILEGES");
+            }
             await conn.end();
         };
         await provisionFor(SOURCE_HOST,  SOURCE_PORT,  SOURCE_DB_NAME);

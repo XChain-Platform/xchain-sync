@@ -146,6 +146,37 @@ class TestDatabase {
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
     }
 
+    // Durable divergence-halt records — mirrors src/db.js so ClientSync's halt
+    // machinery (recordHalt at divergence, getActiveHalt at startup, clearHalt
+    // by the operator) runs for real against the test replica instead of
+    // failing into the in-memory-only fallback.
+    async recordHalt(dbType, blockIndex, reason, mismatches, sources) {
+        let existing = await this.getActiveHalt(dbType);
+        if (existing && Number(existing.block_index) === Number(blockIndex)) return existing;
+        await this.doQuery(
+            "INSERT INTO sync_halt (db_type, block_index, reason, mismatches, sources) VALUES (?, ?, ?, ?, ?)",
+            [dbType, blockIndex, String(reason || 'divergence').slice(0, 64),
+             JSON.stringify(mismatches || []), JSON.stringify(sources || [])]
+        );
+        return await this.getActiveHalt(dbType);
+    }
+
+    async getActiveHalt(dbType) {
+        let rows = await this.doQuery(
+            "SELECT * FROM sync_halt WHERE db_type=? AND cleared_at IS NULL ORDER BY id DESC LIMIT 1",
+            [dbType]
+        );
+        return (rows && rows.length) ? rows[0] : null;
+    }
+
+    async clearHalt(dbType) {
+        let res = await this.doQuery(
+            "UPDATE sync_halt SET cleared_at=NOW() WHERE db_type=? AND cleared_at IS NULL",
+            [dbType]
+        );
+        return res ? res.affectedRows : 0;
+    }
+
     async beginTransaction() {
         if (this.transactionConnection) await this.releaseConnection();
         this.transactionConnection = await this.pool.getConnection();
@@ -216,12 +247,20 @@ async function createDatabase(dbName, host, port, user, pass) {
     let pw = pass || TEST_DB_PASS;
     // CREATE DATABASE needs a privileged user. The MARIADB_USER set up by the
     // docker-compose only has rights on databases that already exist (no global
-    // CREATE), so use root for the admin step and then GRANT the test user.
-    // Compose declares MARIADB_ROOT_PASSWORD=test for both source-db and replica-db.
-    let admin = await mariadb.createConnection({ host: h, port: p, user: 'root', password: 'test' });
+    // CREATE), so an admin account does the create + grant. Defaults match the
+    // compose containers (root / MARIADB_ROOT_PASSWORD=test); override with
+    // E2E_DB_ADMIN_USER / E2E_DB_ADMIN_PASS to run the suites against any other
+    // MariaDB (e.g. one shared instance hosting all three databases by name).
+    let adminUser = process.env.E2E_DB_ADMIN_USER || 'root';
+    let adminPass = process.env.E2E_DB_ADMIN_PASS !== undefined ? process.env.E2E_DB_ADMIN_PASS : 'test';
+    let admin = await mariadb.createConnection({ host: h, port: p, user: adminUser, password: adminPass });
     await admin.query("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
-    await admin.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + u + "`@'%'");
-    await admin.query("FLUSH PRIVILEGES");
+    // Granting to yourself is a no-op that needs GRANT OPTION — skip it when the
+    // test user IS the admin user.
+    if (u !== adminUser) {
+        await admin.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + u + "`@'%'");
+        await admin.query("FLUSH PRIVILEGES");
+    }
     await admin.end();
     return await createDb(dbName, h, p, u, pw);
 }

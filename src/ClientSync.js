@@ -441,6 +441,17 @@ class ClientSync {
     // failed catch-up leaves the committed tip unchanged and the next attempt
     // re-reads the same resume point.)
     async _incrementalCatchUp(sinceBlock){
+        // Refuse to advance once halted on a divergence — same contract as
+        // _applyBlockEvent. The live apply path has carried this guard since the
+        // halts were made durable, but gap detection (_handleBlock) and status
+        // events still triggered catch-ups while halted, and the catch-up apply
+        // path would happily advance the replica past the divergence — the same
+        // half-enforced-halt failure mode the live-path guard closed.
+        if(this._halted){
+            console.error('Refusing incremental catch-up since block ' + sinceBlock +
+                ' — client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
+            return;
+        }
         // Serialize catch-ups so two never apply overlapping ranges. A request that
         // arrives while one is in flight is not dropped — it sets a pending flag, and
         // the in-flight runner loops once more after it finishes. That closes any
