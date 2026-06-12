@@ -35,6 +35,7 @@
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
     "test:e2e": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
+    "test:e2e:ci": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js' --exit",
     "test:regression": "mocha --timeout 10000 --exit --grep @regression --recursive 'test/unit/**/*.test.js'",
     "test:fuzz": "mocha --timeout 0 --recursive 'test/fuzz/suites/**/*.fuzz.js'",
     "test:fuzz:tier1": "mocha --timeout 0 --recursive 'test/fuzz/suites/tier1-*.fuzz.js'",

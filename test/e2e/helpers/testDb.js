@@ -285,7 +285,10 @@ async function _fsReadRetry(fn) {
 }
 
 async function seedSchema(db) {
-    let sqlDir = path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
+    // The canonical indexer schema lives in the sibling repo checkout. CI checks
+    // xchain-indexer out elsewhere and points here via XCHAIN_INDEXER_SQL_PATH.
+    let sqlDir = process.env.XCHAIN_INDEXER_SQL_PATH
+        || path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
     let files = (await _fsReadRetry(() => fs.readdirSync(sqlDir))).filter(f => f.endsWith('.sql')).sort();
 
     let indexFiles = files.filter(f => f.startsWith('index_'));

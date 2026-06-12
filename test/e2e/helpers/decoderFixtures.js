@@ -28,7 +28,10 @@ const { splitSqlStatements } = require('../../../src/sqlUtil');
 // Apply the decoder schema (from xchain-decoder/src/sql/) to a database.
 // Skips mempool_transactions per the xchain-sync decoder decisions (not synced).
 async function seedDecoderSchema(db){
-    let sqlDir = path.join(__dirname, '..', '..', '..', '..', 'xchain-decoder', 'src', 'sql');
+    // Same convention as the indexer repo's CI: XCHAIN_DECODER_SQL_PATH points at
+    // a checked-out xchain-decoder/src/sql when the sibling path doesn't exist.
+    let sqlDir = process.env.XCHAIN_DECODER_SQL_PATH
+        || path.join(__dirname, '..', '..', '..', '..', 'xchain-decoder', 'src', 'sql');
     let files = fs.readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
 
     // index_* first (referenced by blocks/transactions)

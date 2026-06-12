@@ -16,3 +16,78 @@ jobs:
     # Override the Node version for a repo if ever needed:
     # with:
     #   node-version: "20"
+
+  # The e2e tier runs a real server/client pair (REST + WebSocket) against
+  # throwaway source + replica MariaDBs and asserts byte-identical replication,
+  # disconnect/resume parity, and durable halts (incl. the seeded-PRNG
+  # interleave property suite). It lives outside the shared reusable workflow
+  # because it needs two DB service containers and the canonical sibling
+  # schemas: the source DB is seeded from xchain-indexer/src/sql (and the
+  # decoder-lifecycle suite from xchain-decoder/src/sql), so the harness can
+  # never drift from the real schemas. Service-container env values are the
+  # same throwaway fixture credentials committed in test/e2e/docker-compose.e2e.yml.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      source-db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_USER: xchain-node
+          MARIADB_PASSWORD: xchain-fixture-throwaway
+        ports:
+          - 23306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+      replica-db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_USER: xchain-node
+          MARIADB_PASSWORD: xchain-fixture-throwaway
+        ports:
+          - 23307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+
+      # xchain-indexer and xchain-decoder are still PRIVATE pre-launch, so the
+      # default GITHUB_TOKEN cannot read them — each uses a read-only deploy key
+      # scoped to that one repo (a deploy key can only be registered on a single
+      # repo, hence two). When the repos flip public at launch, the ssh-key
+      # lines can simply be dropped.
+      - name: Check out the canonical indexer schema
+        uses: actions/checkout@v4
+        with:
+          repository: XChain-Platform/xchain-indexer
+          ssh-key: ${{ secrets.XCHAIN_INDEXER_DEPLOY_KEY }}
+          path: .xchain-indexer
+
+      - name: Check out the canonical decoder schema
+        uses: actions/checkout@v4
+        with:
+          repository: XChain-Platform/xchain-decoder
+          ssh-key: ${{ secrets.XCHAIN_DECODER_DEPLOY_KEY }}
+          path: .xchain-decoder
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Run the e2e tier
+        env:
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
+          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
+        run: npm run test:e2e:ci
