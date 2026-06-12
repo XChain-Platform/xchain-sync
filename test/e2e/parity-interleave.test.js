@@ -17,9 +17,12 @@
 //
 //   the replica is BYTE-IDENTICAL to the source (full replicated set +
 //   per-block recompute conformance), OR it is durably HALTED — and a halt is
-//   legitimate only when a reorg happened while the replica was disconnected
-//   (the one case the live event stream cannot cover). A remediation
-//   (wipe + re-bootstrap) must then converge it.
+//   legitimate only when a reorg crossed a DELIVERY INTERRUPTION: it fired
+//   inside an explicit disconnect window, or its replacement blocks were
+//   still in flight when a disconnect/server-restart cut the stream (either
+//   way the replica is left on an orphaned tip the live event stream never
+//   corrected, and the catch-up join recompute rightly halts on resume).
+//   A remediation (wipe + re-bootstrap) must then converge it.
 //
 // Failures print the seed: PARITY_SEED=<n> replays the exact schedule.
 // PARITY_RUNS / PARITY_STEPS tune breadth and depth.
@@ -55,7 +58,9 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
     let sourceDb, replicaDb, server, client;
 
     before(async function() {
-        this.timeout(60000);
+        // Schema seeding over the shared remote-DB venue can exceed a minute
+        // under load; on CI's local service containers this is headroom.
+        this.timeout(180000);
         await setup.globalSetup();
         sourceDb  = setup.getSourceDb();
         replicaDb = setup.getReplicaDb();
@@ -90,6 +95,23 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
         }, timeout || 20000);
     }
 
+    // A reorg is "absorbed" once the replica's tip blocks row equals the
+    // source's — same height + same consensus hash ids means the chained
+    // per-block recompute already verified everything beneath it. Checked at
+    // delivery interruptions (disconnect / server-restart): a reorg whose
+    // replacement blocks were still in flight leaves the replica on an
+    // orphaned tip, and the catch-up join recompute will (correctly) halt on
+    // resume — the same class as a reorg inside an explicit disconnect window.
+    async function replicaAbsorbedSourceTip() {
+        const q = 'SELECT block_index, ledger_hash_id, actions_hash_id, contract_hash_id ' +
+                  'FROM blocks ORDER BY block_index DESC LIMIT 1';
+        let [src] = await sourceDb.doQuery(q);
+        let [rep] = await replicaDb.doQuery(q);
+        if (!src || !rep) return false;
+        return ['block_index', 'ledger_hash_id', 'actions_hash_id', 'contract_hash_id']
+            .every(c => String(src[c]) === String(rep[c]));
+    }
+
     async function runSchedule(seed) {
         const rng = mulberry32(seed);
         const pick = (arr) => arr[Math.floor(rng() * arr.length)];
@@ -99,7 +121,13 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
         let tip = 10;
         let generation = 0;            // bumped per reorg → fresh index space
         let connected = true;
-        let reorgWhileDisconnected = false;
+        // Halt legitimacy: a reorg crossed a delivery interruption — it fired
+        // while disconnected, or its replacement blocks were unabsorbed when a
+        // disconnect/server-restart cut the stream. (Over-approximates by one
+        // sided checks at the interruption point, never under-approximates: a
+        // halt with no interruption since genesis/remediation stays a failure.)
+        let reorgCrossedInterruption = false;
+        let pendingReorg = false;      // a reorg not yet verified absorbed
         await fixtures.seedBlocks(sourceDb, 1, tip);
         server = new ServerProcess(sourceDb, SERVER_PORT);
         await server.start();
@@ -137,13 +165,21 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
                 const regrow = depth + Math.floor(rng() * 2); // ≥ depth: chain regrows
                 await fixtures.seedBlocks(sourceDb, from, from + regrow - 1, seedOpts());
                 tip = from + regrow - 1;
-                if (!connected) reorgWhileDisconnected = true;
+                if (!connected) reorgCrossedInterruption = true;
+                pendingReorg = true;
                 trace.push('reorg@' + from + ' regrow' + regrow + '→' + tip);
 
             } else if (action === 'disconnect') {
                 if (!connected) { trace.push('disc-noop'); continue; }
                 await client.stop();
                 connected = false;
+                // stop() drained in-flight applies — the replica's state for
+                // this window is final. An unabsorbed reorg here can orphan-
+                // join on resume, so a later halt is legitimate.
+                if (pendingReorg) {
+                    if (await replicaAbsorbedSourceTip()) pendingReorg = false;
+                    else reorgCrossedInterruption = true;
+                }
                 trace.push('disconnect');
 
             } else if (action === 'reconnect') {
@@ -156,6 +192,13 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
 
             } else if (action === 'serverRestart') {
                 await server.stop();
+                // The WS stream is cut even though the harness still counts
+                // the client as connected — same interruption hazard as a
+                // disconnect for a reorg whose replacements were in flight.
+                if (pendingReorg) {
+                    if (await replicaAbsorbedSourceTip()) pendingReorg = false;
+                    else reorgCrossedInterruption = true;
+                }
                 server = new ServerProcess(sourceDb, SERVER_PORT);
                 await server.start();
                 trace.push('server-restart');
@@ -168,16 +211,17 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
             // A client that halted mid-schedule (reorg crossed a disconnect)
             // gets the production remediation immediately: wipe + re-bootstrap.
             if (connected && client.sync.isHalted()) {
-                assert.ok(reorgWhileDisconnected,
+                assert.ok(reorgCrossedInterruption,
                     'seed=' + seed + ' [' + trace.join(' ') + ']: client halted (' +
                     JSON.stringify(client.sync.getHaltInfo()) +
-                    ') without a reorg-while-disconnected — halts are only legitimate there');
+                    ') without a reorg crossing a delivery interruption — halts are only legitimate there');
                 await client.stop();
                 await testDb.truncateAll(replicaDb);
                 client = new ClientProcess(replicaDb, server.getUrl());
                 await client.start();
                 connected = true;
-                reorgWhileDisconnected = false;
+                reorgCrossedInterruption = false;
+                pendingReorg = false;  // re-bootstrap put the replica on the source chain
                 trace.push('HALT→remediated');
             }
         }
@@ -199,8 +243,8 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
         }, 30000);
 
         if (client.sync.isHalted()) {
-            assert.ok(reorgWhileDisconnected,
-                'seed=' + seed + ' [' + trace.join(' ') + ']: halted at quiesce without a reorg-while-disconnected');
+            assert.ok(reorgCrossedInterruption,
+                'seed=' + seed + ' [' + trace.join(' ') + ']: halted at quiesce without a reorg crossing a delivery interruption');
             let halt = await replicaDb.getActiveHalt('indexer');
             assert.ok(halt, 'seed=' + seed + ': in-memory halt must be durable');
             // Production remediation must converge.
