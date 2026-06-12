@@ -64,6 +64,20 @@ class ClientProcess {
     //    up (ClientSync.start() does this init before connecting — connectLive must
     //    too). Skip when a preceding bootstrap() already set it.
     async connectLive() {
+        // Honor a durable halt, like production ClientSync.start() does — a
+        // fresh client session over a halted replica must come up halted, not
+        // sail past the recorded divergence.
+        if (typeof this.replicaDb.getActiveHalt === 'function') {
+            let prior = await this.replicaDb.getActiveHalt(this.sync.dbType);
+            if (prior && !this.sync._halted) {
+                this.sync._halted = {
+                    blockIndex: Number(prior.block_index),
+                    reason: prior.reason,
+                    mismatches: [], sources: [],
+                    at: prior.created_at || new Date().toISOString()
+                };
+            }
+        }
         if (this.sync.lastAppliedBlock === null) {
             this.sync.lastAppliedBlock = await this.replicaDb.getLastBlock();
             if (this.sync.lastAppliedBlock !== null) {
@@ -80,9 +94,18 @@ class ClientProcess {
         await this.connectLive();
     }
 
-    // Stop all WebSocket connections
-    stop() {
+    // Stop all WebSocket connections and DRAIN in-flight work. ClientSync.stop()
+    // only flips flags and closes sockets — an apply or catch-up already running
+    // keeps writing to the replica DB after "stop", which corrupts the NEXT
+    // test's freshly reset databases (the same zombie-write class the server
+    // helper's poll-drain closed). Await this wherever the same DBs are reused.
+    async stop() {
         this.sync.stop();
+        if (this.sync._catchUpInFlight) {
+            try { await this.sync._catchUpInFlight; } catch (e) {}
+        }
+        // Acquiring the apply lock guarantees any in-flight apply finished.
+        await this.sync._withApplyLock(() => {});
     }
 
     // Get the last applied block index

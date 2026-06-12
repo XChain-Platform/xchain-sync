@@ -512,6 +512,36 @@ class ClientSync {
             await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
+
+            // Verify the catch-up JOIN. The live path recomputes every applied
+            // block's consensus hashes, but a catch-up jumps a range in one
+            // apply with no recompute — so a reorg that happened while this
+            // client was DISCONNECTED (the one fork the live event stream
+            // cannot deliver) was previously stitched onto the replica's
+            // orphaned tip unverified, silently following the new chain while
+            // keeping the orphaned blocks below the join. Recomputing just the
+            // FIRST re-delivered block closes that: its chain hashes fold the
+            // previous (pre-catch-up tip) block's committed hashes, so a join
+            // onto an orphan cannot reproduce the committed hash → durable
+            // halt, same contract as the live path. One recompute per
+            // catch-up; gated like every recompute on VERIFY_RECOMPUTE.
+            if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] &&
+               typeof snapshotData.since_block === 'number'){
+                let joinBlock = snapshotData.since_block;
+                let committed = await this.db.getBlockHashRow(joinBlock);
+                if(committed && committed.ledger_hash){
+                    let mismatches = await this._verifyRecompute({ block_index: joinBlock }, {
+                        ledger_hash:   committed.ledger_hash,
+                        actions_hash:  committed.actions_hash,
+                        contract_hash: committed.contract_hash
+                    });
+                    if(mismatches){
+                        await this._haltOnDivergence(joinBlock, mismatches,
+                            this.sources.slice(0, 1), 'local-recompute-divergence');
+                        return;
+                    }
+                }
+            }
         } catch(e){
             console.error('Incremental catch-up failed:', e);
             // Schema-gap failures are fixable right now: heal and retry once.

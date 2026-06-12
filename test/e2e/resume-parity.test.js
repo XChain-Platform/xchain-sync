@@ -76,8 +76,8 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
     after(async function() {
         sinon.restore();
-        if (client)  client.stop();
-        if (clientB) clientB.stop();
+        if (client)  await client.stop();
+        if (clientB) await clientB.stop();
         if (server)  await server.stop();
         if (replicaBDb) await replicaBDb.close();
         await testDb.dropDatabase(REPLICA_B_NAME,
@@ -88,8 +88,8 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
     beforeEach(async function() {
         this.timeout(30000);
-        if (client)  { client.stop();  client = null; }
-        if (clientB) { clientB.stop(); clientB = null; }
+        if (client)  { await client.stop();  client = null; }
+        if (clientB) { await clientB.stop(); clientB = null; }
         if (server)  { await server.stop(); server = null; }
         await setup.resetDatabases();
         await testDb.truncateAll(replicaBDb);
@@ -112,7 +112,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await waitForReplicaBlock(replicaBDb, 20, 15000);
 
             // A disconnects; the chain advances 30 blocks; B follows live.
-            client.stop();
+            await client.stop();
             await fixtures.seedBlocks(sourceDb, 21, 50);
             await waitForReplicaBlock(replicaBDb, 50, 30000);
 
@@ -149,7 +149,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
             // Disconnect. The source reorgs below the replica's tip: blocks
             // 18-25 are orphaned and replaced by a different chain 18-28.
-            client.stop();
+            await client.stop();
             await fixtures.deleteBlocksFrom(sourceDb, 18);
             // indexOffset: replacement transactions get FRESH global indexes,
             // as on a real chain — they must not collide with the orphans.
@@ -180,7 +180,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             }
 
             // Remediation (what production did): stop, wipe, re-bootstrap.
-            client.stop();
+            await client.stop();
             await testDb.truncateAll(replicaDb);
             await replicaDb.clearHalt('indexer');
             client = new ClientProcess(replicaDb, server.getUrl());
@@ -203,7 +203,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
             // Tear the replica mid-state: drop arbitrary rows from several
             // tables (simulates a bootstrap killed partway through an apply).
-            client.stop();
+            await client.stop();
             await replicaDb.doQuery('DELETE FROM credits WHERE action_index > 1500');
             await replicaDb.doQuery('DELETE FROM transactions WHERE block_index > 22');
             await replicaDb.doQuery('DELETE FROM balances');
@@ -278,7 +278,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             // Later seeds rebuilt the source's balances while the corrupted
             // amount was live — rebuild them now that the ledger is honest.
             await require('../../src/balance-helpers').rebuildBalances(sourceDb);
-            client.stop();
+            await client.stop();
             await testDb.truncateAll(replicaDb);
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.start();
@@ -306,7 +306,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await waitForReplicaBlock(replicaDb, 10, 15000);
 
             // Disconnect, then lose the (empty) replicated table.
-            client.stop();
+            await client.stop();
             await replicaDb.doQuery('DROP TABLE debits');
 
             client = new ClientProcess(replicaDb, server.getUrl());
@@ -336,7 +336,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
             let tip = 10;
             for (let cycle = 0; cycle < 5; cycle++) {
-                client.stop();
+                await client.stop();
                 // Advance the chain a deterministic-but-varied amount per cycle.
                 let next = tip + 3 + cycle;
                 await fixtures.seedBlocks(sourceDb, tip + 1, next);
