@@ -69,9 +69,10 @@ class Database {
             // Return DATETIME columns as MariaDB-format strings rather than
             // JS Dates. JSON.stringify would otherwise emit Date as ISO
             // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
-            // on re-insert. Affects decoder columns events.time and
-            // dispensers.expiration; indexer schemas use INTEGER timestamps,
-            // so this is a no-op there.
+            // on re-insert. Affects the decoder DATETIME column events.time
+            // (decoder dispensers.expiration is now a BIGINT unix timestamp,
+            // replicated as a number via bigIntAsNumber); indexer schemas use
+            // INTEGER timestamps, so this is a no-op there.
             dateStrings:        true,
             minDelayValidation: 3000,
             queryTimeout:       parseInt(process.env.DB_QUERY_TIMEOUT) || 30000
