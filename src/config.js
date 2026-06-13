@@ -151,6 +151,19 @@ module.exports = {
         // Client reconnect delay (default 5 seconds; override via CLIENT_RECONNECT_DELAY)
         config['CLIENT_RECONNECT_DELAY'] = parseIntMin0(process.env.CLIENT_RECONNECT_DELAY, 5000);
 
+        // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
+        // exhausts every configured source must NOT fall through to live-follow on an
+        // empty replica — instead it retries the whole source rotation with bounded
+        // exponential backoff, then propagates failure (start() throws → the process
+        // supervisor restarts the container). This is the only recovery for the
+        // single-source topology, where there is no second source to rotate to.
+        //   BOOTSTRAP_MAX_RETRIES  — extra full-rotation rounds after the first (0 = no retry)
+        //   BOOTSTRAP_RETRY_BASE_MS — first backoff delay; doubles each round
+        //   BOOTSTRAP_RETRY_MAX_MS  — backoff ceiling
+        config['BOOTSTRAP_MAX_RETRIES']   = parseIntMin0(process.env.BOOTSTRAP_MAX_RETRIES, 5);
+        config['BOOTSTRAP_RETRY_BASE_MS'] = parseIntMin1(process.env.BOOTSTRAP_RETRY_BASE_MS, 2000);
+        config['BOOTSTRAP_RETRY_MAX_MS']  = parseIntMin1(process.env.BOOTSTRAP_RETRY_MAX_MS, 60000);
+
         // Hash confirm timeout for cross-source verification (default 5 seconds; override via HASH_CONFIRM_TIMEOUT)
         config['HASH_CONFIRM_TIMEOUT'] = parseIntMin0(process.env.HASH_CONFIRM_TIMEOUT, 5000);
 

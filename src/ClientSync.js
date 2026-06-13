@@ -198,9 +198,20 @@ class ClientSync {
             await this._incrementalCatchUp(this.lastAppliedBlock + 1);
         }
 
+        // Never enter live-follow on an empty replica. _bootstrapFromSnapshot now
+        // throws on permanent exhaustion (unwinding before we get here, propagated to
+        // the supervisor for a clean restart), but guard the tip directly too: if for
+        // any reason we reach this point with no committed block, the live WS path
+        // would apply the first block onto an empty DB with every continuity/fork/
+        // duplicate guard disabled (all gated on lastAppliedBlock !== null), silently
+        // orphaning all blocks below it. Refuse rather than corrupt the replica.
+        if(this.lastAppliedBlock === null){
+            throw new Error('Refusing to enter live-follow: replica still empty after bootstrap for ' +
+                this.chain + '/' + this.network + '/' + this.dbType);
+        }
+
         // Load last block hashes for continuity checking
-        if(this.lastAppliedBlock !== null)
-            this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+        this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
 
         // Open WebSocket connections to all sources
         this._connectWebSockets();
@@ -354,15 +365,55 @@ class ClientSync {
         return true;
     }
 
-    // Bootstrap from a full snapshot
-    // attempt tracks recursion depth to prevent infinite retries when all sources fail
-    async _bootstrapFromSnapshot(attempt){
+    // Bootstrap from a full snapshot.
+    //
+    // Drives a bounded retry-with-backoff loop around _bootstrapRotateSources (one
+    // full pass over every configured source). A bootstrap that exhausts every
+    // source must NEVER fall through and let start() enter live-follow on an empty
+    // replica — that applies the first live block onto an empty DB with all
+    // continuity/fork/duplicate guards disabled (they are gated on
+    // lastAppliedBlock !== null), durably halting (VERIFY_RECOMPUTE) or silently
+    // orphaning every pre-bootstrap block. So:
+    //   - success on any round → return (lastAppliedBlock is committed)
+    //   - all rounds exhausted → THROW, propagating failure to start() and on to the
+    //     supervisor (SyncService exits the process for a container restart)
+    // This is the only recovery for the production single-source topology, where
+    // there is no second source to rotate to and the old code returned normally.
+    async _bootstrapFromSnapshot(){
+        if(!this.sources[0]){
+            console.error('No sync sources configured');
+            throw new Error('Bootstrap failed: no sync sources configured for ' +
+                this.chain + '/' + this.network + '/' + this.dbType);
+        }
+
+        let maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
+        maxRetries = Number.isFinite(maxRetries) ? Math.max(0, maxRetries) : 5;
+        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'] || 2000;
+        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS']  || 60000;
+
+        for(let round = 0; ; round++){
+            if(await this._bootstrapRotateSources()) return; // success — tip committed
+            if(round >= maxRetries){
+                // Exhausted all sources across every retry round. Do not return:
+                // signal failure so start() never enters live-follow empty-handed.
+                throw new Error('Bootstrap failed: all sync sources exhausted after ' +
+                    (round + 1) + ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
+            }
+            let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
+            console.warn('Bootstrap round ' + (round + 1) + ' exhausted all sources for ' +
+                this.chain + '/' + this.network + '/' + this.dbType + ' — retrying in ' + delay + 'ms');
+            await this.util.sleep(delay);
+        }
+    }
+
+    // One full pass over the configured sources for a bootstrap. Returns true once a
+    // snapshot has been applied and the tip committed, false if every source failed
+    // this round. `attempt` tracks rotation depth so a multi-source pass tries each
+    // source exactly once and never recurses indefinitely.
+    async _bootstrapRotateSources(attempt){
         attempt = attempt || 0;
         let source = this.sources[0];
-        if(!source){
-            console.error('No sync sources configured');
-            return;
-        }
+        if(!source) return false;
 
         // Fetch and apply schema before downloading data
         await this._fetchAndApplySchema(source);
@@ -409,16 +460,17 @@ class ClientSync {
             }
 
             console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
+            return true;
         } catch(e){
             console.error('Bootstrap failed:', e);
             // Try next source, but only if we haven't exhausted all sources
             if(this.sources.length > 1 && attempt < this.sources.length - 1){
                 console.log('Trying secondary source...');
                 this.sources.push(this.sources.shift());
-                await this._bootstrapFromSnapshot(attempt + 1);
-            } else {
-                console.error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
+                return this._bootstrapRotateSources(attempt + 1);
             }
+            console.error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
+            return false;
         }
     }
 
@@ -803,6 +855,23 @@ class ClientSync {
     // Handle a block event
     async _handleBlock(event, sourceIndex){
         let blockIndex = event.block_index;
+
+        // Defense in depth: refuse to apply a live block onto an empty replica.
+        // start() bootstraps before live-follow, so reaching here with no committed
+        // tip means bootstrap was skipped or silently failed. Applying the first live
+        // block now would leave every block below it permanently missing — and because
+        // the duplicate/continuity/fork guards below are ALL gated on
+        // lastAppliedBlock !== null, control would otherwise fall straight through to
+        // _applyBlockEvent. block_index 0 (true genesis) is the one legitimate
+        // from-empty apply; for anything above it, refuse and trigger a catch-up to
+        // rebuild from the source rather than orphaning the blocks beneath it.
+        if(this.lastAppliedBlock === null && blockIndex > 0){
+            console.error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
+                this.chain + '/' + this.network + '/' + this.dbType + ') — bootstrap did not complete; ' +
+                'triggering catch-up instead of orphaning blocks below it');
+            await this._incrementalCatchUp(blockIndex);
+            return;
+        }
 
         // Skip if we already have this block — but first guard against a fork at the
         // current head. A block re-delivered at our committed tip with a DIFFERENT

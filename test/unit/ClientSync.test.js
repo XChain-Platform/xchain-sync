@@ -167,7 +167,9 @@ describe('ClientSync', function(){
 
         it('bootstraps from a full snapshot when the replica is empty', async function(){
             db.getLastBlock.resolves(null);
-            sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+            // A successful bootstrap commits a tip — required now that start() refuses
+            // to enter live-follow while lastAppliedBlock is still null.
+            sinon.stub(sync, '_bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
             sinon.stub(sync, '_incrementalCatchUp').resolves();
             sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
 
@@ -175,6 +177,44 @@ describe('ClientSync', function(){
 
             assert.strictEqual(sync._bootstrapFromSnapshot.calledOnce, true);
             assert.strictEqual(sync._incrementalCatchUp.called, false);
+            assert.strictEqual(sync._connectWebSockets.calledOnce, true);
+        });
+    });
+
+    describe('bootstrap-failure gating (empty-replica defect)', function(){
+        // The defect: a swallowed bootstrap failure let start() proceed into
+        // live-follow with lastAppliedBlock=null, applying the first WS block onto an
+        // empty DB with every continuity/fork/duplicate guard (all gated on
+        // lastAppliedBlock !== null) disabled — durable halt or silent block loss.
+
+        it('start() refuses live-follow when bootstrap leaves the replica empty', async function(){
+            db.getLastBlock.resolves(null);
+            // Bootstrap returns without committing a tip (the swallow it used to do).
+            sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+            let connect = sinon.stub(sync, '_connectWebSockets');
+
+            await assert.rejects(() => sync.start(), /Refusing to enter live-follow/);
+            assert.strictEqual(connect.called, false, 'must not open WebSockets onto an empty replica');
+        });
+
+        it('start() propagates a permanent bootstrap failure without live-following', async function(){
+            db.getLastBlock.resolves(null);
+            sinon.stub(sync, '_bootstrapFromSnapshot').rejects(new Error('all sync sources exhausted'));
+            let connect = sinon.stub(sync, '_connectWebSockets');
+
+            await assert.rejects(() => sync.start(), /all sync sources exhausted/);
+            assert.strictEqual(connect.called, false);
+        });
+
+        it('_handleBlock refuses to apply a non-genesis block onto an empty replica', async function(){
+            sync.lastAppliedBlock = null;
+            sinon.stub(sync, '_incrementalCatchUp').resolves();
+
+            await sync._handleBlock(
+                { type: 'block', block_index: 5, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' }, 0);
+
+            assert.strictEqual(applier.applyBlock.called, false, 'must not apply onto an empty DB');
+            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
         });
     });
 

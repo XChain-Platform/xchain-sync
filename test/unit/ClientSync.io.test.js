@@ -198,10 +198,11 @@ describe('ClientSync — _bootstrapFromSnapshot', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('returns early when no sources configured', async function(){
+    it('throws (does not silently return) when no sources configured', async function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: '' }));
 
-        await sync._bootstrapFromSnapshot();
+        // A misconfigured replica must not proceed to live-follow on an empty DB.
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /no sync sources configured/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('No sync sources configured') !== -1));
@@ -264,29 +265,59 @@ describe('ClientSync — _bootstrapFromSnapshot', function(){
         assert.ok(sync._verifyDecoderCompleteness.calledOnce);
     });
 
-    it('catch/retry: rotates sources and exhausts on repeated failure', async function(){
+    it('catch/retry: rotates sources and THROWS on repeated failure (no swallow)', async function(){
+        // BOOTSTRAP_MAX_RETRIES:0 → one rotation round, then propagate. The old code
+        // returned normally here, letting start() live-follow an empty replica.
         ({ sync, db, applier } = makeSync({
-            SYNC_SOURCES: 'http://src1:3006,http://src2:3006'
+            SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
+            BOOTSTRAP_MAX_RETRIES: 0
         }));
         sinon.stub(sync, '_fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(new Error('snap fail'));
 
-        await sync._bootstrapFromSnapshot(0);
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1),
             'must log exhaustion after all retries');
+        assert.strictEqual(sync.lastAppliedBlock, null, 'no tip committed on a failed bootstrap');
     });
 
-    it('single source exhausted immediately on failure', async function(){
-        ({ sync, db, applier } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
+    it('single source exhausted: THROWS instead of returning success', async function(){
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006',
+            BOOTSTRAP_MAX_RETRIES: 0
+        }));
         sinon.stub(sync, '_fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(new Error('snap fail'));
 
-        await sync._bootstrapFromSnapshot();
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1));
+        assert.strictEqual(sync.lastAppliedBlock, null);
+    });
+
+    it('retries the single configured source with backoff, then succeeds', async function(){
+        // Transient failure then success: the production single-source topology must
+        // recover via in-process retry rather than dying on the first transient 404.
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006',
+            BOOTSTRAP_MAX_RETRIES: 3
+        }));
+        let sleep = sinon.stub(sync.util, 'sleep').resolves();   // make backoff instant
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        let payload = Buffer.from(JSON.stringify({ block_height: 42, tables: {} }));
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).rejects(new Error('transient'));
+        get.onCall(1).rejects(new Error('transient'));
+        get.onCall(2).resolves({ data: payload });
+
+        await sync._bootstrapFromSnapshot();
+
+        assert.ok(applier.applyFullSnapshot.calledOnce, 'eventually applies the snapshot');
+        assert.strictEqual(sync.lastAppliedBlock, 42);
+        assert.ok(sleep.callCount >= 2, 'backed off between retry rounds');
     });
 });
 
