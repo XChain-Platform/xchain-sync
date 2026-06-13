@@ -129,6 +129,19 @@ const TOPOLOGY = {
             'sends', 'sleeps',
             'stakes',
             'swaps', 'swap_cancels', 'swap_edits', 'swap_expires', 'swap_matches', 'swap_statuses',
+            // Cross-chain action tables. Each carries internally-minted action rows
+            // (one row per rollback-able action_index: settlement legs, XCALL
+            // requests/expiries, injected XEXEC executions, processed callbacks), so
+            // they ride the per-block action_index join like any other action-scoped
+            // table. Streaming them per block keeps a follower's cross-chain settled
+            // state correct between full snapshots, and pairs with ClientRollback
+            // dropping their orphaned-range rows on reorg.
+            'cross_chain_settlements', 'cross_chain_call_executions',
+            'cross_chain_call_callbacks', 'xcalls',
+            // stake_key_revocations: one row per revocation action_index (rollback-able),
+            // so it rides the per-block action_index join. A follower needs it to know
+            // which stake signing keys are still valid signers.
+            'stake_key_revocations',
             'sweeps', 'tokens', 'unstakes',
             'withdrawals'
         ],

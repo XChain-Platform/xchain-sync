@@ -94,11 +94,25 @@ class ClientRollback {
             'swap_expires',
             'swap_matches',
             'swap_statuses',
+            // Cross-chain action tables. Each holds internally-minted action rows
+            // (settlement legs, XCALL requests/expiries, injected XEXEC executions,
+            // and processed callbacks) keyed by a rollback-able action_index. The
+            // source rolls them back by action_index, so a reorg here must drop the
+            // orphaned-range rows or the replica keeps serving cross-chain swaps as
+            // settled / calls as executed that the source chain never finalized.
+            'cross_chain_settlements',
+            'cross_chain_call_executions',
+            'cross_chain_call_callbacks',
+            'xcalls',
             'sweeps',
             'tokens',
             'stakes',
             'unstakes',
             'delegations',
+            // Revoked stake signing keys (rollback-able action_index). Consensus
+            // state a replica needs to know which keys are valid signers; the source
+            // rolls it back by action_index, so it must be dropped here on reorg too.
+            'stake_key_revocations',
             'reward_claims',
             'contracts',
             'contract_stakes',

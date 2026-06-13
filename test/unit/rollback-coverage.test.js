@@ -168,6 +168,68 @@ describe('Rollback coverage guard @regression', function(){
         );
     });
 
+    it('every table the source indexer rolls back is mirrored by ClientRollback (cross-repo drift guard)', function(){
+        // The per-dbType guards above only see tables ServerPoller *streams*, so a
+        // table the indexer rolls back but sync delivers only via full snapshot
+        // (not per-block) never enters their universe and escapes them entirely —
+        // exactly how the 2026-06 cross-chain table family drifted in undetected.
+        // This guard reads the source's rollback list (xchain-indexer/src/rollback.js)
+        // DIRECTLY, so any table added there fails this suite until it is either
+        // mirrored into ClientRollback or given a deliberate, reasoned exemption here.
+        let IndexerRollback;
+        try {
+            IndexerRollback = require('../../../xchain-indexer/src/rollback.js');
+        } catch(e){
+            // Sibling indexer repo not checked out (standalone sync deploy). The
+            // cross-repo source of truth is unavailable, so skip rather than error;
+            // the per-dbType guards above still run.
+            this.skip();
+            return;
+        }
+        // Rollback's constructor only assigns config aliases + the static table
+        // arrays (no DB/network work), so a bare stub yields the lists we need.
+        const indexer = new IndexerRollback({});
+        const indexerRollback = new Set([...indexer.dataTables, ...indexer.blockTables]);
+
+        // Tables the indexer rolls back that sync intentionally does NOT mirror,
+        // each with a reason. Keep this list tight — it is the deliberate-decision
+        // gate that the cross-chain family lacked.
+        const INDEXER_LOCAL = {
+            pending_hub_pushes:
+                'Indexer-local outbound queue of rows awaiting push to the cross-chain hub. ' +
+                'Not replicated to followers (absent from replicatedTables.js) and meaningless ' +
+                'on a replica, so there is nothing to roll back here — same rationale as the ' +
+                'source keeping icons/price_snapshots out of the streamed set.',
+        };
+
+        const covered = new Set([
+            ...rollback.dataTables,
+            ...rollback.blockTables,
+            ...RECOMPUTED,
+            ...SPECIAL_CASE,
+            ...Object.keys(ROLLBACK_EXEMPT),
+            ...Object.keys(INDEXER_LOCAL),
+        ]);
+        const uncovered = [...indexerRollback]
+            .filter(t => !covered.has(t) && !isLookupTable(t))
+            .sort();
+
+        assert.deepStrictEqual(
+            uncovered,
+            [],
+            uncovered.length
+                ? `\n\nThese tables are rolled back by the source indexer (xchain-indexer/src/\n` +
+                  `rollback.js) but are NOT handled by ClientRollback and not exempted:\n` +
+                  uncovered.map(t => `    - ${t}`).join('\n') +
+                  `\n\nReorged rows would survive on every replica. For each, either add it to\n` +
+                  `ClientRollback (dataTables/blockTables) — and to replicatedTables.js if it has\n` +
+                  `an action_index column so it also live-streams — or add it to INDEXER_LOCAL /\n` +
+                  `ROLLBACK_EXEMPT in this test with a reason. Classify by understanding the\n` +
+                  `table, not by silencing the guard.\n`
+                : undefined
+        );
+    });
+
     it('prices is rolled back on the replica (regression: this was the drift that motivated the guard)', function(){
         assert.ok(
             rollback.dataTables.includes('prices'),
