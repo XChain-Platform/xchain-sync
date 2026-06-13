@@ -74,7 +74,7 @@ class BlockHasher {
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    c.action_index ASC`;
+                    c.action_index ASC, c.address_id ASC, c.tick_id ASC, c.amount ASC`;
         ledger.credits = await this.db.doQuery(query, [block_index]);
         // debits
         query = `SELECT
@@ -89,7 +89,7 @@ class BlockHasher {
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    d.action_index ASC`;
+                    d.action_index ASC, d.address_id ASC, d.tick_id ASC, d.amount ASC`;
         ledger.debits = await this.db.doQuery(query, [block_index]);
         // escrows
         query = `SELECT
@@ -104,7 +104,7 @@ class BlockHasher {
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    e.action_index ASC`;
+                    e.action_index ASC, e.address_id ASC, e.tick_id ASC, e.amount ASC`;
         ledger.escrows = await this.db.doQuery(query, [block_index]);
         // actions
         query = `SELECT
