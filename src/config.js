@@ -154,8 +154,27 @@ module.exports = {
         // Hash confirm timeout for cross-source verification (default 5 seconds; override via HASH_CONFIRM_TIMEOUT)
         config['HASH_CONFIRM_TIMEOUT'] = parseIntMin0(process.env.HASH_CONFIRM_TIMEOUT, 5000);
 
-        // Validator heartbeat TTL: entries not seen within this window (ms) are evicted
+        // Validator heartbeat TTL: entries not seen within this window (ms) are
+        // transitioned to a 'stale' status (kept visible in /validator-status, not
+        // hard-deleted) so a validator that restarted or briefly dropped off the
+        // network remains observable rather than silently vanishing.
         config['VALIDATOR_HEARTBEAT_TTL'] = parseIntMin1(process.env.VALIDATOR_HEARTBEAT_TTL, 60000);
+
+        // Optional expected-validator roster: a comma-separated list of validator
+        // ids/pubkeys. When set, /validator-status reports an `expected_total`
+        // denominator alongside the observed count and flags roster members that
+        // have never reported a heartbeat as status 'absent'. This is the only
+        // in-band signal for a validator that silently fell off the federation —
+        // e.g. a replaced machine configured with the wrong sync server URL, or a
+        // node network-partitioned before it ever POSTed. Empty/unset → [] (the
+        // service runs exactly as before, with no roster anchor). Deduplicated and
+        // trimmed so the denominator is accurate.
+        config['EXPECTED_VALIDATORS'] = [...new Set(
+            (process.env.EXPECTED_VALIDATORS || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0)
+        )];
 
         return config;
     }

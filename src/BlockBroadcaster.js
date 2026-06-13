@@ -42,8 +42,9 @@ class BlockBroadcaster {
         this.statusData = new Map();
 
         // Named-validator REST heartbeat state.
-        // Map<"chain:network:dbType", Map<validatorId, { applied_height, applied_block_time, last_seen }>>
-        // Populated by POST /validator-heartbeat; evicted by evictStaleValidators().
+        // Map<"chain:network:dbType", Map<validatorId, { applied_height, applied_block_time, last_seen, status?, evicted_at? }>>
+        // Populated by POST /validator-heartbeat; entries past the TTL are transitioned
+        // to status 'stale' (kept visible) by evictStaleValidators() rather than deleted.
         this.validatorHeartbeats = new Map();
     }
 
@@ -328,27 +329,38 @@ class BlockBroadcaster {
 
     // Return per-validator heartbeat state for a chain/network/dbType.
     //
-    // Shape: { validators: { <id>: {...} }, total, unknown_count }.
-    //   validators    — map keyed by validator_id; each entry carries
+    // Shape: { validators: { <id>: {...} }, total, expected_total, unknown_count }.
+    //   validators     — map keyed by validator_id; each entry carries
     //                    lag_blocks = source block_height - applied_height (null when
-    //                    undeterminable) and a `status` of 'known' | 'unknown'.
-    //   total         — number of validators with a heartbeat on record.
-    //   unknown_count — how many of those have lag_blocks === null (source height not
-    //                   yet known), i.e. their lag is genuinely unknown rather than 0.
+    //                    undeterminable) and a `status` of 'known' | 'unknown' |
+    //                    'stale' | 'absent'.
+    //   total          — number of validators with a heartbeat on record (including
+    //                    'stale' entries that lapsed past the TTL but are kept visible).
+    //   expected_total — size of the configured EXPECTED_VALIDATORS roster, or null when
+    //                    no roster is configured. Gives operators a denominator: when
+    //                    total < expected_total a federation member is missing.
+    //   unknown_count  — how many on-record entries have lag_blocks === null (source
+    //                    height not yet known), i.e. their lag is genuinely unknown
+    //                    rather than 0.
     //
-    // The per-entry `status` and `unknown_count` give operators and alerting scripts a
-    // count of validators whose lag cannot be determined versus those genuinely caught
-    // up, instead of leaving a null `lag_blocks` to be misread as healthy.
+    // Two statuses close the silent-loss gaps a heartbeat-only view would otherwise have:
+    //   'stale'  — a previously-active validator whose last_seen lapsed past the TTL.
+    //              evictStaleValidators() transitions it in place instead of deleting it,
+    //              so a validator that restarted or briefly partitioned stays visible
+    //              (with its last known applied_height) rather than silently vanishing.
+    //   'absent' — a member of the EXPECTED_VALIDATORS roster that has never POSTed a
+    //              heartbeat for this chain/network/dbType. Without the roster such a
+    //              validator (misconfigured sync URL, partitioned before its first POST)
+    //              would be completely invisible. Surfaced here with null lag/last_seen.
     //
-    // NOTE: this can only report on validators that have POST'd at least once — this
-    // service holds no roster of *expected* validators, so a validator that has never
-    // sent a single REST heartbeat cannot be enumerated here (there is nothing to diff
-    // against). Surfacing those would require an external expected-validator set, which
-    // lives outside xchain-sync.
+    // When no roster is configured the method behaves exactly as before for observed
+    // validators; 'absent' entries simply never appear and expected_total is null.
     getValidatorHeartbeats(chain, network, dbType){
         let key = this._key(chain, network, dbType);
         let map = this.validatorHeartbeats.get(key);
-        if(!map || map.size === 0) return { validators: {}, total: 0, unknown_count: 0 };
+
+        let expected      = this.config['EXPECTED_VALIDATORS'] || [];
+        let expectedTotal = expected.length > 0 ? expected.length : null;
 
         let statusData   = this.statusData.get(key);
         let sourceHeight = (statusData && typeof statusData.block_height === 'number')
@@ -356,32 +368,73 @@ class BlockBroadcaster {
 
         let validators = {};
         let unknownCount = 0;
-        for(let [id, entry] of map){
-            let lagBlocks = (sourceHeight !== null && entry.applied_height !== null)
-                ? Math.max(0, sourceHeight - entry.applied_height)
-                : null;
-            if(lagBlocks === null) unknownCount++;
+        let total = 0;
+        if(map){
+            for(let [id, entry] of map){
+                total++;
+                let lagBlocks = (sourceHeight !== null && entry.applied_height !== null)
+                    ? Math.max(0, sourceHeight - entry.applied_height)
+                    : null;
+                if(lagBlocks === null) unknownCount++;
+                validators[id] = {
+                    applied_height:     entry.applied_height,
+                    applied_block_time: entry.applied_block_time,
+                    last_seen:          new Date(entry.last_seen).toISOString(),
+                    lag_blocks:         lagBlocks,
+                    // 'stale' (lapsed past the TTL) takes precedence over the lag-based
+                    // status; otherwise 'unknown' when lag_blocks could not be computed
+                    // (source height not yet known) so the validator's distance from the
+                    // tip is undetermined, not 0.
+                    status:             entry.status === 'stale' ? 'stale'
+                                          : (lagBlocks === null ? 'unknown' : 'known')
+                };
+                if(entry.status === 'stale' && entry.evicted_at != null)
+                    validators[id].evicted_at = new Date(entry.evicted_at).toISOString();
+            }
+        }
+
+        // Fill in roster members that have never reported for this leaf. A stale roster
+        // member is already in the map above, so this only adds the never-seen ones.
+        for(let id of expected){
+            if(validators[id]) continue;
             validators[id] = {
-                applied_height:     entry.applied_height,
-                applied_block_time: entry.applied_block_time,
-                last_seen:          new Date(entry.last_seen).toISOString(),
-                lag_blocks:         lagBlocks,
-                // 'unknown' when lag_blocks could not be computed (source height not yet
-                // known), so the validator's distance from the tip is undetermined, not 0.
-                status:             lagBlocks === null ? 'unknown' : 'known'
+                applied_height:     null,
+                applied_block_time: null,
+                last_seen:          null,
+                lag_blocks:         null,
+                status:             'absent'
             };
         }
-        return { validators, total: map.size, unknown_count: unknownCount };
+
+        return { validators, total, expected_total: expectedTotal, unknown_count: unknownCount };
     }
 
-    // Evict named-validator entries whose last_seen is older than thresholdMs.
+    // Age out named-validator entries whose last_seen is older than thresholdMs.
     // Called on a periodic interval from api.js (server mode only).
+    //
+    // An active entry past the TTL is transitioned to a 'stale' status IN PLACE rather
+    // than deleted, so a validator that restarted or briefly partitioned stays visible
+    // in /validator-status (with its last known applied_height) instead of silently
+    // disappearing. recordValidatorHeartbeat() overwrites the entry with a fresh,
+    // status-less record on the next POST, so a recovered validator returns to
+    // 'known'/'unknown' automatically.
+    //
+    // To keep memory bounded — validator_id is caller-supplied, so soft-delete alone
+    // would let arbitrary ids accumulate forever — a stale entry that is NOT in the
+    // expected roster is hard-removed once it has been stale for a further thresholdMs
+    // window. Roster members are kept indefinitely (bounded by the roster size) so a
+    // genuinely-expected validator stays surfaced as 'stale' until it reports again.
     evictStaleValidators(thresholdMs){
         let now = Date.now();
+        let expected = new Set(this.config['EXPECTED_VALIDATORS'] || []);
         for(let [key, map] of this.validatorHeartbeats){
             for(let [id, entry] of map){
-                if(now - entry.last_seen > thresholdMs)
-                    map.delete(id);
+                if(entry.status === 'stale'){
+                    if(!expected.has(id) && entry.evicted_at != null && now - entry.evicted_at > thresholdMs)
+                        map.delete(id);
+                } else if(now - entry.last_seen > thresholdMs){
+                    map.set(id, { ...entry, status: 'stale', evicted_at: now });
+                }
             }
             if(map.size === 0)
                 this.validatorHeartbeats.delete(key);

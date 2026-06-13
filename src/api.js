@@ -435,8 +435,9 @@ async function startApi(){
         let chains = syncService.getChains();
         let result = {};
         for(let { coin, network, dbType } of chains){
-            // getValidatorHeartbeats returns { validators, total, unknown_count };
-            // surface it directly so unknown_count rides each leaf of the tree.
+            // getValidatorHeartbeats returns { validators, total, expected_total,
+            // unknown_count }; surface it directly so the expected-roster denominator,
+            // unknown_count, and any 'stale'/'absent' entries ride each leaf of the tree.
             if(!result[coin]) result[coin] = {};
             if(!result[coin][network]) result[coin][network] = {};
             result[coin][network][dbType] = broadcaster.getValidatorHeartbeats(coin, network, dbType);
@@ -460,8 +461,9 @@ async function startApi(){
         let broadcaster = syncService.getBroadcaster();
         if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
 
-        // getValidatorHeartbeats returns { validators, total, unknown_count } — spread
-        // it so total/unknown_count sit alongside the validators map in the response.
+        // getValidatorHeartbeats returns { validators, total, expected_total,
+        // unknown_count } — spread it so the roster denominator and counts sit
+        // alongside the validators map (with 'stale'/'absent' entries) in the response.
         let vstatus = broadcaster.getValidatorHeartbeats(chain, network, dbType);
         res.json({ chain, network, dbType, ...vstatus, last_updated: new Date().toISOString() });
     });

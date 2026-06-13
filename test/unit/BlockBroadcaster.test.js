@@ -327,7 +327,7 @@ describe('BlockBroadcaster', function(){
     describe('getValidatorHeartbeats', function(){
         it('returns empty structure with zero counts when no validators reported', function(){
             let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
-            assert.deepStrictEqual(res, { validators: {}, total: 0, unknown_count: 0 });
+            assert.deepStrictEqual(res, { validators: {}, total: 0, expected_total: null, unknown_count: 0 });
         });
 
         it('marks a validator unknown when source height is not yet known', function(){
@@ -372,6 +372,118 @@ describe('BlockBroadcaster', function(){
             let ltc = broadcaster.getValidatorHeartbeats('litecoin', 'mainnet', 'indexer');
             assert.strictEqual(ltc.total, 1);
             assert.strictEqual(ltc.unknown_count, 1);
+        });
+    });
+
+    describe('getValidatorHeartbeats with an expected-validator roster', function(){
+        let rostered;
+        beforeEach(function(){
+            rostered = new BlockBroadcaster({ EXPECTED_VALIDATORS: ['val-a', 'val-b', 'val-c'] });
+        });
+
+        it('surfaces roster members that have never reported as status absent', function(){
+            rostered.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            let res = rostered.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            // expected_total is the denominator; total counts only the one that reported.
+            assert.strictEqual(res.expected_total, 3);
+            assert.strictEqual(res.total, 1);
+            // val-b and val-c never POSTed → absent, with null lag/last_seen.
+            assert.strictEqual(res.validators['val-b'].status, 'absent');
+            assert.strictEqual(res.validators['val-b'].lag_blocks, null);
+            assert.strictEqual(res.validators['val-b'].last_seen, null);
+            assert.strictEqual(res.validators['val-c'].status, 'absent');
+        });
+
+        it('reports all roster members absent when none have reported', function(){
+            let res = rostered.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            assert.strictEqual(res.expected_total, 3);
+            assert.strictEqual(res.total, 0);
+            assert.strictEqual(Object.keys(res.validators).length, 3);
+            assert.ok(['val-a','val-b','val-c'].every(id => res.validators[id].status === 'absent'));
+        });
+
+        it('does not duplicate a reporting roster member as absent', function(){
+            rostered.updateStatus('bitcoin', 'mainnet', { dbType: 'indexer', block_height: 510 });
+            rostered.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            let res = rostered.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            assert.strictEqual(res.validators['val-a'].status, 'known');
+            assert.strictEqual(res.validators['val-a'].lag_blocks, 10);
+        });
+
+        it('reports a non-roster reporter alongside absent roster members', function(){
+            rostered.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'rogue', 500, null);
+            let res = rostered.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            // total counts the off-roster reporter; expected_total stays the roster size.
+            assert.strictEqual(res.total, 1);
+            assert.strictEqual(res.expected_total, 3);
+            assert.ok(res.validators['rogue']);
+            assert.strictEqual(res.validators['val-a'].status, 'absent');
+        });
+    });
+
+    describe('evictStaleValidators', function(){
+        it('transitions an entry past the TTL to stale instead of deleting it', function(){
+            broadcaster.updateStatus('bitcoin', 'mainnet', { dbType: 'indexer', block_height: 510 });
+            broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            // Backdate last_seen so the entry is older than the threshold.
+            let map = broadcaster.validatorHeartbeats.get('bitcoin:mainnet:indexer');
+            map.get('val-a').last_seen = Date.now() - 100000;
+
+            broadcaster.evictStaleValidators(60000);
+
+            // Still present in the map and surfaced as 'stale' with its last applied_height.
+            let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            assert.strictEqual(res.total, 1);
+            assert.ok(res.validators['val-a']);
+            assert.strictEqual(res.validators['val-a'].status, 'stale');
+            assert.strictEqual(res.validators['val-a'].applied_height, 500);
+            assert.ok(res.validators['val-a'].evicted_at);
+        });
+
+        it('leaves a fresh entry untouched', function(){
+            broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            broadcaster.evictStaleValidators(60000);
+            let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            assert.strictEqual(res.validators['val-a'].status, 'unknown');
+        });
+
+        it('restores a stale validator to known/unknown on the next heartbeat', function(){
+            broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            let map = broadcaster.validatorHeartbeats.get('bitcoin:mainnet:indexer');
+            map.get('val-a').last_seen = Date.now() - 100000;
+            broadcaster.evictStaleValidators(60000);
+            assert.strictEqual(map.get('val-a').status, 'stale');
+
+            // A new POST overwrites the entry with a fresh, status-less record.
+            broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 520, null);
+            let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
+            assert.strictEqual(res.validators['val-a'].status, 'unknown');
+            assert.strictEqual(map.get('val-a').status, undefined);
+        });
+
+        it('hard-removes a non-roster entry that stays stale past a second TTL window', function(){
+            broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'rogue', 500, null);
+            let map = broadcaster.validatorHeartbeats.get('bitcoin:mainnet:indexer');
+            map.get('rogue').last_seen = Date.now() - 100000;
+            broadcaster.evictStaleValidators(60000);          // active → stale
+            assert.strictEqual(map.get('rogue').status, 'stale');
+
+            // Backdate evicted_at beyond a second threshold window → hard-removed.
+            map.get('rogue').evicted_at = Date.now() - 100000;
+            broadcaster.evictStaleValidators(60000);
+            assert.strictEqual(broadcaster.validatorHeartbeats.has('bitcoin:mainnet:indexer'), false);
+        });
+
+        it('keeps a roster member visible as stale indefinitely', function(){
+            let rostered = new BlockBroadcaster({ EXPECTED_VALIDATORS: ['val-a'] });
+            rostered.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'val-a', 500, null);
+            let map = rostered.validatorHeartbeats.get('bitcoin:mainnet:indexer');
+            map.get('val-a').last_seen = Date.now() - 100000;
+            rostered.evictStaleValidators(60000);             // active → stale
+            // Even long past the second window, a roster member is not hard-removed.
+            map.get('val-a').evicted_at = Date.now() - 100000;
+            rostered.evictStaleValidators(60000);
+            assert.strictEqual(map.get('val-a').status, 'stale');
         });
     });
 });
