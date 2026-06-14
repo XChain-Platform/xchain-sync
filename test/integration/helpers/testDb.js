@@ -37,7 +37,10 @@ class TestDatabase {
         this.transactionConnection = null;
     }
 
-    async doQuery(query, args) {
+    // conn (optional): run on an explicit connection (read-snapshot path) instead
+    // of acquiring one — mirrors src/db.js. The caller owns that connection's
+    // lifecycle (commit/rollback/release).
+    async doQuery(query, args, conn) {
         if (Array.isArray(args)) {
             for (let i = 0; i < args.length; i++) {
                 // Mirror src/db.js: Buffers (binary columns) must reach the driver
@@ -46,22 +49,23 @@ class TestDatabase {
                     args[i] = args[i].toString();
             }
         }
-        let conn = this.transactionConnection || await this.pool.getConnection();
+        if (conn) return await conn.query(query, args);
+        let c = this.transactionConnection || await this.pool.getConnection();
         try {
-            return await conn.query(query, args);
+            return await c.query(query, args);
         } finally {
-            if (!this.transactionConnection) conn.release();
+            if (!this.transactionConnection) c.release();
         }
     }
 
-    async getLastBlock() {
-        let rows = await this.doQuery("SELECT MAX(block_index) AS block_index FROM blocks");
+    async getLastBlock(conn) {
+        let rows = await this.doQuery("SELECT MAX(block_index) AS block_index FROM blocks", null, conn);
         if (rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
     }
 
-    async getBlockHashRow(block_index) {
+    async getBlockHashRow(block_index, conn) {
         let rows = await this.doQuery(`SELECT
             b.block_index, b.block_time,
             t1.hash as ledger_hash, t2.hash as actions_hash, t3.hash as contract_hash
@@ -69,14 +73,14 @@ class TestDatabase {
             LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
             LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
             LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
-            WHERE b.block_index=?`, [block_index]);
+            WHERE b.block_index=?`, [block_index], conn);
         return rows.length > 0 ? rows[0] : null;
     }
 
-    async getFirstActionIndex(block_index) {
+    async getFirstActionIndex(block_index, conn) {
         let rows = await this.doQuery(
             "SELECT action_index FROM actions WHERE block_index >= ? ORDER BY action_index ASC LIMIT 1",
-            [block_index]
+            [block_index], conn
         );
         return rows.length > 0 ? Number(rows[0].action_index) : null;
     }
@@ -102,12 +106,12 @@ class TestDatabase {
             WHERE t.block_index = ?`, [block_index]);
     }
 
-    async getTablePage(table, limit, offset) {
-        return await this.doQuery("SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?", [limit, offset]);
+    async getTablePage(table, limit, offset, conn) {
+        return await this.doQuery("SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?", [limit, offset], conn);
     }
 
-    async getTableCount(table) {
-        let rows = await this.doQuery("SELECT COUNT(*) as cnt FROM `" + table + "`");
+    async getTableCount(table, conn) {
+        let rows = await this.doQuery("SELECT COUNT(*) as cnt FROM `" + table + "`", null, conn);
         return Number(rows[0].cnt);
     }
 
@@ -121,11 +125,29 @@ class TestDatabase {
         await this.transactionConnection.beginTransaction();
     }
 
+    // Mirrors src/db.js post-#3732: a read snapshot uses a DEDICATED connection
+    // (returned to the caller), independent of the shared transactionConnection,
+    // so a concurrent writer never collides with the snapshot read.
     async beginReadSnapshot() {
-        if (this.transactionConnection) await this.releaseConnection();
-        this.transactionConnection = await this.pool.getConnection();
-        await this.transactionConnection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-        await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        let conn = await this.pool.getConnection();
+        try {
+            await conn.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        } catch (e) {
+            try { conn.release(); } catch (_e) {}
+            throw e;
+        }
+        return conn;
+    }
+
+    async commitReadSnapshot(conn) {
+        if (!conn) return;
+        try { await conn.commit(); } finally { conn.release(); }
+    }
+
+    async rollbackReadSnapshot(conn) {
+        if (!conn) return;
+        try { await conn.rollback(); } catch (e) { /* best-effort */ } finally { conn.release(); }
     }
 
     async commitTransaction() {
