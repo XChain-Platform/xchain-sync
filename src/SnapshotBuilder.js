@@ -29,7 +29,7 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
 // Tables holding operator-local bookkeeping state (fetch timestamps, retry counters) that
 // legitimately diverges between nodes and must not appear in consensus snapshots.
-const OPERATOR_LOCAL_TABLES = new Set(['icons', 'price_snapshots']);
+const OPERATOR_LOCAL_TABLES = new Set(['icons', 'price_snapshots', 'pending_hub_pushes']);
 
 class SnapshotBuilder {
 
@@ -58,10 +58,11 @@ class SnapshotBuilder {
 
     // Discover all tables in the database and return them in dependency order.
     // Priority tables come first, trailing tables last, everything else alphabetically in between.
-    async _getOrderedTables(db){
+    async _getOrderedTables(db, conn){
         let rows = await db.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
-            [db.dbName]
+            [db.dbName],
+            conn
         );
         let allTables = rows.map(r => r.table_name || r.TABLE_NAME).filter(t => !OPERATOR_LOCAL_TABLES.has(t));
 
@@ -93,12 +94,12 @@ class SnapshotBuilder {
     // a busy source produces mixed-block payloads that fail validator hash
     // verification on bootstrap.
     async streamFullSnapshot(db, res){
-        await db.beginReadSnapshot();
+        let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
         try {
-            let lastBlock = await db.getLastBlock();
+            let lastBlock = await db.getLastBlock(conn);
             if(lastBlock === null){
-                await db.commitTransaction();
+                await db.commitReadSnapshot(conn);
                 snapshotOpen = false;
                 res.status(404).json({ error: 'No blocks in database' });
                 return;
@@ -106,7 +107,7 @@ class SnapshotBuilder {
 
             let dbType  = (db && db.dbType) || 'indexer';
             let schemaVersion = SCHEMA_VERSION[dbType];
-            let hashRow = await db.getBlockHashRow(lastBlock);
+            let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
             // Set response headers
             res.setHeader('Content-Type', 'application/json');
@@ -125,11 +126,11 @@ class SnapshotBuilder {
             // Start JSON structure
             gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
 
-            let tableOrder = await this._getOrderedTables(db);
+            let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
             for(let table of tableOrder){
                 try {
-                    let count = await db.getTableCount(table);
+                    let count = await db.getTableCount(table, conn);
                     if(count === 0) continue;
 
                     if(!first) gzip.write(',');
@@ -139,7 +140,7 @@ class SnapshotBuilder {
                     let offset = 0;
                     let firstRow = true;
                     while(offset < count){
-                        let rows = await db.getTablePage(table, this.pageSize, offset);
+                        let rows = await db.getTablePage(table, this.pageSize, offset, conn);
                         for(let row of rows){
                             if(!firstRow) gzip.write(',');
                             firstRow = false;
@@ -158,11 +159,11 @@ class SnapshotBuilder {
             // is already buffered into gzip, so committing before gzip.end()
             // does not race the stream flush.
             gzip.write('}}');
-            await db.commitTransaction();
+            await db.commitReadSnapshot(conn);
             snapshotOpen = false;
             gzip.end();
         } catch(e){
-            if(snapshotOpen) await db.rollbackTransaction();
+            if(snapshotOpen) await db.rollbackReadSnapshot(conn);
             throw e;
         }
     }
@@ -185,12 +186,12 @@ class SnapshotBuilder {
         // anchor, hash headers, and all per-table reads must observe one block
         // height so the catch-up payload can't mix rows from two heights while
         // the headers advertise only one.
-        await db.beginReadSnapshot();
+        let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
         try {
-            let lastBlock = await db.getLastBlock();
+            let lastBlock = await db.getLastBlock(conn);
             if(lastBlock === null || sinceBlock > lastBlock){
-                await db.commitTransaction();
+                await db.commitReadSnapshot(conn);
                 snapshotOpen = false;
                 res.status(404).json({ error: 'No data available after block ' + sinceBlock });
                 return;
@@ -198,7 +199,7 @@ class SnapshotBuilder {
 
             let dbType  = (db && db.dbType) || 'indexer';
             let schemaVersion = SCHEMA_VERSION[dbType];
-            let hashRow = await db.getBlockHashRow(lastBlock);
+            let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
             // Set response headers
             res.setHeader('Content-Type', 'application/json');
@@ -221,7 +222,7 @@ class SnapshotBuilder {
 
             gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
-            let tableOrder = await this._getOrderedTables(db);
+            let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
 
             // Scoping rules per dbType.
@@ -271,7 +272,7 @@ class SnapshotBuilder {
             // no-op. Mirrors the decoder full-dump path. Sourced from the replicated
             // topology so it can't drift from the per-block streamed set.
             let indexerFullDump    = new Set(replicatedTables.getTopology('indexer').index);
-            let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock) : null;
+            let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock, conn) : null;
 
             for(let table of tableOrder){
                 try {
@@ -280,27 +281,28 @@ class SnapshotBuilder {
                         if(decoderSkip.has(table)){
                             continue;
                         } else if(decoderBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock]);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
                         } else if(decoderTxScoped.has(table)){
                             rows = await db.doQuery(
                                 "SELECT t.* FROM `" + table + "` t " +
                                 "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
                                 "WHERE tx.block_index >= ? ORDER BY t.tx_index",
-                                [sinceBlock]
+                                [sinceBlock],
+                                conn
                             );
                         } else if(decoderFullDump.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "`");
+                            rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
                         } else {
                             continue;
                         }
                     } else {
                         if(indexerBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock]);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
                         } else if(indexerFullDump.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "`");
+                            rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
                         } else if(firstActionIndex !== null){
                             try {
-                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex]);
+                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
                             } catch(e){
                                 // Table doesn't have action_index — skip it for incremental
                                 continue;
@@ -330,11 +332,11 @@ class SnapshotBuilder {
             // Release the read view only after the final table read (see the
             // matching note in streamFullSnapshot).
             gzip.write('}}');
-            await db.commitTransaction();
+            await db.commitReadSnapshot(conn);
             snapshotOpen = false;
             gzip.end();
         } catch(e){
-            if(snapshotOpen) await db.rollbackTransaction();
+            if(snapshotOpen) await db.rollbackReadSnapshot(conn);
             throw e;
         }
     }

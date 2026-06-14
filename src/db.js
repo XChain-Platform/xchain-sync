@@ -439,10 +439,23 @@ class Database {
         }
     }
 
-    // Get a database connection (with exponential backoff + circuit breaker)
+    // Get a database connection (with exponential backoff + circuit breaker).
+    // Returns the active shared transaction connection when one is open, so every
+    // query on this Db instance funnels through that same transaction.
     async getConnection(){
         if(this.transactionConnection)
             return this.transactionConnection;
+        return await this._acquirePoolConnection();
+    }
+
+    // Acquire a fresh connection straight from the pool, bypassing the shared
+    // transactionConnection. Carries the same exponential-backoff retry + circuit
+    // breaker as getConnection. Used by getConnection() and by beginReadSnapshot(),
+    // which needs a DEDICATED connection: a snapshot read must never pin the shared
+    // writer connection, or a concurrent /snapshot read and the live ServerPoller
+    // writer would collide on one connection (and the snapshot's commit/release
+    // would pull the connection out from under in-flight writes).
+    async _acquirePoolConnection(){
         // Circuit breaker: reject immediately if open
         if(this.circuitState === 'open'){
             if(Date.now() < this.circuitOpenUntil)
@@ -551,22 +564,55 @@ class Database {
     // source keeps committing new blocks while the read view stays pinned.
     // Isolation is set explicitly rather than relying on the server default so
     // the guarantee holds regardless of how the source DB is configured.
+    //
+    // Returns a DEDICATED connection (not the shared this.transactionConnection)
+    // that the caller threads into its reads (getLastBlock/getBlockHashRow/
+    // getTablePage/... all accept an optional conn) and ends via
+    // commitReadSnapshot/rollbackReadSnapshot. Using a dedicated connection lets
+    // multiple snapshots run concurrently and keeps the live writer (ServerPoller,
+    // TransparencyLog) off the snapshot's read view entirely.
     async beginReadSnapshot(){
-        if(this.transactionConnection != null)
-            await this.releaseConnection();
-        this.transactionConnection = await this.getConnection();
+        let conn = await this._acquirePoolConnection();
         try {
-            await this.transactionConnection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-            await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+            await conn.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
         } catch(e){
-            await this.transactionConnection.release();
-            this.transactionConnection = null;
+            try { await conn.release(); } catch(_e){ /* already gone */ }
             this.util.throwError('beginReadSnapshot error=' + e);
+        }
+        return conn;
+    }
+
+    // End a read snapshot opened by beginReadSnapshot and return its dedicated
+    // connection to the pool. A read-only snapshot has nothing to persist, so the
+    // commit just closes the transaction; the release returns the connection.
+    async commitReadSnapshot(conn){
+        if(conn == null) return;
+        try {
+            await conn.commit();
+        } finally {
+            await conn.release();
         }
     }
 
-    // Run a query and return results
-    async doQuery(query, args){
+    // Abort a read snapshot and release its dedicated connection. Best-effort
+    // rollback — the connection is released regardless.
+    async rollbackReadSnapshot(conn){
+        if(conn == null) return;
+        try {
+            await conn.rollback();
+        } catch(e){
+            /* best-effort — still release below */
+        } finally {
+            await conn.release();
+        }
+    }
+
+    // Run a query and return results.
+    // conn (optional): run on this explicit connection instead of acquiring one —
+    // used by read-snapshot reads (beginReadSnapshot). The caller owns that
+    // connection's lifecycle (commit/rollback/release), so errors propagate.
+    async doQuery(query, args, conn){
         let results = [];
         if(!this.util.isNull(query)){
             if(Array.isArray(args)){
@@ -578,6 +624,8 @@ class Database {
                         args[i] = args[i].toString();
                 }
             }
+            if(conn)
+                return await conn.query(query, args);
             let tx = this.transactionConnection != null;
             let db = await this.getConnection();
             try {
@@ -592,9 +640,9 @@ class Database {
     }
 
     // Get the last block index from the blocks table
-    async getLastBlock(){
+    async getLastBlock(conn){
         let query = "SELECT MAX(block_index) AS block_index FROM blocks";
-        let rows  = await this.doQuery(query);
+        let rows  = await this.doQuery(query, null, conn);
         if(rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
@@ -636,7 +684,7 @@ class Database {
         return res ? res.affectedRows : 0;
     }
 
-    async getBlockHashRow(block_index){
+    async getBlockHashRow(block_index, conn){
         let query;
         if(this.dbType === 'decoder'){
             query = `SELECT
@@ -663,7 +711,7 @@ class Database {
                 WHERE
                     b.block_index=?`;
         }
-        let rows = await this.doQuery(query, [block_index]);
+        let rows = await this.doQuery(query, [block_index], conn);
         if(rows.length > 0)
             return rows[0];
         return null;
@@ -704,9 +752,9 @@ class Database {
     }
 
     // Get the first action_index at or after a given block
-    async getFirstActionIndex(block_index){
+    async getFirstActionIndex(block_index, conn){
         let query = `SELECT action_index FROM actions a WHERE a.block_index >= ? ORDER BY a.action_index ASC LIMIT 1`;
-        let rows  = await this.doQuery(query, [block_index]);
+        let rows  = await this.doQuery(query, [block_index], conn);
         if(rows.length > 0)
             return Number(rows[0].action_index);
         return null;
@@ -773,17 +821,17 @@ class Database {
     }
 
     // Get all rows from a table (paginated)
-    async getTablePage(table, limit, offset){
+    async getTablePage(table, limit, offset, conn){
         assertValidIdentifier(table);
         let query = "SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?";
-        return await this.doQuery(query, [limit, offset]);
+        return await this.doQuery(query, [limit, offset], conn);
     }
 
     // Get total row count for a table
-    async getTableCount(table){
+    async getTableCount(table, conn){
         assertValidIdentifier(table);
         let query = "SELECT COUNT(*) as cnt FROM `" + table + "`";
-        let rows = await this.doQuery(query);
+        let rows = await this.doQuery(query, null, conn);
         return Number(rows[0].cnt);
     }
 

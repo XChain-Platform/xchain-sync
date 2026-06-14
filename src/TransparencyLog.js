@@ -114,10 +114,12 @@ class TransparencyLog {
     // the orphaned sync_meta rows so recordBlock re-inserts fresh hashes.
     //
     // Deliberately uses plain doQuery (no beginTransaction) — like recordBlock and
-    // the rest of the poll loop. A transaction here drives db.transactionConnection,
-    // the single shared field the snapshot-read path (beginReadSnapshot) also uses;
-    // adding the poll loop's first transaction races that field under fault. Instead
-    // the steps are ordered so a partial failure self-heals on the next poll's retry
+    // the rest of the poll loop. A transaction here would drive the shared
+    // db.transactionConnection; keeping the poll loop transactionless avoids any
+    // contention on it between concurrent writers (the snapshot-read path now uses
+    // its own dedicated connection via beginReadSnapshot, so it is no longer a
+    // party to that field). Instead the steps are ordered so a partial failure
+    // self-heals on the next poll's retry
     // (the reorg branch leaves lastPolledBlock un-rewound until this completes), and
     // every step is idempotent: the marker insert is guarded against duplicates and
     // both DELETEs are range-deletes that no-op once the rows are gone. If any step

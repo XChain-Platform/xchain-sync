@@ -24,9 +24,11 @@ function createMockDb(dbName){
         getFirstActionIndex: sinon.stub().resolves(null),
         getTablePage: sinon.stub().resolves([]),
         getTableCount: sinon.stub().resolves(0),
-        beginReadSnapshot: sinon.stub().resolves(),
-        commitTransaction: sinon.stub().resolves(true),
-        rollbackTransaction: sinon.stub().resolves()
+        // beginReadSnapshot returns a dedicated connection handle the builder
+        // threads into every read and ends via commit/rollbackReadSnapshot.
+        beginReadSnapshot: sinon.stub().resolves({ _snapshotConn: true }),
+        commitReadSnapshot: sinon.stub().resolves(true),
+        rollbackReadSnapshot: sinon.stub().resolves()
     };
 }
 
@@ -341,8 +343,8 @@ describe('SnapshotBuilder', function(){
 
             assert.ok(db.beginReadSnapshot.calledOnce, 'beginReadSnapshot called once');
             assert.ok(db.beginReadSnapshot.calledBefore(db.getLastBlock), 'snapshot opens before anchor read');
-            assert.ok(db.commitTransaction.calledOnce, 'commit releases the read view');
-            assert.ok(db.rollbackTransaction.notCalled, 'no rollback on success');
+            assert.ok(db.commitReadSnapshot.calledOnce, 'commit releases the read view');
+            assert.ok(db.rollbackReadSnapshot.notCalled, 'no rollback on success');
         });
 
         it('full: commits (releases) the snapshot even on the 404 empty-db path', async function(){
@@ -351,7 +353,7 @@ describe('SnapshotBuilder', function(){
             let res = createMockRes();
             await builder.streamFullSnapshot(db, res);
             assert.ok(db.beginReadSnapshot.calledOnce);
-            assert.ok(db.commitTransaction.calledOnce, 'snapshot released on 404 so the connection is not leaked');
+            assert.ok(db.commitReadSnapshot.calledOnce, 'snapshot released on 404 so the connection is not leaked');
         });
 
         it('full: rolls back the snapshot if a read throws before streaming', async function(){
@@ -360,8 +362,8 @@ describe('SnapshotBuilder', function(){
             db.getBlockHashRow.rejects(new Error('boom'));
             let res = createMockRes();
             await assert.rejects(builder.streamFullSnapshot(db, res), /boom/);
-            assert.ok(db.rollbackTransaction.calledOnce, 'snapshot rolled back on error');
-            assert.ok(db.commitTransaction.notCalled, 'no commit on error');
+            assert.ok(db.rollbackReadSnapshot.calledOnce, 'snapshot rolled back on error');
+            assert.ok(db.commitReadSnapshot.notCalled, 'no commit on error');
         });
 
         it('incremental: opens read snapshot before reading the block anchor', async function(){
@@ -383,8 +385,8 @@ describe('SnapshotBuilder', function(){
 
             assert.ok(db.beginReadSnapshot.calledOnce);
             assert.ok(db.beginReadSnapshot.calledBefore(db.getLastBlock));
-            assert.ok(db.commitTransaction.calledOnce);
-            assert.ok(db.rollbackTransaction.notCalled);
+            assert.ok(db.commitReadSnapshot.calledOnce);
+            assert.ok(db.rollbackReadSnapshot.notCalled);
         });
 
         it('incremental: commits (releases) the snapshot on the 404 path', async function(){
@@ -393,7 +395,7 @@ describe('SnapshotBuilder', function(){
             let res = createMockRes();
             await builder.streamIncrementalSnapshot(db, 100, res);
             assert.ok(db.beginReadSnapshot.calledOnce);
-            assert.ok(db.commitTransaction.calledOnce, 'snapshot released on 404');
+            assert.ok(db.commitReadSnapshot.calledOnce, 'snapshot released on 404');
         });
     });
 
@@ -421,14 +423,16 @@ describe('SnapshotBuilder', function(){
             it('drops operator-local tables and tolerates the uppercase TABLE_NAME variant', async function(){
                 let db = createMockDb();
                 db.doQuery.resolves([
-                    { TABLE_NAME: 'icons' },          // operator-local → dropped
-                    { table_name: 'price_snapshots' },// operator-local → dropped
-                    { TABLE_NAME: 'middle_upper' },   // uppercase fallback, middle
-                    { table_name: 'blocks' }          // priority
+                    { TABLE_NAME: 'icons' },             // operator-local → dropped
+                    { table_name: 'price_snapshots' },   // operator-local → dropped
+                    { table_name: 'pending_hub_pushes' },// operator-local → dropped
+                    { TABLE_NAME: 'middle_upper' },      // uppercase fallback, middle
+                    { table_name: 'blocks' }             // priority
                 ]);
                 let ordered = await builder._getOrderedTables(db);
                 assert.ok(!ordered.includes('icons'));
                 assert.ok(!ordered.includes('price_snapshots'));
+                assert.ok(!ordered.includes('pending_hub_pushes'));
                 assert.ok(ordered.includes('middle_upper'));
                 assert.strictEqual(ordered[0], 'blocks');
             });
@@ -448,7 +452,7 @@ describe('SnapshotBuilder', function(){
                 assert.strictEqual(res._headers['X-Ledger-Hash'], '');
                 assert.strictEqual(res._headers['X-Actions-Hash'], '');
                 assert.strictEqual(res._headers['X-Contract-Hash'], '');
-                assert.ok(db.commitTransaction.calledOnce);
+                assert.ok(db.commitReadSnapshot.calledOnce);
                 let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
                 assert.deepStrictEqual(Object.keys(out.tables), ['blocks', 'actions']);
                 assert.strictEqual(out.tables.blocks[0].id, '1'); // BigInt → string
@@ -464,7 +468,7 @@ describe('SnapshotBuilder', function(){
                 let res = streamRes();
                 await run(() => builder.streamFullSnapshot(db, res), res);
                 assert.ok(console.error.getCalls().some(c => /Error reading table actions/.test(c.args[0])));
-                assert.ok(db.commitTransaction.calledOnce);
+                assert.ok(db.commitReadSnapshot.calledOnce);
             });
 
             it('rolls back and rethrows when the snapshot read throws', async function(){
@@ -472,7 +476,7 @@ describe('SnapshotBuilder', function(){
                 db.getLastBlock.rejects(new Error('read fail'));
                 let res = createMockRes();
                 await assert.rejects(() => builder.streamFullSnapshot(db, res), { message: 'read fail' });
-                assert.ok(db.rollbackTransaction.calledOnce);
+                assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
         });
 
@@ -565,7 +569,7 @@ describe('SnapshotBuilder', function(){
                 let res = streamRes();
                 await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
                 assert.ok(console.error.getCalls().some(c => /Error reading table blocks for incremental/.test(c.args[0])));
-                assert.ok(db.commitTransaction.calledOnce);
+                assert.ok(db.commitReadSnapshot.calledOnce);
             });
 
             it('rolls back and rethrows when the incremental read throws before streaming', async function(){
@@ -573,7 +577,7 @@ describe('SnapshotBuilder', function(){
                 db.getLastBlock.rejects(new Error('inc read fail'));
                 let res = createMockRes();
                 await assert.rejects(() => builder.streamIncrementalSnapshot(db, 3, res), { message: 'inc read fail' });
-                assert.ok(db.rollbackTransaction.calledOnce);
+                assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
         });
     });
