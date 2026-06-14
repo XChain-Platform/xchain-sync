@@ -143,7 +143,14 @@ const TOPOLOGY = {
             // which stake signing keys are still valid signers.
             'stake_key_revocations',
             'sweeps', 'tokens', 'unstakes',
-            'withdrawals'
+            'withdrawals',
+            // Programmable-policy controller bind/unbind event logs. One row per
+            // action_index (rollback-able, never mutated in-place), so they ride the
+            // per-block action_index join. Streaming them per block keeps a follower's
+            // access-policy state (which action-classes are guard-gated) correct
+            // between full snapshots, and pairs with ClientRollback dropping their
+            // orphaned-range rows on reorg.
+            'token_controllers', 'address_controllers'
         ],
 
         // Index tables that may have new entries per block

@@ -123,7 +123,16 @@ class ClientRollback {
             'withdrawals',
             'anchor_actions',
             'attests',
-            'prices'
+            'prices',
+            // Programmable-policy controller bind/unbind event logs. Append-only,
+            // keyed by action_index, never mutated in-place (cooldown expiry is
+            // computed at read time), so the generic action_index delete reverts
+            // orphaned binds/unbinds exactly. The source rolls these back, and they
+            // are snapshot-replicated to followers, so a reorg here must drop the
+            // orphaned-range rows or the replica keeps serving stale access policy
+            // (which action-classes are guard-gated) that the source never finalized.
+            'token_controllers',
+            'address_controllers'
         ];
 
         // ── Decoder-DB rollback (used by _rollbackDecoder) ──
