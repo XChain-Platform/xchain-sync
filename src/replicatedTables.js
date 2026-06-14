@@ -150,7 +150,7 @@ const TOPOLOGY = {
             // access-policy state (which action-classes are guard-gated) correct
             // between full snapshots, and pairs with ClientRollback dropping their
             // orphaned-range rows on reorg.
-            'token_controllers', 'address_controllers'
+            'token_controllers', 'address_controllers', 'contract_permissions'
         ],
 
         // Index tables that may have new entries per block

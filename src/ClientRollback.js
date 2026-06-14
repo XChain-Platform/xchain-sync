@@ -132,7 +132,12 @@ class ClientRollback {
             // orphaned-range rows or the replica keeps serving stale access policy
             // (which action-classes are guard-gated) that the source never finalized.
             'token_controllers',
-            'address_controllers'
+            'address_controllers',
+            // contract_permissions: the DEPLOY permissions manifest (which action-classes
+            // are guard-gated for a contract), keyed by the DEPLOY action_index and rolled
+            // back as a dataTable by the source — mirror it so a reorg drops orphaned
+            // manifests too, else the replica keeps enforcing policy the source never finalized.
+            'contract_permissions'
         ];
 
         // ── Decoder-DB rollback (used by _rollbackDecoder) ──
