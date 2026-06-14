@@ -57,6 +57,56 @@ describe('TransparencyLog', function(){
         });
     });
 
+    describe('getHighWaterMark', function(){
+        it('returns MAX(block_index) from sync_meta', async function(){
+            db.doQuery.withArgs(sinon.match(/MAX\(block_index\) AS tip FROM sync_meta/)).resolves([{ tip: 4242 }]);
+            let hwm = await log.getHighWaterMark();
+            assert.strictEqual(hwm, 4242);
+        });
+
+        it('returns null when sync_meta is empty', async function(){
+            db.doQuery.withArgs(sinon.match(/MAX\(block_index\) AS tip FROM sync_meta/)).resolves([{ tip: null }]);
+            let hwm = await log.getHighWaterMark();
+            assert.strictEqual(hwm, null);
+        });
+    });
+
+    describe('findGaps', function(){
+        it('returns ascending interior block indices missing from sync_meta', async function(){
+            db.doQuery.withArgs(sinon.match(/MIN\(block_index\) AS lo/)).resolves([{ lo: 1, hi: 300 }]);
+            db.doQuery.withArgs(sinon.match(/LEFT JOIN sync_meta/)).resolves([
+                { block_index: 150 }, { block_index: 151 }, { block_index: 201 }
+            ]);
+            let gaps = await log.findGaps();
+            assert.deepStrictEqual(gaps, [150, 151, 201]);
+        });
+
+        it('returns empty when sync_meta is empty', async function(){
+            db.doQuery.withArgs(sinon.match(/MIN\(block_index\) AS lo/)).resolves([{ lo: null, hi: null }]);
+            let gaps = await log.findGaps();
+            assert.deepStrictEqual(gaps, []);
+            // The anti-join must not run when there is no recorded range.
+            assert.ok(!db.doQuery.getCalls().some(c => /LEFT JOIN sync_meta/.test(c.args[0])));
+        });
+
+        it('returns empty when the recorded range is too small to hold an interior hole', async function(){
+            db.doQuery.withArgs(sinon.match(/MIN\(block_index\) AS lo/)).resolves([{ lo: 100, hi: 101 }]);
+            let gaps = await log.findGaps();
+            assert.deepStrictEqual(gaps, []);
+        });
+    });
+
+    describe('recommitEpoch', function(){
+        it('deletes the existing epoch row then re-commits it', async function(){
+            let commit = sinon.stub(log, 'commitEpoch').resolves();
+            await log.recommitEpoch(3);
+            let del = db.doQuery.getCalls().find(c => /DELETE FROM merkle_epochs WHERE epoch = \?/.test(c.args[0]));
+            assert.ok(del, 'existing epoch row is deleted');
+            assert.deepStrictEqual(del.args[1], [3]);
+            assert.strictEqual(commit.calledOnceWith(3), true);
+        });
+    });
+
     describe('commitEpoch early returns', function(){
         it('returns early when the epoch is already committed', async function(){
             db.doQuery.withArgs(sinon.match(/SELECT id FROM merkle_epochs/)).resolves([{ id: 7 }]);

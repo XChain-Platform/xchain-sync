@@ -37,8 +37,12 @@ function createMockBroadcaster(){
 
 function createMockLog(){
     return {
-        recordBlock: sinon.stub().resolves(),
-        pruneFrom:   sinon.stub().resolves()
+        epochSize:        100,
+        recordBlock:      sinon.stub().resolves(),
+        pruneFrom:        sinon.stub().resolves(),
+        getHighWaterMark: sinon.stub().resolves(null),
+        findGaps:         sinon.stub().resolves([]),
+        recommitEpoch:    sinon.stub().resolves()
     };
 }
 
@@ -202,6 +206,102 @@ describe('ServerPoller', function(){
 
             assert.strictEqual(broadcaster.broadcast.callCount, 3); // blocks 98, 99, 100
             assert.strictEqual(poller.lastPolledBlock, 100);
+        });
+    });
+
+    describe('_resumeCursor (restart resume) @regression', function(){
+        it('indexer resumes from the transparency-log high-water mark, not the source tip', async function(){
+            // sync_meta recorded up to 100; source DB has since advanced to 250 (e.g.
+            // the indexer ran on while the sync server was down).
+            log.getHighWaterMark.resolves(100);
+            db.getLastBlock.resolves(250);
+
+            let cursor = await poller._resumeCursor();
+
+            assert.strictEqual(cursor, 100, 'must resume from sync_meta high-water mark');
+            assert.strictEqual(db.getLastBlock.called, false, 'must not seed from the source tip');
+        });
+
+        it('indexer resume is null on a fresh node (empty sync_meta)', async function(){
+            log.getHighWaterMark.resolves(null);
+            let cursor = await poller._resumeCursor();
+            assert.strictEqual(cursor, null, 'null lets _poll initialise from the current tip');
+        });
+
+        it('decoder resumes from the source tip (no transparency log)', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getLastBlock.resolves(777);
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+
+            let cursor = await decoderPoller._resumeCursor();
+            assert.strictEqual(cursor, 777);
+        });
+
+        it('does not skip blocks advanced during downtime when polling resumes', async function(){
+            // Restart-mid-advance: recorded through block 100, source now at 105.
+            // After seeding the cursor from the high-water mark, _poll must record
+            // every block in [101, 105] — none may be skipped.
+            log.getHighWaterMark.resolves(100);
+            db.getLastBlock.resolves(105);
+            db.getBlockHashRow.callsFake(async (idx) => ({
+                block_index: idx, block_time: idx * 10,
+                ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
+            }));
+
+            poller.lastPolledBlock = await poller._resumeCursor();
+            await poller._poll();
+
+            let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
+            assert.deepStrictEqual(recorded, [101, 102, 103, 104, 105],
+                'every downtime block must be recorded in the transparency log');
+            assert.strictEqual(poller.lastPolledBlock, 105);
+        });
+    });
+
+    describe('backfillGaps @regression', function(){
+        it('is a no-op for the decoder (no transparency log)', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+            let n = await decoderPoller.backfillGaps();
+            assert.strictEqual(n, 0);
+        });
+
+        it('is a no-op when the transparency log reports no gaps', async function(){
+            log.findGaps.resolves([]);
+            let n = await poller.backfillGaps();
+            assert.strictEqual(n, 0);
+            assert.strictEqual(log.recordBlock.called, false);
+            assert.strictEqual(log.recommitEpoch.called, false);
+        });
+
+        it('replays recordBlock for each missing block and recomputes affected epochs', async function(){
+            // Interior holes at 150 and 201 (epochs 2 and 3 with epochSize 100).
+            log.findGaps.resolves([150, 201]);
+            db.getBlockHashRow.callsFake(async (idx) => ({
+                block_index: idx, block_time: idx * 10,
+                ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
+            }));
+
+            let n = await poller.backfillGaps();
+
+            assert.strictEqual(n, 2);
+            let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
+            assert.deepStrictEqual(recorded, [150, 201]);
+            let recomputed = log.recommitEpoch.getCalls().map(c => c.args[0]).sort();
+            assert.deepStrictEqual(recomputed, [2, 3], 'epochs spanning the holes are rebuilt');
+        });
+
+        it('skips a gap whose source block has vanished (reorg) without recording it', async function(){
+            log.findGaps.resolves([150]);
+            db.getBlockHashRow.resolves(null);  // block no longer in source
+
+            let n = await poller.backfillGaps();
+
+            assert.strictEqual(n, 1);  // counted as detected
+            assert.strictEqual(log.recordBlock.called, false);
+            assert.strictEqual(log.recommitEpoch.called, false);
         });
     });
 

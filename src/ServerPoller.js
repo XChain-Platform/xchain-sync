@@ -72,9 +72,19 @@ class ServerPoller {
 
     // Start the polling loop
     async start(){
-        this.lastPolledBlock = await this.db.getLastBlock();
+        this.lastPolledBlock = await this._resumeCursor();
         this.running = true;
         console.log('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
+
+        // Repair any interior transparency-log holes left by a pre-fix restart that
+        // resumed from the source tip. No-op on a healthy log (and on the decoder,
+        // which has no transparency log). Failure here must not stop live polling —
+        // the backfill is idempotent and retries on the next restart.
+        try {
+            await this.backfillGaps();
+        } catch(e){
+            console.error('Transparency backfill failed for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (continuing with live polling):', e);
+        }
 
         // Update initial status
         await this._updateStatus();
@@ -90,6 +100,66 @@ class ServerPoller {
             if(blocksProcessed < 100)
                 await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
         }
+    }
+
+    // Seed the broadcast cursor for a (re)start. For the indexer, resume from the
+    // transparency log's own high-water mark — the durable record of how far this
+    // poller actually recorded and broadcast (MAX(block_index) in sync_meta). The
+    // source DB tip (db.getLastBlock) is NOT a record of broadcast progress: if the
+    // sync server was down while the co-located indexer advanced, seeding from the
+    // tip would jump the cursor past every missed block, so _poll's while-loop never
+    // runs for them, recordBlock is never called, and any epoch boundary in the gap
+    // is never committed — a permanent hole in sync_meta and missing Merkle proofs,
+    // while the poller falsely reports caught-up. A null high-water mark (empty
+    // sync_meta — fresh node) leaves the cursor null so _poll initialises from the
+    // current tip on its first pass, as before. The decoder has no transparency log,
+    // so it resumes from the source tip (decoder content is deterministic from the
+    // coin node and carries no synthetic hash chain to keep gap-free).
+    async _resumeCursor(){
+        if(this.transparencyLog)
+            return await this.transparencyLog.getHighWaterMark();
+        return await this.db.getLastBlock();
+    }
+
+    // Repair interior holes in the transparency log left by the pre-fix restart
+    // behaviour (resuming from the source tip skipped every block the indexer
+    // advanced during downtime). Replays recordBlock for each missing block and
+    // recomputes any Merkle epoch whose range spanned a hole. Indexer-only and
+    // idempotent: a healthy log reports no gaps, so this is a no-op. Runs once at
+    // startup, before the poll loop.
+    async backfillGaps(){
+        if(!this.transparencyLog) return 0;
+
+        let gaps = await this.transparencyLog.findGaps();
+        if(gaps.length === 0) return 0;
+
+        console.log('Transparency backfill: ' + gaps.length + ' missing block(s) detected for ' +
+            this.chain + '/' + this.network + '/' + this.dbType + ' — repairing');
+
+        let epochSize = this.transparencyLog.epochSize;
+        let epochs = new Set();
+        for(let block_index of gaps){
+            let hashRow = await this.db.getBlockHashRow(block_index);
+            if(!hashRow) continue;  // block no longer in source (reorg since scan) — skip
+            await this.transparencyLog.recordBlock(
+                Number(hashRow.block_index), Number(hashRow.block_time),
+                hashRow.ledger_hash, hashRow.actions_hash, hashRow.contract_hash
+            );
+            // Block N belongs to epoch ceil(N / epochSize) — matches getProof's mapping.
+            epochs.add(Math.ceil(block_index / epochSize));
+        }
+
+        // Recompute every epoch a hole touched. recordBlock auto-commits an epoch only
+        // when the boundary block itself was the gap; an epoch whose boundary block was
+        // already present would have been committed earlier with a partial tree (the
+        // hole's blocks missing), so its root must be rebuilt explicitly now that the
+        // range is complete.
+        for(let epoch of epochs)
+            await this.transparencyLog.recommitEpoch(epoch);
+
+        console.log('Transparency backfill complete for ' + this.chain + '/' + this.network + '/' + this.dbType +
+            ': ' + gaps.length + ' block(s) recorded, ' + epochs.size + ' epoch(s) recomputed');
+        return gaps.length;
     }
 
     // Stop the polling loop

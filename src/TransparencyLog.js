@@ -204,6 +204,58 @@ class TransparencyLog {
         };
     }
 
+    // Highest block recorded in the transparency log — the durable high-water mark
+    // for how far this node has actually recorded and broadcast, used to resume the
+    // poll cursor across restarts. Distinct from the source DB tip (db.getLastBlock):
+    // resuming from the source tip instead would skip every block the co-located
+    // indexer advanced while the sync server was down, leaving a permanent hole in
+    // sync_meta. Returns null when sync_meta is empty (fresh node, nothing recorded).
+    async getHighWaterMark() {
+        let rows = await this.db.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
+        if (rows.length > 0 && rows[0].tip !== null)
+            return Number(rows[0].tip);
+        return null;
+    }
+
+    // Find interior gaps in the transparency log: source blocks that fall strictly
+    // between the log's own lowest and highest recorded block but were never
+    // recorded. These are the permanent holes left by the pre-fix restart behaviour
+    // (resuming the poll cursor from the live source tip skipped every block
+    // advanced during downtime). Pre-history below the first recorded block is
+    // deliberately excluded — the transparency log only ever covers blocks witnessed
+    // since the sync server first ran, so those are not gaps. Returns an ascending
+    // block_index list; empty on a healthy log (the common case, so the bounded
+    // anti-join is cheap on the indexed block_index column).
+    async findGaps() {
+        let bounds = await this.db.doQuery(
+            "SELECT MIN(block_index) AS lo, MAX(block_index) AS hi FROM sync_meta"
+        );
+        if (bounds.length === 0 || bounds[0].lo === null) return [];
+        let lo = Number(bounds[0].lo);
+        let hi = Number(bounds[0].hi);
+        if (hi - lo < 2) return [];  // no room for an interior hole
+
+        let rows = await this.db.doQuery(
+            `SELECT b.block_index AS block_index
+             FROM blocks b
+             LEFT JOIN sync_meta s ON s.block_index = b.block_index
+             WHERE b.block_index > ? AND b.block_index < ? AND s.block_index IS NULL
+             ORDER BY b.block_index ASC`,
+            [lo, hi]
+        );
+        return rows.map(r => Number(r.block_index));
+    }
+
+    // Re-commit an epoch from scratch: drop any existing committed root and rebuild
+    // it from the (now gap-filled) sync_meta rows. Used by transparency backfill to
+    // repair an epoch that was committed with a partial Merkle tree while a downtime
+    // hole was open in its range. commitEpoch returns early when the epoch range has
+    // no rows, so this is safe to call for any epoch.
+    async recommitEpoch(epoch) {
+        await this.db.doQuery("DELETE FROM merkle_epochs WHERE epoch = ?", [epoch]);
+        await this.commitEpoch(epoch);
+    }
+
     // Get the latest committed Merkle root
     async getLatestRoot() {
         let rows = await this.db.doQuery(
