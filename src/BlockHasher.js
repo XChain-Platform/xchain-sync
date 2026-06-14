@@ -37,6 +37,13 @@
  *
  ********************************************************************/
 
+// Consensus block-hash scheme version. MUST stay identical to
+// xchain-indexer/src/db.js BLOCK_HASH_VERSION — see the conformance-pair banner above.
+//   v1 — hashed raw AUTO_INCREMENT lookup ids (diverged across nodes after a reorg).
+//   v2 — hashes the resolved canonical strings (address/tick/action/status); id-independent.
+// Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
+const BLOCK_HASH_VERSION = 2;
+
 class BlockHasher {
 
     // db:   a DB handle exposing async doQuery(sql, params) against the REPLICA
@@ -61,59 +68,68 @@ class BlockHasher {
         };
         let info    = [];
         let hashes  = [];
-        // credits
+        // credits (hash RESOLVED address/tick strings, never the local AUTO_INCREMENT ids —
+        // see BLOCK_HASH_VERSION; LEFT JOIN preserves NULL-id native-coin rows; ORDER BY pins a
+        // BINARY collation so the tie-break order is id- and collation-independent across nodes)
         query = `SELECT
                     c.action_index,
-                    c.address_id,
-                    c.tick_id,
+                    a1.address AS address,
+                    t1.tick    AS tick,
                     c.amount
                 FROM
                     credits c
-                    INNER JOIN actions      a ON (a.action_index=c.action_index)
-                    INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                    INNER JOIN actions        a  ON (a.action_index=c.action_index)
+                    INNER JOIN transactions   t  ON (t.tx_index=a.tx_index)
+                    LEFT  JOIN index_addresses a1 ON (a1.id=c.address_id)
+                    LEFT  JOIN index_tickers   t1 ON (t1.id=c.tick_id)
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    c.action_index ASC, c.address_id ASC, c.tick_id ASC, c.amount ASC`;
+                    c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
         ledger.credits = await this.db.doQuery(query, [block_index]);
         // debits
         query = `SELECT
                     d.action_index,
-                    d.address_id,
-                    d.tick_id,
+                    a1.address AS address,
+                    t1.tick    AS tick,
                     d.amount
                 FROM
                     debits d
-                    INNER JOIN actions      a ON (a.action_index=d.action_index)
-                    INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                    INNER JOIN actions        a  ON (a.action_index=d.action_index)
+                    INNER JOIN transactions   t  ON (t.tx_index=a.tx_index)
+                    LEFT  JOIN index_addresses a1 ON (a1.id=d.address_id)
+                    LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    d.action_index ASC, d.address_id ASC, d.tick_id ASC, d.amount ASC`;
+                    d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
         ledger.debits = await this.db.doQuery(query, [block_index]);
         // escrows
         query = `SELECT
                     e.action_index,
-                    e.address_id,
-                    e.tick_id,
+                    a1.address AS address,
+                    t1.tick    AS tick,
                     e.amount
                 FROM
                     escrows e
-                    INNER JOIN actions      a ON (a.action_index=e.action_index)
-                    INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                    INNER JOIN actions        a  ON (a.action_index=e.action_index)
+                    INNER JOIN transactions   t  ON (t.tx_index=a.tx_index)
+                    LEFT  JOIN index_addresses a1 ON (a1.id=e.address_id)
+                    LEFT  JOIN index_tickers   t1 ON (t1.id=e.tick_id)
                 WHERE
                     t.block_index=?
                 ORDER BY
-                    e.action_index ASC, e.address_id ASC, e.tick_id ASC, e.amount ASC`;
+                    e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
         ledger.escrows = await this.db.doQuery(query, [block_index]);
-        // actions
+        // actions (hash the resolved action-type string, never the index_actions id)
         query = `SELECT
                     a.action_index,
                     a.tx_index,
-                    a.action_id
+                    ia.action AS action
                 FROM
                     actions a
-                    INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                    INNER JOIN transactions  t  ON (t.tx_index=a.tx_index)
+                    LEFT  JOIN index_actions ia ON (ia.id=a.action_id)
                 WHERE
                     t.block_index=?
                 ORDER BY
@@ -128,11 +144,13 @@ class BlockHasher {
             deposits:    [],
             withdrawals: []
         };
-        // new deployments
-        query = `SELECT c.action_index, c.source_id, c.code_hash, c.status_id
+        // new deployments (resolve source_id -> address, status_id -> status string)
+        query = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
                  FROM contracts c
                  INNER JOIN actions a ON (a.action_index=c.action_index)
                  INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                 LEFT  JOIN index_addresses a1 ON (a1.id=c.source_id)
+                 LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
                  WHERE t.block_index=?
                  ORDER BY c.action_index ASC`;
         contracts_data.contracts = await this.db.doQuery(query, [block_index]);
@@ -147,11 +165,13 @@ class BlockHasher {
                  ) latest ON cs.id = latest.max_id
                  ORDER BY cs.contract_index ASC, cs.state_key ASC`;
         contracts_data.state = await this.db.doQuery(query, [block_index]);
-        // executions
-        query = `SELECT ce.action_index, ce.contract_index, ce.caller_id, ce.gas_used, ce.status_id, ce.emitted_count
+        // executions (resolve caller_id -> address, status_id -> status string)
+        query = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
                  FROM contract_executions ce
                  INNER JOIN actions a ON (a.action_index=ce.action_index)
                  INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                 LEFT  JOIN index_addresses a1 ON (a1.id=ce.caller_id)
+                 LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
                  WHERE t.block_index=?
                  ORDER BY ce.action_index ASC`;
         contracts_data.executions = await this.db.doQuery(query, [block_index]);
@@ -164,21 +184,28 @@ class BlockHasher {
                  WHERE t.block_index=?
                  ORDER BY em.execution_index ASC, em.position ASC`;
         contracts_data.emissions = await this.db.doQuery(query, [block_index]);
-        // deposits
-        query = `SELECT d.action_index, d.contract_index, d.source_id, d.tick_id, d.amount, d.status_id
+        // deposits (resolve source_id -> address, tick_id -> tick, status_id -> status; the
+        // resolved secondary sort keys use a pinned BINARY collation, mirroring the indexer)
+        query = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
                  FROM deposits d
                  INNER JOIN actions a ON (a.action_index=d.action_index)
                  INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                 LEFT  JOIN index_addresses a1 ON (a1.id=d.source_id)
+                 LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
+                 LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
                  WHERE t.block_index=?
-                 ORDER BY d.action_index ASC`;
+                 ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
         contracts_data.deposits = await this.db.doQuery(query, [block_index]);
-        // withdrawals
-        query = `SELECT w.action_index, w.contract_index, w.source_id, w.tick_id, w.amount, w.status_id
+        // withdrawals (same resolution + tie-order treatment as deposits)
+        query = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
                  FROM withdrawals w
                  INNER JOIN actions a ON (a.action_index=w.action_index)
                  INNER JOIN transactions t ON (t.tx_index=a.tx_index)
+                 LEFT  JOIN index_addresses a1 ON (a1.id=w.source_id)
+                 LEFT  JOIN index_tickers   t1 ON (t1.id=w.tick_id)
+                 LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
                  WHERE t.block_index=?
-                 ORDER BY w.action_index ASC`;
+                 ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
         contracts_data.withdrawals = await this.db.doQuery(query, [block_index]);
         // previous block's committed hashes (for the chain)
         let prev_block_index = block_index - 1;
@@ -208,6 +235,8 @@ class BlockHasher {
             if(table=='contracts') data = contracts_data;
             data['block_index']   = block_index;
             data['previous_hash'] = hashes[table];
+            // Fold the consensus hash-scheme version into the preimage (mirrors the indexer).
+            data['hash_version']  = BLOCK_HASH_VERSION;
             info[table] = [];
             info[table]['hash'] = this.util.getDataHash(data);
         });

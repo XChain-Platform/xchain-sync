@@ -4,22 +4,22 @@
     [
       {
         "action_index": 1,
-        "address_id": 10,
-        "tick_id": 2,
+        "address": "1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev",
+        "tick": "JDOG",
         "amount": "1000"
       },
       {
         "action_index": 3,
-        "address_id": 11,
-        "tick_id": 2,
+        "address": "1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde",
+        "tick": "JDOG",
         "amount": "500"
       }
     ],
     [
       {
         "action_index": 1,
-        "address_id": 9,
-        "tick_id": 2,
+        "address": "1AdminZS6tQcSxwfxhv6XKKjcyicYA4Fee",
+        "tick": "JDOG",
         "amount": "1500"
       }
     ],
@@ -28,25 +28,25 @@
       {
         "action_index": 1,
         "tx_index": 1,
-        "action_id": 5
+        "action": "SEND"
       },
       {
         "action_index": 2,
         "tx_index": 1,
-        "action_id": 7
+        "action": "DEPLOY"
       },
       {
         "action_index": 3,
         "tx_index": 2,
-        "action_id": 5
+        "action": "SEND"
       }
     ],
     [
       {
         "action_index": 2,
-        "source_id": 9,
+        "source_address": "1AdminZS6tQcSxwfxhv6XKKjcyicYA4Fee",
         "code_hash": "deadbeefcafe",
-        "status_id": 1
+        "status": "deployed"
       }
     ],
     [
@@ -65,16 +65,16 @@
       {
         "action_index": 3,
         "contract_index": 2,
-        "caller_id": 11,
+        "caller_address": "1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde",
         "gas_used": "12345",
-        "status_id": 1,
+        "status": "success",
         "emitted_count": 1
       }
     ],
     [
       {
         "execution_index": 3,
-        "emitted_action": 99,
+        "emitted_action": "EXECUTE",
         "action_index": 3,
         "position": 0
       }
@@ -83,10 +83,10 @@
       {
         "action_index": 1,
         "contract_index": 2,
-        "source_id": 10,
-        "tick_id": 2,
+        "source_address": "1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev",
+        "tick": "JDOG",
         "amount": "1000",
-        "status_id": 1
+        "status": "success"
       }
     ],
     [],
@@ -99,8 +99,8 @@
     ]
   ],
   "expected": {
-    "ledger_hash": "b5e3dbcc878fa979f9a507872d1c2c9a20bdee89f372f8000e88360caee4142d",
-    "actions_hash": "e5a8d007919e7ef4281c8692d6de6e3ffed6c478007ea032fa5ec5fa50d3bde9",
-    "contract_hash": "fe7fd20e974edda29020b5bdcd50e581117e1d16c7b6d53f50d0a9db95d73865"
+    "ledger_hash": "a8aab92fc2cf1e0f81871704c91bba5e6851032ad342ffc5c1ad4cac973eef07",
+    "actions_hash": "d96a1a272cd593fde77f348b310ec673c3595923687439e37a0d2617c1dd2c3f",
+    "contract_hash": "891d638a2e48d3a7dd08db9043bf6542a7ad8aa12c1dc645259ebcf59b88816d"
   }
 }

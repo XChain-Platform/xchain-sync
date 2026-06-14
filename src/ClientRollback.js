@@ -140,6 +140,14 @@ class ClientRollback {
         // are deleted before the block-scoped transactions row that gave them their
         // tx_index scope. index_*/pubkeys/events are append-only and left untouched
         // (the sync stream re-introduces them with INSERT IGNORE).
+        //
+        // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
+        // purely local artifacts that no longer feed any consensus value: as of
+        // BLOCK_HASH_VERSION 2 the block hashes are computed from the RESOLVED strings
+        // (address/tick/action/status), not from address_id/tick_id/etc. (see
+        // xchain-indexer/src/db.js getBlockHashes + xchain-sync/src/BlockHasher.js). If a
+        // lookup id is ever reintroduced into a consensus-visible projection, these orphan
+        // rows would silently fork hashes after a reorg and this skip would become a bug.
 
         // Block-scoped tables, deleted by block_index. Order matters: transactions
         // is listed before blocks (tx rows scope the tx-scoped tables above them).
@@ -321,6 +329,10 @@ class ClientRollback {
             // index_addresses, index_transactions, pubkeys: append-only;
             // orphan rows are harmless (the sync stream uses INSERT IGNORE to
             // re-introduce them when new blocks arrive). Skip.
+            //
+            // "Harmless" holds because these surrogate ids are local-only and feed no
+            // consensus value — block hashes are computed from resolved strings, not lookup
+            // ids (BLOCK_HASH_VERSION 2). Never let a lookup id back into a hashed projection.
 
             await this.db.commitTransaction();
             console.log('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');

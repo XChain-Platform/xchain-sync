@@ -36,30 +36,33 @@ const IndexerUtil  = require('../../../xchain-indexer/src/utility.js');
 // Canned rows the 11 BlockHasher queries return, IN CALL ORDER:
 // credits, debits, escrows, actions, contracts, state, executions,
 // emissions, deposits, withdrawals, previous-block-hash-row.
+// As of BLOCK_HASH_VERSION 2 the consensus projections carry the RESOLVED canonical
+// strings (address/tick/action/status) the JOINs produce, never the raw lookup ids — so
+// these canned rows model the resolved column set exactly as the live queries return it.
 const BLOCK_INDEX = 1000;
 const results = [
     // credits
-    [ { action_index: 1, address_id: 10, tick_id: 2, amount: '1000' },
-      { action_index: 3, address_id: 11, tick_id: 2, amount: '500'  } ],
+    [ { action_index: 1, address: '1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev', tick: 'JDOG', amount: '1000' },
+      { action_index: 3, address: '1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde', tick: 'JDOG', amount: '500'  } ],
     // debits
-    [ { action_index: 1, address_id: 9, tick_id: 2, amount: '1500' } ],
+    [ { action_index: 1, address: '1AdminZS6tQcSxwfxhv6XKKjcyicYA4Fee', tick: 'JDOG', amount: '1500' } ],
     // escrows
     [],
     // actions  (note: assembled as an array WITH block_index/previous_hash props)
-    [ { action_index: 1, tx_index: 1, action_id: 5 },
-      { action_index: 2, tx_index: 1, action_id: 7 },
-      { action_index: 3, tx_index: 2, action_id: 5 } ],
+    [ { action_index: 1, tx_index: 1, action: 'SEND' },
+      { action_index: 2, tx_index: 1, action: 'DEPLOY' },
+      { action_index: 3, tx_index: 2, action: 'SEND' } ],
     // contracts
-    [ { action_index: 2, source_id: 9, code_hash: 'deadbeefcafe', status_id: 1 } ],
+    [ { action_index: 2, source_address: '1AdminZS6tQcSxwfxhv6XKKjcyicYA4Fee', code_hash: 'deadbeefcafe', status: 'deployed' } ],
     // contract state
     [ { contract_index: 2, state_key: 'counter', state_value: '42' },
       { contract_index: 2, state_key: 'owner',   state_value: 'abc' } ],
     // executions
-    [ { action_index: 3, contract_index: 2, caller_id: 11, gas_used: '12345', status_id: 1, emitted_count: 1 } ],
+    [ { action_index: 3, contract_index: 2, caller_address: '1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde', gas_used: '12345', status: 'success', emitted_count: 1 } ],
     // emissions
-    [ { execution_index: 3, emitted_action: 99, action_index: 3, position: 0 } ],
+    [ { execution_index: 3, emitted_action: 'EXECUTE', action_index: 3, position: 0 } ],
     // deposits
-    [ { action_index: 1, contract_index: 2, source_id: 10, tick_id: 2, amount: '1000', status_id: 1 } ],
+    [ { action_index: 1, contract_index: 2, source_address: '1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev', tick: 'JDOG', amount: '1000', status: 'success' } ],
     // withdrawals
     [],
     // previous-block hash row (chaining)
