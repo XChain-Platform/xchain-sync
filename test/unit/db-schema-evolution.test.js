@@ -105,3 +105,91 @@ describe('Database.addMissingColumns', function(){
         assert.strictEqual(added, 0);
     });
 });
+
+describe('Database.ensureReplicatedColumns — nullability relaxation', function(){
+
+    let db;
+
+    beforeEach(function(){
+        db = makeDb();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+
+    afterEach(async function(){
+        sinon.restore();
+        await db.close();
+    });
+
+    // The orders/swaps add-column drift loop queries information_schema.tables
+    // first; returning [] there makes those four entries no-ops so each test
+    // exercises only the contract_emissions.action_index relaxation.
+    it('relaxes contract_emissions.action_index NOT NULL -> NULL when the replica column is NOT NULL', async function(){
+        let alters = [];
+        sinon.stub(db, 'doQuery').callsFake(async (sql) => {
+            if(/information_schema\.tables/i.test(sql)) return [];          // orders/swaps absent
+            if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'NO' }];
+            if(/ALTER TABLE/i.test(sql)){ alters.push(sql); return []; }
+            return [];
+        });
+
+        await db.ensureReplicatedColumns();
+
+        assert.deepStrictEqual(alters, [
+            'ALTER TABLE `contract_emissions` MODIFY COLUMN `action_index` BIGINT UNSIGNED NULL'
+        ]);
+    });
+
+    it('is a no-op when contract_emissions.action_index is already nullable (idempotent)', async function(){
+        let altered = false;
+        sinon.stub(db, 'doQuery').callsFake(async (sql) => {
+            if(/information_schema\.tables/i.test(sql)) return [];
+            if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'YES' }];
+            if(/ALTER TABLE/i.test(sql))               altered = true;
+            return [];
+        });
+
+        await db.ensureReplicatedColumns();
+        assert.strictEqual(altered, false);
+    });
+
+    it('is a no-op when contract_emissions / the column is absent on the replica', async function(){
+        let altered = false;
+        sinon.stub(db, 'doQuery').callsFake(async (sql) => {
+            if(/information_schema\.tables/i.test(sql))  return [];
+            if(/information_schema\.columns/i.test(sql)) return [];   // column not found
+            if(/ALTER TABLE/i.test(sql))                 altered = true;
+            return [];
+        });
+
+        await db.ensureReplicatedColumns();
+        assert.strictEqual(altered, false);
+    });
+
+    it('never tightens — leaves a nullable column alone and issues no MODIFY', async function(){
+        // Defensive: even if upstream were NOT NULL, this method only relaxes;
+        // a replica reporting YES must never be MODIFYed back to NOT NULL.
+        let modifies = 0;
+        sinon.stub(db, 'doQuery').callsFake(async (sql) => {
+            if(/information_schema\.tables/i.test(sql)) return [];
+            if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'YES' }];
+            if(/MODIFY COLUMN/i.test(sql))             modifies++;
+            return [];
+        });
+
+        await db.ensureReplicatedColumns();
+        assert.strictEqual(modifies, 0);
+    });
+
+    it('does nothing on a decoder replica (early return, no queries)', async function(){
+        let decoderDb = new Database('localhost', 3306, 'replica_db', 'u', 'p', { isNull: (v) => v === null || v === undefined }, 'decoder');
+        let called = false;
+        sinon.stub(decoderDb, 'doQuery').callsFake(async () => { called = true; return []; });
+
+        await decoderDb.ensureReplicatedColumns();
+
+        assert.strictEqual(called, false);
+        await decoderDb.close();
+    });
+});

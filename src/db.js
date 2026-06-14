@@ -377,6 +377,23 @@ class Database {
     // existing rows safely. Scoped to indexer replicas — orders/swaps do not
     // exist in the decoder schema. Tables absent locally are skipped (fresh
     // replicas create them with the columns already present).
+    //
+    // Also relaxes NULLABILITY drift in the SAFE direction (NOT NULL -> NULL):
+    // contract_emissions.action_index was declared NOT NULL, but internal SLASH
+    // emissions carry action_index = NULL (they deduct stake / write a
+    // slash_events row but mint no on-wire action). The old stream scoped
+    // contract_emissions by action_index (an INNER JOIN that silently dropped
+    // those NULL rows); the emissions fix streams by execution_index and so
+    // delivers them — and a NOT NULL replica column rejects the INSERT with
+    // errno 1048 ("Column 'action_index' cannot be null"). That is NOT a
+    // schema-gap the apply-time self-heal catches (it only heals errno
+    // 1146 missing-table / 1054 missing-column), so the replica would HALT
+    // permanently. Relaxing here, at startup before any row data is accepted,
+    // heals replicas built before the column was relaxed. Relax-only and
+    // idempotent (no-op once nullable; fresh replicas bootstrap from the already
+    // -relaxed source DDL); never tightens (NULL -> NOT NULL could fail on
+    // existing NULLs and is never required for forward schema evolution). See
+    // xchain-indexer/migrations/20260531_contract_emissions_action_index_nullable.sql.
     async ensureReplicatedColumns(){
         if(this.dbType !== 'indexer') return;
         let drift = [
@@ -400,6 +417,25 @@ class Database {
 
             console.log('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding TINYINT(1) NOT NULL DEFAULT 0.');
             await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` TINYINT(1) NOT NULL DEFAULT 0');
+        }
+
+        // Nullability relaxations: each entry's column must be nullable upstream;
+        // we relax it on the replica iff it is currently NOT NULL. `type` is the
+        // authoritative column type (sans NOT NULL) used for the MODIFY.
+        let relax = [
+            { table: 'contract_emissions', column: 'action_index', type: 'BIGINT UNSIGNED NULL' }
+        ];
+        for(let { table, column, type } of relax){
+            let colRows = await this.doQuery(
+                "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
+                [this.dbName, table, column]
+            );
+            if(colRows.length === 0) continue;                       // table/column absent — skip
+            let nullable = colRows[0].IS_NULLABLE || colRows[0].is_nullable;
+            if(String(nullable).toUpperCase() !== 'NO') continue;    // already nullable — no-op
+
+            console.log('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
+            await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
         }
     }
 
