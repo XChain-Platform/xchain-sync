@@ -1002,6 +1002,39 @@ describe('Database.getActionScopedRows()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 19-a. getEmissionRowsForBlock()
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Database.getEmissionRowsForBlock()', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('joins through contract_executions on execution_index (includes NULL action_index rows)', async function () {
+        let rows = [{ execution_index: 1, emitted_action: 'SLASH', action_index: null, position: 0 }];
+        sinon.stub(db, 'doQuery').resolves(rows);
+        let result = await db.getEmissionRowsForBlock(10);
+        assert.strictEqual(result, rows);
+        let sql = db.doQuery.firstCall.args[0];
+        assert.ok(sql.includes('contract_emissions'));
+        assert.ok(sql.includes('contract_executions'));
+        assert.ok(sql.includes('ce.action_index = em.execution_index'));
+        // Must NOT use the action_index-scoped join (which drops NULL-action_index emissions).
+        assert.ok(!sql.includes('a.action_index = em.action_index'));
+    });
+
+    it('selects only the four protocol columns, never em.* (would carry the id PK)', async function () {
+        sinon.stub(db, 'doQuery').resolves([]);
+        await db.getEmissionRowsForBlock(5);
+        let sql = db.doQuery.firstCall.args[0];
+        assert.ok(sql.includes('em.execution_index'));
+        assert.ok(sql.includes('em.emitted_action'));
+        assert.ok(sql.includes('em.action_index'));
+        assert.ok(sql.includes('em.position'));
+        assert.ok(!sql.includes('em.*'));
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 20. getTxScopedRows()
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getTxScopedRows()', function () {

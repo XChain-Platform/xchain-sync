@@ -692,6 +692,26 @@ class Database {
         return await this.doQuery(query, [block_index]);
     }
 
+    // Get all contract_emissions rows for a block, including INTERNAL emissions whose
+    // action_index IS NULL (e.g. a SLASH). The generic getActionScopedRows() above joins
+    // on t.action_index, so its INNER JOIN drops NULL-action_index rows — but the consensus
+    // contract_hash (BlockHasher) includes them via the execution_index -> contract_executions
+    // chain. Streaming via that same chain keeps the server payload and the hash in agreement,
+    // so a follower's recompute can't diverge. Query is kept byte-aligned with BlockHasher's
+    // emissions query (same joins, columns, and ORDER BY). Select the four protocol columns
+    // explicitly (NOT em.* — that would carry the AUTO_INCREMENT `id` and break idempotent
+    // re-apply after a reorg).
+    async getEmissionRowsForBlock(block_index){
+        let query = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
+            FROM contract_emissions em
+            INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
+            INNER JOIN actions a ON (a.action_index = ce.action_index)
+            INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
+            WHERE tx.block_index = ?
+            ORDER BY em.execution_index ASC, em.position ASC`;
+        return await this.doQuery(query, [block_index]);
+    }
+
     // Get all rows from a table for transactions in a given block (tx_index-scoped tables).
     // Used for decoder DB tables like transaction_outputs and dispensers, which key off
     // tx_index and join to the transactions table to recover the block scope.

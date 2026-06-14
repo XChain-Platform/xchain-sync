@@ -245,6 +245,21 @@ class ServerPoller {
 
             for(let table of this.actionScopedTables){
                 if(table === 'actions') continue; // Already handled
+                // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
+                // getActionScopedRows joins on action_index and would drop those rows from the
+                // payload, while the consensus hash includes them (via execution_index) — a
+                // follower would then recompute a divergent contract_hash and halt. Stream them
+                // through the execution_index chain instead, matching BlockHasher exactly.
+                if(table === 'contract_emissions'){
+                    try {
+                        let rows = await this.db.getEmissionRowsForBlock(block_index);
+                        if(rows && rows.length > 0)
+                            payload.data[table] = rows;
+                    } catch(e){
+                        // Table may not exist — skip silently
+                    }
+                    continue;
+                }
                 try {
                     let rows = await this.db.getActionScopedRows(table, block_index);
                     if(rows && rows.length > 0)

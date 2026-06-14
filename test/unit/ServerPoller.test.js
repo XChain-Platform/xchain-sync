@@ -19,6 +19,7 @@ function createMockDb(){
         getBlockHashRow: sinon.stub().resolves(null),
         getBlockScopedRows: sinon.stub().resolves([]),
         getActionScopedRows: sinon.stub().resolves([]),
+        getEmissionRowsForBlock: sinon.stub().resolves([]),
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
         doQuery: sinon.stub().resolves([])
@@ -229,6 +230,26 @@ describe('ServerPoller', function(){
             assert.strictEqual(payload.block_time, 1700000000);
             assert.strictEqual(payload.ledger_hash, 'lh');
             assert.ok(payload.data);
+        });
+
+        it('streams contract_emissions via getEmissionRowsForBlock, not getActionScopedRows', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
+            });
+            // Internal SLASH emission: action_index is NULL — getActionScopedRows would drop it.
+            db.getEmissionRowsForBlock.resolves([
+                { execution_index: 10, emitted_action: 'SLASH', action_index: null, position: 0 }
+            ]);
+
+            let payload = await poller._buildBlockPayload(100);
+
+            assert.ok(db.getEmissionRowsForBlock.calledOnceWith(100),
+                'contract_emissions must be sourced via getEmissionRowsForBlock');
+            assert.ok(!db.getActionScopedRows.getCalls().some(c => c.args[0] === 'contract_emissions'),
+                'contract_emissions must NOT go through getActionScopedRows');
+            assert.ok(payload.data['contract_emissions'], 'emission rows present in payload');
+            assert.strictEqual(payload.data['contract_emissions'][0].action_index, null);
         });
 
         it('includes a sync_meta transparency row in the indexer payload', async function(){
