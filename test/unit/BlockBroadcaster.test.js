@@ -159,6 +159,42 @@ describe('BlockBroadcaster', function(){
         it('does nothing when no subscribers', function(){
             broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block' }); // should not throw
         });
+
+        it('infra-only subscriber receives only infra tables, filtered from event.data', function(){
+            // Regression (#3621/#3874): the gate filtered event.tables (always
+            // undefined for block payloads — rows live under event.data), so
+            // infra-only subscribers silently received the FULL block.
+            let full = mockWs(), infra = mockWs();
+            broadcaster.addSubscription(full,  mockReq('7.7.7.7'), 'bitcoin', 'mainnet');
+            broadcaster.addSubscription(infra, mockReq('8.8.8.8'), 'bitcoin', 'mainnet');
+            infra._syncMode = 'infra-only';
+
+            let event = { type: 'block', block_index: 5, data: {
+                blocks:  [{ id: 1 }],   // infra table
+                actions: [{ id: 2 }]    // non-infra table
+            }};
+            broadcaster.broadcast('bitcoin', 'mainnet', event, new Set(['blocks']));
+
+            // Full subscriber still gets every table.
+            let fullMsg = JSON.parse(full.send.firstCall.args[0]);
+            assert.deepStrictEqual(Object.keys(fullMsg.data).sort(), ['actions', 'blocks']);
+
+            // Infra-only subscriber gets ONLY the infra table, under `data`.
+            let infraMsg = JSON.parse(infra.send.firstCall.args[0]);
+            assert.strictEqual(infraMsg.sync_mode, 'infra-only');
+            assert.deepStrictEqual(Object.keys(infraMsg.data), ['blocks']);
+            assert.ok(!('actions' in infraMsg.data), 'non-infra table must be filtered out');
+        });
+
+        it('infra-only subscriber with no matching infra tables gets an empty data set (not the full block)', function(){
+            let infra = mockWs();
+            broadcaster.addSubscription(infra, mockReq('9.9.9.9'), 'bitcoin', 'mainnet');
+            infra._syncMode = 'infra-only';
+            let event = { type: 'block', block_index: 6, data: { actions: [{ id: 1 }] } };
+            broadcaster.broadcast('bitcoin', 'mainnet', event, new Set(['blocks']));
+            let infraMsg = JSON.parse(infra.send.firstCall.args[0]);
+            assert.deepStrictEqual(infraMsg.data, {});
+        });
     });
 
     describe('broadcastStatus', function(){

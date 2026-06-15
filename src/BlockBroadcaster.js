@@ -203,14 +203,19 @@ class BlockBroadcaster {
         for(let ws of subs){
             if(ws._syncMode === 'infra-only'){ hasInfraOnly = true; break; }
         }
-        if(hasInfraOnly && event && event.tables && infraTables){
+        if(hasInfraOnly && event && event.data && infraTables){
+            // Block payloads carry rows under `data` (same key the full-message
+            // wire encoding reads above and ServerPoller writes); filtering on
+            // `event.tables` left infraMessage null, so infra-only subscribers
+            // silently received the full block. Filter `data` and re-emit it
+            // under `data` so the consumer decodes the infra subset identically.
             let filteredTables = {};
-            for(let tbl of Object.keys(event.tables)){
+            for(let tbl of Object.keys(event.data)){
                 if(infraTables.has(tbl)){
-                    filteredTables[tbl] = event.tables[tbl];
+                    filteredTables[tbl] = event.data[tbl];
                 }
             }
-            let infraEvent = Object.assign({}, event, { tables: encodeTables(filteredTables), sync_mode: 'infra-only' });
+            let infraEvent = Object.assign({}, event, { data: encodeTables(filteredTables), sync_mode: 'infra-only' });
             infraMessage = JSON.stringify(infraEvent, bigIntReplacer);
         }
 
