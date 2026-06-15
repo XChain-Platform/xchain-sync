@@ -133,13 +133,49 @@ describe('ClientRollback', function(){
             assert.strictEqual(actionDeletes.length, 0);
         });
 
-        it('replays the escrow_action_index re-NULL on surviving tokens (firstActionIndex-keyed)', async function(){
+        // tokens.escrow_action_index is RE-DERIVED after the dataTables delete (mirror of
+        // xchain-indexer rollback.js, TP-03 #4017): set to the surviving open GIVE_OWNERSHIP
+        // offer's action_index, else NULL. Collapses both directions and matches the source
+        // byte-for-byte.
+        const AFFECTED_RE  = /escrow_action_index IS NOT NULL/i;
+        const OPENOFFER_RE = /SELECT o\.action_index FROM orders/i;
+        const REDERIVE_RE  = /UPDATE tokens SET escrow_action_index=\?\s+WHERE tick_id=\(SELECT id FROM index_tickers/i;
+
+        it('re-stamps escrow to a surviving open offer (orphaned release / CLEAR direction)', async function(){
+            db.doQuery.withArgs(sinon.match(AFFECTED_RE)).resolves([{ tick: 'FOO' }]);
+            db.doQuery.withArgs(sinon.match(OPENOFFER_RE)).resolves([{ action_index: 30 }]);
             await rollback.rollback(100);
-            let escrowReset = db.doQuery.getCalls().find(c =>
-                c.args[0].includes('UPDATE tokens') && c.args[0].includes('escrow_action_index = NULL')
-            );
-            assert.ok(escrowReset, 'expected an escrow_action_index re-NULL update');
-            assert.deepStrictEqual(escrowReset.args[1], [500]); // firstActionIndex
+            let rederive = db.doQuery.getCalls().find(c => REDERIVE_RE.test(c.args[0]));
+            assert.ok(rederive, 'expected a re-derive UPDATE on tokens.escrow_action_index');
+            assert.deepStrictEqual(rederive.args[1], [30, 'FOO']);
+            // old SET-only reset must be gone
+            assert.ok(!db.doQuery.getCalls().some(c => /escrow_action_index\s*>=\s*\?/i.test(c.args[0])),
+                'the old SET-only `escrow_action_index >= ?` reset must no longer be issued');
+        });
+
+        it('clears escrow when no offer survives (orphaned offer / SET direction)', async function(){
+            db.doQuery.withArgs(sinon.match(AFFECTED_RE)).resolves([{ tick: 'BAR' }]);
+            db.doQuery.withArgs(sinon.match(OPENOFFER_RE)).resolves([]);
+            await rollback.rollback(100);
+            let rederive = db.doQuery.getCalls().find(c => REDERIVE_RE.test(c.args[0]));
+            assert.ok(rederive, 'expected a re-derive UPDATE');
+            assert.deepStrictEqual(rederive.args[1], [null, 'BAR']);
+        });
+
+        it('re-derives escrow AFTER the action-scoped deletes', async function(){
+            db.doQuery.withArgs(sinon.match(AFFECTED_RE)).resolves([{ tick: 'FOO' }]);
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let tokenDeleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `tokens`'));
+            let affectedIdx    = calls.findIndex(c => AFFECTED_RE.test(c.args[0]));
+            assert.ok(tokenDeleteIdx >= 0 && affectedIdx >= 0);
+            assert.ok(affectedIdx > tokenDeleteIdx, 'escrow re-derive must run AFTER the tokens delete');
+        });
+
+        it('does not throw if the escrow re-derive tables are missing (older replica schema)', async function(){
+            db.doQuery.withArgs(sinon.match(AFFECTED_RE)).rejects(new Error('Table does not exist'));
+            await rollback.rollback(100);
+            assert.strictEqual(db.commitTransaction.calledOnce, true, 'rollback still commits');
         });
 
         it('replays the attests and xcalls request_status resets (block_index-keyed)', async function(){
@@ -159,20 +195,23 @@ describe('ClientRollback', function(){
         it('runs the in-place resets before the action-scoped deletes', async function(){
             await rollback.rollback(100);
             let calls = db.doQuery.getCalls();
-            let escrowIdx = calls.findIndex(c => c.args[0].includes('UPDATE tokens') && c.args[0].includes('escrow_action_index = NULL'));
+            // attests/xcalls request_status resets are in-place on surviving rows and must
+            // precede the deletes (escrow is the exception — it is re-derived AFTER, tested above).
+            let attestIdx = calls.findIndex(c => c.args[0].includes('UPDATE attests') && c.args[0].includes("request_status = 'pending'"));
             let tokenDeleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `tokens`'));
-            assert.ok(escrowIdx >= 0 && tokenDeleteIdx >= 0);
-            assert.ok(escrowIdx < tokenDeleteIdx, 'escrow reset must precede the tokens delete');
+            assert.ok(attestIdx >= 0 && tokenDeleteIdx >= 0);
+            assert.ok(attestIdx < tokenDeleteIdx, 'attests reset must precede the deletes');
         });
 
-        it('skips the in-place resets when firstActionIndex is null', async function(){
+        it('skips the in-place resets and the escrow re-derive when firstActionIndex is null', async function(){
             db.getFirstActionIndex.resolves(null);
             await rollback.rollback(100);
-            let resets = db.doQuery.getCalls().filter(c =>
-                c.args[0].includes('escrow_action_index = NULL') ||
+            let touched = db.doQuery.getCalls().filter(c =>
+                AFFECTED_RE.test(c.args[0]) ||
+                REDERIVE_RE.test(c.args[0]) ||
                 (c.args[0].includes("request_status = 'pending'"))
             );
-            assert.strictEqual(resets.length, 0);
+            assert.strictEqual(touched.length, 0);
         });
 
         it('replays the slash-debit restore for both stake tables (block_index-keyed, before deletes)', async function(){

@@ -231,16 +231,10 @@ class ClientRollback {
             // set). That subset is tracked separately as the deactivation-block
             // sync-mirror gap and is intentionally NOT replayed here.
             if(firstActionIndex !== null){
-                // tokens.escrow_action_index — an orphaned ORDER/SWAP/DISPENSER carrying
-                // GIVE_OWNERSHIP stamped a surviving token (created by a much earlier
-                // ISSUE) with the offer's action_index. Re-NULL stamps pointing into the
-                // orphaned range so isOwnershipEscrowed() stops permanently rejecting
-                // every owner-only action on the replica while the source accepts them.
-                try {
-                    await this.db.doQuery('UPDATE tokens SET escrow_action_index = NULL WHERE escrow_action_index >= ?', [firstActionIndex]);
-                } catch(e){
-                    // Column/table may not exist on older replica schemas — skip
-                }
+                // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
+                // AFTER the dataTables delete (mirror of xchain-indexer rollback.js) — a range
+                // reset here would only handle the SET direction (offer orphaned), not the CLEAR
+                // direction (a surviving offer whose release was orphaned).
 
                 // attests (ATTEST v0 request) — an orphaned v1 response / v2 expiry
                 // flipped a surviving request out of 'pending'. Reset it (keyed on
@@ -312,6 +306,46 @@ class ClientRollback {
                     } catch(e){
                         // Table may not exist in older schemas — skip
                     }
+                }
+
+                // Re-derive tokens.escrow_action_index AFTER the dataTables delete (mirror of
+                // xchain-indexer rollback.js). Orphaned offers + their append-only status rows
+                // (order_statuses/swap_statuses/dispenser_statuses) are now gone, so a surviving
+                // GIVE_OWNERSHIP offer whose release was orphaned has reverted to its latest
+                // surviving status. Set the gate to that offer's action_index (or NULL if none
+                // survives). The SQL between the ESCROW-REDERIVE-SQL markers is kept logically
+                // identical with xchain-indexer/src/db.js (cross-repo drift guard in
+                // rollback-coverage.test.js) so source + replica derive byte-identical values.
+                // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
+                // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
+                try {
+                    //<ESCROW-REDERIVE-SQL>
+                    const escrowAffectedTickersSql =
+                        `SELECT DISTINCT tk.tick FROM tokens t INNER JOIN index_tickers tk ON tk.id=t.tick_id WHERE t.escrow_action_index IS NOT NULL
+                         UNION
+                         SELECT DISTINCT tk.tick FROM index_tickers tk WHERE tk.id IN (
+                             SELECT o.give_tick_id FROM orders o INNER JOIN order_statuses st ON st.order_action_index=o.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE o.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM order_statuses x WHERE x.order_action_index=o.action_index) AND si.status IN ('open','cancelling','expiring')
+                             UNION ALL
+                             SELECT s.give_tick_id FROM swaps s INNER JOIN swap_statuses st ON st.swap_action_index=s.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE s.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM swap_statuses x WHERE x.swap_action_index=s.action_index) AND si.status IN ('open','cancelling','expiring')
+                             UNION ALL
+                             SELECT d.give_tick_id FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling','expiring')
+                         )`;
+                    const escrowOpenOfferSql =
+                        `SELECT o.action_index FROM orders o INNER JOIN order_statuses st ON st.order_action_index=o.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=o.give_tick_id WHERE tk.tick=? AND o.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM order_statuses x WHERE x.order_action_index=o.action_index) AND si.status IN ('open','cancelling','expiring')
+                         UNION ALL
+                         SELECT s.action_index FROM swaps s INNER JOIN swap_statuses st ON st.swap_action_index=s.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=s.give_tick_id WHERE tk.tick=? AND s.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM swap_statuses x WHERE x.swap_action_index=s.action_index) AND si.status IN ('open','cancelling','expiring')
+                         UNION ALL
+                         SELECT d.action_index FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=d.give_tick_id WHERE tk.tick=? AND d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling','expiring')
+                         LIMIT 1`;
+                    //</ESCROW-REDERIVE-SQL>
+                    let escrowTickers = await this.db.doQuery(escrowAffectedTickersSql, []);
+                    for(let row of escrowTickers){
+                        let offerRows = await this.db.doQuery(escrowOpenOfferSql, [row.tick, row.tick, row.tick]);
+                        let newEscrow = (offerRows.length > 0) ? offerRows[0].action_index : null;
+                        await this.db.doQuery("UPDATE tokens SET escrow_action_index=? WHERE tick_id=(SELECT id FROM index_tickers WHERE tick=? LIMIT 1)", [newEscrow, row.tick]);
+                    }
+                } catch(e){
+                    // Tables/columns may not exist on older replica schemas — skip
                 }
             }
 

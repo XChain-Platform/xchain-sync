@@ -268,4 +268,30 @@ describe('Rollback coverage guard @regression', function(){
         assert.ok(!rollback.dataTables.includes('balances'));
         assert.ok(!rollback.blockTables.includes('balances'));
     });
+
+    // Cross-repo drift guard for the escrow re-derive SQL (TP-03 #4017). The
+    // tokens.escrow_action_index re-derive must run the SAME logic on the source
+    // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js),
+    // or a reorg leaves source and replica with different gate values — a silent consensus
+    // divergence. Both files carry the SQL between //<ESCROW-REDERIVE-SQL> markers; this
+    // guard extracts the backtick SQL literals from each and asserts they are
+    // whitespace-normalised identical. If you edit one, edit the other.
+    it('escrow re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function escrowSql(path){
+            const src = fs.readFileSync(path, 'utf8');
+            const m = src.match(/\/\/<ESCROW-REDERIVE-SQL>([\s\S]*?)\/\/<\/ESCROW-REDERIVE-SQL>/);
+            assert.ok(m, `ESCROW-REDERIVE-SQL markers not found in ${path}`);
+            // pull every backtick literal, normalise whitespace
+            const lits = m[1].match(/`[^`]*`/g) || [];
+            assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
+            return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
+        }
+        let indexerPath, syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        try { indexerPath = require('path').resolve(__dirname, '../../../xchain-indexer/src/rollback.js'); }
+        catch(e){ this.skip(); return; }
+        if(!require('fs').existsSync(indexerPath)) this.skip();
+        assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
+            'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js — keep them identical');
+    });
 });
