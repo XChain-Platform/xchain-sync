@@ -40,6 +40,22 @@
  *   - dispensers (decoder)            live-pruned each block; the block stream
  *                                     carries only inserts, so its count would
  *                                     diverge upward forever — full-snapshot only
+ *   - cross_chain_calls,              hub-mirrored (hub_db_sync), NOT produced by
+ *     cross_chain_matches,            block processing — pushed/retracted by the hub
+ *     oracle_prices,                  (pushpricereorg / pushdexreorg) out-of-band with
+ *     capability_snapshots,           block apply, so they cannot ride the per-block
+ *     state_checkpoints               stream. On a source node they converge via
+ *                                     hub_db_sync; on a synced replica they arrive by
+ *                                     full snapshot only (frozen at bootstrap — the live
+ *                                     stream and incremental catch-up both skip them).
+ *                                     This is an accepted trade-off: replicas are
+ *                                     read-only API surfaces and hub-side retraction
+ *                                     protects consensus. oracle_prices / cross_chain_calls
+ *                                     are not served from the replica copy at all; the
+ *                                     explorer reads the consensus-relevant ones
+ *                                     (state_checkpoints, capability_snapshots,
+ *                                     cross_chain_matches) directly from the co-located
+ *                                     hub DB rather than the stale replica mirror.
  *
  ********************************************************************/
 
