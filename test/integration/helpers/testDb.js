@@ -96,6 +96,20 @@ class TestDatabase {
             WHERE tx.block_index = ?`, [block_index]);
     }
 
+    // Mirror of src/db.js getEmissionRowsForBlock(): block-scopes contract_emissions
+    // through execution_index -> contract_executions -> actions (NOT em.action_index),
+    // so NULL-action_index internal emissions (e.g. SLASH) are included — the rows the
+    // action-scoped INNER JOIN drops. Must stay byte-identical to the production query.
+    async getEmissionRowsForBlock(block_index) {
+        return await this.doQuery(`SELECT em.execution_index, em.emitted_action, em.action_index, em.position
+            FROM contract_emissions em
+            INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
+            INNER JOIN actions a ON (a.action_index = ce.action_index)
+            INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
+            WHERE tx.block_index = ?
+            ORDER BY em.execution_index ASC, em.position ASC`, [block_index]);
+    }
+
     async getTransactions(block_index) {
         return await this.doQuery("SELECT * FROM transactions WHERE block_index = ?", [block_index]);
     }
