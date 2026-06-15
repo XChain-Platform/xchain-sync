@@ -166,6 +166,13 @@ const TOPOLOGY = {
             // so it rides the per-block action_index join. A follower needs it to know
             // which stake signing keys are still valid signers.
             'stake_key_revocations',
+            // full_node_verifications: NODEPROOF verdict rows (verified-validator
+            // tier). One verdict action_index writes one row per PASS pubkey — all
+            // sharing that action_index — so they ride the per-block action_index
+            // join together and ClientRollback drops them as a unit on reorg. Lets
+            // a light validator mirror the verified-full-node set that drives the
+            // oracle-round reward split (NODEPROOF.md).
+            'full_node_verifications',
             'sweeps', 'tokens', 'unstakes',
             'withdrawals',
             // Programmable-policy controller bind/unbind event logs. One row per
