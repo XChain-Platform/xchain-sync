@@ -22,3 +22,9 @@ RewriteRule ^(.+)/latest\.tgz$ latest.php?dir=$1&type=tgz [L,QSA]
 # Companion checksum, if an external <archive>.sha256 was published.
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^(.+)/latest\.tgz\.sha256$ latest.php?dir=$1&type=sha256 [L,QSA]
+
+# Detached Ed25519 signature for the SAME newest archive (xchain-node verifies
+# this against the pinned public key). Resolved alongside latest.tgz so the
+# archive and its signature can never drift to different versions.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.+)/latest\.tgz\.sig$ latest.php?dir=$1&type=sig [L,QSA]

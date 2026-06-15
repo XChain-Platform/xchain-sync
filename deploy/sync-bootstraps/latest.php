@@ -6,6 +6,7 @@
  * Driven by the sibling .htaccess, which rewrites
  *   <service>/<coin>/<network>/latest.tgz        -> latest.php?dir=...&type=tgz
  *   <service>/<coin>/<network>/latest.tgz.sha256 -> latest.php?dir=...&type=sha256
+ *   <service>/<coin>/<network>/latest.tgz.sig    -> latest.php?dir=...&type=sig
  *
  * Bootstrap archives are named  <network>-<service>-<YYYYMMDD_HHMMSS>.tar.gz
  * (xchain-node BootstrapService). That timestamp suffix is lexically
@@ -74,6 +75,21 @@ if ($type === 'sha256') {
     }
     header('Content-Type: text/plain');
     readfile($sha);
+    exit;
+}
+
+if ($type === 'sig') {
+    // Detached signature published next to the SAME newest archive. A 404 here
+    // means the newest archive is unsigned (xchain-node then treats the
+    // bootstrap as unsigned per its signature policy).
+    $sig = $newest . '.sig';
+    if (!is_file($sig)) {
+        http_response_code(404);
+        header('Content-Type: text/plain');
+        exit("No signature published\n");
+    }
+    header('Content-Type: text/plain');
+    readfile($sig);
     exit;
 }
 
