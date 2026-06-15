@@ -106,6 +106,11 @@ const TOPOLOGY = {
             'batches', 'broadcasts', 'callbacks',
             'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
             'contracts', 'contract_executions', 'contract_emissions',
+            // deploy_chunks: one row per DEPLOY v4 carrier action_index (rollback-able, never
+            // mutated in-place), so it rides the per-block action_index join. Streaming it
+            // per block keeps a follower's chunk store current between full snapshots and
+            // pairs with ClientRollback dropping orphaned-range chunk rows on reorg.
+            'deploy_chunks',
             'contract_stakes', 'contract_unstakes', 'contract_delegations',
             'credits', 'debits', 'escrows',
             'delegations',

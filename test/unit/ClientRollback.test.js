@@ -81,7 +81,7 @@ describe('ClientRollback', function(){
         it('deletes from action-scoped tables with action_index', async function(){
             await rollback.rollback(100);
             let actionDeletes = db.doQuery.getCalls().filter(c =>
-                c.args[0].includes('action_index >=') && !c.args[0].includes('contract_emissions')
+                c.args[0].includes('DELETE FROM') && c.args[0].includes('action_index >=') && !c.args[0].includes('contract_emissions')
             );
             // Should have one delete per dataTable
             assert.strictEqual(actionDeletes.length, rollback.dataTables.length);
@@ -130,6 +130,48 @@ describe('ClientRollback', function(){
                 c.args[0].includes('action_index >=')
             );
             assert.strictEqual(actionDeletes.length, 0);
+        });
+
+        it('replays the escrow_action_index re-NULL on surviving tokens (firstActionIndex-keyed)', async function(){
+            await rollback.rollback(100);
+            let escrowReset = db.doQuery.getCalls().find(c =>
+                c.args[0].includes('UPDATE tokens') && c.args[0].includes('escrow_action_index = NULL')
+            );
+            assert.ok(escrowReset, 'expected an escrow_action_index re-NULL update');
+            assert.deepStrictEqual(escrowReset.args[1], [500]); // firstActionIndex
+        });
+
+        it('replays the attests and xcalls request_status resets (block_index-keyed)', async function(){
+            await rollback.rollback(100);
+            let attestReset = db.doQuery.getCalls().find(c =>
+                c.args[0].includes('UPDATE attests') && c.args[0].includes("request_status = 'pending'")
+            );
+            assert.ok(attestReset, 'expected an attests request_status reset');
+            assert.deepStrictEqual(attestReset.args[1], [100]); // block_index
+            let xcallReset = db.doQuery.getCalls().find(c =>
+                c.args[0].includes('UPDATE xcalls') && c.args[0].includes("request_status = 'pending'")
+            );
+            assert.ok(xcallReset, 'expected an xcalls request_status reset');
+            assert.deepStrictEqual(xcallReset.args[1], [100]); // block_index
+        });
+
+        it('runs the in-place resets before the action-scoped deletes', async function(){
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let escrowIdx = calls.findIndex(c => c.args[0].includes('UPDATE tokens') && c.args[0].includes('escrow_action_index = NULL'));
+            let tokenDeleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `tokens`'));
+            assert.ok(escrowIdx >= 0 && tokenDeleteIdx >= 0);
+            assert.ok(escrowIdx < tokenDeleteIdx, 'escrow reset must precede the tokens delete');
+        });
+
+        it('skips the in-place resets when firstActionIndex is null', async function(){
+            db.getFirstActionIndex.resolves(null);
+            await rollback.rollback(100);
+            let resets = db.doQuery.getCalls().filter(c =>
+                c.args[0].includes('escrow_action_index = NULL') ||
+                (c.args[0].includes("request_status = 'pending'"))
+            );
+            assert.strictEqual(resets.length, 0);
         });
 
         it('rolls back transaction on error and rethrows', async function(){

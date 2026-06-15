@@ -115,6 +115,14 @@ class ClientRollback {
             'stake_key_revocations',
             'reward_claims',
             'contracts',
+            // deploy_chunks: one row per DEPLOY v4 carrier action (rollback-able action_index),
+            // delivered to followers via snapshots. The source rolls it back by
+            // action_index (xchain-indexer/src/rollback.js dataTables); mirror it here or
+            // orphaned chunk rows for a DEPLOY the source chain never finalized linger on
+            // the replica until the next full snapshot (the explorer's per-chunk status
+            // view then serves them). Unhashed, so no checkpoint fork — but it is genuine
+            // rollback-able per-action state, not an indexer-local artifact.
+            'deploy_chunks',
             'contract_stakes',
             'contract_unstakes',
             'contract_delegations',
@@ -199,6 +207,65 @@ class ClientRollback {
                     );
                 } catch(e){
                     // Table may not exist — skip
+                }
+            }
+
+            // ── In-place column resets (mirror xchain-indexer/src/rollback.js) ──
+            // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows
+            // (action_index < firstActionIndex) to undo stamps that orphaned actions
+            // wrote on them. The DELETE loops below only drop orphaned-RANGE rows, so
+            // without replaying these resets the replica keeps the stale stamp and
+            // diverges from the source (and from a from-genesis replay) after a reorg —
+            // a consensus-affecting split. These three resets key purely on
+            // firstActionIndex / block_index, so they port exactly; run them BEFORE the
+            // deletes, matching the source order.
+            //
+            // NOTE: the source ALSO re-NULLs deactivation_block on
+            // stakes/delegations/contract_stakes/contract_delegations, but those resets
+            // key on the global ACTIVATION_DELAY_BLOCKS, which the thin replica does not
+            // hold (it is a per-chain indexer default, only hub-overlaid when explicitly
+            // set). That subset is tracked separately as the deactivation-block
+            // sync-mirror gap and is intentionally NOT replayed here.
+            if(firstActionIndex !== null){
+                // tokens.escrow_action_index — an orphaned ORDER/SWAP/DISPENSER carrying
+                // GIVE_OWNERSHIP stamped a surviving token (created by a much earlier
+                // ISSUE) with the offer's action_index. Re-NULL stamps pointing into the
+                // orphaned range so isOwnershipEscrowed() stops permanently rejecting
+                // every owner-only action on the replica while the source accepts them.
+                try {
+                    await this.db.doQuery('UPDATE tokens SET escrow_action_index = NULL WHERE escrow_action_index >= ?', [firstActionIndex]);
+                } catch(e){
+                    // Column/table may not exist on older replica schemas — skip
+                }
+
+                // attests (ATTEST v0 request) — an orphaned v1 response / v2 expiry
+                // flipped a surviving request out of 'pending'. Reset it (keyed on
+                // resolved_block so BOTH flip paths reset) so a re-applied response is not
+                // rejected as already-resolved and the pending-only deadline sweep can
+                // re-synthesize the v2 row.
+                try {
+                    await this.db.doQuery(
+                        "UPDATE attests SET request_status = 'pending', resolved_block = NULL " +
+                        "WHERE version = 0 AND request_status IN ('fulfilled', 'errored', 'expired') AND resolved_block >= ?",
+                        [block_index]
+                    );
+                } catch(e){
+                    // Column/table may not exist on older replica schemas — skip
+                }
+
+                // xcalls (XCALL v0 request) — an orphaned result callback / deadline
+                // expiry flipped a surviving request terminal. Reset so a re-applied
+                // result is not silently lost to the already-resolved interlock (and an
+                // expiry re-arms).
+                try {
+                    await this.db.doQuery(
+                        "UPDATE xcalls SET request_status = 'pending', result_status = NULL, " +
+                        "result_payload = NULL, resolved_block = NULL, callback_action_index = NULL " +
+                        "WHERE version = 0 AND request_status IN ('completed', 'expired') AND resolved_block >= ?",
+                        [block_index]
+                    );
+                } catch(e){
+                    // Column/table may not exist on older replica schemas — skip
                 }
             }
 
