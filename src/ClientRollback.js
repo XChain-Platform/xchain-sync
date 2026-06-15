@@ -21,12 +21,27 @@
  ********************************************************************/
 
 const balanceHelpers = require('./balance-helpers');
+const { activationDelayBlocks } = require('./consensus-constants');
 
 class ClientRollback {
 
-    constructor(db, util) {
+    constructor(db, util, coin) {
         this.db   = db;
         this.util = util;
+
+        // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
+        // indexer's reorg deactivation_block re-NULL resets (see _rollbackIndexer). A wrong
+        // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
+        // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
+        // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
+        // skipped (with a warning) rather than run with a wrong value. The production wiring
+        // (SyncService._startClientSyncForChain) always passes cfg.coin.
+        this.coin = coin;
+        let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
+        if(delay === undefined){
+            throw new Error('ClientRollback: unrecognized coin "' + coin + '" — no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+        }
+        this.activationDelay = delay;
 
         // IMPORTANT: These lists mirror xchain-indexer/src/rollback.js. They MUST be kept
         // in sync — any table the indexer rolls back AND xchain-sync replicates must also
@@ -225,11 +240,11 @@ class ClientRollback {
             // deletes, matching the source order.
             //
             // NOTE: the source ALSO re-NULLs deactivation_block on
-            // stakes/delegations/contract_stakes/contract_delegations, but those resets
-            // key on the global ACTIVATION_DELAY_BLOCKS, which the thin replica does not
-            // hold (it is a per-chain indexer default, only hub-overlaid when explicitly
-            // set). That subset is tracked separately as the deactivation-block
-            // sync-mirror gap and is intentionally NOT replayed here.
+            // stakes/delegations/contract_stakes/contract_delegations. Those resets key on
+            // ACTIVATION_DELAY_BLOCKS, which is a frozen per-chain node-local consensus
+            // constant (never hub-overlaid — the indexer's _mergeHubParams overlay is empty
+            // for consensus params), so the replica now holds it via consensus-constants.js
+            // and mirrors all four resets below.
             if(firstActionIndex !== null){
                 // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
                 // AFTER the dataTables delete (mirror of xchain-indexer rollback.js) — a range
@@ -296,6 +311,96 @@ class ClientRollback {
                         // Table may not exist on older replica schemas — skip
                     }
                 }
+
+                // deactivation_block re-NULL — mirror of xchain-indexer/src/rollback.js.
+                // Orphaned UNSTAKE / DELEGATE-revoke actions stamped deactivation_block =
+                // actionBlock + activationDelay IN PLACE on surviving parent stake/delegation
+                // rows (created by a much earlier STAKE/DELEGATE in a surviving block). The
+                // action-scoped delete below drops the orphaned action row but cannot undo
+                // that in-place UPDATE, so without this reset the surviving parent keeps a
+                // non-NULL deactivation_block; every active-set read gates on
+                // (deactivation_block IS NULL OR deactivation_block > currentBlock), so once
+                // the new chain passes the stale value the staker silently drops out on the
+                // replica while the source (and a from-genesis replay) keeps it active — a
+                // consensus-affecting divergence. The reset is PRECISE: we match the EXACT
+                // value an orphaned action wrote (orphanBlock + activationDelay), never a
+                // blanket >= block_index, so legitimately-earned earlier deactivations are
+                // preserved. Keyed identically to the source (this.activationDelay holds the
+                // frozen per-chain ACTIVATION_DELAY_BLOCKS).
+                let activationDelay = this.activationDelay;
+                if(activationDelay == null){
+                    // No coin supplied at construction (legacy/test path). Skip rather than
+                    // run with a wrong value — but warn, since on a real replica this would
+                    // silently reintroduce the deactivation-block sync divergence.
+                    console.warn('ClientRollback: deactivation_block re-NULL mirror skipped (no coin supplied)');
+                } else {
+
+                // stakes ← orphaned unstakes (capability staking)
+                try {
+                    await this.db.doQuery(
+                        "UPDATE stakes s " +
+                        "JOIN unstakes u ON u.signing_pubkey_id = s.signing_pubkey_id " +
+                        "SET s.deactivation_block = NULL " +
+                        "WHERE u.block_index >= ? " +
+                        "  AND s.deactivation_block IS NOT NULL " +
+                        "  AND s.deactivation_block = u.block_index + ?",
+                        [block_index, activationDelay]
+                    );
+                } catch(e){
+                    // Table may not exist on older replica schemas — skip
+                }
+
+                // delegations ← orphaned DELEGATE-revoke rows (a revoke is itself a
+                // delegations row; the parent it stamped is an earlier delegations row for
+                // the same source + signing pubkey — self-join).
+                try {
+                    await this.db.doQuery(
+                        "UPDATE delegations p " +
+                        "JOIN delegations r ON r.source_id = p.source_id " +
+                        "  AND r.signing_pubkey_id = p.signing_pubkey_id " +
+                        "SET p.deactivation_block = NULL " +
+                        "WHERE r.block_index >= ? " +
+                        "  AND p.deactivation_block IS NOT NULL " +
+                        "  AND p.deactivation_block = r.block_index + ?",
+                        [block_index, activationDelay]
+                    );
+                } catch(e){
+                    // Table may not exist on older replica schemas — skip
+                }
+
+                // contract_stakes ← orphaned contract_unstakes (contract staking, all chains)
+                try {
+                    await this.db.doQuery(
+                        "UPDATE contract_stakes cs " +
+                        "JOIN contract_unstakes cu ON cu.signing_pubkey_id = cs.signing_pubkey_id " +
+                        "  AND cu.target_contract_index = cs.target_contract_index " +
+                        "  AND cu.tick_id = cs.tick_id " +
+                        "SET cs.deactivation_block = NULL " +
+                        "WHERE cu.block_index >= ? " +
+                        "  AND cs.deactivation_block IS NOT NULL " +
+                        "  AND cs.deactivation_block = cu.block_index + ?",
+                        [block_index, activationDelay]
+                    );
+                } catch(e){
+                    // Table may not exist on older replica schemas — skip
+                }
+
+                // contract_delegations ← orphaned DELEGATE v3 contract-revokes. No child row
+                // exists (pure in-place UPDATE), so key on the value threshold: anything at or
+                // above block_index + activationDelay was stamped by an orphaned revoke (any
+                // surviving revoke stamps a strictly smaller value).
+                try {
+                    await this.db.doQuery(
+                        "UPDATE contract_delegations " +
+                        "SET deactivation_block = NULL " +
+                        "WHERE deactivation_block IS NOT NULL " +
+                        "  AND deactivation_block >= ?",
+                        [Number(block_index) + activationDelay]
+                    );
+                } catch(e){
+                    // Table may not exist on older replica schemas — skip
+                }
+                } // end deactivation_block mirror (activationDelay present)
             }
 
             // Delete from action-scoped data tables
