@@ -237,22 +237,6 @@ describe('ClientRollback', function(){
             await assert.rejects(() => rollback.rollback(100), { message: 'real db error' });
             assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
-
-        it('logs (does not rethrow) a 1146 error from rebuildContractBalances', async function(){
-            sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-            sinon.stub(balanceHelpers, 'rebuildContractBalances')
-                .rejects(Object.assign(new Error('no table'), { errno: 1146 }));
-            await rollback.rollback(100);
-            assert.strictEqual(db.commitTransaction.calledOnce, true);
-        });
-
-        it('rethrows a non-1146 error from rebuildContractBalances', async function(){
-            sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-            sinon.stub(balanceHelpers, 'rebuildContractBalances')
-                .rejects(Object.assign(new Error('real cb error'), { errno: 2002 }));
-            await assert.rejects(() => rollback.rollback(100), { message: 'real cb error' });
-            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
-        });
     });
 
     describe('_rollbackDecoder', function(){

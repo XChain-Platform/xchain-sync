@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { rebuildBalances, rebuildContractBalances } = require('../../src/balance-helpers');
+const { rebuildBalances } = require('../../src/balance-helpers');
 
 // These helpers are pure SQL emitters (the real arithmetic happens in MariaDB),
 // so a unit test can only guard the SQL *semantics* — call order, target tables,
@@ -101,61 +101,4 @@ describe('balance-helpers @money @regression', function () {
         });
     });
 
-    describe('rebuildContractBalances()', function () {
-        let db;
-        beforeEach(async function () { db = fakeDb(); await rebuildContractBalances(db); });
-
-        it('clears then reinserts contract_balances', function () {
-            assert.strictEqual(db.queries.length, 2);
-            assert.ok(/^DELETE FROM contract_balances/i.test(db.queries[0]));
-            assert.ok(/INSERT INTO contract_balances \(contract_index, tick_id, amount\)/i.test(db.queries[1]));
-        });
-
-        it('nets valid deposits minus valid withdrawals at DECIMAL(65,18) precision', function () {
-            const sql = db.queries[1];
-            assert.ok(/FROM deposits/i.test(sql) && /FROM withdrawals/i.test(sql));
-            assert.ok(/WHEN t\.type = 'deposit' THEN CAST\(t\.amount AS DECIMAL\(65,18\)\)/i.test(sql), 'deposit cast');
-            assert.ok(/ELSE -CAST\(t\.amount AS DECIMAL\(65,18\)\)/i.test(sql), 'withdrawal negative cast');
-        });
-
-        it('only counts rows whose status is valid', function () {
-            const sql = db.queries[1];
-            const matches = sql.match(/status_id = \(SELECT id FROM index_statuses WHERE status = 'valid'\)/gi) || [];
-            assert.strictEqual(matches.length, 2, 'both deposits and withdrawals filtered to valid');
-        });
-
-        it('retains only positive custody (HAVING ... > 0)', function () {
-            assert.ok(/HAVING SUM\(.*\) > 0/i.test(db.queries[1]));
-        });
-    });
-
-    describe('rebuildContractBalances() — scoped', function () {
-        const scope = { contractIndexes: [4], tickIds: [1, 2] };
-        let db;
-        beforeEach(async function () { db = fakeDb(); await rebuildContractBalances(db, scope); });
-
-        it('scopes the DELETE to the touched ids', function () {
-            assert.ok(/^DELETE FROM contract_balances WHERE contract_index IN \(\?\) AND tick_id IN \(\?, \?\)$/i.test(db.queries[0]));
-            assert.deepStrictEqual(db.argsLog[0], [4, 1, 2]);
-        });
-
-        it('ANDs the scope onto the valid-status filter in BOTH branches', function () {
-            const sql = db.queries[1];
-            const branchPreds = sql.match(/status_id = \(SELECT id FROM index_statuses WHERE status = 'valid'\) AND contract_index IN \(\?\) AND tick_id IN \(\?, \?\)/gi) || [];
-            assert.strictEqual(branchPreds.length, 2, 'deposits and withdrawals both keep the status filter AND the scope');
-            assert.deepStrictEqual(db.argsLog[1], [4, 1, 2, 4, 1, 2]);
-        });
-
-        it('keeps the DECIMAL(65,18) netting and positive-custody pruning', function () {
-            const sql = db.queries[1];
-            assert.ok(/WHEN t\.type = 'deposit' THEN CAST\(t\.amount AS DECIMAL\(65,18\)\)/i.test(sql));
-            assert.ok(/HAVING SUM\(.*\) > 0/i.test(sql));
-        });
-
-        it('is a no-op when the scope is empty', async function () {
-            const empty = fakeDb();
-            await rebuildContractBalances(empty, { contractIndexes: [], tickIds: [] });
-            assert.strictEqual(empty.queries.length, 0);
-        });
-    });
 });

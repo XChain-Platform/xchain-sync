@@ -373,19 +373,6 @@ class ClientRollback {
                 console.error('Error rebuilding balances after rollback:', e);
             }
 
-            // Recalculate contract custody balances from the surviving valid
-            // deposits/withdrawals.  contract_balances is a derived aggregate with
-            // no action_index column, so it can't be deleted by the action-scoped
-            // loop above and isn't streamed per-block.  A wholesale rebuild from the
-            // remaining rows reproduces the source indexer's updateContractBalances()
-            // exactly.  SQL shared with ClientApplier via balance-helpers.
-            try {
-                await balanceHelpers.rebuildContractBalances(this.db);
-            } catch(e){
-                if(e.errno !== 1146) throw e;
-                console.error('Error rebuilding contract_balances after rollback:', e);
-            }
-
             await this.db.commitTransaction();
             console.log('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 

@@ -105,13 +105,6 @@ describe('ClientApplier', function(){
             assert.strictEqual(rb.calledOnce, true);
         });
 
-        it('rebuilds contract_balances when a payload touches deposits/withdrawals', async function(){
-            db.dbType = 'indexer';
-            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
-            await applier.applyBlock({ block_index: 5, data: { withdrawals: [{ id: 1 }] } });
-            assert.strictEqual(rcb.calledOnce, true);
-        });
-
         it('does NOT rebuild balances on a decoder replica', async function(){
             db.dbType = 'decoder';
             let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
@@ -120,7 +113,7 @@ describe('ClientApplier', function(){
         });
     });
 
-    describe('_rebuildBalances / _rebuildContractBalances error handling', function(){
+    describe('_rebuildBalances error handling', function(){
         it('swallows a 1146 (table-missing) error on rebuildBalances', async function(){
             sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('no table'), { errno: 1146 }));
             await applier._rebuildBalances(); // must not throw
@@ -129,16 +122,6 @@ describe('ClientApplier', function(){
         it('rethrows a non-1146 error on rebuildBalances', async function(){
             sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('real'), { errno: 1234 }));
             await assert.rejects(() => applier._rebuildBalances(), { message: 'real' });
-        });
-
-        it('swallows a 1146 error on rebuildContractBalances', async function(){
-            sinon.stub(balanceHelpers, 'rebuildContractBalances').rejects(Object.assign(new Error('no table'), { errno: 1146 }));
-            await applier._rebuildContractBalances();
-        });
-
-        it('rethrows a non-1146 error on rebuildContractBalances', async function(){
-            sinon.stub(balanceHelpers, 'rebuildContractBalances').rejects(Object.assign(new Error('real'), { errno: 1234 }));
-            await assert.rejects(() => applier._rebuildContractBalances(), { message: 'real' });
         });
     });
 
@@ -153,16 +136,6 @@ describe('ClientApplier', function(){
             }});
             assert.strictEqual(rb.calledOnce, true);
             assert.deepStrictEqual(rb.firstCall.args[1], { addressIds: [7, 9], tickIds: [3] });
-        });
-
-        it('passes the touched (contract_index, tick_id) ids to rebuildContractBalances', async function(){
-            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
-            await applier.applyBlock({ block_index: 5, data: {
-                deposits:    [{ contract_index: 4, tick_id: 1, amount: '1' }],
-                withdrawals: [{ contract_index: 4, tick_id: 2, amount: '1' }]
-            }});
-            assert.strictEqual(rcb.calledOnce, true);
-            assert.deepStrictEqual(rcb.firstCall.args[1], { contractIndexes: [4], tickIds: [1, 2] });
         });
 
         it('falls back to the FULL rebuild when a row is missing its ids', async function(){
@@ -185,10 +158,8 @@ describe('ClientApplier', function(){
 
         it('skips the rebuild entirely when the touched tables are empty arrays', async function(){
             let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
             await applier.applyBlock({ block_index: 5, data: { credits: [], deposits: [], blocks: [{ block_index: 5 }] } });
             assert.strictEqual(rb.called, false);
-            assert.strictEqual(rcb.called, false);
         });
 
         it('scopes the incremental catch-up rebuild the same way', async function(){
@@ -293,17 +264,15 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
-        it('rebuilds balances + contract_balances when the catch-up touches them', async function(){
+        it('rebuilds balances when the catch-up touches credits/debits', async function(){
             db.dbType = 'indexer';
             let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-            let rcb = sinon.stub(balanceHelpers, 'rebuildContractBalances').resolves();
             await applier.applyIncrementalSnapshot({
                 schema_version: SCHEMA_VERSION.indexer,
                 since_block: 10,
-                tables: { debits: [{ id: 1 }], deposits: [{ id: 2 }] }
+                tables: { debits: [{ id: 1 }] }
             });
             assert.strictEqual(rb.calledOnce, true);
-            assert.strictEqual(rcb.calledOnce, true);
         });
 
         it('rolls back on error', async function(){

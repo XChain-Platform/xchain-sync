@@ -88,14 +88,13 @@ const TOPOLOGY = {
 
         // Action-scoped tables to include in block payloads
         actionScoped: [
-            // NOTE: balances, contract_balances, and events are intentionally NOT
-            // listed here. None has an action_index column, so the per-block
+            // NOTE: balances and events are intentionally NOT listed here. Neither
+            // has an action_index column, so the per-block
             // `INNER JOIN actions a ON (a.action_index = t.action_index)` in
             // db.getActionScopedRows() throws ER_BAD_FIELD_ERROR on every poll.
-            // balances and contract_balances are derived aggregates the follower
-            // recomputes from credits/debits and deposits/withdrawals
-            // (ClientApplier._rebuildBalances / _rebuildContractBalances), so they
-            // must not ride the per-block payload. events is an unscoped operational
+            // balances is a derived aggregate the follower recomputes from
+            // credits/debits (ClientApplier._rebuildBalances), so it must not ride
+            // the per-block payload. events is an unscoped operational
             // log carried by full snapshots only — same rationale as markets below.
             // state_checkpoints is also intentionally NOT here: it is hub-mirrored
             // (hub_db_sync, like price_snapshots), not produced by block processing.

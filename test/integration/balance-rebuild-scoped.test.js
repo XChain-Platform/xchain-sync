@@ -28,12 +28,6 @@ async function snapshotBalances(db) {
     return rows.map(r => [Number(r.address_id), Number(r.tick_id), String(r.amount)]);
 }
 
-async function snapshotContractBalances(db) {
-    let rows = await db.doQuery(
-        'SELECT contract_index, tick_id, amount FROM contract_balances ORDER BY contract_index, tick_id');
-    return rows.map(r => [Number(r.contract_index), Number(r.tick_id), String(r.amount)]);
-}
-
 async function insertLedgerRows(db, table, rows) {
     for (let r of rows) {
         await db.doQuery(
@@ -151,58 +145,4 @@ describe('Integration: scoped balance rebuilds', function() {
         });
     });
 
-    describe('contract_balances', function() {
-
-        let validId, invalidId;
-
-        beforeEach(async function() {
-            await db.doQuery("INSERT INTO index_statuses (status) VALUES ('valid'), ('invalid')");
-            let rows = await db.doQuery("SELECT id, status FROM index_statuses");
-            validId   = Number(rows.find(r => r.status === 'valid').id);
-            invalidId = Number(rows.find(r => r.status === 'invalid').id);
-        });
-
-        it('a scoped rebuild leaves the table exactly as a full rebuild would', async function() {
-            // History: contracts 1-3, fractional amounts, one invalid deposit
-            // that must never count, pair (3,2) fully withdrawn (custody 0).
-            await insertCustodyRows(db, 'deposits', [
-                { action_index: 1, contract_index: 1, tick_id: 1, amount: '10.5',                  status_id: validId },
-                { action_index: 2, contract_index: 2, tick_id: 1, amount: '0.000000000000000001',  status_id: validId },
-                { action_index: 3, contract_index: 2, tick_id: 2, amount: '1000000',               status_id: validId },
-                { action_index: 4, contract_index: 3, tick_id: 2, amount: '77',                    status_id: validId },
-                { action_index: 5, contract_index: 1, tick_id: 1, amount: '500',                   status_id: invalidId }
-            ]);
-            await insertCustodyRows(db, 'withdrawals', [
-                { action_index: 6, contract_index: 1, tick_id: 1, amount: '0.5', status_id: validId },
-                { action_index: 7, contract_index: 3, tick_id: 2, amount: '77',  status_id: validId }
-            ]);
-            await balanceHelpers.rebuildContractBalances(db);
-
-            // New rows touch contracts {2} × ticks {1,2}, including an invalid
-            // withdrawal that must NOT reduce custody.
-            await insertCustodyRows(db, 'deposits', [
-                { action_index: 8, contract_index: 2, tick_id: 1, amount: '5', status_id: validId }
-            ]);
-            await insertCustodyRows(db, 'withdrawals', [
-                { action_index: 9,  contract_index: 2, tick_id: 2, amount: '999999', status_id: validId },
-                { action_index: 10, contract_index: 2, tick_id: 2, amount: '1',      status_id: invalidId }
-            ]);
-
-            await balanceHelpers.rebuildContractBalances(db, { contractIndexes: [2], tickIds: [1, 2] });
-            let scoped = await snapshotContractBalances(db);
-
-            await balanceHelpers.rebuildContractBalances(db);
-            let full = await snapshotContractBalances(db);
-
-            assert.deepStrictEqual(scoped, full);
-
-            assert.ok(scoped.some(r => r[0] === 1 && r[1] === 1 && r[2] === '10'),
-                'untouched contract 1 intact (invalid deposit excluded)');
-            assert.ok(scoped.some(r => r[0] === 2 && r[1] === 1 && r[2] === '5.000000000000000001'),
-                'touched fractional custody recomputed at full precision');
-            assert.ok(scoped.some(r => r[0] === 2 && r[1] === 2 && r[2] === '1'),
-                'invalid withdrawal did not reduce custody');
-            assert.ok(!scoped.some(r => r[0] === 3 && r[1] === 2), 'zero-custody pair stays pruned');
-        });
-    });
 });

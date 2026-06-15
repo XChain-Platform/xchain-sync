@@ -575,9 +575,9 @@ describe('ClientSync', function(){
         });
 
         it('returns no mismatches when the follower is complete (local >= source)', async function(){
-            db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, contract_balances: 12 })[t];
+            db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, deposits: 12 })[t];
             // A follower legitimately ahead on a table is not flagged.
-            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 4999, contract_balances: 12 });
+            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 4999, deposits: 12 });
             assert.strictEqual(mismatches.length, 0);
         });
 

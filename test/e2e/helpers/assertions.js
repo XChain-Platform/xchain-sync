@@ -17,9 +17,9 @@ const testDbModule = require('./testDb');
 // Columns excluded from the byte comparison: local-machine artifacts that are
 // NOT replicated data (each side writes its own value by design).
 //   - sync_meta id/logged_at: AUTO_INCREMENT + local write timestamp.
-//   - balances/contract_balances id: the follower REBUILDS these aggregates
+//   - balances id: the follower REBUILDS this aggregate
 //     (DELETE + re-INSERT), so its AUTO_INCREMENT ids legitimately differ
-//     from the source's; the (address|contract, tick, amount) content is the
+//     from the source's; the (address, tick, amount) content is the
 //     replicated contract. (A full-snapshot bootstrap copies source ids
 //     verbatim, so id equality WOULD hold right after bootstrap — comparing
 //     it would make the oracle pass or fail depending on which path
@@ -28,7 +28,6 @@ const testDbModule = require('./testDb');
 const COLUMN_EXCLUSIONS = {
     sync_meta: ['id', 'logged_at'],
     balances: ['id'],
-    contract_balances: ['id'],
 };
 
 // Tables compared with SUBSET semantics (every replica row must exist
@@ -63,7 +62,7 @@ const SUBSET_TABLES = new Set([
 // exactly the way the source indexer writes them — that contract broke in
 // production twice: DOUBLE-promotion corruption and trailing-zero format
 // drift).
-const DERIVED_AGGREGATES = { indexer: ['balances', 'contract_balances'], decoder: [] };
+const DERIVED_AGGREGATES = { indexer: ['balances'], decoder: [] };
 
 // Canonicalize one row for comparison: stable key order, Buffers as hex,
 // BigInt as string. DATETIME/TIMESTAMP already arrive as strings

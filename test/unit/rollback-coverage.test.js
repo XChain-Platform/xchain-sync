@@ -66,13 +66,13 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 // ── Coverage that lives outside ClientRollback's table arrays ──
 
 // Recomputed from surviving ledger rows during rollback (ClientRollback and
-// ClientApplier both rebuild these derived aggregates):
-//   - balances           ← credits/debits
-//   - contract_balances   ← valid deposits/withdrawals (custody balances).
-// Both lack an action_index column, so the source poller can't stream them
+// ClientApplier both rebuild this derived aggregate):
+//   - balances           ← credits/debits (includes contract custody, keyed by
+//                           the contract's derived address C:<CHAIN>:<action_index>)
+// It lacks an action_index column, so the source poller can't stream it
 // per-block (its action_index JOIN errors and is swallowed); the replica derives
-// them from the surviving ledger rows instead.
-const RECOMPUTED = ['balances', 'contract_balances'];
+// it from the surviving ledger rows instead.
+const RECOMPUTED = ['balances'];
 
 // Deleted by bespoke logic in _rollbackIndexer rather than the generic loops.
 // attestation_validator_stats is a snapshot-only aggregate the thin replica

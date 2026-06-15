@@ -90,15 +90,6 @@ class ClientApplier {
             if(dbType === 'indexer' && (data.credits || data.debits)){
                 await this._rebuildBalancesTouchedBy(data.credits, data.debits);
             }
-            // contract_balances is the deposits/withdrawals analogue of balances:
-            // a derived aggregate with no action_index column, so the source poller
-            // can't stream it per-block (its action_index JOIN errors). Recompute it
-            // here whenever the payload touched deposits/withdrawals, exactly as we do
-            // for balances above — otherwise replica custody balances stay stale until
-            // the next full snapshot.
-            if(dbType === 'indexer' && (data.deposits || data.withdrawals)){
-                await this._rebuildContractBalancesTouchedBy(data.deposits, data.withdrawals);
-            }
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
@@ -137,13 +128,6 @@ class ClientApplier {
         await this._rebuildBalances(scope);
     }
 
-    // deposits/withdrawals analogue of _rebuildBalancesTouchedBy.
-    async _rebuildContractBalancesTouchedBy(deposits, withdrawals){
-        let scope = this._collectRebuildScope([deposits, withdrawals], 'contract_index');
-        if(scope && !scope.keys.length) return;
-        await this._rebuildContractBalances(scope);
-    }
-
     // Recompute the balances table from the current credits/debits rows.
     // SQL lives in balance-helpers so ClientRollback uses the same query.
     // scope (optional): { keys, ticks } from _collectRebuildScope; null/absent
@@ -152,21 +136,6 @@ class ClientApplier {
         try {
             await balanceHelpers.rebuildBalances(this.db,
                 scope ? { addressIds: scope.keys, tickIds: scope.ticks } : undefined);
-        } catch(e){
-            if(e.errno !== 1146) throw e;
-            // Tables may not exist on a decoder replica — the dbType guard above
-            // should prevent this from being reached, but the catch keeps the
-            // applier's containing transaction from blowing up if it is.
-        }
-    }
-
-    // Recompute the contract_balances table from the current deposits/withdrawals
-    // rows (valid status only).  SQL lives in balance-helpers so ClientRollback
-    // uses the same query.  Indexer-shaped DBs only.
-    async _rebuildContractBalances(scope){
-        try {
-            await balanceHelpers.rebuildContractBalances(this.db,
-                scope ? { contractIndexes: scope.keys, tickIds: scope.ticks } : undefined);
         } catch(e){
             if(e.errno !== 1146) throw e;
             // Tables may not exist on a decoder replica — the dbType guard above
@@ -256,12 +225,6 @@ class ClientApplier {
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer' && (snapshotData.tables.credits || snapshotData.tables.debits)){
                 await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
-            }
-            // Same rationale as applyBlock: contract_balances is a derived aggregate
-            // with no action_index cursor, so refresh it from deposits/withdrawals
-            // whenever the incremental catch-up touched either.
-            if(dbType === 'indexer' && (snapshotData.tables.deposits || snapshotData.tables.withdrawals)){
-                await this._rebuildContractBalancesTouchedBy(snapshotData.tables.deposits, snapshotData.tables.withdrawals);
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');

@@ -77,38 +77,4 @@ async function rebuildBalances(db, scope) {
         args.concat(args));
 }
 
-// Recompute the contract_balances table from the surviving valid
-// deposits/withdrawals rows.  Uses DECIMAL(65,18) to preserve fractional
-// precision in the HAVING filter; only rows where custody is still positive
-// are retained (matches source indexer updateContractBalances behaviour).
-// scope (optional): { contractIndexes: [...], tickIds: [...] } — limits the
-// rebuild to those ids; an empty list means nothing was touched (no-op).
-async function rebuildContractBalances(db, scope) {
-    let pred = '';
-    let delPred = '';
-    let args = [];
-    if (scope) {
-        if (!scope.contractIndexes.length || !scope.tickIds.length) return;
-        let p = 'contract_index IN ' + inList(scope.contractIndexes)
-              + ' AND tick_id IN ' + inList(scope.tickIds);
-        pred = ' AND ' + p;
-        delPred = ' WHERE ' + p;
-        args = scope.contractIndexes.concat(scope.tickIds);
-    }
-    await db.doQuery('DELETE FROM contract_balances' + delPred, args);
-    await db.doQuery(`INSERT INTO contract_balances (contract_index, tick_id, amount)
-        SELECT contract_index, tick_id,
-            ${minimalDecimal("SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END)")}
-        FROM (
-            SELECT contract_index, tick_id, amount, 'deposit' as type FROM deposits
-                WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')${pred}
-            UNION ALL
-            SELECT contract_index, tick_id, amount, 'withdrawal' as type FROM withdrawals
-                WHERE status_id = (SELECT id FROM index_statuses WHERE status = 'valid')${pred}
-        ) t
-        GROUP BY contract_index, tick_id
-        HAVING SUM(CASE WHEN t.type = 'deposit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END) > 0`,
-        args.concat(args));
-}
-
-module.exports = { rebuildBalances, rebuildContractBalances };
+module.exports = { rebuildBalances };
