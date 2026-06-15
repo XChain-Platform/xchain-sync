@@ -70,7 +70,8 @@ describe('ServerPoller', function(){
             assert.ok(poller.blockScopedTables.includes('blocks'));
             assert.ok(poller.blockScopedTables.includes('transactions'));
             assert.ok(poller.blockScopedTables.includes('slash_events'));
-            assert.strictEqual(poller.blockScopedTables.length, 5);
+            assert.ok(poller.blockScopedTables.includes('contract_slash_debits'));
+            assert.strictEqual(poller.blockScopedTables.length, 6);
         });
 
         it('has action-scoped tables', function(){

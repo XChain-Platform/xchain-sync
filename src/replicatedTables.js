@@ -78,7 +78,11 @@ const TOPOLOGY = {
         // Tables scoped by block_index (not action_index).
         // slash_events keys off block_index (it has execution_index +
         // block_index but no action_index), so it is block-scoped.
-        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events'],
+        // contract_slash_debits keys off block_index (per-row slash debit log, same
+        // shape as slash_events), so it is block-scoped — streamed per block and entering
+        // the /status completeness count. The replica's ClientRollback reads it to restore
+        // slashed stake amounts on reorg, so it MUST replicate.
+        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'contract_slash_debits'],
 
         txScoped:     [],  // indexer joins via actions, not directly via tx_index
 

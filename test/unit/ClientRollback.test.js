@@ -41,11 +41,12 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 5 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 5);
+        it('has 6 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 6);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
+            assert.ok(rollback.blockTables.includes('contract_slash_debits'));
         });
 
         it('has action-scoped data tables', function(){
@@ -94,7 +95,7 @@ describe('ClientRollback', function(){
         it('deletes from block-scoped tables with block_index', async function(){
             await rollback.rollback(100);
             let blockDeletes = db.doQuery.getCalls().filter(c =>
-                c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+                c.args[0].includes('DELETE FROM') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
             );
             assert.strictEqual(blockDeletes.length, rollback.blockTables.length);
             for(let call of blockDeletes){
@@ -172,6 +173,20 @@ describe('ClientRollback', function(){
                 (c.args[0].includes("request_status = 'pending'"))
             );
             assert.strictEqual(resets.length, 0);
+        });
+
+        it('replays the slash-debit restore for both stake tables (block_index-keyed, before deletes)', async function(){
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let stakeRestore = calls.find(c => c.args[0].includes('UPDATE contract_stakes') && c.args[0].includes('contract_slash_debits') && c.args[0].includes('SET t.amount = d.prev_amount'));
+            let unstakeRestore = calls.find(c => c.args[0].includes('UPDATE contract_unstakes') && c.args[0].includes('contract_slash_debits'));
+            assert.ok(stakeRestore, 'expected a contract_stakes slash restore');
+            assert.ok(unstakeRestore, 'expected a contract_unstakes slash restore');
+            assert.deepStrictEqual(stakeRestore.args[1], ['contract_stakes', 100, 100]);
+            assert.deepStrictEqual(unstakeRestore.args[1], ['contract_unstakes', 100, 100]);
+            let restoreIdx = calls.indexOf(stakeRestore);
+            let deleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `contract_stakes`'));
+            assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'slash restore must precede the contract_stakes delete');
         });
 
         it('rolls back transaction on error and rethrows', async function(){

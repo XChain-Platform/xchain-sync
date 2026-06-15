@@ -40,7 +40,11 @@ class ClientRollback {
             'transactions',
             'validator_rewards',
             'contract_state',
-            'slash_events'
+            'slash_events',
+            // Per-row slash debit log (one row per in-place contract_stakes/contract_unstakes
+            // amount reduction). Block-scoped like slash_events. The restore above reads it
+            // BEFORE this generic delete drops the orphaned rows; mirrors the source indexer.
+            'contract_slash_debits'
         ];
 
         // Tables that store data using action_index
@@ -266,6 +270,37 @@ class ClientRollback {
                     );
                 } catch(e){
                     // Column/table may not exist on older replica schemas — skip
+                }
+
+                // contract_slash_debits restore — an orphaned SLASH reduced
+                // contract_stakes/contract_unstakes.amount IN PLACE on surviving rows (the
+                // source records each debit's pre-slash `prev_amount`). The action-scoped
+                // delete below drops orphaned-range rows but never re-streams the surviving
+                // mutated row, so the replica keeps the slashed amount and diverges from the
+                // source after a reorg. Mirror the source restore (xchain-indexer
+                // rollback.js): copy back the EARLIEST orphaned debit's `prev_amount` per row
+                // — a pure string copy, byte-identical to the source (no arithmetic). Keys
+                // only on block_index/stake_action_index, so it ports cleanly (no
+                // ACTIVATION_DELAY_BLOCKS dependency).
+                for(let slashTbl of ['contract_stakes', 'contract_unstakes']){
+                    try {
+                        await this.db.doQuery(
+                            "UPDATE " + slashTbl + " t " +
+                            "JOIN contract_slash_debits d ON d.stake_action_index = t.action_index " +
+                            "SET t.amount = d.prev_amount " +
+                            "WHERE d.target_table = ? AND d.block_index >= ? " +
+                            "AND NOT EXISTS (" +
+                            "  SELECT 1 FROM contract_slash_debits e " +
+                            "  WHERE e.target_table = d.target_table " +
+                            "    AND e.stake_action_index = d.stake_action_index " +
+                            "    AND e.block_index >= ? " +
+                            "    AND (e.block_index < d.block_index " +
+                            "         OR (e.block_index = d.block_index AND e.id < d.id)))",
+                            [slashTbl, block_index, block_index]
+                        );
+                    } catch(e){
+                        // Table may not exist on older replica schemas — skip
+                    }
                 }
             }
 
