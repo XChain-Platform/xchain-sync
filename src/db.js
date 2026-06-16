@@ -760,6 +760,15 @@ class Database {
         return null;
     }
 
+    // Resolve a status name to its local index_statuses id. index_statuses is replicated, so the
+    // id resolves consistently against the replica's own *.status_id values. Used by
+    // ClientRollback's cooldown-maturity reversal mirror. Returns null if the status is absent
+    // (e.g. 'completed' never created because no cooldown has matured) — the caller then skips.
+    async getStatusId(status){
+        let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status]);
+        return rows.length > 0 ? Number(rows[0].id) : null;
+    }
+
     // Get all rows from a table for a given block (block_index-scoped tables)
     async getBlockScopedRows(table, block_index){
         let query = "SELECT * FROM `" + table + "` WHERE block_index = ?";

@@ -21,7 +21,7 @@
  ********************************************************************/
 
 const balanceHelpers = require('./balance-helpers');
-const { activationDelayBlocks } = require('./consensus-constants');
+const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 
 class ClientRollback {
 
@@ -445,6 +445,54 @@ class ClientRollback {
                     // Table may not exist on older replica schemas — skip
                 }
                 } // end deactivation_block mirror (activationDelay present)
+
+                // Reverse orphaned cooldown-maturity completions — mirror of
+                // xchain-indexer/src/rollback.js (commit 309fec7). When a capability/contract
+                // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit
+                // carrying the unstake's OWN (earlier-block) action_index and flips the surviving
+                // unstake row's status_id to 'completed' IN PLACE. Both effects live on rows whose
+                // action_index < firstActionIndex, so the dataTables delete below can't touch them;
+                // the credit has no block_index and can't be range-deleted at all; and the surviving
+                // in-place mutation never rides the forward per-block stream, so the replica only
+                // acquires the matured state via full snapshot. On a reorg that orphans the maturity
+                // block (cooldown_end_block >= block_index) the source deletes the refund credit and
+                // resets status_id to 'valid'. Without this mirror the replica keeps a phantom refund
+                // (overstated rebuilt balance) and a stuck 'completed' unstake the re-maturity sweep
+                // skips forever — a credits/balances/unstakes divergence (hard balance fork if a later
+                // SLASH cuts the stake). Predicates key only on cooldown_end_block/block_index, so
+                // they port byte-identically; the GAS tick (capability refund) is the frozen
+                // consensus constant, never a hub poll. Runs BEFORE the dataTables delete.
+                try {
+                    let completedStatusId = await this.db.getStatusId('completed');
+                    let validStatusId     = await this.db.getStatusId('valid');
+                    if(completedStatusId !== null && validStatusId !== null){
+                        let gasTick = gasTickSymbol();
+                        if(gasTick){
+                            // Capability maturity refund is paid in GAS, keyed by the unstake's action_index.
+                            await this.db.doQuery(
+                                "DELETE c FROM credits c " +
+                                "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
+                                "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
+                                "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+                                [gasTick, completedStatusId, block_index, block_index]);
+                        }
+                        // Contract maturity refund is paid in the unstake's own tick.
+                        await this.db.doQuery(
+                            "DELETE c FROM credits c " +
+                            "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+                            "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+                            [completedStatusId, block_index, block_index]);
+                        // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
+                        await this.db.doQuery(
+                            "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+                            [validStatusId, completedStatusId, block_index, block_index]);
+                        await this.db.doQuery(
+                            "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+                            [validStatusId, completedStatusId, block_index, block_index]);
+                    }
+                } catch(e){
+                    // Tables/columns may not exist on older replica schemas — skip
+                }
             }
 
             // Delete from action-scoped data tables

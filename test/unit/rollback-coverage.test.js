@@ -294,4 +294,38 @@ describe('Rollback coverage guard @regression', function(){
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js — keep them identical');
     });
+
+    // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
+    // in-place reset on SURVIVING credits/unstakes/contract_unstakes rows. Those tables are
+    // already in both rollback lists, so the table-membership guard above structurally cannot
+    // catch an unmirrored reset (this is exactly how the gap reached HEAD — see #4248/#4249).
+    // Assert both rollback.js (source) and ClientRollback.js (replica) carry all four operations
+    // the source added in 309fec7. If you add a new in-place reorg reset to one file, mirror it
+    // in the other and extend this guard.
+    it('cooldown-maturity reversal is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        let indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/rollback.js');
+        if(!fs.existsSync(indexerPath)) this.skip();
+        // Whitespace-normalised fragments that uniquely identify each of the four ops.
+        const OPS = [
+            { name: 'capability refund-credit delete', re: /DELETE c FROM credits c JOIN unstakes u ON u\.action_index = c\.action_index/ },
+            { name: 'contract refund-credit delete',   re: /DELETE c FROM credits c JOIN contract_unstakes cu ON cu\.action_index = c\.action_index/ },
+            { name: 'unstakes status reset',           re: /UPDATE unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
+            { name: 'contract_unstakes status reset',  re: /UPDATE contract_unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
+        ];
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            // Normalise away the two ways the same SQL is spelled: the source uses backtick
+            // template literals; the replica concatenates double-quoted strings with `+`. Strip
+            // quotes/backticks and the string-concat `+`, then collapse whitespace, so both reduce
+            // to the same fragment text.
+            const norm = fs.readFileSync(p, 'utf8')
+                .replace(/[`"']/g, ' ')
+                .replace(/\s+\+\s+/g, ' ')
+                .replace(/\s+/g, ' ');
+            for(const op of OPS){
+                assert.ok(op.re.test(norm), `${label} is missing the cooldown-maturity ${op.name} — source and replica must both reverse it on reorg`);
+            }
+        }
+    });
 });

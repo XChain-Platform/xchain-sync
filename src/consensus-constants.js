@@ -54,4 +54,15 @@ function activationDelayBlocks(coin){
     return ticker ? ACTIVATION_DELAY_BLOCKS_BY_COIN[ticker] : undefined;
 }
 
-module.exports = { ACTIVATION_DELAY_BLOCKS_BY_COIN, activationDelayBlocks };
+// GAS token TICK — the genesis gas-asset symbol (xchain-indexer/src/config.js: `gas = 'XCHAIN'`,
+// hardcoded). Network-independent and identical across all chains, like GAS_PRICE / GAS_SCHEDULE.
+// Capability UNSTAKE cooldown refunds are paid in GAS, so ClientRollback's cooldown-maturity
+// reversal needs it to byte-match the source indexer's GAS-tick refund-credit delete. Never
+// hub-polled — a frozen consensus constant, changeable only via a coordinated node upgrade.
+const GAS_TICK = 'XCHAIN';
+
+// Resolve the GAS TICK. Coin-independent today (one frozen symbol across chains); kept as a
+// function to mirror activationDelayBlocks() and to leave room for a future per-chain split.
+function gasTickSymbol(){ return GAS_TICK; }
+
+module.exports = { ACTIVATION_DELAY_BLOCKS_BY_COIN, activationDelayBlocks, GAS_TICK, gasTickSymbol };
