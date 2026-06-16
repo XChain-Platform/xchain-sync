@@ -383,7 +383,9 @@ async function startApi(){
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
 
         try {
-            await builder.streamIncrementalSnapshot(db, sinceBlock, res);
+            // `chain` is the coin key (e.g. 'BTC'); the builder needs it to resolve the
+            // frozen ACTIVATION_DELAY_BLOCKS for the in-place updated-rows channel.
+            await builder.streamIncrementalSnapshot(db, sinceBlock, res, chain);
         } catch(e){
             console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e);
             if(!res.headersSent)

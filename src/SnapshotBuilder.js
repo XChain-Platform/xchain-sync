@@ -21,8 +21,10 @@
 
 const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('./schema-version');
-const { encodeRow } = require('./wireCodec');
+const { encodeRow, encodeTables } = require('./wireCodec');
 const replicatedTables = require('./replicatedTables');
+const { collectUpdatedRows } = require('./updatedRows');
+const { activationDelayBlocks } = require('./consensus-constants');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -181,7 +183,7 @@ class SnapshotBuilder {
     //     repeated full dump is idempotent (existing ids no-op, new ones insert).
     //     Without this, an incrementally-caught-up follower would never receive
     //     events rows for the gap and would silently drift behind the source.
-    async streamIncrementalSnapshot(db, sinceBlock, res){
+    async streamIncrementalSnapshot(db, sinceBlock, res, coin){
         // Same REPEATABLE READ snapshot discipline as streamFullSnapshot: the
         // anchor, hash headers, and all per-table reads must observe one block
         // height so the catch-up payload can't mix rows from two heights while
@@ -342,9 +344,24 @@ class SnapshotBuilder {
                 }
             }
 
-            // Release the read view only after the final table read (see the
-            // matching note in streamFullSnapshot).
-            gzip.write('}}');
+            // Close the "tables" object, then emit the in-place updated-rows channel
+            // as a sibling key. The action_index window above can't reach a surviving
+            // row (created below the window) that was mutated in place during the
+            // catch-up range, so carry its current full state here for the follower to
+            // UPSERT (ClientApplier._applyUpdatedRows). Indexer only — decoder has none
+            // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
+            // the snapshot's block height. Window starts at sinceBlock to match the
+            // `block_index >= sinceBlock` data scoping above (over-inclusion is a
+            // harmless UPSERT). tokens.escrow_action_index is omitted — the follower
+            // re-derives it locally (ClientApplier._maybeRederiveEscrow).
+            gzip.write('}');
+            if(dbType === 'indexer'){
+                let delay = activationDelayBlocks(coin);
+                if(delay === undefined) delay = null;
+                let updated = await collectUpdatedRows(db, sinceBlock, lastBlock, delay, conn);
+                gzip.write(',"updated_rows":' + JSON.stringify(encodeTables(updated), bigIntReplacer));
+            }
+            gzip.write('}');
             await db.commitReadSnapshot(conn);
             snapshotOpen = false;
             gzip.end();

@@ -23,11 +23,23 @@ const validation          = require('./validation');
 const balanceHelpers      = require('./balance-helpers');
 const { SCHEMA_VERSION }  = require('./schema-version');
 const { decodeValue }     = require('./wireCodec');
+const { rederiveEscrowGate } = require('./ClientRollback');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
 // to a full recompute anyway) — fall back to the unscoped rebuild.
 const MAX_SCOPED_REBUILD_IDS = 1000;
+
+// Tables whose presence in a block/catch-up payload can change a token's
+// ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
+// closed state). When any appears, re-derive tokens.escrow_action_index from the
+// already-replicated offer/status tables — the forward-apply counterpart to the
+// reorg re-derive in ClientRollback (the gate is never carried on the wire because
+// it is fully replica-derivable). See _maybeRederiveEscrow.
+const ESCROW_TRIGGER_TABLES = new Set([
+    'orders', 'order_statuses', 'swaps', 'swap_statuses',
+    'dispensers', 'dispenser_statuses', 'tokens'
+]);
 
 class ClientApplier {
 
@@ -87,8 +99,18 @@ class ClientApplier {
             // the new rows touched where possible. Indexer-shaped DBs only —
             // decoder has no balances/credits/debits tables.
             let dbType = (this.db && this.db.dbType) || 'indexer';
-            if(dbType === 'indexer' && (data.credits || data.debits)){
-                await this._rebuildBalancesTouchedBy(data.credits, data.debits);
+            if(dbType === 'indexer'){
+                // Apply in-place mutations to SURVIVING rows (deactivation_block,
+                // SLASH amounts, request_status) the action-scoped insert loop above
+                // can't reach — they live on rows created by an earlier block. Without
+                // this UPSERT every forward in-place mutation is silently dropped.
+                if(payload.updated_rows)
+                    await this._applyUpdatedRows(payload.updated_rows);
+                // Re-derive tokens.escrow_action_index when this block moved any
+                // offer/status (the gate is replica-derived, not wire-carried).
+                await this._maybeRederiveEscrow(data);
+                if(data.credits || data.debits)
+                    await this._rebuildBalancesTouchedBy(data.credits, data.debits);
             }
             await this.db.commitTransaction();
         } catch(e){
@@ -223,8 +245,15 @@ class ClientApplier {
             // happens to touch credits/debits (mirrors applyBlock above).
             // Indexer-shaped DBs only — decoder has no balances table.
             let dbType = (this.db && this.db.dbType) || 'indexer';
-            if(dbType === 'indexer' && (snapshotData.tables.credits || snapshotData.tables.debits)){
-                await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
+            if(dbType === 'indexer'){
+                // Mirror applyBlock: in-place mutations to below-window surviving rows
+                // ride a separate updated_rows map (the incremental's action_index
+                // window can't reach them), and the escrow gate is re-derived locally.
+                if(snapshotData.updated_rows)
+                    await this._applyUpdatedRows(snapshotData.updated_rows);
+                await this._maybeRederiveEscrow(snapshotData.tables);
+                if(snapshotData.tables.credits || snapshotData.tables.debits)
+                    await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
@@ -283,6 +312,87 @@ class ClientApplier {
 
             let query = insertPrefix + valueClauses.join(', ');
             await this.db.doQuery(query, args);
+        }
+    }
+
+    // Apply the in-place "updated rows" channel: each entry is the CURRENT full
+    // state of a surviving row the source mutated in place (deactivation_block,
+    // SLASH amount, request_status). These rows already exist on the replica with
+    // their stale values, so they must be UPSERTed (INSERT … ON DUPLICATE KEY
+    // UPDATE) — a plain INSERT would collide on the row's UNIQUE action_index.
+    // updated is a { table: [rows] } map; an old payload simply omits it.
+    async _applyUpdatedRows(updated){
+        if(!updated || typeof updated !== 'object') return;
+        for(let table in updated){
+            let rows = updated[table];
+            if(!rows || rows.length === 0) continue;
+            await this._upsertRows(table, rows);
+        }
+    }
+
+    // INSERT … ON DUPLICATE KEY UPDATE for a batch of full rows. Every column is
+    // written on both insert and update, so an already-present surviving row has
+    // its mutated columns overwritten to the source's current values while a
+    // not-yet-present row (e.g. created and mutated within the same window) is
+    // inserted. Identifier validation + binary decode mirror _insertRows.
+    async _upsertRows(table, rows){
+        if(!rows || rows.length === 0) return;
+
+        let tableCheck = validation.validateIdentifier(table);
+        if(!tableCheck.valid){
+            console.error('Rejected table name in _upsertRows: ' + table + ' (' + tableCheck.reason + ')');
+            return;
+        }
+
+        let columns = Object.keys(rows[0]);
+        for(let col of columns){
+            let colCheck = validation.validateIdentifier(col);
+            if(!colCheck.valid){
+                console.error('Rejected column name in _upsertRows: ' + col + ' (' + colCheck.reason + ')');
+                return;
+            }
+        }
+        let colList      = columns.map(c => '`' + c + '`').join(', ');
+        let placeholders = columns.map(() => '?').join(', ');
+        // VALUES(col) back-reference is the MariaDB idiom for "the value this row
+        // would have inserted"; updating the key column to itself is a harmless no-op.
+        let updateList   = columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ');
+
+        let insertPrefix = 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
+        let updateSuffix = ' ON DUPLICATE KEY UPDATE ' + updateList;
+
+        let batchSize = 100;
+        for(let i = 0; i < rows.length; i += batchSize){
+            let batch = rows.slice(i, i + batchSize);
+            let valueClauses = [];
+            let args = [];
+            for(let row of batch){
+                valueClauses.push('(' + placeholders + ')');
+                for(let col of columns)
+                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
+            }
+            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
+            await this.db.doQuery(query, args);
+        }
+    }
+
+    // Re-derive tokens.escrow_action_index from the already-replicated offer/status
+    // tables when this payload moved any escrow-relevant row. The gate is fully
+    // replica-derivable (it is never carried on the wire), so the forward-apply
+    // path runs the SAME re-derive ClientRollback runs on reorg — keeping source
+    // and replica byte-identical with no new payload field. `tables` is the payload's
+    // table map (live block `data` or incremental `tables`).
+    async _maybeRederiveEscrow(tables){
+        if(!tables) return;
+        let touched = false;
+        for(let t in tables){
+            if(ESCROW_TRIGGER_TABLES.has(t)){ touched = true; break; }
+        }
+        if(!touched) return;
+        try {
+            await rederiveEscrowGate(this.db);
+        } catch(e){
+            // Tables/columns may not exist on older/thin replica schemas — skip.
         }
     }
 }

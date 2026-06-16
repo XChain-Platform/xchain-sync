@@ -32,11 +32,20 @@
  *       on apply (see src/wireCodec.js). Prior versions corrupted every
  *       binary column. A v1 peer fails closed against a v2 snapshot. This wire
  *       change affected both dbTypes, so both keys advanced to 2 together.
+ *   3 — (indexer only) incremental snapshots and live block payloads gained an
+ *       `updated_rows` channel carrying the current state of SURVIVING rows the
+ *       source mutated in place (deactivation_block, SLASH amounts, v0
+ *       request_status) — rows the action_index-scoped paths can't reach. The
+ *       follower UPSERTs them (ClientApplier) and re-derives the escrow gate
+ *       locally. A v2 follower silently ignores the field and stays divergent,
+ *       so the bump forces a coordinated server+follower upgrade: a v2 follower
+ *       fails closed against a v3 incremental/full snapshot. Decoder is
+ *       unaffected (none of these tables exist there) and stays at 2.
  *
  ********************************************************************/
 
 // Per-dbType schema version. Bump only the key whose DDL or wire encoding changed
 // so the unaffected dbType's validators need not restart.
-const SCHEMA_VERSION = { indexer: 2, decoder: 2 };
+const SCHEMA_VERSION = { indexer: 3, decoder: 2 };
 
 module.exports = { SCHEMA_VERSION };

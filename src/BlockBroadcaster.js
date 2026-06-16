@@ -190,9 +190,15 @@ class BlockBroadcaster {
         // serializing — block payloads carry rows under `data`. Without this,
         // JSON.stringify mangles Buffers and the replica's blob columns corrupt
         // (see src/wireCodec.js).
-        let wireEvent = (event && event.data)
-            ? Object.assign({}, event, { data: encodeTables(event.data) })
-            : event;
+        let wireEvent = event;
+        if(event && (event.data || event.updated_rows)){
+            wireEvent = Object.assign({}, event);
+            if(event.data)         wireEvent.data         = encodeTables(event.data);
+            // updated_rows carries the same { table: [rows] } shape as data and may
+            // hold binary columns (e.g. attests/xcalls payload blobs), so it must ride
+            // the same base64 wire encoding or those columns corrupt on the replica.
+            if(event.updated_rows) wireEvent.updated_rows = encodeTables(event.updated_rows);
+        }
         let fullMessage = JSON.stringify(wireEvent, bigIntReplacer);
         let infraMessage = null;
 
@@ -216,6 +222,17 @@ class BlockBroadcaster {
                 }
             }
             let infraEvent = Object.assign({}, event, { data: encodeTables(filteredTables), sync_mode: 'infra-only' });
+            // Filter updated_rows to the infra subset too (e.g. stakes/delegations are
+            // infra tables), so infra-only subscribers still receive in-place mutations
+            // to the consensus-relevant tables they do track.
+            if(event.updated_rows){
+                let filteredUpdated = {};
+                for(let tbl of Object.keys(event.updated_rows)){
+                    if(infraTables.has(tbl))
+                        filteredUpdated[tbl] = event.updated_rows[tbl];
+                }
+                infraEvent.updated_rows = encodeTables(filteredUpdated);
+            }
             infraMessage = JSON.stringify(infraEvent, bigIntReplacer);
         }
 

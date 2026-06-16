@@ -195,6 +195,31 @@ describe('BlockBroadcaster', function(){
             let infraMsg = JSON.parse(infra.send.firstCall.args[0]);
             assert.deepStrictEqual(infraMsg.data, {});
         });
+
+        it('encodes binary columns in the updated_rows channel (same wire codec as data)', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('1.2.3.4'), 'bitcoin', 'mainnet');
+            let event = { type: 'block', block_index: 7, data: { blocks: [{ id: 1 }] },
+                updated_rows: { attests: [{ action_index: 9, payload: Buffer.from('hi') }] } };
+            broadcaster.broadcast('bitcoin', 'mainnet', event);
+            let msg = JSON.parse(ws.send.firstCall.args[0]);
+            // Buffer must serialize to the base64 binary sentinel, not {"type":"Buffer"}.
+            assert.strictEqual(msg.updated_rows.attests[0].payload.__xbin__, Buffer.from('hi').toString('base64'));
+        });
+
+        it('infra-only subscriber receives the infra subset of updated_rows', function(){
+            let infra = mockWs();
+            broadcaster.addSubscription(infra, mockReq('2.3.4.5'), 'bitcoin', 'mainnet');
+            infra._syncMode = 'infra-only';
+            let event = { type: 'block', block_index: 8, data: { stakes: [{ id: 1 }] },
+                updated_rows: {
+                    stakes:          [{ action_index: 1 }],  // infra table → kept
+                    contract_stakes: [{ action_index: 2 }]   // non-infra    → dropped
+                }};
+            broadcaster.broadcast('bitcoin', 'mainnet', event, new Set(['stakes']));
+            let msg = JSON.parse(infra.send.firstCall.args[0]);
+            assert.deepStrictEqual(Object.keys(msg.updated_rows), ['stakes']);
+        });
     });
 
     describe('broadcastStatus', function(){

@@ -31,6 +31,8 @@
  ********************************************************************/
 
 const replicatedTables = require('./replicatedTables');
+const { collectUpdatedRows } = require('./updatedRows');
+const { activationDelayBlocks } = require('./consensus-constants');
 
 class ServerPoller {
 
@@ -43,6 +45,14 @@ class ServerPoller {
         this.config   = config;
         this.util     = util;
         this.dbType   = (db && db.dbType) ? db.dbType : 'indexer';
+
+        // Frozen per-chain ACTIVATION_DELAY_BLOCKS, needed to detect forward
+        // deactivation_block stamps for the in-place updated-rows channel (see
+        // updatedRows.js). A coin that is unrecognized (or omitted in a test
+        // harness) yields undefined/null — collectUpdatedRows then skips the
+        // deactivation_block class rather than scanning with a wrong delay.
+        let delay = activationDelayBlocks(chain);
+        this.activationDelay = (delay === undefined) ? null : delay;
 
         this.lastPolledBlock = null;
         this.running = false;
@@ -473,6 +483,28 @@ class ServerPoller {
                         // Table may not exist in older schemas — skip silently
                     }
                 }
+            }
+        }
+
+        // In-place mutations to SURVIVING (below-window) rows — deactivation_block
+        // stamps, SLASH amount reductions, and v0 request_status flips — are not
+        // reachable by the action_index-scoped joins above (those rows were created
+        // by an earlier block's action). Carry their current full state in a separate
+        // top-level `updated_rows` map so the follower can UPSERT them; without this
+        // every forward in-place mutation is silently dropped on the replica. Indexer
+        // only (decoder has none of these tables). tokens.escrow_action_index is NOT
+        // included — the follower re-derives it from the replicated offer/status
+        // tables (ClientApplier._maybeRederiveEscrow). Kept OUT of payload.data so an
+        // old follower that doesn't recognise the field simply ignores it (its apply
+        // loop iterates payload.data only) rather than mis-applying a non-row map.
+        if(this.dbType !== 'decoder'){
+            try {
+                let updated = await collectUpdatedRows(this.db, block_index, block_index, this.activationDelay);
+                if(updated && Object.keys(updated).length > 0)
+                    payload.updated_rows = updated;
+            } catch(e){
+                // Never let updated-rows collection break live block broadcasting.
+                console.error('updated_rows collection failed for block ' + block_index + ':', e);
             }
         }
 
