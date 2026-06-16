@@ -270,6 +270,12 @@ class ServerPoller {
             payload.ledger_hash   = hashRow.ledger_hash;
             payload.actions_hash  = hashRow.actions_hash;
             payload.contract_hash = hashRow.contract_hash;
+            // Fourth, replication-integrity hash (the in-place mutations + backdated refund
+            // credits the three hashes can't cover). Optional top-level field, NOT in
+            // sync_meta / the Merkle leaf / the hub-signed checkpoint; a follower with
+            // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
+            // for blocks indexed before the feature (the follower then skips the check).
+            payload.state_hash    = hashRow.state_hash;
 
             // Replicate the per-block transparency-log row (sync_meta) live. The
             // table is otherwise only carried by snapshots (SnapshotBuilder includes

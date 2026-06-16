@@ -702,12 +702,14 @@ class Database {
                     b.block_time,
                     t1.hash as ledger_hash,
                     t2.hash as actions_hash,
-                    t3.hash as contract_hash
+                    t3.hash as contract_hash,
+                    t4.hash as state_hash
                 FROM
                     blocks b
                     LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
                     LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
                     LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
+                    LEFT JOIN index_transactions t4 ON (t4.id=b.state_hash_id)
                 WHERE
                     b.block_index=?`;
         }

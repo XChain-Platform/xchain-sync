@@ -44,6 +44,9 @@
 // Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
 const BLOCK_HASH_VERSION = 2;
 
+const { buildStateHashData } = require('./stateHash');
+const { gasTickSymbol } = require('./consensus-constants');
+
 class BlockHasher {
 
     // db:   a DB handle exposing async doQuery(sql, params) against the REPLICA
@@ -229,6 +232,23 @@ class BlockHasher {
             actions_hash:  info['actions']['hash'],
             contract_hash: info['contracts']['hash']
         };
+    }
+
+    // Recompute the replication-integrity state_hash for a block from the replicated
+    // raw rows — the fourth hash covering the in-place mutations + backdated refund
+    // credits the three consensus hashes structurally cannot see (see stateHash.js).
+    // Conformance twin of xchain-indexer/src/db.js getBlockHashes' state_hash branch:
+    // both call the byte-identical buildStateHashData + the shared getDataHash. The
+    // caller MUST invoke this APPLY-TIME (tip = block_index) — never via a historical
+    // recompute, where the in-place-mutated rows have since moved on (see ClientSync).
+    // activationDelay is the frozen per-chain ACTIVATION_DELAY_BLOCKS; gasTick defaults
+    // to the consensus GAS constant.
+    async computeStateHash(block_index, activationDelay, gasTick){
+        let stateData = await buildStateHashData(this.db, block_index, {
+            activationDelay: activationDelay,
+            gasTick:         (gasTick !== undefined) ? gasTick : gasTickSymbol()
+        });
+        return this.util.getDataHash(stateData);
     }
 }
 

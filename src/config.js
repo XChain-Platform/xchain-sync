@@ -142,6 +142,14 @@ module.exports = {
         // read-only convenience mirrors whose state nothing downstream trusts.
         config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
 
+        // VERIFY_STATE_HASH — apply-time recompute of the per-block state_hash (the
+        // in-place mutations + backdated refund credits the three consensus hashes
+        // can't cover). Default ON; a mismatch HALTs durably, the same as a recompute
+        // divergence. Additive + fail-soft: a NULL state_hash (block indexed before the
+        // source had the feature) is skipped, so enabling it can never false-halt a
+        // back-level source. Set VERIFY_STATE_HASH=false only for throwaway mirrors.
+        config['VERIFY_STATE_HASH'] = (process.env.VERIFY_STATE_HASH || 'true').toLowerCase() !== 'false';
+
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
 

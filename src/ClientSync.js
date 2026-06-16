@@ -31,6 +31,7 @@ const axios       = require('axios');
 const zlib        = require('zlib');
 const validation  = require('./validation');
 const BlockHasher = require('./BlockHasher');
+const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 
 class ClientSync {
 
@@ -1074,6 +1075,27 @@ class ClientSync {
                 if(mismatches){
                     await this._haltOnDivergence(event.block_index, mismatches,
                         this.sources.slice(0, 1), 'local-recompute-divergence');
+                    return; // halted — do not advance lastAppliedBlock
+                }
+            }
+            // Replication-integrity check (validator track): the three hashes above cover
+            // only immutable block-scoped rows. The state_hash covers the in-place mutations
+            // + backdated refund credits the updated_rows / cooldownCredits channels carry —
+            // so a follower that silently dropped one of those applies now HALTS instead of
+            // serving divergent balances/status until the next full snapshot. APPLY-TIME ONLY:
+            // the mutated rows are in their block-`event.block_index` state at exactly this
+            // instant (just applied, before lastAppliedBlock advances). This must NEVER move
+            // into the historical _verifyRecompute paths (catch-up / cross-source), where
+            // those rows have since been mutated again. NULL state_hash (pre-feature blocks)
+            // is skipped.
+            if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
+                let delay = activationDelayBlocks(this.chain);
+                let localState = await this.blockHasher.computeStateHash(
+                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol());
+                if(localState !== event.state_hash){
+                    await this._haltOnDivergence(event.block_index,
+                        [{ field: 'state_hash', a: event.state_hash, b: localState }],
+                        this.sources.slice(0, 1), 'state-hash-divergence');
                     return; // halted — do not advance lastAppliedBlock
                 }
             }

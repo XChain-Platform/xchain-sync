@@ -1,0 +1,77 @@
+{
+  "block_index": 1000,
+  "activation_delay": 6,
+  "gas_tick": "XCHAIN",
+  "completed_id": 7,
+  "results": [
+    [
+      {
+        "action_index": 10,
+        "deactivation_block": 1006
+      }
+    ],
+    [],
+    [
+      {
+        "action_index": 11,
+        "deactivation_block": 1006
+      }
+    ],
+    [],
+    [
+      {
+        "action_index": 12,
+        "amount": "900"
+      }
+    ],
+    [],
+    [],
+    [
+      {
+        "action_index": 13,
+        "amount": "50"
+      }
+    ],
+    [
+      {
+        "action_index": 14,
+        "request_status": "fulfilled",
+        "resolved_block": 1000
+      }
+    ],
+    [
+      {
+        "action_index": 15,
+        "request_status": "expired",
+        "resolved_block": 1000
+      }
+    ],
+    [
+      {
+        "action_index": 16,
+        "status": "completed"
+      }
+    ],
+    [
+      {
+        "action_index": 17,
+        "status": "completed"
+      }
+    ],
+    [
+      {
+        "action_index": 16,
+        "address": "1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev",
+        "tick": "XCHAIN",
+        "amount": "1000"
+      },
+      {
+        "action_index": 17,
+        "address": "1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde",
+        "tick": "JDOG",
+        "amount": "500"
+      }
+    ]
+  ],
+  "expected_state_hash": "7d99b6756840c44e1e93d02e91710e77e809688216e4af54748adfe51965c8c8"
+}

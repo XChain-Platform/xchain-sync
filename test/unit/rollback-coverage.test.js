@@ -373,4 +373,38 @@ describe('Rollback coverage guard @regression', function(){
         assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
     });
+
+    // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from
+    // src/stateHash.js: the indexer stores it at index-time, the follower recomputes it
+    // apply-time and halts on mismatch. The two copies are a byte-aligned twin (separate
+    // npm packages, no cross-dep) — any drift silently turns a divergence detector into a
+    // false-halt generator. Lock them identical (skip if the sibling indexer repo absent).
+    it('stateHash.js is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/stateHash.js');
+        const indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/stateHash.js');
+        if(!fs.existsSync(indexerPath)) this.skip();
+        assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+            'stateHash.js drifted between xchain-sync and xchain-indexer — keep the twin byte-identical');
+    });
+
+    // The state_hash selection must mirror the SAME mutation classes the updated_rows +
+    // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
+    // block columns — or the integrity hash covers a different row set than it protects.
+    it('stateHash.js selection predicates mirror the replicated mutation classes', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/stateHash.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const PREDICATES = [
+            { name: 'deactivation_block stamp',  re: /WHERE deactivation_block BETWEEN \? AND \?/ },
+            { name: 'SLASH debit-log join',      re: /JOIN .* d ON d\.stake_action_index = t\.action_index/ },
+            { name: 'v0 request_status flip',    re: /WHERE version = 0 AND resolved_block BETWEEN \? AND \?/ },
+            { name: 'cooldown status by maturity block', re: /WHERE t\.cooldown_end_block BETWEEN \? AND \?/ },
+            { name: 'capability GAS refund credit',      re: /JOIN unstakes u ON \(u\.action_index = c\.action_index/ },
+            { name: 'contract own-tick refund credit',   re: /JOIN contract_unstakes cu ON \(cu\.action_index = c\.action_index/ },
+        ];
+        for(const p of PREDICATES){
+            assert.ok(p.re.test(src), `stateHash.js is missing the ${p.name} selection — its hash would not cover that replicated mutation class`);
+        }
+    });
 });
