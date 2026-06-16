@@ -71,7 +71,10 @@ describe('ServerPoller', function(){
             assert.ok(poller.blockScopedTables.includes('transactions'));
             assert.ok(poller.blockScopedTables.includes('slash_events'));
             assert.ok(poller.blockScopedTables.includes('contract_slash_debits'));
-            assert.strictEqual(poller.blockScopedTables.length, 6);
+            // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
+            assert.ok(poller.blockScopedTables.includes('capability_slash_events'));
+            assert.ok(poller.blockScopedTables.includes('capability_slash_debits'));
+            assert.strictEqual(poller.blockScopedTables.length, 8);
         });
 
         it('has action-scoped tables', function(){

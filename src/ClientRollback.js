@@ -330,6 +330,11 @@ class ClientRollback {
                 // IN PLACE on surviving rows; copy back the EARLIEST orphaned debit's verbatim
                 // prev_amount per row. Same shape/keys as the contract path; mirrors the source
                 // indexer (xchain-indexer rollback.js).
+                //
+                // Same-block tiebreak is slash_action_index (the deterministic, replay-stable
+                // wire-SLASH action_index), NOT AUTO_INCREMENT `id` — must byte-match the source
+                // indexer or a reorg retracting a block with ≥2 capability slashes on one stake
+                // row restores a divergent amount on the replica vs the source (stake-weight fork).
                 for(let slashTbl of ['stakes', 'unstakes']){
                     try {
                         await this.db.doQuery(
@@ -343,7 +348,7 @@ class ClientRollback {
                             "    AND e.stake_action_index = d.stake_action_index " +
                             "    AND e.block_index >= ? " +
                             "    AND (e.block_index < d.block_index " +
-                            "         OR (e.block_index = d.block_index AND e.id < d.id)))",
+                            "         OR (e.block_index = d.block_index AND e.slash_action_index < d.slash_action_index)))",
                             [slashTbl, block_index, block_index]
                         );
                     } catch(e){

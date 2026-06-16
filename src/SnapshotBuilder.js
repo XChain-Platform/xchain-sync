@@ -258,10 +258,20 @@ class SnapshotBuilder {
             // are intentionally omitted. They ride along in the full snapshot only;
             // for price_snapshots, live convergence is handled by the hub DB sync
             // mirror, not this block stream.
-            // capability_slash_events (WI-2 bump 2) is block-scoped like slash_events — its
-            // twin debit log capability_slash_debits, like contract_slash_debits, rides the
-            // streaming topology + full snapshot rather than this incremental set.
-            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'capability_slash_events', 'sync_meta']);
+            // Every block_index-scoped streamed table must be filtered by block_index here:
+            // these tables carry NO action_index column (e.g. the slash debit logs key off
+            // execution_index / slash_action_index, not action_index), so the action_index
+            // branch below cannot reach them — a follower catching up incrementally over their
+            // range would hit `SELECT … WHERE action_index >= ?` → ER_BAD_FIELD_ERROR → caught
+            // → continue, silently dropping every row (short /status count; the reorg restore,
+            // which JOINs the debit logs, then finds nothing to restore).
+            //
+            // Derive the set from the streaming topology (the single source of truth) rather
+            // than a hand-maintained literal, so the next block-scoped table added to
+            // replicatedTables can never re-open this gap. sync_meta is appended because it is
+            // streamed inline by ServerPoller (not via the blockScoped topology) but is still
+            // block_index-scoped for incremental catch-up.
+            let indexerBlockScoped = new Set([...replicatedTables.getTopology('indexer').blockScoped, 'sync_meta']);
 
             // Append-only lookup/dedup tables (index_actions, index_addresses,
             // index_transactions, …). They carry neither a block_index nor an

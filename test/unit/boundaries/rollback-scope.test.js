@@ -40,7 +40,7 @@ describe('Boundary: Rollback Scope', function(){
         db.getFirstActionIndex.resolves(1000);
         await rollback.rollback(10);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+            c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
         for(let call of blockDeletes){
             assert.deepStrictEqual(call.args[1], [10]);
@@ -51,7 +51,7 @@ describe('Boundary: Rollback Scope', function(){
         db.getFirstActionIndex.resolves(100);
         await rollback.rollback(1);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+            c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
         for(let call of blockDeletes){
             assert.deepStrictEqual(call.args[1], [1]);
@@ -68,7 +68,7 @@ describe('Boundary: Rollback Scope', function(){
         db.getFirstActionIndex.resolves(0);
         await rollback.rollback(0);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+            c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
         for(let call of blockDeletes){
             assert.deepStrictEqual(call.args[1], [0]);
@@ -84,7 +84,7 @@ describe('Boundary: Rollback Scope', function(){
         assert.strictEqual(actionDeletes.length, 0);
         // Block-scoped deletes still happen
         let blockDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+            c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
         assert.strictEqual(blockDeletes.length, rollback.blockTables.length);
     });
@@ -94,7 +94,7 @@ describe('Boundary: Rollback Scope', function(){
         await rollback.rollback(9999);
         // Block-scoped deletes execute (but DELETE WHERE block_index >= 9999 will match nothing)
         let blockDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
+            c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
         assert.strictEqual(blockDeletes.length, rollback.blockTables.length);
         assert.strictEqual(db.commitTransaction.calledOnce, true);

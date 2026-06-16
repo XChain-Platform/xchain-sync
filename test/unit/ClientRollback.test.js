@@ -41,12 +41,15 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 6 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 6);
+        it('has 8 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 8);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
             assert.ok(rollback.blockTables.includes('contract_slash_debits'));
+            // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
+            assert.ok(rollback.blockTables.includes('capability_slash_events'));
+            assert.ok(rollback.blockTables.includes('capability_slash_debits'));
         });
 
         it('has action-scoped data tables', function(){
