@@ -99,8 +99,8 @@
     ]
   ],
   "expected": {
-    "ledger_hash": "a8aab92fc2cf1e0f81871704c91bba5e6851032ad342ffc5c1ad4cac973eef07",
-    "actions_hash": "d96a1a272cd593fde77f348b310ec673c3595923687439e37a0d2617c1dd2c3f",
-    "contract_hash": "891d638a2e48d3a7dd08db9043bf6542a7ad8aa12c1dc645259ebcf59b88816d"
+    "ledger_hash": "b877b7b65bae57b5f7db81a32013bc69afea70549f7bf1fe7e6dccd82929acdc",
+    "actions_hash": "a87f2987494bbe53eafdddaf8a6d5fea0672a9cded1c8ad157f107181d5bae36",
+    "contract_hash": "2e473721e1df1581a90e7e8fa57bf5928b166fe1e5efab79efacc3f88b0da0dd"
   }
 }

@@ -42,7 +42,7 @@
 //   v1 — hashed raw AUTO_INCREMENT lookup ids (diverged across nodes after a reorg).
 //   v2 — hashes the resolved canonical strings (address/tick/action/status); id-independent.
 // Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
-const BLOCK_HASH_VERSION = 2;
+const BLOCK_HASH_VERSION = 1;
 
 const { buildStateHashData } = require('./stateHash');
 const { gasTickSymbol } = require('./consensus-constants');
