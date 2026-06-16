@@ -155,6 +155,14 @@ class ClientRollback {
             'withdrawals',
             'anchor_actions',
             'attests',
+            // full_node_verifications: NODEPROOF verdict rows (verified-validator
+            // tier), keyed by the verdict action_index and rolled back as a dataTable
+            // by the source (xchain-indexer/src/rollback.js). Mirror it here or a reorg
+            // leaves orphaned PASS-verdict rows on every replica — the follower keeps
+            // mirroring a verified-full-node set (which drives the oracle-round reward
+            // split) that the source chain never finalized. Generic action_index delete,
+            // no restore — same shape as the source.
+            'full_node_verifications',
             'prices',
             // Programmable-policy controller bind/unbind event logs. Append-only,
             // keyed by action_index, never mutated in-place (cooldown expiry is
