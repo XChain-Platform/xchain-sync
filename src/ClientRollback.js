@@ -505,6 +505,33 @@ class ClientRollback {
                 }
             }
 
+            // Reset an anchor batch's surviving parent v1 stamped 'invalid_archive' by an
+            // orphaned final chunk — mirror of xchain-indexer rollback.js. When the last v2
+            // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
+            // check, the source stamps the parent v1 (in an earlier, surviving block)
+            // 'invalid_archive' IN PLACE. If that completing chunk is in the orphaned range,
+            // the dataTables delete below removes the chunk but cannot undo the parent stamp,
+            // leaving the replica's parent stuck 'invalid_archive' while a from-genesis replay
+            // re-derives its pre-flip status. Self-join the parent to an orphaned v2 chunk of
+            // the same match_batch_seq whose status is 'valid' (a completing chunk is always
+            // 'valid'; the valid-filter excludes a late rejected duplicate) and reset to
+            // 'unverified', the conservative re-verification state. Runs BEFORE the delete.
+            if(firstActionIndex !== null){
+                try {
+                    await this.db.doQuery(
+                        "UPDATE anchor_actions p " +
+                        "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
+                        "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
+                        "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                        "JOIN index_statuses us ON us.status = 'unverified' " +
+                        "SET p.status_id = us.id " +
+                        "WHERE p.version = 1 AND p.action_index < ?",
+                        [firstActionIndex, firstActionIndex]);
+                } catch(e){
+                    // Tables/columns may not exist on older replica schemas — skip
+                }
+            }
+
             // Delete from action-scoped data tables
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
