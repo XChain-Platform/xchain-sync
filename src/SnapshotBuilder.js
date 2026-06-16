@@ -24,6 +24,7 @@ const { SCHEMA_VERSION } = require('./schema-version');
 const { encodeRow, encodeTables } = require('./wireCodec');
 const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
+const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { activationDelayBlocks } = require('./consensus-constants');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
@@ -324,6 +325,30 @@ class SnapshotBuilder {
                             }
                         } else {
                             continue;
+                        }
+                    }
+
+                    // Cooldown-maturity refund credits reuse the unstake's earlier-block
+                    // action_index (and carry no block_index), so they sit below the
+                    // action_index cursor above and are missed. Merge them by maturity
+                    // block over the same [sinceBlock, lastBlock] window the in-place
+                    // updated_rows channel uses, deduped on the credit's logical identity
+                    // — the forward mirror of ClientRollback's reverse cooldown delete. An
+                    // unstake created AND matured inside this window can be reached both
+                    // here and by the action_index scope, hence the dedup.
+                    if(dbType === 'indexer' && table === 'credits'){
+                        try {
+                            let matured = await collectMaturedCooldownCredits(db, sinceBlock, lastBlock, conn);
+                            if(matured.length > 0){
+                                rows = rows || [];
+                                let seen = new Set(rows.map(c => c.action_index + ':' + c.address_id + ':' + c.tick_id));
+                                for(let c of matured){
+                                    let k = c.action_index + ':' + c.address_id + ':' + c.tick_id;
+                                    if(!seen.has(k)){ seen.add(k); rows.push(c); }
+                                }
+                            }
+                        } catch(e){
+                            // Tables may not exist on older schemas — skip
                         }
                     }
 

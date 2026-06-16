@@ -32,6 +32,7 @@
 
 const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
+const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { activationDelayBlocks } = require('./consensus-constants');
 
 class ServerPoller {
@@ -347,6 +348,31 @@ class ServerPoller {
                 } catch(e){
                     // Table may not exist — skip silently
                 }
+            }
+
+            // Cooldown-maturity refund credits mint AT this block but carry the
+            // unstake's earlier-block action_index (and no block_index), so the
+            // action-scoped join above misses them — leaving followers permanently
+            // short by every matured refund. Select them by maturity block
+            // (cooldown_end_block = this block), the forward mirror of
+            // ClientRollback's reverse delete, and merge into the credits payload;
+            // ClientApplier then upserts them and rebuilds balances like any other
+            // credit. Disjoint from the action-scoped credits (those carry an action
+            // in THIS block; a refund's action is in an earlier block), but dedup the
+            // union defensively on the credit's logical identity.
+            try {
+                let matured = await collectMaturedCooldownCredits(this.db, block_index, block_index);
+                if(matured.length > 0){
+                    let existing = payload.data['credits'] || [];
+                    let seen = new Set(existing.map(c => c.action_index + ':' + c.address_id + ':' + c.tick_id));
+                    for(let c of matured){
+                        let k = c.action_index + ':' + c.address_id + ':' + c.tick_id;
+                        if(!seen.has(k)){ seen.add(k); existing.push(c); }
+                    }
+                    payload.data['credits'] = existing;
+                }
+            } catch(e){
+                // Tables may not exist on older schemas — skip silently
             }
         }
 

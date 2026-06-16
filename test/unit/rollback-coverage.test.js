@@ -328,4 +328,32 @@ describe('Rollback coverage guard @regression', function(){
             }
         }
     });
+
+    // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
+    // above removes the refund credit on reorg, but the FORWARD path must stream that same
+    // credit to followers in the first place — keyed by maturity block, since its backdated
+    // action_index escapes every action-scoped channel (see #4316). The selection lives in
+    // cooldownCredits.js and MUST mirror the reverse join keys / cooldown_end_block predicate,
+    // or source and follower diverge. If you change one side, change the other and this guard.
+    it('forward cooldown-credit selection mirrors the reverse delete keys (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/cooldownCredits.js'), 'utf8'));
+        const FWD_OPS = [
+            { name: 'capability refund select (GAS, by unstake action_index)', re: /SELECT c\.\* FROM credits c JOIN unstakes u ON u\.action_index = c\.action_index AND u\.source_id = c\.address_id/ },
+            { name: 'contract refund select (own tick)',                       re: /SELECT c\.\* FROM credits c JOIN contract_unstakes cu ON cu\.action_index = c\.action_index AND cu\.source_id = c\.address_id AND cu\.tick_id = c\.tick_id/ },
+            { name: 'capability maturity-block + completed predicate',         re: /WHERE u\.status_id = \? AND u\.cooldown_end_block BETWEEN \? AND \?/ },
+            { name: 'contract maturity-block + completed predicate',           re: /WHERE cu\.status_id = \? AND cu\.cooldown_end_block BETWEEN \? AND \?/ },
+        ];
+        for(const op of FWD_OPS){
+            assert.ok(op.re.test(fwd), `cooldownCredits.js is missing the forward ${op.name} — it must mirror ClientRollback's reverse delete keys`);
+        }
+        // Both forward channels (live per-block + incremental snapshot) must actually invoke it,
+        // or one of them silently re-opens the gap for its replication path.
+        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+            const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
+            assert.ok(/collectMaturedCooldownCredits\s*\(/.test(src),
+                `${f} does not call collectMaturedCooldownCredits — its replication channel drops cooldown-maturity refunds`);
+        }
+    });
 });
