@@ -768,11 +768,16 @@ class Database {
 
     // Get all rows from a table for actions in a given block (action_index-scoped tables).
     // Indexer-only: decoder DB has no actions table.
+    // Scope by the ACTION's own block_index, NOT a transactions join: protocol-generated
+    // actions (ORDER_MATCH / SWAP_MATCH / *_EXPIRE) carry tx_index = NULL with no transactions
+    // row, so the old tx-join dropped their ledger rows (match settlements, expiry refunds) from
+    // the payload while the consensus hash now includes them — a follower would then recompute a
+    // divergent hash and halt. a.block_index is set for every action, so this streams them and
+    // matches BlockHasher.
     async getActionScopedRows(table, block_index){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
-            INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
-            WHERE tx.block_index = ?`;
+            WHERE a.block_index = ?`;
         return await this.doQuery(query, [block_index]);
     }
 
@@ -790,8 +795,7 @@ class Database {
             FROM contract_emissions em
             INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
             INNER JOIN actions a ON (a.action_index = ce.action_index)
-            INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
-            WHERE tx.block_index = ?
+            WHERE a.block_index = ?
             ORDER BY em.execution_index ASC, em.position ASC`;
         return await this.doQuery(query, [block_index]);
     }
@@ -812,11 +816,12 @@ class Database {
         return await this.doQuery(query, [block_index]);
     }
 
-    // Get actions for a given block
+    // Get actions for a given block. Scope by the action's own block_index (not a transactions
+    // join): protocol-generated actions (ORDER_MATCH / SWAP_MATCH / *_EXPIRE) have tx_index = NULL
+    // and must still stream to followers (and are now in the consensus hash).
     async getActions(block_index){
         let query = `SELECT a.* FROM actions a
-            INNER JOIN transactions t ON (t.tx_index = a.tx_index)
-            WHERE t.block_index = ?`;
+            WHERE a.block_index = ?`;
         return await this.doQuery(query, [block_index]);
     }
 
