@@ -1258,8 +1258,8 @@ describe('ClientSync — small branches', function(){
         assert.deepStrictEqual(sync.lastHashes, { block_hash: 'bh5' });
     });
 
-    // _handleReorg max-depth exceeded (lines 917-922)
-    it('_handleReorg: exceeds MAX_ROLLBACK_DEPTH → logs and does NOT rollback', async function(){
+    // _handleReorg max-depth exceeded → fail closed (durable halt, no rollback)
+    it('_handleReorg: exceeds MAX_ROLLBACK_DEPTH → HALTS and does NOT rollback', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }));
         sync.lastAppliedBlock = 100;
@@ -1271,7 +1271,24 @@ describe('ClientSync — small branches', function(){
         await sync._handleReorg({ type: 'reorg', block_index: 10 });
 
         assert.strictEqual(rollbackStub.called, false, 'rollback must NOT be called when depth exceeded');
-        let errCalls = console.error.getCalls().map(c => c.args[0]);
-        assert.ok(errCalls.some(m => m && m.indexOf('MAX_ROLLBACK_DEPTH') !== -1));
+        // Fail closed: record a durable halt rather than returning and serving the fork.
+        assert.ok(sync.isHalted(), 'must halt durably when reorg depth exceeds the ceiling');
+        assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
+        assert.strictEqual(db.recordHalt.calledOnce, true, 'durable halt must be persisted');
+    });
+
+    // The decoder track has no VERIFY_RECOMPUTE/VERIFY_STATE_HASH net, so the
+    // max-depth halt is its only guard against permanently serving the fork.
+    it('_handleReorg: decoder track also HALTS on max-depth exceed', async function(){
+        let rb;
+        ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }, { dbType: 'decoder' }));
+        sync.lastAppliedBlock = 100;
+
+        await sync._handleReorg({ type: 'reorg', block_index: 10 }); // depth = 91 > 5
+
+        assert.strictEqual(rb.rollback.called, false);
+        assert.ok(sync.isHalted(), 'decoder must halt durably — it has no recompute fallback');
+        assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
+        assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
     });
 });

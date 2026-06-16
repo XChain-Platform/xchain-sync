@@ -21,7 +21,8 @@ function createMockDb(){
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(true),
         rollbackTransaction: sinon.stub().resolves(),
-        truncateTable: sinon.stub().resolves()
+        truncateTable: sinon.stub().resolves(),
+        recordHalt: sinon.stub().resolves()
     };
 }
 
@@ -292,19 +293,45 @@ describe('ClientSync security', function(){
             assert.strictEqual(rollback.rollback.calledOnce, true);
         });
 
-        it('rejects rollback exceeding MAX_ROLLBACK_DEPTH', async function(){
+        it('HALTS (fails closed) when reorg exceeds MAX_ROLLBACK_DEPTH', async function(){
             let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
             let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
             sync.lastAppliedBlock = 100;
             sync.lastHashes = null;
 
             await sync._handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6
+            // Must NOT roll back (too deep to rewind safely)...
             assert.strictEqual(rollback.rollback.called, false);
-            assert.strictEqual(console.error.called, true);
-            assert.ok(console.error.firstCall.args[0].includes('MAX_ROLLBACK_DEPTH'));
+            // ...and must NOT fail open: a durable halt is recorded so the replica
+            // stops applying instead of silently serving the orphaned fork.
+            assert.strictEqual(sync.isHalted(), true);
+            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
+            assert.strictEqual(db.recordHalt.calledOnce, true);
+            assert.strictEqual(db.recordHalt.firstCall.args[2], 'max-rollback-depth-exceeded');
+            // lastAppliedBlock is left untouched — we did not advance, but we also
+            // halt so the stale value can no longer be used to drop canonical blocks.
+            assert.strictEqual(sync.lastAppliedBlock, 100);
         });
 
-        it('rejects deep rollback to block 1', async function(){
+        it('HALTS the decoder track too (no recompute safety net)', async function(){
+            // The decoder has no VERIFY_RECOMPUTE / VERIFY_STATE_HASH self-halt path,
+            // so the max-depth halt is its ONLY protection against serving the fork.
+            db.dbType = 'decoder';
+            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
+            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
+            assert.strictEqual(sync.dbType, 'decoder');
+            sync.lastAppliedBlock = 100;
+            sync.lastHashes = null;
+
+            await sync._handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6
+            assert.strictEqual(rollback.rollback.called, false);
+            assert.strictEqual(sync.isHalted(), true);
+            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
+            assert.strictEqual(db.recordHalt.calledOnce, true);
+            assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
+        });
+
+        it('HALTS on deep rollback to block 1', async function(){
             let config = createConfig({ MAX_ROLLBACK_DEPTH: 100 });
             let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
             sync.lastAppliedBlock = 500;
@@ -312,6 +339,8 @@ describe('ClientSync security', function(){
 
             await sync._handleReorg({ type: 'reorg', block_index: 1 }); // depth = 500
             assert.strictEqual(rollback.rollback.called, false);
+            assert.strictEqual(sync.isHalted(), true);
+            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         });
 
         it('allows rollback when lastAppliedBlock is null', async function(){

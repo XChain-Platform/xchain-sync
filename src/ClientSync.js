@@ -995,9 +995,21 @@ class ClientSync {
         catch(e){ console.error('CRITICAL: failed to persist divergence halt (still halting in-memory):', e); }
         console.error('================================================================');
         console.error('CONSENSUS DIVERGENCE HALT — ' + this.chain + '/' + this.network + '/' + this.dbType);
-        console.error('block ' + blockIndex + ': sources disagree on the consensus hash — one is on a');
-        console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
-        console.error('investigate and clear before this validator can resume.');
+        if(this._halted.reason === 'local-recompute-divergence'){
+            console.error('block ' + blockIndex + ': local recompute diverged from committed hash — replica');
+            console.error('integrity failure. HALTING (applying no further blocks). Operator must');
+            console.error('investigate replica state and clear before this validator can resume.');
+        } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
+            console.error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
+            console.error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
+            console.error('cannot rewind to the new canonical base. HALTING (applying no further');
+            console.error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
+            console.error('this validator can resume.');
+        } else {
+            console.error('block ' + blockIndex + ': sources disagree on the consensus hash — one is on a');
+            console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
+            console.error('investigate and clear before this validator can resume.');
+        }
         console.error('mismatches: ' + JSON.stringify(mismatches));
         console.error('sources: ' + JSON.stringify(sources));
         console.error('================================================================');
@@ -1135,8 +1147,21 @@ class ClientSync {
         if(this.lastAppliedBlock !== null){
             let depth = this.lastAppliedBlock - event.block_index + 1;
             if(depth > this.config['MAX_ROLLBACK_DEPTH']){
-                console.error('Reorg depth ' + depth + ' exceeds MAX_ROLLBACK_DEPTH ' + this.config['MAX_ROLLBACK_DEPTH'] + ' — rejecting');
-                return;
+                // A reorg too deep to roll back safely must FAIL CLOSED, not fail open.
+                // Returning bare here would leave lastAppliedBlock pointing at the now-
+                // orphaned tip: every canonical block the source re-streams from
+                // event.block_index upward is <= lastAppliedBlock, so _handleBlock's
+                // `blockIndex <= lastAppliedBlock` guard silently drops it and the replica
+                // serves the orphaned fork indefinitely. The indexer track might eventually
+                // self-halt once canonical hashes overtake the old tip and VERIFY_RECOMPUTE
+                // catches the chained-hash break, but the decoder track has no recompute net
+                // and would stay permanently diverged with halted:false on /status. So record
+                // a durable halt via the same contract used for consensus divergence and let
+                // the operator investigate/clear, rather than advancing onto the fork.
+                await this._haltOnDivergence(event.block_index,
+                    [{ field: 'rollback_depth', depth, max: this.config['MAX_ROLLBACK_DEPTH'] }],
+                    this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
+                return; // halted — no rollback, lastAppliedBlock left as-is, no further applies
             }
         }
 
