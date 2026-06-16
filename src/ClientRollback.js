@@ -304,6 +304,13 @@ class ClientRollback {
                 // — a pure string copy, byte-identical to the source (no arithmetic). Keys
                 // only on block_index/stake_action_index, so it ports cleanly (no
                 // ACTIVATION_DELAY_BLOCKS dependency).
+                //
+                // Same-block tiebreak is (execution_index, slash_position) — the EXECUTE's
+                // on-chain action_index plus the emission-loop index, the deterministic total
+                // order the source uses for contract_emissions — NOT the AUTO_INCREMENT `id`.
+                // This MUST byte-match the source indexer or a reorg retracting a block with
+                // ≥2 contract slashes on one stake row restores a divergent amount on the
+                // replica vs the source (stake-weight fork).
                 for(let slashTbl of ['contract_stakes', 'contract_unstakes']){
                     try {
                         await this.db.doQuery(
@@ -317,7 +324,10 @@ class ClientRollback {
                             "    AND e.stake_action_index = d.stake_action_index " +
                             "    AND e.block_index >= ? " +
                             "    AND (e.block_index < d.block_index " +
-                            "         OR (e.block_index = d.block_index AND e.id < d.id)))",
+                            "         OR (e.block_index = d.block_index " +
+                            "             AND (e.execution_index < d.execution_index " +
+                            "                  OR (e.execution_index = d.execution_index " +
+                            "                      AND e.slash_position < d.slash_position)))))",
                             [slashTbl, block_index, block_index]
                         );
                     } catch(e){

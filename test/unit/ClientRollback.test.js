@@ -231,6 +231,29 @@ describe('ClientRollback', function(){
             assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'slash restore must precede the contract_stakes delete');
         });
 
+        it('contract slash-restore tiebreaks on (execution_index, slash_position), byte-matching the source — never AUTO_INCREMENT id', async function(){
+            // Must mirror xchain-indexer rollback.js exactly. If the replica tiebreaks on the
+            // AUTO_INCREMENT `id` (assigned in physical insert order, differs source-vs-replica),
+            // a reorg retracting a block with >=2 contract slashes on one stake_action_index
+            // restores a divergent prev_amount on the replica -> stake-weight / quorum fork.
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let restores = calls.filter(c =>
+                /UPDATE contract_(?:un)?stakes/.test(c.args[0]) &&
+                c.args[0].includes('contract_slash_debits') &&
+                c.args[0].includes('d.prev_amount'));
+            assert.strictEqual(restores.length, 2, 'expected contract_stakes + contract_unstakes slash restores');
+            for(let r of restores){
+                let sql = r.args[0];
+                assert.ok(/e\.execution_index\s*<\s*d\.execution_index/.test(sql),
+                    'restore must order by execution_index (deterministic, replay-stable)');
+                assert.ok(/e\.slash_position\s*<\s*d\.slash_position/.test(sql),
+                    'restore must use slash_position as the within-EXECUTE secondary tiebreak');
+                assert.ok(!/e\.id\s*<\s*d\.id/.test(sql),
+                    'restore must NOT tiebreak on the non-deterministic AUTO_INCREMENT id');
+            }
+        });
+
         it('rolls back transaction on error and rethrows', async function(){
             db.commitTransaction.rejects(new Error('commit fail'));
             await assert.rejects(() => rollback.rollback(100), { message: 'commit fail' });
