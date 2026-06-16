@@ -59,7 +59,12 @@ class ClientRollback {
             // Per-row slash debit log (one row per in-place contract_stakes/contract_unstakes
             // amount reduction). Block-scoped like slash_events. The restore above reads it
             // BEFORE this generic delete drops the orphaned rows; mirrors the source indexer.
-            'contract_slash_debits'
+            'contract_slash_debits',
+            // Capability-stake equivocation slashing (WI-2 bump 2) — block-scoped twins of
+            // slash_events / contract_slash_debits. The capability_slash_debits restore below
+            // copies back the pre-slash stakes/unstakes amount on reorg; mirrors the source.
+            'capability_slash_events',
+            'capability_slash_debits'
         ];
 
         // Tables that store data using action_index
@@ -300,6 +305,32 @@ class ClientRollback {
                             "WHERE d.target_table = ? AND d.block_index >= ? " +
                             "AND NOT EXISTS (" +
                             "  SELECT 1 FROM contract_slash_debits e " +
+                            "  WHERE e.target_table = d.target_table " +
+                            "    AND e.stake_action_index = d.stake_action_index " +
+                            "    AND e.block_index >= ? " +
+                            "    AND (e.block_index < d.block_index " +
+                            "         OR (e.block_index = d.block_index AND e.id < d.id)))",
+                            [slashTbl, block_index, block_index]
+                        );
+                    } catch(e){
+                        // Table may not exist on older replica schemas — skip
+                    }
+                }
+
+                // capability_slash_debits restore (WI-2 bump 2) — the capability-stake twin
+                // of the contract restore above. An orphaned SLASH burned stakes/unstakes.amount
+                // IN PLACE on surviving rows; copy back the EARLIEST orphaned debit's verbatim
+                // prev_amount per row. Same shape/keys as the contract path; mirrors the source
+                // indexer (xchain-indexer rollback.js).
+                for(let slashTbl of ['stakes', 'unstakes']){
+                    try {
+                        await this.db.doQuery(
+                            "UPDATE " + slashTbl + " t " +
+                            "JOIN capability_slash_debits d ON d.stake_action_index = t.action_index " +
+                            "SET t.amount = d.prev_amount " +
+                            "WHERE d.target_table = ? AND d.block_index >= ? " +
+                            "AND NOT EXISTS (" +
+                            "  SELECT 1 FROM capability_slash_debits e " +
                             "  WHERE e.target_table = d.target_table " +
                             "    AND e.stake_action_index = d.stake_action_index " +
                             "    AND e.block_index >= ? " +

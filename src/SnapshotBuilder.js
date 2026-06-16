@@ -258,7 +258,10 @@ class SnapshotBuilder {
             // are intentionally omitted. They ride along in the full snapshot only;
             // for price_snapshots, live convergence is handled by the hub DB sync
             // mirror, not this block stream.
-            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'sync_meta']);
+            // capability_slash_events (WI-2 bump 2) is block-scoped like slash_events — its
+            // twin debit log capability_slash_debits, like contract_slash_debits, rides the
+            // streaming topology + full snapshot rather than this incremental set.
+            let indexerBlockScoped = new Set(['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'capability_slash_events', 'sync_meta']);
 
             // Append-only lookup/dedup tables (index_actions, index_addresses,
             // index_transactions, …). They carry neither a block_index nor an

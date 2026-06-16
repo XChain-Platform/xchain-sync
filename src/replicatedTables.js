@@ -97,8 +97,10 @@ const TOPOLOGY = {
         // contract_slash_debits keys off block_index (per-row slash debit log, same
         // shape as slash_events), so it is block-scoped — streamed per block and entering
         // the /status completeness count. The replica's ClientRollback reads it to restore
-        // slashed stake amounts on reorg, so it MUST replicate.
-        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'contract_slash_debits'],
+        // slashed stake amounts on reorg, so it MUST replicate. capability_slash_events /
+        // capability_slash_debits (WI-2 bump 2 equivocation slashing) are the block-scoped
+        // capability-stake twins — same rationale, same reorg-restore requirement.
+        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'contract_slash_debits', 'capability_slash_events', 'capability_slash_debits'],
 
         txScoped:     [],  // indexer joins via actions, not directly via tx_index
 
