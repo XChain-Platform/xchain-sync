@@ -50,8 +50,12 @@ describe('updatedRows.collectUpdatedRows', function(){
         // No query should reference deactivation_block (delay unknown → skip).
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
-        // The slash + request_status classes still run (4 slash + 2 request = 6).
-        assert.strictEqual(db.calls.length, 6);
+        // The slash + request_status + cooldown-status classes still run, none of which
+        // depend on the activation delay (4 slash + 2 request + 2 cooldown-status = 8).
+        assert.strictEqual(db.calls.length, 8);
+        // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
+        let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
+        assert.strictEqual(hitCooldown, true);
     });
 
     it('detects deactivation stamps by value-threshold [from+delay, to+delay]', async function(){

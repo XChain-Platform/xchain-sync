@@ -43,6 +43,11 @@
  *     themselves block-streamed and carry block_index.
  *   - request_status flip on a surviving v0 attests / xcalls request row, stamped
  *     with resolved_block = the resolving block.
+ *   - cooldown-maturity status_id flip on surviving unstakes / contract_unstakes
+ *     (markCooldownsCompleted sets status_id = 'completed' in place at the maturity
+ *     block) — keyed by cooldown_end_block ∈ [fromBlock, toBlock]. The forward twin
+ *     of ClientRollback's reverse status reset and of cooldownCredits.js's forward
+ *     refund-credit selection (same maturity-block key).
  *
  * tokens.escrow_action_index is intentionally NOT carried here: it is re-derived
  * on the follower from the already-replicated offer/status tables (the same
@@ -67,6 +72,12 @@ const SLASH_SPECS = [
 
 // v0 request rows whose request_status went terminal in this window (resolved_block stamp).
 const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
+
+// Surviving unstake rows whose status_id was flipped to 'completed' in place when their
+// cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block — the maturity
+// block — exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
+// credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
+const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
 // Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows —
@@ -143,6 +154,25 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         }
     }
 
+    // 4. cooldown-maturity status_id flip on surviving unstakes / contract_unstakes.
+    //    markCooldownsCompleted flips status_id to 'completed' in place on a row whose
+    //    creating action is in an earlier block, so the action-scoped stream misses it.
+    //    The flip lands at the maturity block, so it falls in [from, to] iff
+    //    cooldown_end_block ∈ [from, to] (no activation-delay offset — unlike the
+    //    deactivation_block stamp). Carry the current row state, mirroring how the
+    //    deactivation_block class carries the surviving stamped row. add() dedups by
+    //    the UNIQUE action_index against any SLASH row for the same unstake.
+    for(let table of COOLDOWN_STATUS_TABLES){
+        try {
+            let rows = await db.doQuery(
+                "SELECT * FROM `" + table + "` WHERE cooldown_end_block BETWEEN ? AND ?",
+                [from, to], conn);
+            add(table, rows);
+        } catch(e){
+            // Table/column may not exist on older source schemas — skip.
+        }
+    }
+
     let out = {};
     for(let table in acc){
         let arr = Array.from(acc[table].values());
@@ -151,4 +181,4 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     return out;
 }
 
-module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES };
+module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES };

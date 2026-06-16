@@ -356,4 +356,21 @@ describe('Rollback coverage guard @regression', function(){
                 `${f} does not call collectMaturedCooldownCredits — its replication channel drops cooldown-maturity refunds`);
         }
     });
+
+    // The maturity event has TWO forward effects that must both be replicated: the refund
+    // credit (above, via cooldownCredits.js) AND the in-place status_id flip to 'completed'
+    // on the surviving unstake row. The credit rides the credits channel; the status flip
+    // must ride the updated_rows channel keyed by cooldown_end_block — the forward twin of
+    // ClientRollback's reverse status reset. Without it the follower keeps a stale 'valid'
+    // unstake while its balance is already refunded (see #4317).
+    it('updated_rows carries the cooldown-maturity status_id flip keyed by cooldown_end_block', function(){
+        const { COOLDOWN_STATUS_TABLES } = require('../../src/updatedRows');
+        assert.deepStrictEqual(COOLDOWN_STATUS_TABLES, ['unstakes', 'contract_unstakes'],
+            'updated_rows must track the cooldown status flip on both unstake tables');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
+            'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
+    });
 });
