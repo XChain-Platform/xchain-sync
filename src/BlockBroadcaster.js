@@ -16,8 +16,8 @@
  *
  * Manages WebSocket subscriptions per chain/network/dbType and broadcasts
  * block, reorg, and status events to all subscribers. Subscribers
- * watching indexer DB do not receive decoder DB events and vice versa
- * — the dbType discriminator is part of the subscription key.
+ * watching indexer DB do not receive decoder DB events and vice versa;
+ * the dbType discriminator is part of the subscription key.
  *
  ********************************************************************/
 
@@ -63,9 +63,9 @@ class BlockBroadcaster {
         return req.socket.remoteAddress || 'unknown';
     }
 
-    // Add a subscriber for a chain/network/dbType
-    // syncMode: 'full' (default) or 'infra-only' — controls which tables are forwarded
-    // dbType:   'indexer' (default) or 'decoder' — controls which DB's events are received
+    // Add a subscriber for a chain/network/dbType.
+    // syncMode: 'full' (default) or 'infra-only' (controls which tables are forwarded).
+    // dbType:   'indexer' (default) or 'decoder' (controls which DB's events are received).
     addSubscription(ws, req, chain, network, syncMode, dbType){
         let ip = this._getIp(req);
         let type = dbType || 'indexer';
@@ -154,8 +154,8 @@ class BlockBroadcaster {
     // Handle an inbound message from a subscriber. Currently the only supported
     // message is { type: 'heartbeat', appliedBlock: <number> }, which records how
     // far the subscriber has applied blocks to its replica DB. Malformed JSON or
-    // unrecognised message types are ignored silently — this channel is otherwise
-    // server→client push only.
+    // unrecognised message types are ignored silently (the channel is otherwise
+    // server-to-client push only).
     _handleClientMessage(ws, data){
         let msg;
         try {
@@ -177,7 +177,7 @@ class BlockBroadcaster {
     }
 
     // Broadcast an event to all subscribers for a chain/network/dbType.
-    // dbType is read from event.dbType (set by ServerPoller) — falls back to 'indexer'.
+    // dbType is read from event.dbType (set by ServerPoller), falling back to 'indexer'.
     // For block events with a `tables` payload, infra-only subscribers receive a filtered
     // version containing only infrastructure tables (passed in as `infraTables`).
     broadcast(chain, network, event, infraTables){
@@ -187,7 +187,7 @@ class BlockBroadcaster {
         if(!subs || subs.size === 0) return;
 
         // Encode binary (Buffer) columns to the base64 wire sentinel before
-        // serializing — block payloads carry rows under `data`. Without this,
+        // serializing. Block payloads carry rows under `data`; without this,
         // JSON.stringify mangles Buffers and the replica's blob columns corrupt
         // (see src/wireCodec.js).
         let wireEvent = event;
@@ -260,10 +260,10 @@ class BlockBroadcaster {
     // lastSentBlock is null until the first block is broadcast; appliedBlock is null
     // until the subscriber sends its first heartbeat; lag (lastSentBlock - appliedBlock)
     // is null whenever either side is unavailable. heartbeatReceived is true once the
-    // subscriber has reported an applied block at least once — it lets callers tell a
+    // subscriber has reported an applied block at least once; it lets callers tell a
     // caught-up subscriber (lag 0) apart from one that has never reported (lag null
     // because it is unknown, not because it is in sync). Clients that never send a
-    // heartbeat — legacy builds, third-party validators — stay heartbeatReceived:false.
+    // heartbeat (legacy builds, third-party validators) stay heartbeatReceived:false.
     getSubscribers(chain, network, dbType){
         let subs = this.subscribers.get(this._key(chain, network, dbType));
         if(!subs) return [];
@@ -281,11 +281,11 @@ class BlockBroadcaster {
                 heartbeatReceived,
                 // lagStatus is an explicit machine-readable signal so an operator or
                 // alerting script does not have to interpret what a null `lag` means.
-                // 'known'   — a heartbeat established a baseline, so `lag` is a real
-                //             number (including a genuine 0 = caught up).
-                // 'unknown' — no heartbeat yet, so `lag` is null because it is
-                //             undetermined, NOT because the subscriber is in sync.
-                //             Scanning only for non-zero `lag` would silently skip these.
+                // 'known':   a heartbeat established a baseline, so `lag` is a real
+                //            number (including a genuine 0 = caught up).
+                // 'unknown': no heartbeat yet, so `lag` is null because it is
+                //            undetermined, NOT because the subscriber is in sync.
+                //            Scanning only for non-zero `lag` would silently skip these.
                 lagStatus: heartbeatReceived ? 'known' : 'unknown'
             });
         }
@@ -352,28 +352,30 @@ class BlockBroadcaster {
     // Return per-validator heartbeat state for a chain/network/dbType.
     //
     // Shape: { validators: { <id>: {...} }, total, expected_total, unknown_count }.
-    //   validators     — map keyed by validator_id; each entry carries
-    //                    lag_blocks = source block_height - applied_height (null when
-    //                    undeterminable) and a `status` of 'known' | 'unknown' |
-    //                    'stale' | 'absent'.
-    //   total          — number of validators with a heartbeat on record (including
-    //                    'stale' entries that lapsed past the TTL but are kept visible).
-    //   expected_total — size of the configured EXPECTED_VALIDATORS roster, or null when
-    //                    no roster is configured. Gives operators a denominator: when
-    //                    total < expected_total a federation member is missing.
-    //   unknown_count  — how many on-record entries have lag_blocks === null (source
-    //                    height not yet known), i.e. their lag is genuinely unknown
-    //                    rather than 0.
+    //   validators:     map keyed by validator_id; each entry carries
+    //                   lag_blocks = source block_height - applied_height (null when
+    //                   undeterminable) and a `status` of 'known' | 'unknown' |
+    //                   'stale' | 'absent'.
+    //   total:          number of live (non-stale) validators with a heartbeat on record.
+    //                   Stale entries remain visible in the validators map but are
+    //                   excluded from total so a going-stale validator decrements the
+    //                   count (the only meaningful erosion signal for an operator).
+    //   expected_total: size of the configured EXPECTED_VALIDATORS roster, or null when
+    //                   no roster is configured. Gives operators a denominator: when
+    //                   total < expected_total a federation member is missing.
+    //   unknown_count:  how many on-record entries have lag_blocks === null (source
+    //                   height not yet known), i.e. their lag is genuinely unknown
+    //                   rather than 0.
     //
     // Two statuses close the silent-loss gaps a heartbeat-only view would otherwise have:
-    //   'stale'  — a previously-active validator whose last_seen lapsed past the TTL.
-    //              evictStaleValidators() transitions it in place instead of deleting it,
-    //              so a validator that restarted or briefly partitioned stays visible
-    //              (with its last known applied_height) rather than silently vanishing.
-    //   'absent' — a member of the EXPECTED_VALIDATORS roster that has never POSTed a
-    //              heartbeat for this chain/network/dbType. Without the roster such a
-    //              validator (misconfigured sync URL, partitioned before its first POST)
-    //              would be completely invisible. Surfaced here with null lag/last_seen.
+    //   'stale':  a previously-active validator whose last_seen lapsed past the TTL.
+    //             evictStaleValidators() transitions it in place instead of deleting it,
+    //             so a validator that restarted or briefly partitioned stays visible
+    //             (with its last known applied_height) rather than silently vanishing.
+    //   'absent': a member of the EXPECTED_VALIDATORS roster that has never POSTed a
+    //             heartbeat for this chain/network/dbType. Without the roster such a
+    //             validator (misconfigured sync URL, partitioned before its first POST)
+    //             would be completely invisible. Surfaced here with null lag/last_seen.
     //
     // When no roster is configured the method behaves exactly as before for observed
     // validators; 'absent' entries simply never appear and expected_total is null.
@@ -393,7 +395,11 @@ class BlockBroadcaster {
         let total = 0;
         if(map){
             for(let [id, entry] of map){
-                total++;
+                // Only count live (non-stale) entries in `total` so that a validator
+                // transitioning from healthy to stale is reflected as a drop in total
+                // rather than being invisible. The 'stale' entry remains visible in
+                // the validators map but no longer props up the denominator.
+                if(entry.status !== 'stale') total++;
                 let lagBlocks = (sourceHeight !== null && entry.applied_height !== null)
                     ? Math.max(0, sourceHeight - entry.applied_height)
                     : null;
@@ -441,8 +447,8 @@ class BlockBroadcaster {
     // status-less record on the next POST, so a recovered validator returns to
     // 'known'/'unknown' automatically.
     //
-    // To keep memory bounded — validator_id is caller-supplied, so soft-delete alone
-    // would let arbitrary ids accumulate forever — a stale entry that is NOT in the
+    // To keep memory bounded (validator_id is caller-supplied, so soft-delete alone
+    // would let arbitrary ids accumulate forever), a stale entry that is NOT in the
     // expected roster is hard-removed once it has been stale for a further thresholdMs
     // window. Roster members are kept indefinitely (bounded by the roster size) so a
     // genuinely-expected validator stays surfaced as 'stale' until it reports again.

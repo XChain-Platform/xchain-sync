@@ -5,7 +5,7 @@
 //
 // This file is part of XChain Platform. Licensed under the GNU Affero
 // General Public License v3.0 or later; see LICENSE.md. A commercial
-// license (without AGPL source-disclosure terms) is available —
+// license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
 const assert = require('assert');
@@ -17,6 +17,7 @@ function createMockDb(){
     return {
         doQuery: sinon.stub().resolves([]),
         getFirstActionIndex: sinon.stub().resolves(500),
+        getStatusId: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves()
@@ -36,7 +37,7 @@ describe('Boundary: Rollback Scope', function(){
 
     afterEach(function(){ sinon.restore(); });
 
-    it('rollback at highest block — deletes only that block', async function(){
+    it('rollback at highest block: deletes only that block', async function(){
         db.getFirstActionIndex.resolves(1000);
         await rollback.rollback(10);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
@@ -47,7 +48,7 @@ describe('Boundary: Rollback Scope', function(){
         }
     });
 
-    it('rollback at block 1 — deletes everything', async function(){
+    it('rollback at block 1: deletes everything', async function(){
         db.getFirstActionIndex.resolves(100);
         await rollback.rollback(1);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
@@ -56,15 +57,20 @@ describe('Boundary: Rollback Scope', function(){
         for(let call of blockDeletes){
             assert.deepStrictEqual(call.args[1], [1]);
         }
+        // Only the dataTables DELETE loop binds a bare [firstActionIndex]; the anchor
+        // invalid_archive reset is an in-place UPDATE (not a DELETE) that also references
+        // `action_index >=` but binds [firstActionIndex, firstActionIndex] so exclude it.
+        // oracle_prices is a bespoke delete that binds [coin, firstActionIndex] so also exclude it.
         let actionDeletes = db.doQuery.getCalls().filter(c =>
-            c.args[0].includes('action_index >=') && !c.args[0].includes('contract_emissions')
+            c.args[0].includes('DELETE') && c.args[0].includes('action_index >=') &&
+            !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices')
         );
         for(let call of actionDeletes){
             assert.deepStrictEqual(call.args[1], [100]);
         }
     });
 
-    it('rollback at block 0 — deletes all data', async function(){
+    it('rollback at block 0: deletes all data', async function(){
         db.getFirstActionIndex.resolves(0);
         await rollback.rollback(0);
         let blockDeletes = db.doQuery.getCalls().filter(c =>
@@ -75,7 +81,7 @@ describe('Boundary: Rollback Scope', function(){
         }
     });
 
-    it('rollback with no actions at block — skips action-scoped deletes', async function(){
+    it('rollback with no actions at block: skips action-scoped deletes', async function(){
         db.getFirstActionIndex.resolves(null);
         await rollback.rollback(5);
         let actionDeletes = db.doQuery.getCalls().filter(c =>
@@ -89,7 +95,7 @@ describe('Boundary: Rollback Scope', function(){
         assert.strictEqual(blockDeletes.length, rollback.blockTables.length);
     });
 
-    it('rollback at non-existent block — still runs block deletes', async function(){
+    it('rollback at non-existent block: still runs block deletes', async function(){
         db.getFirstActionIndex.resolves(null);
         await rollback.rollback(9999);
         // Block-scoped deletes execute (but DELETE WHERE block_index >= 9999 will match nothing)

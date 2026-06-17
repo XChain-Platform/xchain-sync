@@ -20,7 +20,7 @@
  * All routes are namespaced by :dbType (indexer or decoder), e.g.
  * /snapshot/indexer/BTC/mainnet, /subscribe/decoder/LTC/testnet.
  * Transparency endpoints are indexer-only (decoder has no synthetic
- * chain-of-state hashes — see xchain-sync-decoder-db-decisions).
+ * chain-of-state hashes; see xchain-sync-decoder-db-decisions).
  *
  ********************************************************************/
 
@@ -53,12 +53,12 @@ const cfg = config.getConfig();
 
 // SYNC_API_KEY is optional, matching the other services: unset leaves the
 // REST/WS replication endpoints open (single-host / regtest / managed
-// deployments — xchain-node injects no key) and is warned about loudly below;
+// deployments; xchain-node injects no key) and is warned about loudly below;
 // when configured, every endpoint fails closed (401) without it. The
 // destructive /halt/clear admin route additionally refuses to run at all
 // while no key is configured.
 if(!cfg['SYNC_API_KEY'])
-    console.warn('WARNING: SYNC_API_KEY is not set — the REST/WS API is UNAUTHENTICATED and /halt/clear is disabled. Set a key for any shared or public-facing deployment.');
+    console.warn('WARNING: SYNC_API_KEY is not set. The REST/WS API is UNAUTHENTICATED and /halt/clear is disabled. Set a key for any shared or public-facing deployment.');
 
 async function startApi(){
 
@@ -114,7 +114,7 @@ async function startApi(){
     // Initialize the SyncService
     const syncService = new SyncService(cfg);
 
-    // ── REST Routes (server mode only, but status works in client mode too) ──
+    // REST Routes (server mode only, but status works in client mode too)
     //
     // All routes use the /:dbType/:chain/:network namespace.
     // :dbType is one of 'indexer' or 'decoder'.
@@ -128,6 +128,59 @@ async function startApi(){
 
     // Build the status row for one (db, dbType, chain, network) tuple.
     async function buildStatusRow(db, dbType, chain, network){
+        if(cfg['SYNC_MODE'] === 'server'){
+            // In server mode, block_height is the broadcaster's last-polled position
+            // (how far the poller has actually broadcast), not the source DB tip.
+            // Using the source DB tip here hides poller lag: if the poller is wedged
+            // or catching up, block_height would show a climbing source tip with no
+            // lag signal. The WS _updateStatus path (ServerPoller) correctly separates
+            // lastPolledBlock from the source tip; REST now matches those semantics.
+            let broadcaster = syncService.getBroadcaster();
+            let statusData = broadcaster ? broadcaster.statusData : null;
+            // statusData is keyed by "chain:network:dbType" inside BlockBroadcaster.
+            // The status object stored by ServerPoller._updateStatus has block_height
+            // (polled position) and source_block_height (DB tip) already separated.
+            let key = chain + ':' + network + ':' + (dbType || 'indexer');
+            let pollerStatus = (statusData && statusData.get) ? statusData.get(key) : null;
+
+            let polledBlock = (pollerStatus && pollerStatus.block_height != null)
+                ? pollerStatus.block_height : null;
+            let sourceBlock = (pollerStatus && pollerStatus.source_block_height != null)
+                ? pollerStatus.source_block_height : (await db.getLastBlock());
+
+            let hashRow = polledBlock !== null ? await db.getBlockHashRow(polledBlock) : null;
+            let row = {
+                block_height:  polledBlock,
+                source_height: sourceBlock,
+                lag_blocks:    (sourceBlock !== null && polledBlock !== null)
+                                   ? Math.max(0, sourceBlock - polledBlock) : null,
+                block_time:    hashRow ? Number(hashRow.block_time) : null,
+                poll_error_count: (pollerStatus && pollerStatus.poll_error_count != null)
+                                   ? pollerStatus.poll_error_count : 0
+            };
+            if(dbType === 'decoder'){
+                row.block_hash = hashRow ? hashRow.block_hash : null;
+            } else {
+                row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
+                row.actions_hash  = hashRow ? hashRow.actions_hash : null;
+                row.contract_hash = hashRow ? hashRow.contract_hash : null;
+            }
+            // Expose per-subscriber applied-block lag so operators can see a
+            // validator falling behind before the backpressure limit force-closes it.
+            row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
+            // Per-table row counts (same logic as client-mode path below)
+            row.table_counts = {};
+            for(let table of getReplicatedTables(dbType)){
+                try {
+                    row.table_counts[table] = await db.getTableCount(table);
+                } catch(e){
+                    // Table absent in this schema; omit rather than fail the whole status.
+                }
+            }
+            return row;
+        }
+
+        // Client mode: block_height is whatever the replica DB has applied.
         let lastBlock = await db.getLastBlock();
         let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
         let row = {
@@ -141,17 +194,7 @@ async function startApi(){
             row.actions_hash  = hashRow ? hashRow.actions_hash : null;
             row.contract_hash = hashRow ? hashRow.contract_hash : null;
         }
-        if(cfg['SYNC_MODE'] === 'server'){
-            // Server is the source — these fields are not applicable
-            row.source_height = null;
-            row.lag_blocks    = null;
-            // Expose per-subscriber applied-block lag so operators can see a
-            // validator falling behind before the backpressure limit force-closes
-            // it. appliedBlock/lag are null for subscribers that haven't sent a
-            // heartbeat yet (e.g. older client builds).
-            let broadcaster = syncService.getBroadcaster();
-            row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
-        } else {
+        {
             let clientState  = syncService.getClientSyncState(chain, network, dbType);
             let sourceHeight = clientState.lastKnownServerBlock;
             row.source_height = sourceHeight;
@@ -168,14 +211,14 @@ async function startApi(){
         //
         // The committed ledger/actions/contract hashes are computed on the source
         // during block processing and replicated verbatim, so a follower missing
-        // entire tables still agrees on every hash — the hashes describe the
+        // entire tables still agrees on every hash. The hashes describe the
         // source's blockchain computation, not what actually landed downstream.
         // Publishing row counts gives followers an independent completeness
         // signal: ClientSync._verifyAgainstSource compares these against its own
         // counts and flags any table the source has rows in but the follower does
         // not. Scoped to the per-block replicated set (see replicatedTables.js) so
         // legitimately-divergent snapshot-only / operator-local tables don't raise
-        // false alarms. COUNT(*) per table is acceptable here — /status is an
+        // false alarms. COUNT(*) per table is acceptable here; /status is an
         // operator-polled endpoint, not a hot path.
         row.table_counts = {};
         for(let table of getReplicatedTables(dbType)){
@@ -183,13 +226,13 @@ async function startApi(){
                 row.table_counts[table] = await db.getTableCount(table);
             } catch(e){
                 // Table absent in this schema (older replica, or decoder vs
-                // indexer split) — omit it rather than fail the whole status.
+                // indexer split); omit rather than fail the whole status.
             }
         }
         return row;
     }
 
-    // GET /health — lightweight liveness + DB circuit-breaker visibility.
+    // GET /health : lightweight liveness + DB circuit-breaker visibility.
     // /status reports per-chain block heights and lag, but not whether a
     // database connection has tripped its circuit breaker open after repeated
     // failures. When that happens the replicator stops applying blocks while the
@@ -220,7 +263,7 @@ async function startApi(){
         });
     });
 
-    // GET /status — all chains, nested by coin → network → dbType
+    // GET /status : all chains, nested by coin/network/dbType
     app.get('/status', (req, res) => {
         let chains = syncService.getChains();
         let result = {};
@@ -244,7 +287,7 @@ async function startApi(){
     // GET /status/:dbType/:chain/:network
     app.get('/status/:dbType/:chain/:network', async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
@@ -263,7 +306,7 @@ async function startApi(){
         }
     });
 
-    // GET /catalog — the databases this server offers to sync, with sizes + tips.
+    // GET /catalog : the databases this server offers to sync, with sizes + tips.
     // Open/read-only. One server-wide information_schema query (cached ~30s) so
     // page loads don't hammer the DB. Powers the sync.xchain.io "Browse databases" UI.
     let _catalogCache = { at: 0, payload: null };
@@ -308,13 +351,13 @@ async function startApi(){
         }
     });
 
-    // GET /schema/:dbType/:chain/:network — table DDLs for schema replication (server mode)
+    // GET /schema/:dbType/:chain/:network : table DDLs for schema replication (server mode)
     app.get('/schema/:dbType/:chain/:network', async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Schema only available in server mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
@@ -339,13 +382,13 @@ async function startApi(){
         }
     });
 
-    // GET /snapshot/:dbType/:chain/:network — full snapshot (server mode)
+    // GET /snapshot/:dbType/:chain/:network : full snapshot (server mode)
     app.get('/snapshot/:dbType/:chain/:network', fullSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
@@ -363,13 +406,13 @@ async function startApi(){
         }
     });
 
-    // GET /snapshot/:dbType/:chain/:network/since/:blockHeight — incremental snapshot (server mode)
+    // GET /snapshot/:dbType/:chain/:network/since/:blockHeight : incremental snapshot (server mode)
     app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network, blockHeight } = req.params;
         let sinceBlock = parseInt(blockHeight);
@@ -393,7 +436,7 @@ async function startApi(){
         }
     });
 
-    // ── Validator heartbeat endpoints (server mode only) ──
+    // Validator heartbeat endpoints (server mode only)
 
     // POST /validator-heartbeat/:dbType/:chain/:network
     // Accepts { validator_id, applied_height, applied_block_time? } from a named validator.
@@ -404,7 +447,7 @@ async function startApi(){
             return res.status(403).json({ error: 'Validator heartbeat only available in server mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
@@ -426,7 +469,7 @@ async function startApi(){
         res.json({ ok: true });
     });
 
-    // GET /validator-status — all chains, nested by coin → network → dbType → validators
+    // GET /validator-status : all chains, nested by coin/network/dbType/validators
     app.get('/validator-status', (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Validator status only available in server mode' });
@@ -454,7 +497,7 @@ async function startApi(){
             return res.status(403).json({ error: 'Validator status only available in server mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
@@ -464,22 +507,22 @@ async function startApi(){
         if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
 
         // getValidatorHeartbeats returns { validators, total, expected_total,
-        // unknown_count } — spread it so the roster denominator and counts sit
+        // unknown_count }; spread it so the roster denominator and counts sit
         // alongside the validators map (with 'stale'/'absent' entries) in the response.
         let vstatus = broadcaster.getValidatorHeartbeats(chain, network, dbType);
         res.json({ chain, network, dbType, ...vstatus, last_updated: new Date().toISOString() });
     });
 
-    // ── Transparency endpoints (indexer only) ──
+    // Transparency endpoints (indexer only)
     // Decoder DB doesn't have synthetic chain-of-state hashes, so the
     // transparency log doesn't apply. Decoder requests return 400.
 
-    // GET /transparency/:dbType/:chain/:network/roots — transparency log
+    // GET /transparency/:dbType/:chain/:network/roots : transparency log entries
     app.get('/transparency/:dbType/:chain/:network/roots', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
         if(req.params.dbType !== 'indexer')
-            return res.status(400).json({ error: 'Transparency log is indexer-only — decoder DB has no synthetic chain-of-state hashes' });
+            return res.status(400).json({ error: 'Transparency log is indexer-only. Decoder DB has no synthetic chain-of-state hashes.' });
 
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
@@ -497,7 +540,7 @@ async function startApi(){
         }
     });
 
-    // GET /transparency/:dbType/:chain/:network/proof/:block_index — Merkle inclusion proof
+    // GET /transparency/:dbType/:chain/:network/proof/:block_index : Merkle inclusion proof
     app.get('/transparency/:dbType/:chain/:network/proof/:block_index', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
@@ -518,7 +561,7 @@ async function startApi(){
         }
     });
 
-    // GET /transparency/:dbType/:chain/:network/root/latest — latest committed Merkle root
+    // GET /transparency/:dbType/:chain/:network/root/latest : latest committed Merkle root
     app.get('/transparency/:dbType/:chain/:network/root/latest', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Transparency log only available in server mode' });
@@ -538,13 +581,13 @@ async function startApi(){
         }
     });
 
-    // POST /halt/clear/:dbType/:chain/:network — operator acknowledges an
+    // POST /halt/clear/:dbType/:chain/:network : operator acknowledges an
     // investigated consensus-divergence halt and lets the client resume. Never
     // automatic: a halted validator must not self-resume onto a contested chain.
     // Bearer-authenticated (SYNC_API_KEY) and ALWAYS fails closed: unlike the
     // replication endpoints, this route is rejected outright when no key is
-    // configured — resuming a halted validator must never be reachable
-    // unauthenticated. Restart the service afterwards for a clean catch-up of
+    // configured (resuming a halted validator must never be reachable
+    // unauthenticated). Restart the service afterwards for a clean catch-up of
     // any blocks missed during the halt.
     app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
         let apiKey = cfg['SYNC_API_KEY'];
@@ -554,7 +597,7 @@ async function startApi(){
             return res.status(403).json({ error: 'Halt clearing only applies to client mode' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType — must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
         let { chain, network } = req.params;
 
         let client = syncService.getClientSync(chain, network, dbType);
@@ -570,7 +613,7 @@ async function startApi(){
         }
     });
 
-    // ── HTTP + WebSocket Server ──
+    // HTTP + WebSocket Server
 
     const server = http.createServer(app);
 
@@ -580,9 +623,9 @@ async function startApi(){
     // Handle WebSocket upgrade requests
     server.on('upgrade', (request, socket, head) => {
         // API key authentication for WebSocket connections (enforced only when
-        // a key is configured — see the SYNC_API_KEY note at the top; managed
+        // a key is configured; see the SYNC_API_KEY note at the top). Managed
         // validators replicate keyless, so an unconditional reject here would
-        // sever their streaming sync).
+        // sever their streaming sync.
         let apiKey = cfg['SYNC_API_KEY'];
         if(apiKey){
             let authHeader = request.headers['authorization'];
@@ -610,9 +653,9 @@ async function startApi(){
             return;
         }
 
-        // Parse query string for sync_mode preference
-        // Subscribers can request 'full' (default — all tables) or 'infra-only' (only cross-chain
-        // infrastructure tables: stakes, delegations, validator_rewards, prices, etc.)
+        // Parse query string for sync_mode preference.
+        // Subscribers can request 'full' (default, all tables) or 'infra-only' (only cross-chain
+        // infrastructure tables: stakes, delegations, validator_rewards, prices, etc.).
         // 'infra-only' is indexer-only; decoder always serves the full table set.
         let syncMode = 'full';
         if(match[4]){
@@ -661,7 +704,7 @@ async function startApi(){
         clearInterval(pingInterval);
     });
 
-    // Periodic status broadcasts (server mode) — once per (chain, network, dbType)
+    // Periodic status broadcasts (server mode), once per (chain, network, dbType)
     if(cfg['SYNC_MODE'] === 'server'){
         setInterval(() => {
             let broadcaster = syncService.getBroadcaster();
@@ -672,7 +715,7 @@ async function startApi(){
             }
         }, cfg['WS_STATUS_INTERVAL']);
 
-        // Stale validator-heartbeat eviction — run every 30 seconds.
+        // Stale validator-heartbeat eviction, run every 30 seconds.
         // Removes entries whose last_seen exceeds VALIDATOR_HEARTBEAT_TTL so the map
         // does not accumulate dead entries after validators disconnect.
         setInterval(() => {

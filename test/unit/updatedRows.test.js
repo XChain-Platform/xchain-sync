@@ -9,8 +9,8 @@
 // contact legal@dankest.llc.
 //
 // Coverage for the in-place "updated rows" channel that closes the forward
-// in-place-mutation replication gap (no UPDATE path on the replica). Mirrors —
-// in the forward direction — the reorg-reset predicates ClientRollback runs.
+// in-place-mutation replication gap (no UPDATE path on the replica). Mirrors,
+// in the forward direction, the reorg-reset predicates ClientRollback runs.
 
 const assert = require('assert');
 const sinon  = require('sinon');
@@ -47,12 +47,12 @@ describe('updatedRows.collectUpdatedRows', function(){
     it('skips the deactivation_block class entirely when activationDelay is null', async function(){
         let db = fakeDb([]);
         await collectUpdatedRows(db, 100, 100, null);
-        // No query should reference deactivation_block (delay unknown → skip).
+        // No query should reference deactivation_block (delay unknown, so skip).
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
-        // The slash + request_status + cooldown-status classes still run, none of which
-        // depend on the activation delay (4 slash + 2 request + 2 cooldown-status = 8).
-        assert.strictEqual(db.calls.length, 8);
+        // The slash + request_status + cooldown-status + anchor_invalid classes still run,
+        // none of which depend on the activation delay (4 slash + 2 request + 2 cooldown-status + 1 anchor = 9).
+        assert.strictEqual(db.calls.length, 9);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -118,7 +118,7 @@ describe('ClientApplier in-place updated-rows apply', function(){
     });
     afterEach(() => sinon.restore());
 
-    it('_upsertRows emits INSERT … ON DUPLICATE KEY UPDATE writing every column', async function(){
+    it('_upsertRows emits INSERT ... ON DUPLICATE KEY UPDATE writing every column', async function(){
         await applier._upsertRows('stakes', [{ action_index: 3, deactivation_block: 50 }]);
         let q = db.calls.find(c => c.sql.indexOf('ON DUPLICATE KEY UPDATE') !== -1);
         assert.ok(q, 'expected an upsert query');
@@ -146,7 +146,7 @@ describe('ClientApplier in-place updated-rows apply', function(){
 
     it('_maybeRederiveEscrow runs the escrow re-derive only when an escrow-relevant table is present', async function(){
         // The re-derive's first query is the affected-tickers SELECT (escrow_action_index
-        // IS NOT NULL …). Observe it directly rather than stubbing the captured fn ref.
+        // IS NOT NULL ...). Observe it directly rather than stubbing the captured fn ref.
         let isEscrowQuery = (c) => c.sql.indexOf('escrow_action_index IS NOT NULL') !== -1;
 
         await applier._maybeRederiveEscrow({ sends: [{}] });          // not escrow-relevant

@@ -47,7 +47,7 @@ class TransparencyLog {
         }
     }
 
-    // Commit a Merkle epoch — build tree from epoch blocks and store root
+    // Commit a Merkle epoch: build tree from epoch blocks and store root
     async commitEpoch(epoch) {
         let startBlock = (epoch - 1) * this.epochSize + 1;
         let endBlock   = epoch * this.epochSize;
@@ -98,11 +98,11 @@ class TransparencyLog {
             ', root: ' + tree.root.substring(0, 16) + '...)');
     }
 
-    // Prune the transparency log on a server-side reorg to `block_index` — the new
-    // canonical tip + 1, so every block >= block_index was orphaned. The source's
+    // Prune the transparency log on a server-side reorg to `block_index` (the new
+    // canonical tip + 1, so every block >= block_index was orphaned). The source's
     // own sync_meta / merkle_epochs are sync-service-owned tables that nothing else
     // rolls back (the indexer rolls back its data tables, not these), and
-    // recordBlock writes sync_meta with INSERT IGNORE on a UNIQUE block_index — so
+    // recordBlock writes sync_meta with INSERT IGNORE on a UNIQUE block_index, so
     // without this, re-added blocks keep their pre-reorg hashes (the new hashes
     // silently dropped) and the node serves wrong Merkle proofs. Mirrors and
     // completes the client's sync_meta prune in ClientRollback, on the source side.
@@ -113,7 +113,7 @@ class TransparencyLog {
     // when the boundary is re-crossed (commitEpoch backfills new_root), and delete
     // the orphaned sync_meta rows so recordBlock re-inserts fresh hashes.
     //
-    // Deliberately uses plain doQuery (no beginTransaction) — like recordBlock and
+    // Deliberately uses plain doQuery (no beginTransaction), like recordBlock and
     // the rest of the poll loop. A transaction here would drive the shared
     // db.transactionConnection; keeping the poll loop transactionless avoids any
     // contention on it between concurrent writers (the snapshot-read path now uses
@@ -206,9 +206,9 @@ class TransparencyLog {
         };
     }
 
-    // Highest block recorded in the transparency log — the durable high-water mark
-    // for how far this node has actually recorded and broadcast, used to resume the
-    // poll cursor across restarts. Distinct from the source DB tip (db.getLastBlock):
+    // Highest block recorded in the transparency log. This is the durable high-water
+    // mark for how far this node has actually recorded and broadcast, used to resume
+    // the poll cursor across restarts. Distinct from the source DB tip (db.getLastBlock):
     // resuming from the source tip instead would skip every block the co-located
     // indexer advanced while the sync server was down, leaving a permanent hole in
     // sync_meta. Returns null when sync_meta is empty (fresh node, nothing recorded).
@@ -224,7 +224,7 @@ class TransparencyLog {
     // recorded. These are the permanent holes left by the pre-fix restart behaviour
     // (resuming the poll cursor from the live source tip skipped every block
     // advanced during downtime). Pre-history below the first recorded block is
-    // deliberately excluded — the transparency log only ever covers blocks witnessed
+    // intentionally excluded; the transparency log only ever covers blocks witnessed
     // since the sync server first ran, so those are not gaps. Returns an ascending
     // block_index list; empty on a healthy log (the common case, so the bounded
     // anti-join is cheap on the indexed block_index column).
@@ -253,7 +253,17 @@ class TransparencyLog {
     // repair an epoch that was committed with a partial Merkle tree while a downtime
     // hole was open in its range. commitEpoch returns early when the epoch range has
     // no rows, so this is safe to call for any epoch.
-    async recommitEpoch(epoch) {
+    //
+    // highWaterMark guards against committing a partial root for an epoch that is
+    // still in progress: if the epoch's endBlock has not yet been reached by the
+    // log, the full block set is not available and the resulting root would be
+    // incomplete. The real boundary commit (via recordBlock) will run when the
+    // boundary block arrives; re-committing now would lock in a partial root that
+    // the existing-row guard in commitEpoch would then prevent from being corrected.
+    async recommitEpoch(epoch, highWaterMark) {
+        let endBlock = epoch * this.epochSize;
+        if(highWaterMark !== undefined && highWaterMark !== null && endBlock > highWaterMark)
+            return;  // epoch not yet complete; let recordBlock commit it at the boundary
         await this.db.doQuery("DELETE FROM merkle_epochs WHERE epoch = ?", [epoch]);
         await this.commitEpoch(epoch);
     }

@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -24,9 +24,9 @@
  *   - 'indexer' (default): full block payload with actions, action-scoped
  *     tables, infra tables, and three-hash transparency log
  *   - 'decoder':           simpler payload with transactions + tx-scoped
- *     tables (transaction_outputs, dispensers). No actions, no
- *     transparency log (decoder content is deterministic from the coin
- *     node — see xchain-sync-decoder-db-decisions memory).
+ *     tables (transaction_outputs). No actions, no transparency log
+ *     (decoder content is deterministic from the coin node; see
+ *     xchain-sync-decoder-db-decisions memory).
  *
  ********************************************************************/
 
@@ -50,7 +50,7 @@ class ServerPoller {
         // Frozen per-chain ACTIVATION_DELAY_BLOCKS, needed to detect forward
         // deactivation_block stamps for the in-place updated-rows channel (see
         // updatedRows.js). A coin that is unrecognized (or omitted in a test
-        // harness) yields undefined/null — collectUpdatedRows then skips the
+        // harness) yields undefined/null; collectUpdatedRows then skips the
         // deactivation_block class rather than scanning with a wrong delay.
         let delay = activationDelayBlocks(chain);
         this.activationDelay = (delay === undefined) ? null : delay;
@@ -59,7 +59,7 @@ class ServerPoller {
         this.running = false;
 
         // Per-block replicated table topology (single source of truth shared with
-        // the row-count completeness check — see src/replicatedTables.js).
+        // the row-count completeness check; see src/replicatedTables.js).
         let topo = replicatedTables.getTopology(this.dbType);
         this.blockScopedTables  = topo.blockScoped;
         this.txScopedTables     = topo.txScoped;
@@ -70,7 +70,7 @@ class ServerPoller {
             // Decoder doesn't have cross-chain infrastructure tables
             this.infraTables = new Set();
         } else {
-            // Infrastructure tables — always synced regardless of subscriber sync mode
+            // Infrastructure tables: always synced regardless of subscriber sync mode.
             // These tables provide cross-chain state that every node needs (validator set,
             // rewards) or that participate in cross-chain queries (PRICE actions on any chain).
             // Subscribers in 'infra-only' mode receive ONLY these tables for this chain.
@@ -79,6 +79,10 @@ class ServerPoller {
                 'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
             ]);
         }
+
+        // Count of consecutive _poll() failures so _updateStatus can surface
+        // a stale-status signal to /health callers when the poller is wedged.
+        this.pollErrorCount = 0;
     }
 
     // Start the polling loop
@@ -89,7 +93,7 @@ class ServerPoller {
 
         // Repair any interior transparency-log holes left by a pre-fix restart that
         // resumed from the source tip. No-op on a healthy log (and on the decoder,
-        // which has no transparency log). Failure here must not stop live polling —
+        // which has no transparency log). Failure here must not stop live polling;
         // the backfill is idempotent and retries on the next restart.
         try {
             await this.backfillGaps();
@@ -104,25 +108,30 @@ class ServerPoller {
             let blocksProcessed = 0;
             try {
                 blocksProcessed = await this._poll() || 0;
+                this.pollErrorCount = 0;
             } catch(e){
-                console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ':', e);
+                this.pollErrorCount++;
+                console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e);
+                // Update status so the poll_error_count field is current even while
+                // lastPolledBlock is frozen at the last-good value.
+                await this._updateStatus().catch(() => {});
             }
-            // Skip sleep when the batch cap was hit — backlog likely remains
+            // Skip sleep when the batch cap was hit (backlog likely remains)
             if(blocksProcessed < 100)
                 await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
         }
     }
 
     // Seed the broadcast cursor for a (re)start. For the indexer, resume from the
-    // transparency log's own high-water mark — the durable record of how far this
-    // poller actually recorded and broadcast (MAX(block_index) in sync_meta). The
+    // transparency log's own high-water mark, which is the durable record of how far
+    // this poller actually recorded and broadcast (MAX(block_index) in sync_meta). The
     // source DB tip (db.getLastBlock) is NOT a record of broadcast progress: if the
     // sync server was down while the co-located indexer advanced, seeding from the
     // tip would jump the cursor past every missed block, so _poll's while-loop never
     // runs for them, recordBlock is never called, and any epoch boundary in the gap
-    // is never committed — a permanent hole in sync_meta and missing Merkle proofs,
-    // while the poller falsely reports caught-up. A null high-water mark (empty
-    // sync_meta — fresh node) leaves the cursor null so _poll initialises from the
+    // is never committed, leaving a permanent hole in sync_meta and missing Merkle
+    // proofs while the poller falsely reports caught-up. A null high-water mark (empty
+    // sync_meta, fresh node) leaves the cursor null so _poll initialises from the
     // current tip on its first pass, as before. The decoder has no transparency log,
     // so it resumes from the source tip (decoder content is deterministic from the
     // coin node and carries no synthetic hash chain to keep gap-free).
@@ -145,18 +154,18 @@ class ServerPoller {
         if(gaps.length === 0) return 0;
 
         console.log('Transparency backfill: ' + gaps.length + ' missing block(s) detected for ' +
-            this.chain + '/' + this.network + '/' + this.dbType + ' — repairing');
+            this.chain + '/' + this.network + '/' + this.dbType + '; repairing');
 
         let epochSize = this.transparencyLog.epochSize;
         let epochs = new Set();
         for(let block_index of gaps){
             let hashRow = await this.db.getBlockHashRow(block_index);
-            if(!hashRow) continue;  // block no longer in source (reorg since scan) — skip
+            if(!hashRow) continue;  // block no longer in source (reorg since scan); skip
             await this.transparencyLog.recordBlock(
                 Number(hashRow.block_index), Number(hashRow.block_time),
                 hashRow.ledger_hash, hashRow.actions_hash, hashRow.contract_hash
             );
-            // Block N belongs to epoch ceil(N / epochSize) — matches getProof's mapping.
+            // Block N belongs to epoch ceil(N / epochSize); matches getProof's mapping.
             epochs.add(Math.ceil(block_index / epochSize));
         }
 
@@ -164,9 +173,12 @@ class ServerPoller {
         // when the boundary block itself was the gap; an epoch whose boundary block was
         // already present would have been committed earlier with a partial tree (the
         // hole's blocks missing), so its root must be rebuilt explicitly now that the
-        // range is complete.
+        // range is complete. Pass highWaterMark so recommitEpoch skips any epoch whose
+        // endBlock has not yet been reached, avoiding a permanent partial root for the
+        // current in-progress epoch.
+        let hwm = await this.transparencyLog.getHighWaterMark();
         for(let epoch of epochs)
-            await this.transparencyLog.recommitEpoch(epoch);
+            await this.transparencyLog.recommitEpoch(epoch, hwm);
 
         console.log('Transparency backfill complete for ' + this.chain + '/' + this.network + '/' + this.dbType +
             ': ' + gaps.length + ' block(s) recorded, ' + epochs.size + ' epoch(s) recomputed');
@@ -194,7 +206,7 @@ class ServerPoller {
         if(currentBlock < this.lastPolledBlock){
             console.log('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock);
 
-            // Prune the source's own transparency log first (indexer only — decoder
+            // Prune the source's own transparency log first (indexer only; decoder
             // has no transparencyLog). The indexer rolls back its data tables on a
             // reorg but not these sync-service-owned tables, and recordBlock's
             // INSERT IGNORE would otherwise keep the orphaned blocks' stale hashes
@@ -222,7 +234,7 @@ class ServerPoller {
             let nextBlock = this.lastPolledBlock + 1;
             let payload = await this._buildBlockPayload(nextBlock);
             if(payload){
-                // Record in transparency log — indexer only (decoder has no synthetic hashes)
+                // Record in transparency log (indexer only; decoder has no synthetic hashes)
                 if(this.transparencyLog){
                     await this.transparencyLog.recordBlock(
                         payload.block_index, payload.block_time,
@@ -304,7 +316,7 @@ class ServerPoller {
                 if(rows && rows.length > 0)
                     payload.data[table] = rows;
             } catch(e){
-                // Table may not exist in older schemas — skip silently
+                // Table may not exist in older schemas; skip silently
             }
         }
 
@@ -314,7 +326,7 @@ class ServerPoller {
             payload.data['transactions'] = txRows;
 
         if(this.dbType === 'decoder'){
-            // Decoder: tx-scoped tables (transaction_outputs, dispensers)
+            // Decoder: tx-scoped tables (transaction_outputs)
             for(let table of this.txScopedTables){
                 try {
                     let rows = await this.db.getTxScopedRows(table, block_index);
@@ -334,7 +346,7 @@ class ServerPoller {
                 if(table === 'actions') continue; // Already handled
                 // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
                 // getActionScopedRows joins on action_index and would drop those rows from the
-                // payload, while the consensus hash includes them (via execution_index) — a
+                // payload, while the consensus hash includes them (via execution_index). A
                 // follower would then recompute a divergent contract_hash and halt. Stream them
                 // through the execution_index chain instead, matching BlockHasher exactly.
                 if(table === 'contract_emissions'){
@@ -343,7 +355,7 @@ class ServerPoller {
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
-                        // Table may not exist — skip silently
+                        // Table may not exist; skip silently
                     }
                     continue;
                 }
@@ -352,13 +364,13 @@ class ServerPoller {
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
-                    // Table may not exist — skip silently
+                    // Table may not exist; skip silently
                 }
             }
 
             // Cooldown-maturity refund credits mint AT this block but carry the
             // unstake's earlier-block action_index (and no block_index), so the
-            // action-scoped join above misses them — leaving followers permanently
+            // action-scoped join above misses them, leaving followers permanently
             // short by every matured refund. Select them by maturity block
             // (cooldown_end_block = this block), the forward mirror of
             // ClientRollback's reverse delete, and merge into the credits payload;
@@ -378,7 +390,7 @@ class ServerPoller {
                     payload.data['credits'] = existing;
                 }
             } catch(e){
-                // Tables may not exist on older schemas — skip silently
+                // Tables may not exist on older schemas; skip silently
             }
         }
 
@@ -429,15 +441,11 @@ class ServerPoller {
                         if(tx.source_id) ids.push(tx.source_id);
                         if(tx.destination_id) ids.push(tx.destination_id);
                     }
-                    // Decoder: also collect from transaction_outputs and dispensers
+                    // Decoder: also collect from transaction_outputs
                     if(this.dbType === 'decoder'){
                         if(payload.data['transaction_outputs']){
                             for(let o of payload.data['transaction_outputs'])
                                 if(o.destination_id) ids.push(o.destination_id);
-                        }
-                        if(payload.data['dispensers']){
-                            for(let d of payload.data['dispensers'])
-                                if(d.address_id) ids.push(d.address_id);
                         }
                     }
                     if(ids.length > 0){
@@ -447,7 +455,7 @@ class ServerPoller {
                             payload.data[table] = rows;
                     }
                 }
-                // pubkeys: decoder-only — fetch any pubkeys for addresses referenced this block
+                // pubkeys: decoder-only; fetch any pubkeys for addresses referenced this block
                 else if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses']){
                     let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
                     if(ids.length > 0){
@@ -456,7 +464,7 @@ class ServerPoller {
                             payload.data[table] = rows;
                     }
                 }
-                // events: decoder-only — operational log with no block_index/tx_index
+                // events: decoder-only operational log with no block_index/tx_index
                 // cursor, so it can't be scoped per-block; it is intentionally skipped
                 // here. It converges via snapshots instead: both the full snapshot and
                 // every incremental snapshot re-dump the events table in full (the client
@@ -473,17 +481,17 @@ class ServerPoller {
         // (index_actions, index_statuses, index_tickers, index_fiats, index_coins,
         // index_memos, index_mime_types, index_pubkeys). Each is an append-only
         // string-interning table referenced by `*_id` columns scattered across
-        // dozens of action/block-scoped tables — and the references are NOT a clean
+        // dozens of action/block-scoped tables. The references are NOT a clean
         // suffix convention (e.g. lists.item_id and orders.give_tick_id/get_coin_id
         // all point at index_tickers/index_coins). Hardcoding every referencing
         // column would silently drop a brand-new interned value the first time a new
-        // action type appears mid-stream, until the next snapshot backfilled it —
-        // the exact completeness gap this closes. Instead, pool every `*_id` value
-        // present in this block's already-assembled payload and fetch the matching
-        // rows from each remaining index table. Over-fetch is harmless: the rows
-        // exist on the source, the client applies them INSERT IGNORE on the PK
-        // (ClientApplier.ignoreTables), so the replica's index_* set stays a subset
-        // of the source's and never overshoots the row-count completeness check.
+        // action type appears mid-stream, until the next snapshot backfilled it.
+        // Instead, pool every `*_id` value present in this block's already-assembled
+        // payload and fetch the matching rows from each remaining index table.
+        // Over-fetch is harmless: the rows exist on the source, the client applies
+        // them INSERT IGNORE on the PK (ClientApplier.ignoreTables), so the replica's
+        // index_* set stays a subset of the source's and never overshoots the
+        // row-count completeness check.
         // index_transactions/index_addresses are handled explicitly above.
         if(this.dbType !== 'decoder'){
             let refIds = new Set();
@@ -512,20 +520,20 @@ class ServerPoller {
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
-                        // Table may not exist in older schemas — skip silently
+                        // Table may not exist in older schemas; skip silently
                     }
                 }
             }
         }
 
-        // In-place mutations to SURVIVING (below-window) rows — deactivation_block
-        // stamps, SLASH amount reductions, and v0 request_status flips — are not
+        // In-place mutations to SURVIVING (below-window) rows: deactivation_block
+        // stamps, SLASH amount reductions, and v0 request_status flips are not
         // reachable by the action_index-scoped joins above (those rows were created
         // by an earlier block's action). Carry their current full state in a separate
         // top-level `updated_rows` map so the follower can UPSERT them; without this
         // every forward in-place mutation is silently dropped on the replica. Indexer
         // only (decoder has none of these tables). tokens.escrow_action_index is NOT
-        // included — the follower re-derives it from the replicated offer/status
+        // included; the follower re-derives it from the replicated offer/status
         // tables (ClientApplier._maybeRederiveEscrow). Kept OUT of payload.data so an
         // old follower that doesn't recognise the field simply ignores it (its apply
         // loop iterates payload.data only) rather than mis-applying a non-row map.
@@ -550,7 +558,8 @@ class ServerPoller {
             dbType:              this.dbType,
             block_height:        this.lastPolledBlock,
             block_time:          hashRow ? Number(hashRow.block_time) : null,
-            source_block_height: sourceBlockHeight != null ? sourceBlockHeight : (await this.db.getLastBlock())
+            source_block_height: sourceBlockHeight != null ? sourceBlockHeight : (await this.db.getLastBlock()),
+            poll_error_count:    this.pollErrorCount
         };
         if(this.dbType === 'decoder'){
             status.block_hash = hashRow ? hashRow.block_hash : null;

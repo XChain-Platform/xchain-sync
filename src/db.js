@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -15,8 +15,8 @@
  * XChain Sync - Database Class
  *
  * This file handles connecting to MariaDB and running SQL queries.
- * Simplified from xchain-indexer/src/db.js — no action processing,
- * just connection pool, circuit breaker, and query execution.
+ * Simplified from xchain-indexer/src/db.js (no action processing,
+ * just connection pool, circuit breaker, and query execution).
  *
  * Supports both 'indexer' and 'decoder' DBs via the dbType parameter.
  * Most queries are schema-agnostic; the indexer-specific block-hash join
@@ -31,8 +31,8 @@ const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
 
 // Guard for the few queries that must interpolate a table name into a
-// backtick-quoted identifier (COUNT(*), pagination, TRUNCATE) — parameter
-// binding can't carry identifiers. Some callers pass server-supplied names
+// backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
+// binding cannot carry identifiers. Some callers pass server-supplied names
 // (e.g. a sync source's `table_counts` keys), so a stray backtick or
 // metacharacter here would break out of the quoting. Reject anything that
 // isn't a plain [A-Za-z0-9_] identifier before it reaches the query string.
@@ -53,14 +53,17 @@ class Database {
         this.util   = util;
         this.dbType = dbType || 'indexer';  // 'indexer' (default) or 'decoder'
 
-        // Connection pool parameters
+        // Connection pool parameters.
+        // DB_POOL_SIZE controls the per-database connection limit (default 5).
+        // A server with 3 chains x 2 dbTypes opens 6 pools; at default size 5
+        // that is 30 connections. Raise with DB_POOL_SIZE for high-throughput hosts.
         this.connectionPoolParams = {
             host:               this.host,
             user:               this.user,
             password:           this.pass,
             database:           this.dbName,
             port:               this.port,
-            connectionLimit:    10,
+            connectionLimit:    parseInt(process.env.DB_POOL_SIZE) || 5,
             connectTimeout:     10000,
             acquireTimeout:     10000,
             idleTimeout:        60000,
@@ -162,7 +165,7 @@ class Database {
     // dynamically via replicateSchema / the /schema fetch, not from local SQL
     // files). Which sync-owned tables apply depends on the DB shape: the
     // transparency log (sync_meta + merkle_epochs) is indexer-only, but the
-    // durable divergence halt (sync_halt) applies to BOTH db types —
+    // durable divergence halt (sync_halt) applies to BOTH db types.
     // ClientSync checks and records halts for decoder replicas too, and
     // without the table every decoder client start logged a 1146 probe error.
     async verifySyncTables(){
@@ -209,7 +212,7 @@ class Database {
     // back permanently. Source column names + definitions are derived from
     // the source's CREATE TABLE DDL (validated by validateDdl by the caller);
     // the target's columns come from INFORMATION_SCHEMA. Each gap is closed
-    // with a best-effort ALTER TABLE ADD COLUMN — a column whose definition
+    // with a best-effort ALTER TABLE ADD COLUMN. A column whose definition
     // cannot be cleanly parsed is logged and skipped rather than aborting the
     // whole sync. DDL auto-commits, so this must run before any snapshot
     // transaction is opened. Returns the number of columns added.
@@ -240,7 +243,7 @@ class Database {
 
             let def = validation.extractColumnDefinition(sourceDdl, col);
             if(!def){
-                console.warn('Could not extract definition for column ' + col + ' on ' + tableName + ' — skipping (manual ALTER may be required)');
+                console.warn('Could not extract definition for column ' + col + ' on ' + tableName + '; skipping (manual ALTER may be required)');
                 continue;
             }
 
@@ -260,7 +263,7 @@ class Database {
     // creates any missing tables locally. For tables that already exist,
     // propagates any columns the source has added since the replica was
     // bootstrapped (see addMissingColumns). This ensures the replica always
-    // matches the authoritative indexer schema — no copied SQL files needed.
+    // matches the authoritative indexer schema (no copied SQL files needed).
     async replicateSchema(sourceDb){
         console.log('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
 
@@ -302,7 +305,7 @@ class Database {
                 continue;
             }
 
-            // Table already exists on the replica — don't recreate it, but
+            // Table already exists on the replica: don't recreate it, but
             // propagate any columns the source has added since it was created.
             if(existingSet.has(tableName)){
                 await this.addMissingColumns(tableName, createSql);
@@ -314,7 +317,7 @@ class Database {
                 await this.doQuery(createSql);
                 created++;
             } catch(e){
-                // Table may reference another table not yet created — retry later
+                // Table may reference another table not yet created; retry later.
                 console.log('Deferred: ' + tableName + ':', e);
             }
         }
@@ -354,7 +357,7 @@ class Database {
             }
         }
 
-        // replicateSchema only CREATEs missing tables — it never ALTERs an
+        // replicateSchema only CREATEs missing tables. It never ALTERs an
         // existing table to add a column introduced after the replica was first
         // built. Run the column self-heal so replicas built before a column was
         // added pick it up on this pass.
@@ -374,8 +377,8 @@ class Database {
     // the orders and swaps tables. Mirror the indexer's alterTableForDrift
     // contract: add the column from its authoritative definition only when
     // absent. Both columns are NOT NULL DEFAULT 0, so the ADD COLUMN backfills
-    // existing rows safely. Scoped to indexer replicas — orders/swaps do not
-    // exist in the decoder schema. Tables absent locally are skipped (fresh
+    // existing rows safely. Scoped to indexer replicas (orders/swaps do not
+    // exist in the decoder schema). Tables absent locally are skipped (fresh
     // replicas create them with the columns already present).
     //
     // Also relaxes NULLABILITY drift in the SAFE direction (NOT NULL -> NULL):
@@ -384,7 +387,7 @@ class Database {
     // slash_events row but mint no on-wire action). The old stream scoped
     // contract_emissions by action_index (an INNER JOIN that silently dropped
     // those NULL rows); the emissions fix streams by execution_index and so
-    // delivers them — and a NOT NULL replica column rejects the INSERT with
+    // delivers them. A NOT NULL replica column rejects the INSERT with
     // errno 1048 ("Column 'action_index' cannot be null"). That is NOT a
     // schema-gap the apply-time self-heal catches (it only heals errno
     // 1146 missing-table / 1054 missing-column), so the replica would HALT
@@ -430,9 +433,9 @@ class Database {
                 "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
                 [this.dbName, table, column]
             );
-            if(colRows.length === 0) continue;                       // table/column absent — skip
+            if(colRows.length === 0) continue;                       // table/column absent; skip
             let nullable = colRows[0].IS_NULLABLE || colRows[0].is_nullable;
-            if(String(nullable).toUpperCase() !== 'NO') continue;    // already nullable — no-op
+            if(String(nullable).toUpperCase() !== 'NO') continue;    // already nullable; no-op
 
             console.log('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
             await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
@@ -459,9 +462,9 @@ class Database {
         // Circuit breaker: reject immediately if open
         if(this.circuitState === 'open'){
             if(Date.now() < this.circuitOpenUntil)
-                this.util.throwError('Circuit breaker open — database connections rejected until cooldown expires');
+                this.util.throwError('Circuit breaker open: database connections rejected until cooldown expires');
             this.circuitState = 'half-open';
-            console.log('Circuit breaker half-open — attempting reconnection');
+            console.log('Circuit breaker half-open: attempting reconnection');
         }
         let connection  = null;
         let attempts    = 0;
@@ -474,7 +477,7 @@ class Database {
                 if(this.circuitState === 'half-open'){
                     this.circuitState = 'closed';
                     this.circuitFailures = 0;
-                    console.log('Circuit breaker closed — database connection restored');
+                    console.log('Circuit breaker closed: database connection restored');
                 }
                 this.circuitFailures = 0;
             } catch (e){
@@ -560,8 +563,8 @@ class Database {
     // time. Without this, a concurrent block commit mid-read can produce a
     // snapshot whose advertised hashes (captured first) disagree with the row
     // data (read later), failing hash verification on the consuming validator.
-    // InnoDB MVCC means this read view does not block writers — the snapshot
-    // source keeps committing new blocks while the read view stays pinned.
+    // InnoDB MVCC means this read view does not block writers (the snapshot
+    // source keeps committing new blocks while the read view stays pinned).
     // Isolation is set explicitly rather than relying on the server default so
     // the guarantee holds regardless of how the source DB is configured.
     //
@@ -596,28 +599,28 @@ class Database {
     }
 
     // Abort a read snapshot and release its dedicated connection. Best-effort
-    // rollback — the connection is released regardless.
+    // rollback; the connection is released regardless.
     async rollbackReadSnapshot(conn){
         if(conn == null) return;
         try {
             await conn.rollback();
         } catch(e){
-            /* best-effort — still release below */
+            /* best-effort; still release below */
         } finally {
             await conn.release();
         }
     }
 
     // Run a query and return results.
-    // conn (optional): run on this explicit connection instead of acquiring one —
-    // used by read-snapshot reads (beginReadSnapshot). The caller owns that
+    // conn (optional): run on this explicit connection instead of acquiring one.
+    // Used by read-snapshot reads (beginReadSnapshot). The caller owns that
     // connection's lifecycle (commit/rollback/release), so errors propagate.
     async doQuery(query, args, conn){
         let results = [];
         if(!this.util.isNull(query)){
             if(Array.isArray(args)){
                 for(let i = 0; i < args.length; i++){
-                    // Buffers (binary/blob column values) must reach the driver intact —
+                    // Buffers (binary/blob column values) must reach the driver intact.
                     // toString() would UTF-8-decode and corrupt them. Other objects keep
                     // the legacy stringify coercion.
                     if(args[i] !== null && args[i] !== undefined && typeof args[i] === 'object' && !Buffer.isBuffer(args[i]))
@@ -650,8 +653,8 @@ class Database {
 
     // Get block hash data for a given block_index.
     // Indexer: joins to index_transactions for the synthetic ledger/actions/contract hashes.
-    // Decoder: simpler — decoder DB has no synthetic chain-of-state hashes; only the
-    // blockchain block hash itself (via block_hash_id → index_transactions).
+    // Decoder: joins only to the blockchain block hash (via block_hash_id -> index_transactions).
+    // Decoder DB has no synthetic chain-of-state hashes.
     // --- Divergence halt (sync_halt) ------------------------------------------
     // Durably record a confirmed cross-source consensus divergence so a halted
     // client does not silently resume onto a contested chain after a restart.
@@ -765,15 +768,17 @@ class Database {
     // Resolve a status name to its local index_statuses id. index_statuses is replicated, so the
     // id resolves consistently against the replica's own *.status_id values. Used by
     // ClientRollback's cooldown-maturity reversal mirror. Returns null if the status is absent
-    // (e.g. 'completed' never created because no cooldown has matured) — the caller then skips.
+    // (e.g. 'completed' never created because no cooldown has matured); the caller then skips.
     async getStatusId(status){
         let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status]);
         return rows.length > 0 ? Number(rows[0].id) : null;
     }
 
-    // Get all rows from a table for a given block (block_index-scoped tables)
+    // Get all rows from a table for a given block (block_index-scoped tables).
+    // ORDER BY block_index, then by the first column for deterministic ordering
+    // across sources with differing insert histories (matches the snapshot path).
     async getBlockScopedRows(table, block_index){
-        let query = "SELECT * FROM `" + table + "` WHERE block_index = ?";
+        let query = "SELECT * FROM `" + table + "` WHERE block_index = ? ORDER BY block_index ASC, 1 ASC";
         return await this.doQuery(query, [block_index]);
     }
 
@@ -782,24 +787,25 @@ class Database {
     // Scope by the ACTION's own block_index, NOT a transactions join: protocol-generated
     // actions (ORDER_MATCH / SWAP_MATCH / *_EXPIRE) carry tx_index = NULL with no transactions
     // row, so the old tx-join dropped their ledger rows (match settlements, expiry refunds) from
-    // the payload while the consensus hash now includes them — a follower would then recompute a
+    // the payload while the consensus hash now includes them. A follower would then recompute a
     // divergent hash and halt. a.block_index is set for every action, so this streams them and
     // matches BlockHasher.
     async getActionScopedRows(table, block_index){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
-            WHERE a.block_index = ?`;
+            WHERE a.block_index = ?
+            ORDER BY t.action_index ASC`;
         return await this.doQuery(query, [block_index]);
     }
 
     // Get all contract_emissions rows for a block, including INTERNAL emissions whose
     // action_index IS NULL (e.g. a SLASH). The generic getActionScopedRows() above joins
-    // on t.action_index, so its INNER JOIN drops NULL-action_index rows — but the consensus
+    // on t.action_index, so its INNER JOIN drops NULL-action_index rows. The consensus
     // contract_hash (BlockHasher) includes them via the execution_index -> contract_executions
     // chain. Streaming via that same chain keeps the server payload and the hash in agreement,
     // so a follower's recompute can't diverge. Query is kept byte-aligned with BlockHasher's
     // emissions query (same joins, columns, and ORDER BY). Select the four protocol columns
-    // explicitly (NOT em.* — that would carry the AUTO_INCREMENT `id` and break idempotent
+    // explicitly (not em.*, which would carry the AUTO_INCREMENT `id` and break idempotent
     // re-apply after a reorg).
     async getEmissionRowsForBlock(block_index){
         let query = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
@@ -812,18 +818,19 @@ class Database {
     }
 
     // Get all rows from a table for transactions in a given block (tx_index-scoped tables).
-    // Used for decoder DB tables like transaction_outputs and dispensers, which key off
-    // tx_index and join to the transactions table to recover the block scope.
+    // Used for decoder DB tables like transaction_outputs, which key off tx_index and
+    // join to the transactions table to recover the block scope.
     async getTxScopedRows(table, block_index){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN transactions tx ON (tx.tx_index = t.tx_index)
-            WHERE tx.block_index = ?`;
+            WHERE tx.block_index = ?
+            ORDER BY t.tx_index ASC, 1 ASC`;
         return await this.doQuery(query, [block_index]);
     }
 
     // Get transactions for a given block
     async getTransactions(block_index){
-        let query = "SELECT * FROM transactions WHERE block_index = ?";
+        let query = "SELECT * FROM transactions WHERE block_index = ? ORDER BY tx_index ASC";
         return await this.doQuery(query, [block_index]);
     }
 
@@ -832,7 +839,8 @@ class Database {
     // and must still stream to followers (and are now in the consensus hash).
     async getActions(block_index){
         let query = `SELECT a.* FROM actions a
-            WHERE a.block_index = ?`;
+            WHERE a.block_index = ?
+            ORDER BY a.action_index ASC`;
         return await this.doQuery(query, [block_index]);
     }
 

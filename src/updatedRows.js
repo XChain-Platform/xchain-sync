@@ -17,41 +17,48 @@
  * The per-block payload and the incremental snapshot both scope rows by
  * action_index (rows whose creating action falls in the block/catch-up window).
  * That captures INSERTs and mutations to rows created inside the window, but it
- * can never carry an in-place mutation the indexer makes to a SURVIVING row —
- * one created by an earlier (below-window) action and later mutated in place.
+ * cannot carry an in-place mutation the indexer makes to a SURVIVING row (one
+ * created by an earlier, below-window action and later mutated in place).
  * Those mutations were silently dropped on every follower from bootstrap onward
  * (no UPDATE path on the apply side, no hash coverage to detect the gap).
  *
  * This module collects, for a block window [fromBlock, toBlock], the CURRENT
  * full state of every surviving row mutated in place during that window, keyed
  * by the table's natural row identity (action_index, which is UNIQUE on every
- * affected table). The follower applies them with INSERT … ON DUPLICATE KEY
+ * affected table). The follower applies them with INSERT ... ON DUPLICATE KEY
  * UPDATE (see ClientApplier._upsertRows), so re-sending a row already current is
- * a harmless no-op. The detection mirrors — in the forward direction — the exact
+ * a harmless no-op. The detection mirrors (in the forward direction) the exact
  * reorg-reset predicates ClientRollback already runs (which themselves mirror
  * xchain-indexer/src/rollback.js), so source and follower converge byte-for-byte.
  *
  * Covered in-place mutation classes (all indexer-only):
  *   - deactivation_block stamp on stakes / delegations / contract_stakes /
  *     contract_delegations (set on UNSTAKE / DELEGATE-revoke to
- *     actionBlock + ACTIVATION_DELAY_BLOCKS — so a stamp landed in this window
- *     iff deactivation_block ∈ [fromBlock+delay, toBlock+delay], an indexed
+ *     actionBlock + ACTIVATION_DELAY_BLOCKS; a stamp lands in this window
+ *     iff deactivation_block in [fromBlock+delay, toBlock+delay], an indexed
  *     range scan).
  *   - amount reduction on contract_stakes / contract_unstakes (contract SLASH)
- *     and stakes / unstakes (capability SLASH) — found via the per-row slash
+ *     and stakes / unstakes (capability SLASH), found via the per-row slash
  *     debit logs (contract_slash_debits / capability_slash_debits), which are
  *     themselves block-streamed and carry block_index.
  *   - request_status flip on a surviving v0 attests / xcalls request row, stamped
  *     with resolved_block = the resolving block.
  *   - cooldown-maturity status_id flip on surviving unstakes / contract_unstakes
  *     (markCooldownsCompleted sets status_id = 'completed' in place at the maturity
- *     block) — keyed by cooldown_end_block ∈ [fromBlock, toBlock]. The forward twin
- *     of ClientRollback's reverse status reset and of cooldownCredits.js's forward
+ *     block), keyed by cooldown_end_block in [fromBlock, toBlock]. Forward twin
+ *     of ClientRollback's reverse status reset and cooldownCredits.js's forward
  *     refund-credit selection (same maturity-block key).
+ *   - invalid_archive stamp on a surviving anchor_actions v1 parent row when the
+ *     completing v2 chunk of its batch lands in this window and CRC fails. The
+ *     parent's action_index is below the window, so the action-scoped stream misses
+ *     it. Keyed by the completing v2 chunk's block_index (in [fromBlock, toBlock]).
+ *     Forward twin of ClientRollback's reverse 'unverified' reset (which joins on
+ *     exactly this predicate). status_id is not hashed raw; it is resolved via
+ *     status name by the follower's upsert using the replicated index_statuses table.
  *
  * tokens.escrow_action_index is intentionally NOT carried here: it is re-derived
  * on the follower from the already-replicated offer/status tables (the same
- * re-derive ClientRollback runs on reorg), so it needs no wire field — see
+ * re-derive ClientRollback runs on reorg), so it needs no wire field. See
  * ClientApplier._maybeRederiveEscrow.
  *
  ********************************************************************/
@@ -74,16 +81,16 @@ const SLASH_SPECS = [
 const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
 
 // Surviving unstake rows whose status_id was flipped to 'completed' in place when their
-// cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block — the maturity
-// block — exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
+// cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block (the maturity
+// block), exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
 // credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
 const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
-// Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows —
+// Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
 // the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
 //
-//   db              the source Database (indexer dbType only — callers must gate)
+//   db              the source Database (indexer dbType only; callers must gate)
 //   fromBlock       inclusive lower block bound of the window
 //   toBlock         inclusive upper block bound of the window
 //   activationDelay frozen per-chain ACTIVATION_DELAY_BLOCKS; null skips the
@@ -108,9 +115,9 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         }
     }
 
-    // 1. deactivation_block stamps — indexed range scan on each table. A stamp of
+    // 1. deactivation_block stamps: indexed range scan on each table. A stamp of
     //    value V was written by an action in block V - delay, so a stamp landed in
-    //    [from, to] iff V ∈ [from+delay, to+delay]. Skipped when delay is unknown.
+    //    [from, to] iff V in [from+delay, to+delay]. Skipped when delay is unknown.
     if(activationDelay != null){
         for(let table of DEACTIVATION_TABLES){
             try {
@@ -119,13 +126,13 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                     [from + activationDelay, to + activationDelay], conn);
                 add(table, rows);
             } catch(e){
-                // Table/column may not exist on older source schemas — skip.
+                // Table/column may not exist on older source schemas; skip.
             }
         }
     }
 
-    // 2. SLASH amount reductions — join the slashed stake/unstake row to its debit
-    //    log entry for this window. No DISTINCT: the add() Map dedups by action_index
+    // 2. SLASH amount reductions: join the slashed stake/unstake row to its debit
+    //    log entry for this window. No DISTINCT; the add() Map dedups by action_index
     //    (avoids DISTINCT over wide/blob columns).
     for(let spec of SLASH_SPECS){
         try {
@@ -136,13 +143,13 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [spec.target, from, to], conn);
             add(spec.table, rows);
         } catch(e){
-            // Table may not exist on older source schemas — skip.
+            // Table may not exist on older source schemas; skip.
         }
     }
 
     // 3. request_status flips on surviving v0 attest/xcall request rows. Keyed on
-    //    resolved_block (the resolving block stamp) — captures both the response and
-    //    the deadline-expiry flip paths, mirroring ClientRollback's reset key.
+    //    resolved_block (the resolving block stamp), which captures both the response
+    //    and the deadline-expiry flip paths, mirroring ClientRollback's reset key.
     for(let table of REQUEST_STATUS_TABLES){
         try {
             let rows = await db.doQuery(
@@ -150,16 +157,16 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [from, to], conn);
             add(table, rows);
         } catch(e){
-            // Table/column may not exist on older source schemas — skip.
+            // Table/column may not exist on older source schemas; skip.
         }
     }
 
     // 4. cooldown-maturity status_id flip on surviving unstakes / contract_unstakes.
     //    markCooldownsCompleted flips status_id to 'completed' in place on a row whose
     //    creating action is in an earlier block, so the action-scoped stream misses it.
-    //    The flip lands at the maturity block, so it falls in [from, to] iff
-    //    cooldown_end_block ∈ [from, to] (no activation-delay offset — unlike the
-    //    deactivation_block stamp). Carry the current row state, mirroring how the
+    //    The flip lands at the maturity block, falling in [from, to] iff
+    //    cooldown_end_block in [from, to] (no activation-delay offset, unlike the
+    //    deactivation_block stamp). Carries the current row state, mirroring how the
     //    deactivation_block class carries the surviving stamped row. add() dedups by
     //    the UNIQUE action_index against any SLASH row for the same unstake.
     for(let table of COOLDOWN_STATUS_TABLES){
@@ -169,8 +176,32 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [from, to], conn);
             add(table, rows);
         } catch(e){
-            // Table/column may not exist on older source schemas — skip.
+            // Table/column may not exist on older source schemas; skip.
         }
+    }
+
+    // 5. invalid_archive stamp on surviving anchor_actions v1 parent rows. When the
+    //    final v2 chunk of a chunked archive batch lands and the reassembled blob fails
+    //    its CRC check, anchor.js stamps the v1 parent 'invalid_archive' in place. The
+    //    parent's action_index is in an earlier block (chunking spans blocks by design),
+    //    so the action-scoped stream for the completing chunk's block carries the chunk
+    //    row but NOT the parent's flipped status. This class finds those parents via a
+    //    self-join to their completing v2 chunk, keyed by the chunk's block_index in
+    //    [from, to]. Mirrors ClientRollback's reverse 'unverified' reset predicate.
+    //    Carries the full parent row so the follower's upsert refreshes status_id in
+    //    place (INSERT ... ON DUPLICATE KEY UPDATE). Table may not exist on schemas
+    //    without ANCHOR support.
+    try {
+        let anchorRows = await db.doQuery(
+            "SELECT DISTINCT p.* FROM anchor_actions p " +
+            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
+            "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
+            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+            "WHERE p.version = 1 AND c.block_index BETWEEN ? AND ?",
+            [from, to], conn);
+        add('anchor_actions', anchorRows);
+    } catch(e){
+        // Table/columns may not exist on older source schemas; skip.
     }
 
     let out = {};

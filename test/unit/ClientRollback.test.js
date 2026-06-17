@@ -18,6 +18,7 @@ function createMockDb(){
     return {
         doQuery: sinon.stub().resolves([]),
         getFirstActionIndex: sinon.stub().resolves(500),
+        getStatusId: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves()
@@ -85,9 +86,10 @@ describe('ClientRollback', function(){
         it('deletes from action-scoped tables with action_index', async function(){
             await rollback.rollback(100);
             let actionDeletes = db.doQuery.getCalls().filter(c =>
-                c.args[0].includes('DELETE FROM') && c.args[0].includes('action_index >=') && !c.args[0].includes('contract_emissions')
+                c.args[0].includes('DELETE FROM') && c.args[0].includes('action_index >=') &&
+                !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices')
             );
-            // Should have one delete per dataTable
+            // Should have one delete per dataTable (oracle_prices is a bespoke delete excluded above)
             assert.strictEqual(actionDeletes.length, rollback.dataTables.length);
             // Each should use firstActionIndex = 500
             for(let call of actionDeletes){
@@ -176,7 +178,10 @@ describe('ClientRollback', function(){
         });
 
         it('does not throw if the escrow re-derive tables are missing (older replica schema)', async function(){
-            db.doQuery.withArgs(sinon.match(AFFECTED_RE)).rejects(new Error('Table does not exist'));
+            // Simulate a MariaDB "table not found" error with errno 1146 (the errno the
+            // schema-gap catch checks for). A plain Error without errno would be rethrown.
+            db.doQuery.withArgs(sinon.match(AFFECTED_RE))
+                .rejects(Object.assign(new Error('Table does not exist'), { errno: 1146 }));
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true, 'rollback still commits');
         });
@@ -199,7 +204,7 @@ describe('ClientRollback', function(){
             await rollback.rollback(100);
             let calls = db.doQuery.getCalls();
             // attests/xcalls request_status resets are in-place on surviving rows and must
-            // precede the deletes (escrow is the exception — it is re-derived AFTER, tested above).
+            // precede the deletes (escrow is the exception: it is re-derived AFTER, tested above).
             let attestIdx = calls.findIndex(c => c.args[0].includes('UPDATE attests') && c.args[0].includes("request_status = 'pending'"));
             let tokenDeleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `tokens`'));
             assert.ok(attestIdx >= 0 && tokenDeleteIdx >= 0);
@@ -231,7 +236,7 @@ describe('ClientRollback', function(){
             assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'slash restore must precede the contract_stakes delete');
         });
 
-        it('contract slash-restore tiebreaks on (execution_index, slash_position), byte-matching the source — never AUTO_INCREMENT id', async function(){
+        it('contract slash-restore tiebreaks on (execution_index, slash_position), byte-matching the source (not AUTO_INCREMENT id)', async function(){
             // Must mirror xchain-indexer rollback.js exactly. If the replica tiebreaks on the
             // AUTO_INCREMENT `id` (assigned in physical insert order, differs source-vs-replica),
             // a reorg retracting a block with >=2 contract slashes on one stake_action_index
@@ -261,14 +266,15 @@ describe('ClientRollback', function(){
         });
 
         it('handles per-table errors gracefully (table may not exist)', async function(){
-            // Make some doQuery calls throw (simulating missing tables)
+            // Simulate a MariaDB "table not found" error (errno 1146) on the 3rd query.
+            // All bespoke optional-delete paths check e.errno 1146/1054 and swallow it.
             let callCount = 0;
             db.doQuery.callsFake(async (query) => {
                 callCount++;
-                if(callCount === 3) throw new Error('Table does not exist');
+                if(callCount === 3) throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
                 return [];
             });
-            // Should not throw — individual table errors are caught
+            // Should not throw; individual table errors are caught
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
         });

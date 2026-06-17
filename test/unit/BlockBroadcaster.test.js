@@ -162,7 +162,7 @@ describe('BlockBroadcaster', function(){
 
         it('infra-only subscriber receives only infra tables, filtered from event.data', function(){
             // Regression (#3621/#3874): the gate filtered event.tables (always
-            // undefined for block payloads — rows live under event.data), so
+            // undefined for block payloads (rows live under event.data), so
             // infra-only subscribers silently received the FULL block.
             let full = mockWs(), infra = mockWs();
             broadcaster.addSubscription(full,  mockReq('7.7.7.7'), 'bitcoin', 'mainnet');
@@ -424,7 +424,7 @@ describe('BlockBroadcaster', function(){
             broadcaster.updateStatus('bitcoin', 'mainnet', { dbType: 'indexer', block_height: 600 });
             broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'known-1', 600, null);
             broadcaster.recordValidatorHeartbeat('bitcoin', 'mainnet', 'indexer', 'known-2', 590, null);
-            // A different chain has no status data, so its validator stays unknown — but
+            // A different chain has no status data, so its validator stays unknown, but
             // it must not bleed into the bitcoin/mainnet tally.
             broadcaster.recordValidatorHeartbeat('litecoin', 'mainnet', 'indexer', 'unk-1', 100, null);
             let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
@@ -493,8 +493,10 @@ describe('BlockBroadcaster', function(){
             broadcaster.evictStaleValidators(60000);
 
             // Still present in the map and surfaced as 'stale' with its last applied_height.
+            // Stale entries are excluded from total so a going-stale validator
+            // decrements the count (the operator-visible erosion signal).
             let res = broadcaster.getValidatorHeartbeats('bitcoin', 'mainnet', 'indexer');
-            assert.strictEqual(res.total, 1);
+            assert.strictEqual(res.total, 0);
             assert.ok(res.validators['val-a']);
             assert.strictEqual(res.validators['val-a'].status, 'stale');
             assert.strictEqual(res.validators['val-a'].applied_height, 500);

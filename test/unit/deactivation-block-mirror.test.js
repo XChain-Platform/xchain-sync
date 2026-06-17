@@ -27,6 +27,7 @@ function createMockDb(){
         dbType: 'indexer',
         doQuery: sinon.stub().resolves([]),
         getFirstActionIndex: sinon.stub().resolves(500),
+        getStatusId: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves()
@@ -86,7 +87,7 @@ describe('deactivation_block sync-mirror (#3976/#4110)', function(){
             const q = deactivationResets(db).find(c => c.args[0].includes('UPDATE stakes s'));
             assert.ok(q, 'stakes reset present');
             assert.ok(q.args[0].includes('JOIN unstakes u'));
-            // precise: deactivation_block = u.block_index + ? — NOT a blanket >= block_index
+            // precise: deactivation_block = u.block_index + ? (not a blanket >= block_index)
             assert.ok(q.args[0].includes('s.deactivation_block = u.block_index + ?'));
             assert.deepStrictEqual(q.args[1], [100, 6]);
         });

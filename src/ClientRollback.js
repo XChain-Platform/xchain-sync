@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -39,12 +39,12 @@ class ClientRollback {
         this.coin = coin;
         let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
         if(delay === undefined){
-            throw new Error('ClientRollback: unrecognized coin "' + coin + '" — no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+            throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
         }
         this.activationDelay = delay;
 
         // IMPORTANT: These lists mirror xchain-indexer/src/rollback.js. They MUST be kept
-        // in sync — any table the indexer rolls back AND xchain-sync replicates must also
+        // in sync: any table the indexer rolls back AND xchain-sync replicates must also
         // be rolled back here, or the replica keeps orphaned rows after a reorg and silently
         // diverges from the source. test/unit/rollback-coverage.test.js guards this against
         // drift by checking every table ServerPoller replicates is handled below.
@@ -60,7 +60,7 @@ class ClientRollback {
             // amount reduction). Block-scoped like slash_events. The restore above reads it
             // BEFORE this generic delete drops the orphaned rows; mirrors the source indexer.
             'contract_slash_debits',
-            // Capability-stake equivocation slashing (WI-2 bump 2) — block-scoped twins of
+            // Capability-stake equivocation slashing (WI-2 bump 2), block-scoped twins of
             // slash_events / contract_slash_debits. The capability_slash_debits restore below
             // copies back the pre-slash stakes/unstakes amount on reorg; mirrors the source.
             'capability_slash_events',
@@ -144,7 +144,7 @@ class ClientRollback {
             // action_index (xchain-indexer/src/rollback.js dataTables); mirror it here or
             // orphaned chunk rows for a DEPLOY the source chain never finalized linger on
             // the replica until the next full snapshot (the explorer's per-chunk status
-            // view then serves them). Unhashed, so no checkpoint fork — but it is genuine
+            // view then serves them). Unhashed, so no checkpoint fork, but it is genuine
             // rollback-able per-action state, not an indexer-local artifact.
             'deploy_chunks',
             'contract_stakes',
@@ -158,10 +158,10 @@ class ClientRollback {
             // full_node_verifications: NODEPROOF verdict rows (verified-validator
             // tier), keyed by the verdict action_index and rolled back as a dataTable
             // by the source (xchain-indexer/src/rollback.js). Mirror it here or a reorg
-            // leaves orphaned PASS-verdict rows on every replica — the follower keeps
+            // leaves orphaned PASS-verdict rows on every replica. The follower keeps
             // mirroring a verified-full-node set (which drives the oracle-round reward
             // split) that the source chain never finalized. Generic action_index delete,
-            // no restore — same shape as the source.
+            // no restore, same shape as the source.
             'full_node_verifications',
             'prices',
             // Programmable-policy controller bind/unbind event logs. Append-only,
@@ -175,7 +175,7 @@ class ClientRollback {
             'address_controllers',
             // contract_permissions: the DEPLOY permissions manifest (which action-classes
             // are guard-gated for a contract), keyed by the DEPLOY action_index and rolled
-            // back as a dataTable by the source — mirror it so a reorg drops orphaned
+            // back as a dataTable by the source; mirror it so a reorg drops orphaned
             // manifests too, else the replica keeps enforcing policy the source never finalized.
             'contract_permissions'
         ];
@@ -200,15 +200,15 @@ class ClientRollback {
 
         // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
         // dispensers is intentionally absent: it is no longer per-block replicated
-        // (the decoder live-prunes it, which the block stream can't model — see
-        // replicatedTables.js), so it converges via the full snapshot only. Deleting
+        // (the decoder live-prunes it, which the block stream can't model (see
+        // replicatedTables.js)); it converges via the full snapshot only. Deleting
         // its rows on a reorg would corrupt that full-snapshot state with no live
         // stream to restore them, so a reorg leaves dispensers untouched.
         this.decoderTxScopedTables = ['transaction_outputs'];
     }
 
     // Roll back all data at or after the given block_index.
-    // Branches on db.dbType — decoder has a different table layout (no actions,
+    // Branches on db.dbType: decoder has a different table layout (no actions,
     // no balances, tx-scoped tables instead of action-scoped) and no
     // contract_emissions / sync_meta.
     async rollback(block_index){
@@ -238,7 +238,7 @@ class ClientRollback {
                         [firstActionIndex]
                     );
                 } catch(e){
-                    // Table may not exist — skip
+                    // Table may not exist on older replica schemas - skip
                 }
             }
 
@@ -247,7 +247,7 @@ class ClientRollback {
             // (action_index < firstActionIndex) to undo stamps that orphaned actions
             // wrote on them. The DELETE loops below only drop orphaned-RANGE rows, so
             // without replaying these resets the replica keeps the stale stamp and
-            // diverges from the source (and from a from-genesis replay) after a reorg —
+            // diverges from the source (and from a from-genesis replay) after a reorg.
             // a consensus-affecting split. These three resets key purely on
             // firstActionIndex / block_index, so they port exactly; run them BEFORE the
             // deletes, matching the source order.
@@ -255,16 +255,16 @@ class ClientRollback {
             // NOTE: the source ALSO re-NULLs deactivation_block on
             // stakes/delegations/contract_stakes/contract_delegations. Those resets key on
             // ACTIVATION_DELAY_BLOCKS, which is a frozen per-chain node-local consensus
-            // constant (never hub-overlaid — the indexer's _mergeHubParams overlay is empty
+            // constant (never hub-overlaid; the indexer's _mergeHubParams overlay is empty
             // for consensus params), so the replica now holds it via consensus-constants.js
             // and mirrors all four resets below.
             if(firstActionIndex !== null){
                 // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
-                // AFTER the dataTables delete (mirror of xchain-indexer rollback.js) — a range
+                // AFTER the dataTables delete (mirror of xchain-indexer rollback.js), a range
                 // reset here would only handle the SET direction (offer orphaned), not the CLEAR
                 // direction (a surviving offer whose release was orphaned).
 
-                // attests (ATTEST v0 request) — an orphaned v1 response / v2 expiry
+                // attests (ATTEST v0 request): an orphaned v1 response / v2 expiry
                 // flipped a surviving request out of 'pending'. Reset it (keyed on
                 // resolved_block so BOTH flip paths reset) so a re-applied response is not
                 // rejected as already-resolved and the pending-only deadline sweep can
@@ -276,10 +276,12 @@ class ClientRollback {
                         [block_index]
                     );
                 } catch(e){
-                    // Column/table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // xcalls (XCALL v0 request) — an orphaned result callback / deadline
+                // xcalls (XCALL v0 request): an orphaned result callback / deadline
                 // expiry flipped a surviving request terminal. Reset so a re-applied
                 // result is not silently lost to the already-resolved interlock (and an
                 // expiry re-arms).
@@ -291,23 +293,25 @@ class ClientRollback {
                         [block_index]
                     );
                 } catch(e){
-                    // Column/table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // contract_slash_debits restore — an orphaned SLASH reduced
+                // contract_slash_debits restore: an orphaned SLASH reduced
                 // contract_stakes/contract_unstakes.amount IN PLACE on surviving rows (the
                 // source records each debit's pre-slash `prev_amount`). The action-scoped
                 // delete below drops orphaned-range rows but never re-streams the surviving
                 // mutated row, so the replica keeps the slashed amount and diverges from the
                 // source after a reorg. Mirror the source restore (xchain-indexer
                 // rollback.js): copy back the EARLIEST orphaned debit's `prev_amount` per row
-                // — a pure string copy, byte-identical to the source (no arithmetic). Keys
+                // This is a pure string copy, byte-identical to the source (no arithmetic). Keys
                 // only on block_index/stake_action_index, so it ports cleanly (no
                 // ACTIVATION_DELAY_BLOCKS dependency).
                 //
-                // Same-block tiebreak is (execution_index, slash_position) — the EXECUTE's
+                // Same-block tiebreak is (execution_index, slash_position), the EXECUTE's
                 // on-chain action_index plus the emission-loop index, the deterministic total
-                // order the source uses for contract_emissions — NOT the AUTO_INCREMENT `id`.
+                // order the source uses for contract_emissions, NOT the AUTO_INCREMENT `id`.
                 // This MUST byte-match the source indexer or a reorg retracting a block with
                 // ≥2 contract slashes on one stake row restores a divergent amount on the
                 // replica vs the source (stake-weight fork).
@@ -331,18 +335,20 @@ class ClientRollback {
                             [slashTbl, block_index, block_index]
                         );
                     } catch(e){
-                        // Table may not exist on older replica schemas — skip
+                        // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                        // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
                     }
                 }
 
-                // capability_slash_debits restore (WI-2 bump 2) — the capability-stake twin
+                // capability_slash_debits restore (WI-2 bump 2): the capability-stake twin
                 // of the contract restore above. An orphaned SLASH burned stakes/unstakes.amount
                 // IN PLACE on surviving rows; copy back the EARLIEST orphaned debit's verbatim
                 // prev_amount per row. Same shape/keys as the contract path; mirrors the source
                 // indexer (xchain-indexer rollback.js).
                 //
                 // Same-block tiebreak is slash_action_index (the deterministic, replay-stable
-                // wire-SLASH action_index), NOT AUTO_INCREMENT `id` — must byte-match the source
+                // wire-SLASH action_index), NOT AUTO_INCREMENT `id`; must byte-match the source
                 // indexer or a reorg retracting a block with ≥2 capability slashes on one stake
                 // row restores a divergent amount on the replica vs the source (stake-weight fork).
                 for(let slashTbl of ['stakes', 'unstakes']){
@@ -362,11 +368,13 @@ class ClientRollback {
                             [slashTbl, block_index, block_index]
                         );
                     } catch(e){
-                        // Table may not exist on older replica schemas — skip
+                        // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                        // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
                     }
                 }
 
-                // deactivation_block re-NULL — mirror of xchain-indexer/src/rollback.js.
+                // deactivation_block re-NULL, mirror of xchain-indexer/src/rollback.js.
                 // Orphaned UNSTAKE / DELEGATE-revoke actions stamped deactivation_block =
                 // actionBlock + activationDelay IN PLACE on surviving parent stake/delegation
                 // rows (created by a much earlier STAKE/DELEGATE in a surviving block). The
@@ -375,7 +383,7 @@ class ClientRollback {
                 // non-NULL deactivation_block; every active-set read gates on
                 // (deactivation_block IS NULL OR deactivation_block > currentBlock), so once
                 // the new chain passes the stale value the staker silently drops out on the
-                // replica while the source (and a from-genesis replay) keeps it active — a
+                // replica while the source (and a from-genesis replay) keeps it active, a
                 // consensus-affecting divergence. The reset is PRECISE: we match the EXACT
                 // value an orphaned action wrote (orphanBlock + activationDelay), never a
                 // blanket >= block_index, so legitimately-earned earlier deactivations are
@@ -384,7 +392,7 @@ class ClientRollback {
                 let activationDelay = this.activationDelay;
                 if(activationDelay == null){
                     // No coin supplied at construction (legacy/test path). Skip rather than
-                    // run with a wrong value — but warn, since on a real replica this would
+                    // run with a wrong value, but warn since on a real replica this would
                     // silently reintroduce the deactivation-block sync divergence.
                     console.warn('ClientRollback: deactivation_block re-NULL mirror skipped (no coin supplied)');
                 } else {
@@ -401,12 +409,14 @@ class ClientRollback {
                         [block_index, activationDelay]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
                 // delegations ← orphaned DELEGATE-revoke rows (a revoke is itself a
                 // delegations row; the parent it stamped is an earlier delegations row for
-                // the same source + signing pubkey — self-join).
+                // the same source + signing pubkey (self-join).
                 try {
                     await this.db.doQuery(
                         "UPDATE delegations p " +
@@ -419,7 +429,9 @@ class ClientRollback {
                         [block_index, activationDelay]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
                 // contract_stakes ← orphaned contract_unstakes (contract staking, all chains)
@@ -436,7 +448,9 @@ class ClientRollback {
                         [block_index, activationDelay]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
                 // contract_delegations ← orphaned DELEGATE v3 contract-revokes. No child row
@@ -452,11 +466,13 @@ class ClientRollback {
                         [Number(block_index) + activationDelay]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
                 } // end deactivation_block mirror (activationDelay present)
 
-                // Reverse orphaned cooldown-maturity completions — mirror of
+                // Reverse orphaned cooldown-maturity completions, mirror of
                 // xchain-indexer/src/rollback.js (commit 309fec7). When a capability/contract
                 // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit
                 // carrying the unstake's OWN (earlier-block) action_index and flips the surviving
@@ -468,7 +484,7 @@ class ClientRollback {
                 // block (cooldown_end_block >= block_index) the source deletes the refund credit and
                 // resets status_id to 'valid'. Without this mirror the replica keeps a phantom refund
                 // (overstated rebuilt balance) and a stuck 'completed' unstake the re-maturity sweep
-                // skips forever — a credits/balances/unstakes divergence (hard balance fork if a later
+                // skips forever, a credits/balances/unstakes divergence (hard balance fork if a later
                 // SLASH cuts the stake). Predicates key only on cooldown_end_block/block_index, so
                 // they port byte-identically; the GAS tick (capability refund) is the frozen
                 // consensus constant, never a hub poll. Runs BEFORE the dataTables delete.
@@ -501,12 +517,14 @@ class ClientRollback {
                             [validStatusId, completedStatusId, block_index, block_index]);
                     }
                 } catch(e){
-                    // Tables/columns may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
             }
 
             // Reset an anchor batch's surviving parent v1 stamped 'invalid_archive' by an
-            // orphaned final chunk — mirror of xchain-indexer rollback.js. When the last v2
+            // orphaned final chunk, mirror of xchain-indexer rollback.js. When the last v2
             // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
             // check, the source stamps the parent v1 (in an earlier, surviving block)
             // 'invalid_archive' IN PLACE. If that completing chunk is in the orphaned range,
@@ -528,7 +546,9 @@ class ClientRollback {
                         "WHERE p.version = 1 AND p.action_index < ?",
                         [firstActionIndex, firstActionIndex]);
                 } catch(e){
-                    // Tables/columns may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
             }
 
@@ -538,7 +558,7 @@ class ClientRollback {
                     try {
                         await this.db.doQuery("DELETE FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
                     } catch(e){
-                        // Table may not exist in older schemas — skip
+                        // Table may not exist in older schemas - skip
                     }
                 }
 
@@ -558,8 +578,21 @@ class ClientRollback {
                     // in rederiveEscrowGate() below (cross-repo drift guard reads it there).
                     await rederiveEscrowGate(this.db);
                 } catch(e){
-                    // Tables/columns may not exist on older replica schemas — skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
+            }
+
+            // Sweep orphan icon rows after the dataTables delete has removed any
+            // reorged token rows. icons is keyed by token_id (FK to tokens), so
+            // icons for reorged tokens become orphans; the next full snapshot would
+            // eventually overwrite them, but serving stale icon state for a token
+            // that no longer exists is misleading. Mirrors xchain-indexer rollback.js.
+            try {
+                await this.db.doQuery('DELETE FROM icons WHERE token_id NOT IN (SELECT id FROM tokens)', []);
+            } catch(e){
+                // Table may not exist on older schemas - skip
             }
 
             // Delete from block-scoped tables
@@ -567,24 +600,51 @@ class ClientRollback {
                 try {
                     await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
                 } catch(e){
-                    // Table may not exist — skip
+                    // Table may not exist on older replica schemas - skip
                 }
             }
 
             // price_snapshots anchors each round to a block via reference_block
             // (its equivalent of block_index) rather than block_index itself, so
             // it falls outside the generic blockTables loop above and needs its
-            // own delete — mirroring the source indexer's rollback. Live
+            // own delete, mirroring the source indexer's rollback. Live
             // convergence on this table is hub-driven (the hub DB sync mirror
             // delivers row:deleted events), but that propagation lags the local
             // reorg, leaving the replica serving finalized rows for orphaned
             // rounds until the hub catches up. Deleting them here closes that
             // staleness window; any later hub-driven delete of an already-gone
             // row is a harmless SQL no-op.
+            //
+            // Note: other hub-mirrored block-anchored tables (state_checkpoints,
+            // capability_snapshots) are intentionally NOT deleted here. Both are
+            // append-only with supersede-by-seq / MAX-per-height read semantics,
+            // so a stale row is harmless once the hub pushes a higher-seq
+            // replacement. The price_snapshots delete exists because a from-genesis
+            // replay never regenerates orphaned rounds, so hub re-mirror alone
+            // cannot close the divergence window on this table.
             try {
                 await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_block >= ?", [block_index]);
             } catch(e){
-                // Table may not exist on older replica schemas — skip
+                // Table may not exist on older replica schemas - skip
+            }
+
+            // oracle_prices is the per-action local mirror of PRICE v1 rows
+            // (populated by hub_db_sync). Like price_snapshots, its rows are
+            // tagged by source_chain + action_index and are NOT regenerated by a
+            // from-genesis replay on the new chain. Deleting them here closes the
+            // staleness window before hub-driven convergence catches up. The delete
+            // MUST be qualified by source_chain (this.coin) because oracle_prices
+            // holds rows from ALL chains and action_index is only unique within a
+            // chain.
+            if(firstActionIndex !== null){
+                try {
+                    await this.db.doQuery(
+                        "DELETE FROM oracle_prices WHERE source_chain = ? AND action_index >= ?",
+                        [this.coin, firstActionIndex]
+                    );
+                } catch(e){
+                    // Table may not exist on older replica schemas - skip
+                }
             }
 
             // Delete from sync_meta transparency log
@@ -596,19 +656,23 @@ class ClientRollback {
 
             // attest_validator_stats: running per-validator aggregate counters
             // (fulfilled/missed/slashed). This table is NOT block-streamed to
-            // replicas — it only arrives via full-snapshot ride-along — and the thin
+            // replicas; it only arrives via full-snapshot ride-along, and the thin
             // replica DB has none of the capability/governance machinery the source
             // uses to derive missed_count (the responsible-set capability snapshot),
             // so it cannot recompute these rows; reproducing that math here would
             // re-introduce the indexer-mirror drift the rollback guard exists to
             // catch. On reorg we therefore drop the rows whose most-recent touch is
-            // in the orphaned range — so the replica never serves overcounted values
-            // — and let the next full-snapshot ride-along restore correct counts
+            // in the orphaned range, so the replica never serves overcounted values
+            // and let the next full-snapshot ride-along restore correct counts
             // from the (now reorg-safe) source. Same recovery model as markets.
+            // NOTE: between this DELETE and the next full snapshot, the replica
+            // serves no attest_validator_stats rows for the affected validators;
+            // this window is unbounded if full snapshots are infrequent. Acceptable
+            // trade-off: correctness is preferred over availability for this table.
             try {
                 await this.db.doQuery("DELETE FROM `attest_validator_stats` WHERE last_updated_block >= ?", [block_index]);
             } catch(e){
-                // Table may not exist on older replica schemas — skip
+                // Table may not exist on older replica schemas - skip
             }
 
             // Recalculate balances from the surviving credits/debits.
@@ -631,8 +695,8 @@ class ClientRollback {
     }
 
     // Decoder rollback. Decoder schema has no actions / contract_emissions /
-    // balances / sync_meta. Tx-scoped tables (transaction_outputs, dispensers)
-    // must be deleted BEFORE the parent transactions rows that gave them their
+    // balances / sync_meta. Tx-scoped tables (transaction_outputs) must be
+    // deleted BEFORE the parent transactions rows that gave them their
     // tx_index scope. events is left untouched: it has no block_index and no
     // monotonic cursor, so per-block rollback isn't possible without a schema
     // change (decoder review Finding D).
@@ -656,7 +720,7 @@ class ClientRollback {
                     try {
                         await this.db.doQuery("DELETE FROM `" + t + "` WHERE tx_index IN (" + placeholders + ")", txIndexes);
                     } catch(e){
-                        // Table may not exist in the target schema — skip
+                        // Table may not exist in the target schema - skip
                     }
                 }
             }
@@ -672,7 +736,7 @@ class ClientRollback {
             // re-introduce them when new blocks arrive). Skip.
             //
             // "Harmless" holds because these surrogate ids are local-only and feed no
-            // consensus value — block hashes are computed from resolved strings, not lookup
+            // consensus value; block hashes are computed from resolved strings, not lookup
             // ids (BLOCK_HASH_VERSION 2). Never let a lookup id back into a hashed projection.
 
             await this.db.commitTransaction();
@@ -714,6 +778,7 @@ async function rederiveEscrowGate(db){
          SELECT s.action_index FROM swaps s INNER JOIN swap_statuses st ON st.swap_action_index=s.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=s.give_tick_id WHERE tk.tick=? AND s.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM swap_statuses x WHERE x.swap_action_index=s.action_index) AND si.status IN ('open','cancelling','expiring')
          UNION ALL
          SELECT d.action_index FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=d.give_tick_id WHERE tk.tick=? AND d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling','expiring')
+         ORDER BY action_index ASC
          LIMIT 1`;
     //</ESCROW-REDERIVE-SQL>
     let escrowTickers = await db.doQuery(escrowAffectedTickersSql, []);

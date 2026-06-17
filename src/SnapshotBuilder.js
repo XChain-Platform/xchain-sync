@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -32,7 +32,13 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
 // Tables holding operator-local bookkeeping state (fetch timestamps, retry counters) that
 // legitimately diverges between nodes and must not appear in consensus snapshots.
-const OPERATOR_LOCAL_TABLES = new Set(['icons', 'price_snapshots', 'pending_hub_pushes']);
+const OPERATOR_LOCAL_TABLES = new Set([
+    'icons', 'price_snapshots', 'pending_hub_pushes',
+    // Hub-mirrored tables: pushed/retracted by hub_db_sync out-of-band with block
+    // apply, so they vary by WS arrival timing and must not appear in consensus snapshots.
+    'oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches',
+    'state_checkpoints',
+]);
 
 class SnapshotBuilder {
 
@@ -48,7 +54,7 @@ class SnapshotBuilder {
             'blocks', 'transactions', 'actions'
         ];
 
-        // Tables to put last (derived/computed — depend on everything else)
+        // Tables to put last (derived/computed; they depend on everything else).
         // pubkeys trails index_addresses: pubkeys.sql declares a FK on index_addresses(id),
         // so the reverse-delete path in applyFullSnapshot must drop pubkeys rows before
         // index_addresses rows.  Appended after sync_meta because neither balances nor
@@ -179,7 +185,7 @@ class SnapshotBuilder {
     //     joined through transactions, and the small append-only index_* / pubkeys
     //     tables included in full (the client uses INSERT IGNORE on those).
     //     `events` (operational log) has no block cursor to scope by, so it is
-    //     re-dumped in full each increment — its AUTO_INCREMENT `id` PK rides the
+    //     re-dumped in full each increment. Its AUTO_INCREMENT `id` PK rides the
     //     payload and the client applies incremental rows with INSERT IGNORE, so a
     //     repeated full dump is idempotent (existing ids no-op, new ones insert).
     //     Without this, an incrementally-caught-up follower would never receive
@@ -235,39 +241,43 @@ class SnapshotBuilder {
             //   to scope incrementally, so the only way an incrementally-caught-up
             //   follower converges its events table is a complete re-dump. It is safe
             //   to re-send because events has an AUTO_INCREMENT `id` PK and the client
-            //   applies all incremental rows with INSERT IGNORE — existing ids no-op.
+            //   applies all incremental rows with INSERT IGNORE (existing ids are no-ops).
             let decoderBlockScoped = new Set(['blocks', 'transactions']);
             let decoderTxScoped    = new Set(['transaction_outputs']);
             let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys', 'events']);
             // dispensers is skipped here for the same reason it is excluded from the
-            // per-block replicated topology: the decoder prunes expired dispensers
-            // every block, so an insert-only incremental delta (the tx_index→
-            // block_index join) would re-introduce the upward count divergence on
-            // any follower that catches up incrementally. dispensers converges via
-            // the full snapshot only (streamFullSnapshot dumps current rows).
+            // per-block replicated topology: the decoder soft-expires dispensers each
+            // block (UPDATE expired_block_index) and defers the hard-purge to
+            // purgeExpiredDispensers. An insert-only incremental delta (the tx_index->
+            // block_index join) would re-introduce the upward count divergence on any
+            // follower that catches up incrementally. dispensers converges via the full
+            // snapshot only (streamFullSnapshot dumps current rows).
             let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
-            // action_index, so the action_index branch below cannot reach them —
-            // they must be filtered by block_index here to appear in incremental
+            // action_index, so the action_index branch below cannot reach them.
+            // They must be filtered by block_index here to appear in incremental
             // snapshots. slash_events is block-scoped for the same reason
             // (see ServerPoller.blockScopedTables).
             //
-            // Tables with neither a block_index nor an action_index cursor —
-            // icons (token-icon processing state, keyed by token_id),
-            // attest_validator_stats (running per-validator aggregates), and
+            // Tables with neither a block_index nor an action_index cursor, such as
+            // icons (token-icon processing state, keyed by token_id) and
             // price_snapshots (mirrored from the cross-chain hub's price channel,
-            // keyed by round_number/coin_pair) — cannot be scoped incrementally and
+            // keyed by round_number/coin_pair), cannot be scoped incrementally and
             // are intentionally omitted. They ride along in the full snapshot only;
             // for price_snapshots, live convergence is handled by the hub DB sync
             // mirror, not this block stream.
+            // attest_validator_stats, markets, and merkle_epochs are also unscoped
+            // but are included in indexerFullDump below so a follower does not
+            // freeze those tables at bootstrap height (see comment there).
+            //
             // Every block_index-scoped streamed table must be filtered by block_index here:
             // these tables carry NO action_index column (e.g. the slash debit logs key off
             // execution_index / slash_action_index, not action_index), so the action_index
-            // branch below cannot reach them — a follower catching up incrementally over their
-            // range would hit `SELECT … WHERE action_index >= ?` → ER_BAD_FIELD_ERROR → caught
-            // → continue, silently dropping every row (short /status count; the reorg restore,
-            // which JOINs the debit logs, then finds nothing to restore).
+            // branch below cannot reach them. A follower catching up incrementally over their
+            // range would hit `SELECT ... WHERE action_index >= ?` -> ER_BAD_FIELD_ERROR ->
+            // caught -> continue, silently dropping every row (short /status count; the reorg
+            // restore, which JOINs the debit logs, then finds nothing to restore).
             //
             // Derive the set from the streaming topology (the single source of truth) rather
             // than a hand-maintained literal, so the next block-scoped table added to
@@ -277,17 +287,38 @@ class SnapshotBuilder {
             let indexerBlockScoped = new Set([...replicatedTables.getTopology('indexer').blockScoped, 'sync_meta']);
 
             // Append-only lookup/dedup tables (index_actions, index_addresses,
-            // index_transactions, …). They carry neither a block_index nor an
-            // action_index cursor, so they can't be range-scoped — but a follower that
+            // index_transactions, ...). They carry neither a block_index nor an
+            // action_index cursor, so they can't be range-scoped. A follower that
             // heals a gap via incremental still needs the index_* rows those blocks
             // reference, or it is left short on them (row-count + ledger-hash mismatch
-            // after the heal — blocks/transactions carry *_hash_id FKs into
+            // after the heal; blocks/transactions carry *_hash_id FKs into
             // index_transactions, so even action-less blocks need it). They are
             // therefore re-dumped in full; the client applies index_* with INSERT
             // IGNORE (ClientApplier.ignoreTables), so re-sending existing rows is a
             // no-op. Mirrors the decoder full-dump path. Sourced from the replicated
             // topology so it can't drift from the per-block streamed set.
-            let indexerFullDump    = new Set(replicatedTables.getTopology('indexer').index);
+            //
+            // Also included:
+            //   - merkle_epochs: transparency epoch records with no block_index or
+            //     action_index cursor. Absent from every topology bucket, so it never
+            //     enters the action_index or block_index scoping branches. Without an
+            //     explicit full-dump here, a relay follower's merkle_epochs table
+            //     freezes at bootstrap height and getProof returns "epoch not yet
+            //     committed" for every post-bootstrap epoch.
+            //   - markets: derived OHLCV aggregate keyed by tick pair with no
+            //     action_index. Without a full-dump here, a follower's markets table
+            //     freezes at bootstrap height. ClientRollback drops affected rows on
+            //     reorg; the next incremental catch-up restores current values.
+            //   - attest_validator_stats: running per-validator aggregate counters
+            //     with no action_index. Without a full-dump here, these counters
+            //     freeze at bootstrap height. ClientRollback drops affected rows on
+            //     reorg; the next incremental catch-up restores current values.
+            let indexerFullDump    = new Set([
+                ...replicatedTables.getTopology('indexer').index,
+                'merkle_epochs',
+                'markets',
+                'attest_validator_stats',
+            ]);
             let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock, conn) : null;
 
             for(let table of tableOrder){
@@ -320,7 +351,7 @@ class SnapshotBuilder {
                             try {
                                 rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
                             } catch(e){
-                                // Table doesn't have action_index — skip it for incremental
+                                // Table doesn't have action_index; skip it for incremental
                                 continue;
                             }
                         } else {
@@ -333,7 +364,7 @@ class SnapshotBuilder {
                     // action_index cursor above and are missed. Merge them by maturity
                     // block over the same [sinceBlock, lastBlock] window the in-place
                     // updated_rows channel uses, deduped on the credit's logical identity
-                    // — the forward mirror of ClientRollback's reverse cooldown delete. An
+                    // (the forward mirror of ClientRollback's reverse cooldown delete). An
                     // unstake created AND matured inside this window can be reached both
                     // here and by the action_index scope, hence the dedup.
                     if(dbType === 'indexer' && table === 'credits'){
@@ -348,7 +379,7 @@ class SnapshotBuilder {
                                 }
                             }
                         } catch(e){
-                            // Tables may not exist on older schemas — skip
+                            // Tables may not exist on older schemas; skip
                         }
                     }
 
@@ -373,11 +404,11 @@ class SnapshotBuilder {
             // as a sibling key. The action_index window above can't reach a surviving
             // row (created below the window) that was mutated in place during the
             // catch-up range, so carry its current full state here for the follower to
-            // UPSERT (ClientApplier._applyUpdatedRows). Indexer only — decoder has none
+            // UPSERT (ClientApplier._applyUpdatedRows). Indexer only; decoder has none
             // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
             // the snapshot's block height. Window starts at sinceBlock to match the
             // `block_index >= sinceBlock` data scoping above (over-inclusion is a
-            // harmless UPSERT). tokens.escrow_action_index is omitted — the follower
+            // harmless UPSERT). tokens.escrow_action_index is omitted; the follower
             // re-derives it locally (ClientApplier._maybeRederiveEscrow).
             gzip.write('}');
             if(dbType === 'indexer'){

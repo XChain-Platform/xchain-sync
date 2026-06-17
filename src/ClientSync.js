@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -21,7 +21,7 @@
  *
  * dbType is read from db.dbType. Decoder DB instances skip the
  * three-hash cross-source verification (decoder has no synthetic
- * ledger/actions/contract hashes — content is deterministic from
+ * ledger/actions/contract hashes; content is deterministic from
  * the coin node).
  *
  ********************************************************************/
@@ -46,8 +46,8 @@ class ClientSync {
         this.config       = config;
         this.util         = util;
         // Independent block-hash recomputation (true byzantine / replication-
-        // integrity detection — verifies the replicated raw rows actually hash to
-        // the committed hash, rather than trusting verbatim-replicated hashes).
+        // integrity detection). Verifies the replicated raw rows actually hash to
+        // the committed hash, rather than trusting verbatim-replicated hashes.
         this.blockHasher  = new BlockHasher(db, util);
 
         // VERIFY_RECOMPUTE=false is DECLARED UNSAFE for consensus-relevant
@@ -59,7 +59,7 @@ class ClientSync {
         if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] === false){
             console.error('================================================================');
             console.error('WARNING: VERIFY_RECOMPUTE is DISABLED for ' + this.chain + '/' +
-                this.network + '/indexer — this mode is UNSAFE for consensus-relevant');
+                this.network + '/indexer. This mode is UNSAFE for consensus-relevant');
             console.error('replicas: a reorg occurring while this client is disconnected or');
             console.error('restarting will be stitched onto the orphaned tip UNVERIFIED and');
             console.error('the replica will silently follow the forked chain. Use only for');
@@ -100,8 +100,8 @@ class ClientSync {
         // testnet, which mints blocks at ~10/sec and is tens of millions of
         // blocks high) the replica perpetually trails the live tip, so every
         // incoming block while behind would otherwise emit a "block gap" /
-        // "continuity" line — thousands per minute, burying real faults in the
-        // journal. Trailing-while-catching-up is a NORMAL condition, not an
+        // "continuity" line (thousands per minute, burying real faults in the
+        // journal). Trailing-while-catching-up is a NORMAL condition, not an
         // error: we log the first occurrence, then at most one summary line per
         // _gapLogIntervalMs, folding the suppressed count into it.
         this._gapLogIntervalMs = Number(this.config['GAP_LOG_INTERVAL_MS'] || 30000);
@@ -127,29 +127,29 @@ class ClientSync {
         this._gapLogSuppressed = 0;
     }
 
-    // Start the client sync loop
+    // Start the client sync loop.
     // Surface the replica's data-integrity posture at startup. The only defense
     // that actually REJECTS fabricated content is cross-source hash divergence
     // (2+ sources, VERIFY_HASHES, HALT_ON_DIVERGENCE). With a single source the
     // independent recompute only re-derives the local rows and compares them to
-    // the hashes published by that same server — a server serving internally
-    // consistent fake rows + matching fake hashes passes. The decoder path has
+    // the hashes published by that same server (a server serving internally
+    // consistent fake rows + matching fake hashes passes). The decoder path has
     // no hash rejection at all (completeness is row-count advisory only). None
-    // of this is silently unsafe — but it is a trust assumption operators must
+    // of this is silently unsafe, but it is a trust assumption operators must
     // make deliberately, so say it out loud rather than burying it in docs.
     _warnTrustPosture(){
         if(this.sources.length < 2){
             console.warn(
                 'SECURITY: ' + this.dbType + ' replica is running SINGLE-SOURCE (' +
                 (this.sources[0] || '<none>') + '). Content integrity rests entirely on TLS trust ' +
-                'of that one server — cross-source divergence detection is INACTIVE, and the local ' +
+                'of that one server. Cross-source divergence detection is INACTIVE, and the local ' +
                 'recompute only checks rows against hashes published by the same server. Configure ' +
                 '2+ independent SYNC_SOURCES for Byzantine integrity.'
             );
         }
         if(this.dbType === 'decoder'){
             console.warn(
-                'SECURITY: decoder replication has no hash-based rejection — completeness is ' +
+                'SECURITY: decoder replication has no hash-based rejection. Completeness is ' +
                 'row-count advisory only (a shortfall is logged, never rejected). A decoder replica ' +
                 'trusts its source(s) for row content. Treat decoder sources as trusted infrastructure.'
             );
@@ -178,7 +178,7 @@ class ClientSync {
                     '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
                 // Stay alive but idle so /status can report the halt.
                 while(this.running && this._halted){ await this.util.sleep(5000); }
-                if(!this._halted) return this.start(); // cleared at runtime → restart cleanly
+                if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
                 return;
             }
         } catch(e){ console.error('halt-state check failed (continuing):', e); }
@@ -187,11 +187,11 @@ class ClientSync {
         this.lastAppliedBlock = await this.db.getLastBlock();
 
         if(this.lastAppliedBlock === null){
-            // Empty database — bootstrap from full snapshot
+            // Empty database: bootstrap from full snapshot.
             console.log('No local data found, bootstrapping from full snapshot...');
             await this._bootstrapFromSnapshot();
         } else {
-            // Partial data — incremental catch-up.
+            // Partial data: incremental catch-up.
             // Pass the next needed block (lastAppliedBlock + 1): the server uses
             // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
             // applied rows and the non-ignore INSERT throws a duplicate-key error.
@@ -270,7 +270,7 @@ class ClientSync {
         }
         this._hbLastSentBlock = this.lastAppliedBlock;
 
-        // REST heartbeat — fire-and-forget to each configured source.
+        // REST heartbeat: fire-and-forget to each configured source.
         for(let source of this.sources){
             this._sendRestHeartbeat(source).catch(() => {});
         }
@@ -325,7 +325,7 @@ class ClientSync {
                             await this.db.doQuery(createSql);
                             console.log('  Created table: ' + tableName);
                         } else {
-                            // Table already exists — propagate any columns the
+                            // Table already exists: propagate any columns the
                             // master has added since this replica was bootstrapped.
                             // Without this the path is CREATE-only and a replica
                             // that pre-dates a column addition stalls on the first
@@ -335,7 +335,7 @@ class ClientSync {
                             await this.db.addMissingColumns(tableName, createSql);
                         }
                     } catch(e){
-                        // May fail on ordering — retry will catch it
+                        // May fail on ordering; retry will catch it
                     }
                 }
                 console.log('Schema applied from ' + source);
@@ -346,12 +346,12 @@ class ClientSync {
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
-    // means the source's schema moved ahead of this replica AFTER bootstrap —
+    // means the source's schema moved ahead of this replica AFTER bootstrap.
     // _fetchAndApplySchema only runs at bootstrap, so a server-side table
     // addition wedges every already-bootstrapped replica on the first snapshot
     // carrying rows for it (live case: anchor_actions, added server-side while
-    // the replicas pre-dated it). Re-apply the source schema — it CREATEs
-    // missing tables and ALTERs in missing columns — so the next apply attempt
+    // the replicas pre-dated it). Re-apply the source schema (it CREATEs
+    // missing tables and ALTERs in missing columns) so the next apply attempt
     // can proceed. Debounced to one heal per minute so a failure the schema
     // can't fix (e.g. rejected DDL) can't hammer the /schema endpoint.
     async _healSchemaIfStale(e){
@@ -361,7 +361,7 @@ class ClientSync {
         if(this._lastSchemaHeal && (now - this._lastSchemaHeal) < 60000) return false;
         this._lastSchemaHeal = now;
         console.log('Apply failed on a schema gap (errno ' + errno + ') for ' +
-            this.chain + '/' + this.network + ' — re-applying source schema');
+            this.chain + '/' + this.network + '; re-applying source schema');
         await this._fetchAndApplySchema(this.sources[0]);
         return true;
     }
@@ -371,12 +371,12 @@ class ClientSync {
     // Drives a bounded retry-with-backoff loop around _bootstrapRotateSources (one
     // full pass over every configured source). A bootstrap that exhausts every
     // source must NEVER fall through and let start() enter live-follow on an empty
-    // replica — that applies the first live block onto an empty DB with all
+    // replica: that would apply the first live block onto an empty DB with all
     // continuity/fork/duplicate guards disabled (they are gated on
     // lastAppliedBlock !== null), durably halting (VERIFY_RECOMPUTE) or silently
     // orphaning every pre-bootstrap block. So:
-    //   - success on any round → return (lastAppliedBlock is committed)
-    //   - all rounds exhausted → THROW, propagating failure to start() and on to the
+    //   - success on any round -> return (lastAppliedBlock is committed)
+    //   - all rounds exhausted -> THROW, propagating failure to start() and on to the
     //     supervisor (SyncService exits the process for a container restart)
     // This is the only recovery for the production single-source topology, where
     // there is no second source to rotate to and the old code returned normally.
@@ -393,7 +393,7 @@ class ClientSync {
         let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS']  || 60000;
 
         for(let round = 0; ; round++){
-            if(await this._bootstrapRotateSources()) return; // success — tip committed
+            if(await this._bootstrapRotateSources()) return; // success: tip committed
             if(round >= maxRetries){
                 // Exhausted all sources across every retry round. Do not return:
                 // signal failure so start() never enters live-follow empty-handed.
@@ -402,7 +402,7 @@ class ClientSync {
             }
             let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
             console.warn('Bootstrap round ' + (round + 1) + ' exhausted all sources for ' +
-                this.chain + '/' + this.network + '/' + this.dbType + ' — retrying in ' + delay + 'ms');
+                this.chain + '/' + this.network + '/' + this.dbType + '; retrying in ' + delay + 'ms');
             await this.util.sleep(delay);
         }
     }
@@ -454,7 +454,7 @@ class ClientSync {
                     // snapshot can still arrive truncated (network cut mid-stream) or stale.
                     // Cross-check the source's published per-table row counts so an incomplete
                     // bootstrap fails loudly instead of being accepted as complete. This runs
-                    // independent of VERIFY_HASHES — row counts need no synthetic hashes, so the
+                    // independent of VERIFY_HASHES: row counts need no synthetic hashes, so the
                     // indexer-only hash gate does not apply here.
                     await this._verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
                 }
@@ -480,7 +480,7 @@ class ClientSync {
     // the replica DB. The in-flight guard on catch-up only serializes
     // catch-up-vs-catch-up; this also covers catch-up-vs-live and live-vs-live
     // (multiple sources). Without it, a catch-up and a concurrent live block race
-    // on the same rows — e.g. both INSERT the same block's sync_meta — and one
+    // on the same rows (e.g. both INSERT the same block's sync_meta) and one
     // transaction blocks the other until innodb_lock_wait_timeout (~50s), stalling
     // recovery (observed as ER_LOCK_WAIT_TIMEOUT on sync_meta during a source-DB
     // outage recovery). Simple promise-chain mutex; a failing op still releases.
@@ -501,29 +501,29 @@ class ClientSync {
     // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
     // is intentionally ignored: catch-up always resumes from the replica's actual
     // committed tip (re-read from the DB), never from the in-memory cursor, which
-    // can lag a concurrently-applied block. And a single in-flight guard coalesces
-    // overlapping calls — two status/gap triggers firing under fault would
+    // can lag a concurrently-applied block. A single in-flight guard coalesces
+    // overlapping calls: two status/gap triggers firing under fault would
     // otherwise fetch overlapping ranges and re-insert already-applied rows,
     // crashing on keyed tables (blocks.id, tx_index) or silently duplicating
     // keyless ones (credits/debits). Together these guarantee each applied range
     // begins strictly above committed data, so the non-IGNORE INSERTs never
-    // collide. (applyIncrementalSnapshot is itself atomic — one transaction — so a
+    // collide. (applyIncrementalSnapshot is itself atomic, one transaction, so a
     // failed catch-up leaves the committed tip unchanged and the next attempt
     // re-reads the same resume point.)
     async _incrementalCatchUp(sinceBlock){
-        // Refuse to advance once halted on a divergence — same contract as
-        // _applyBlockEvent. The live apply path has carried this guard since the
+        // Refuse to advance once halted on a divergence (same contract as
+        // _applyBlockEvent). The live apply path has carried this guard since the
         // halts were made durable, but gap detection (_handleBlock) and status
         // events still triggered catch-ups while halted, and the catch-up apply
-        // path would happily advance the replica past the divergence — the same
-        // half-enforced-halt failure mode the live-path guard closed.
+        // path would happily advance the replica past the divergence (the same
+        // half-enforced-halt failure mode the live-path guard closed).
         if(this._halted){
             console.error('Refusing incremental catch-up since block ' + sinceBlock +
-                ' — client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
+                '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
         // Serialize catch-ups so two never apply overlapping ranges. A request that
-        // arrives while one is in flight is not dropped — it sets a pending flag, and
+        // arrives while one is in flight is not dropped: it sets a pending flag, and
         // the in-flight runner loops once more after it finishes. That closes any
         // residual gap (e.g. the source advanced mid-catch-up) without ever running
         // two catch-ups concurrently, so it fixes the duplication race AND avoids
@@ -546,7 +546,7 @@ class ClientSync {
                 // would re-set the pending flag every pass and spin forever. On no
                 // progress we stop and let the next status/block event re-trigger a
                 // fresh catch-up once the source has actually advanced. (`this.running`
-                // gates only the re-run, not the initial pass — callers invoke catch-up
+                // gates only the re-run, not the initial pass; callers invoke catch-up
                 // directly before start() sets running.)
                 keepGoing = this._catchUpPending && (this.lastAppliedBlock !== before) && this.running;
             }
@@ -583,18 +583,27 @@ class ClientSync {
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
 
-            // Verify the catch-up JOIN. The live path recomputes every applied
+            // Verify the catch-up range. The live path recomputes every applied
             // block's consensus hashes, but a catch-up jumps a range in one
-            // apply with no recompute — so a reorg that happened while this
-            // client was DISCONNECTED (the one fork the live event stream
-            // cannot deliver) was previously stitched onto the replica's
-            // orphaned tip unverified, silently following the new chain while
-            // keeping the orphaned blocks below the join. Recomputing just the
-            // FIRST re-delivered block closes that: its chain hashes fold the
-            // previous (pre-catch-up tip) block's committed hashes, so a join
-            // onto an orphan cannot reproduce the committed hash → durable
-            // halt, same contract as the live path. One recompute per
-            // catch-up; gated like every recompute on VERIFY_RECOMPUTE.
+            // apply with no recompute. A reorg that happened while this client
+            // was DISCONNECTED (the one fork the live event stream cannot deliver)
+            // was previously stitched onto the replica's orphaned tip unverified,
+            // silently following the new chain while keeping the orphaned blocks
+            // below the join.
+            //
+            // Recomputing the FIRST re-delivered block (join block) closes the
+            // orphan-stitch fault: its chain hashes fold the previous block's
+            // committed hashes, so a join onto an orphan cannot reproduce the
+            // committed hash -> durable halt, same contract as the live path.
+            //
+            // Recomputing the TERMINAL block (block_height) closes the
+            // truncated/corrupted interior fault: its committed hashes fold the
+            // whole applied range via the chained sync_meta rows, so a payload
+            // that is correct at the join but corrupted past it is detected here
+            // rather than being silently accepted and chained over by the next
+            // live block's recompute.
+            //
+            // Both recomputes are gated on VERIFY_RECOMPUTE.
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] &&
                typeof snapshotData.since_block === 'number'){
                 let joinBlock = snapshotData.since_block;
@@ -611,11 +620,28 @@ class ClientSync {
                         return;
                     }
                 }
+                // Also recompute the terminal block if the range spans more than one block.
+                let terminalBlock = snapshotData.block_height;
+                if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
+                    let termCommitted = await this.db.getBlockHashRow(terminalBlock);
+                    if(termCommitted && termCommitted.ledger_hash){
+                        let termMismatches = await this._verifyRecompute({ block_index: terminalBlock }, {
+                            ledger_hash:   termCommitted.ledger_hash,
+                            actions_hash:  termCommitted.actions_hash,
+                            contract_hash: termCommitted.contract_hash
+                        });
+                        if(termMismatches){
+                            await this._haltOnDivergence(terminalBlock, termMismatches,
+                                this.sources.slice(0, 1), 'local-recompute-divergence');
+                            return;
+                        }
+                    }
+                }
             }
         } catch(e){
             console.error('Incremental catch-up failed:', e);
             // Schema-gap failures are fixable right now: heal and retry once.
-            // The heal's debounce bounds the recursion — a second schema-gap
+            // The heal's debounce bounds the recursion: a second schema-gap
             // failure inside the window returns false and falls through.
             if(await this._healSchemaIfStale(e))
                 return this._runIncrementalCatchUp();
@@ -623,7 +649,7 @@ class ClientSync {
     }
 
     // Verify local block hashes against a remote source.
-    // Indexer-only — decoder DB has no synthetic chain-of-state hashes to compare.
+    // Indexer-only: decoder DB has no synthetic chain-of-state hashes to compare.
     async _verifyAgainstSource(source, blockHeight){
         if(this.dbType !== 'indexer') return;
         try {
@@ -654,7 +680,7 @@ class ClientSync {
             // Independent recomputation (validator track): the comparison above is a
             // transport check (verbatim-replicated local hash vs the source's
             // published hash). Additionally recompute the LOCAL committed hash from
-            // the LOCAL replicated raw rows — this catches a catch-up snapshot whose
+            // the LOCAL replicated raw rows: this catches a catch-up snapshot whose
             // DATA does not match its committed hash, which the verbatim comparison
             // cannot. (The live per-block path does the same in _applyBlockEvent.)
             if(this.config['VERIFY_RECOMPUTE']){
@@ -669,21 +695,21 @@ class ClientSync {
                 }
             }
 
-            // Replica-completeness check (additive — never overrides the hash result).
+            // Replica-completeness check (additive; never overrides the hash result).
             //
             // The committed ledger/actions/contract hashes are computed on the
             // source during block processing and replicated verbatim, so a follower
-            // missing entire tables still agrees on every hash — the hashes describe
+            // missing entire tables still agrees on every hash (the hashes describe
             // the source's blockchain computation, not what actually landed
-            // downstream. The source now publishes per-table row counts on /status
+            // downstream). The source now publishes per-table row counts on /status
             // (api.buildStatusRow); compare them against our own to surface any table
             // the source has rows in that we do not. A shortfall is logged as a
-            // health signal for operators — it does NOT reject the block, since a
+            // health signal for operators: it does NOT reject the block, since a
             // passing hash check is still a valid consensus result.
             let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
             if(countMismatches.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
-                    ' — follower may be missing replicated rows:');
+                    '; follower may be missing replicated rows:');
                 console.error(JSON.stringify(countMismatches));
             } else if(remoteStatus.table_counts){
                 console.log('Table-count verification passed against ' + source);
@@ -696,7 +722,7 @@ class ClientSync {
     // Cross-check decoder snapshot completeness against a source's published
     // per-table row counts. Decoder has no synthetic ledger/actions/contract
     // hashes to compare, but a truncated or stale full snapshot still leaves the
-    // follower with fewer rows than the source — _verifyAgainstSource (indexer-only)
+    // follower with fewer rows than the source. _verifyAgainstSource (indexer-only)
     // never runs for decoder, so this is the only completeness signal at bootstrap.
     // Best-effort and additive: a shortfall is logged loudly so operators see an
     // incomplete bootstrap; a transient /status fetch failure is swallowed so it
@@ -711,7 +737,7 @@ class ClientSync {
             let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
             if(countMismatches.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
-                    ' — decoder snapshot may be truncated or incomplete:');
+                    '; decoder snapshot may be truncated or incomplete:');
                 console.error(JSON.stringify(countMismatches));
             } else if(remoteStatus.table_counts){
                 console.log('Table-count verification passed against ' + source);
@@ -723,17 +749,17 @@ class ClientSync {
 
     // Compare the source's published per-table row counts against this replica's
     // own counts. Returns an array of { table, sourceCount, localCount, delta } for
-    // every table the source has MORE rows in than the follower — a shortfall that
-    // indicates missing replicated data. Followers legitimately holding extra local
+    // every table the source has MORE rows in than the follower (a shortfall that
+    // indicates missing replicated data). Followers legitimately holding extra local
     // rows are ignored: only source-ahead deltas signal incomplete replication.
-    // Best-effort — a table that can't be counted locally (absent in this replica's
+    // Best-effort: a table that can't be counted locally (absent in this replica's
     // schema) is reported as a full shortfall rather than silently skipped.
     async _verifyTableCounts(remoteCounts){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
         for(let table of Object.keys(remoteCounts)){
             // table names here come straight from the remote source's /status
-            // payload — validate before they reach getTableCount's identifier
+            // payload: validate before they reach getTableCount's identifier
             // interpolation, mirroring the schema-application loop above. Skip
             // (don't fault) an invalid key so one bad name can't manufacture a
             // false count mismatch and trip a needless recompute/halt.
@@ -840,12 +866,20 @@ class ClientSync {
                 this.lastKnownServerBlock = event.block_height;
             }
             // Check for gaps on status update. Use a strict '>' (not '>='): a
-            // server exactly one block ahead is the normal steady state — that
-            // next block arrives over the live WS stream — so only a shortfall of
+            // server exactly one block ahead is the normal steady state (that
+            // next block arrives over the live WS stream), so only a shortfall of
             // two or more blocks is a real gap worth an out-of-band catch-up. This
             // mirrors the decoder gap check in _handleBlock and avoids firing a
             // redundant incremental fetch on every status tick during live sync;
             // a genuinely dropped block is still picked up on the next status tick.
+            // Design corner: after a reconnect the server may be exactly one block
+            // ahead (lastAppliedBlock + 1 === event.block_height). This check
+            // intentionally does NOT fire an incremental catch-up for that case.
+            // The missing block arrives naturally on the next live WS block event;
+            // if the chain is idle and that event never comes, the one-block gap
+            // persists until the next block is mined and verifyChainContinuity
+            // detects the skip and triggers catch-up. This keeps the steady-state
+            // path quiet and avoids spurious snapshot fetches.
             if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
                 this._logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
@@ -860,27 +894,27 @@ class ClientSync {
         // Defense in depth: refuse to apply a live block onto an empty replica.
         // start() bootstraps before live-follow, so reaching here with no committed
         // tip means bootstrap was skipped or silently failed. Applying the first live
-        // block now would leave every block below it permanently missing — and because
+        // block now would leave every block below it permanently missing (and because
         // the duplicate/continuity/fork guards below are ALL gated on
         // lastAppliedBlock !== null, control would otherwise fall straight through to
-        // _applyBlockEvent. block_index 0 (true genesis) is the one legitimate
+        // _applyBlockEvent). block_index 0 (true genesis) is the one legitimate
         // from-empty apply; for anything above it, refuse and trigger a catch-up to
         // rebuild from the source rather than orphaning the blocks beneath it.
         if(this.lastAppliedBlock === null && blockIndex > 0){
             console.error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
-                this.chain + '/' + this.network + '/' + this.dbType + ') — bootstrap did not complete; ' +
+                this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
                 'triggering catch-up instead of orphaning blocks below it');
             await this._incrementalCatchUp(blockIndex);
             return;
         }
 
-        // Skip if we already have this block — but first guard against a fork at the
+        // Skip if we already have this block, but first guard against a fork at the
         // current head. A block re-delivered at our committed tip with a DIFFERENT
         // block_hash than the one we stored means the source replaced that block (a
         // short reorg we never observed on the live stream). Silently skipping it
         // would pin this replica to an orphaned tip, so treat it as a continuity
-        // error and catch up — symmetric with the indexer's hash-continuity check
-        // below, which catches the same class of fault via its chain hashes. Decoder
+        // error and catch up (symmetric with the indexer's hash-continuity check
+        // below, which catches the same class of fault via its chain hashes). Decoder
         // events carry only the block's own block_hash (no replicated previous-hash
         // link), so a head re-delivery is the one fork the stored hash can detect
         // without hash-chain math.
@@ -890,7 +924,7 @@ class ClientSync {
                this.lastHashes && this.lastHashes.block_hash &&
                event.block_hash && event.block_hash !== this.lastHashes.block_hash){
                 console.error('Chain continuity error (decoder): fork at head block ' + blockIndex +
-                    ' — stored block_hash ' + this.lastHashes.block_hash +
+                    '; stored block_hash ' + this.lastHashes.block_hash +
                     ' != incoming ' + event.block_hash + '; triggering catch-up');
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
@@ -907,7 +941,7 @@ class ClientSync {
                 );
                 if(!continuity.valid){
                     // Normal trailing-tip lag on a fast chain (server ahead of our
-                    // committed height) — not a fault. Log throttled at info level;
+                    // committed height): not a fault. Log throttled at info level;
                     // a genuine fork at our head is caught separately above as an error.
                     this._logGap('Catch-up lag (indexer): ' + continuity.reason);
                     await this._incrementalCatchUp(this.lastAppliedBlock + 1);
@@ -920,7 +954,7 @@ class ClientSync {
             }
         }
 
-        // Cross-source verification — indexer only (decoder has no synthetic chain hashes)
+        // Cross-source verification: indexer only (decoder has no synthetic chain hashes)
         if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.sources.length > 1){
             // Store hashes from this source
             if(!this.pendingHashes.has(blockIndex))
@@ -937,7 +971,7 @@ class ClientSync {
             if(sourceIndices.length < 2){
                 // Wait for second source (with timeout)
                 if(sourceIndex === 0){
-                    setTimeout(() => {
+                    setTimeout(async () => {
                         // If still waiting after timeout, handle based on strict mode
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
                             if(this.config['HASH_CONFIRM_STRICT']){
@@ -945,7 +979,11 @@ class ClientSync {
                                 this.pendingHashes.delete(blockIndex);
                             } else {
                                 console.log('Cross-source timeout for block ' + blockIndex + ', applying from primary');
-                                this._applyBlockEvent(event);
+                                try {
+                                    await this._applyBlockEvent(event);
+                                } catch(e){
+                                    console.error('Error applying block ' + blockIndex + ' after cross-source timeout:', e);
+                                }
                                 this.pendingHashes.delete(blockIndex);
                             }
                         }
@@ -961,7 +999,7 @@ class ClientSync {
             if(!result.match){
                 this.pendingHashes.delete(blockIndex);
                 if(this.config['HALT_ON_DIVERGENCE']){
-                    // Durable, alerting halt — one source is on a forked/Byzantine chain.
+                    // Durable, alerting halt: one source is on a forked/Byzantine chain.
                     await this._haltOnDivergence(blockIndex, result.mismatches,
                         [this.sources[sourceIndices[0]], this.sources[sourceIndices[1]]], 'cross-source-divergence');
                     return;
@@ -980,7 +1018,7 @@ class ClientSync {
 
     // Durable HALT on a confirmed cross-source consensus divergence. Two honest
     // sources committed different ledger/actions/contract hashes for the SAME
-    // block → one is on a forked/Byzantine chain. We must NOT pick one and apply
+    // block: one is on a forked/Byzantine chain. We must NOT pick one and apply
     // it (that risks replicating a forked chain), and must NOT silently stall.
     // Stop applying, record the halt durably (survives restart), and alert loudly
     // until an operator investigates and clears it.
@@ -994,9 +1032,9 @@ class ClientSync {
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
         catch(e){ console.error('CRITICAL: failed to persist divergence halt (still halting in-memory):', e); }
         console.error('================================================================');
-        console.error('CONSENSUS DIVERGENCE HALT — ' + this.chain + '/' + this.network + '/' + this.dbType);
+        console.error('CONSENSUS DIVERGENCE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
         if(this._halted.reason === 'local-recompute-divergence'){
-            console.error('block ' + blockIndex + ': local recompute diverged from committed hash — replica');
+            console.error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
             console.error('integrity failure. HALTING (applying no further blocks). Operator must');
             console.error('investigate replica state and clear before this validator can resume.');
         } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
@@ -1006,7 +1044,7 @@ class ClientSync {
             console.error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
             console.error('this validator can resume.');
         } else {
-            console.error('block ' + blockIndex + ': sources disagree on the consensus hash — one is on a');
+            console.error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
             console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
             console.error('investigate and clear before this validator can resume.');
         }
@@ -1052,7 +1090,7 @@ class ClientSync {
     getHaltInfo(){ return this._halted; }
     _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }
 
-    // Operator clear — acknowledge an investigated divergence and allow resume.
+    // Operator clear: acknowledge an investigated divergence and allow resume.
     // Never automatic: a halted validator must not self-resume onto a contested
     // chain. Caller is responsible for restarting the sync loop afterwards.
     async clearHalt(){
@@ -1066,11 +1104,11 @@ class ClientSync {
 
     // Apply a verified block event
     async _applyBlockEvent(event){
-        // Refuse to apply anything once halted on a divergence — never replicate
+        // Refuse to apply anything once halted on a divergence: never replicate
         // onto a chain we could not agree with the fleet on.
         if(this._halted){
             console.error('Refusing to apply block ' + (event && event.block_index) +
-                ' — client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
+                '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
         try {
@@ -1078,21 +1116,21 @@ class ClientSync {
             // Independent recomputation (validator track). The block's raw rows are
             // now in the replica; recompute its consensus hashes and confirm they
             // match the committed hashes the source published for it. A mismatch
-            // means the replicated DATA does not hash to the committed hash —
-            // replication corruption, a partial apply, or a source serving rows
-            // inconsistent with its own committed hash — so HALT durably rather
+            // means the replicated DATA does not hash to the committed hash
+            // (replication corruption, a partial apply, or a source serving rows
+            // inconsistent with its own committed hash), so HALT durably rather
             // than advance onto unverifiable state.
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this._verifyRecompute(event);
                 if(mismatches){
                     await this._haltOnDivergence(event.block_index, mismatches,
                         this.sources.slice(0, 1), 'local-recompute-divergence');
-                    return; // halted — do not advance lastAppliedBlock
+                    return; // halted: do not advance lastAppliedBlock
                 }
             }
             // Replication-integrity check (validator track): the three hashes above cover
             // only immutable block-scoped rows. The state_hash covers the in-place mutations
-            // + backdated refund credits the updated_rows / cooldownCredits channels carry —
+            // + backdated refund credits the updated_rows / cooldownCredits channels carry,
             // so a follower that silently dropped one of those applies now HALTS instead of
             // serving divergent balances/status until the next full snapshot. APPLY-TIME ONLY:
             // the mutated rows are in their block-`event.block_index` state at exactly this
@@ -1108,7 +1146,7 @@ class ClientSync {
                     await this._haltOnDivergence(event.block_index,
                         [{ field: 'state_hash', a: event.state_hash, b: localState }],
                         this.sources.slice(0, 1), 'state-hash-divergence');
-                    return; // halted — do not advance lastAppliedBlock
+                    return; // halted: do not advance lastAppliedBlock
                 }
             }
             this.lastAppliedBlock     = event.block_index;
@@ -1132,7 +1170,7 @@ class ClientSync {
             }
         } catch(e){
             console.error('Error applying block ' + event.block_index + ':', e);
-            // Heal a schema gap but don't re-apply the block inline — the
+            // Heal a schema gap but don't re-apply the block inline: the
             // skipped block leaves a gap that the next status event's gap
             // detection closes via incremental catch-up, post-heal.
             await this._healSchemaIfStale(e);
@@ -1161,7 +1199,7 @@ class ClientSync {
                 await this._haltOnDivergence(event.block_index,
                     [{ field: 'rollback_depth', depth, max: this.config['MAX_ROLLBACK_DEPTH'] }],
                     this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
-                return; // halted — no rollback, lastAppliedBlock left as-is, no further applies
+                return; // halted: no rollback, lastAppliedBlock left as-is, no further applies
             }
         }
 

@@ -71,7 +71,8 @@
         "tick": "JDOG",
         "amount": "500"
       }
-    ]
+    ],
+    []
   ],
-  "expected_state_hash": "7d99b6756840c44e1e93d02e91710e77e809688216e4af54748adfe51965c8c8"
+  "expected_state_hash": "bf393d16a6cb4b096fbe2870a12d711e79e3a37d492cbaaab6311521cd6180a7"
 }

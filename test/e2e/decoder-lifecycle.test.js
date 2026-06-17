@@ -12,7 +12,7 @@
  *
  **********************************************************************
  *
- * E2E: Decoder DB lifecycle — bootstrap + live sync
+ * E2E: Decoder DB lifecycle (bootstrap + live sync)
  *
  * Exercises the Phase 1-3 decoder sync path end-to-end against real
  * MariaDB containers (test/e2e/docker-compose.e2e.yml). The server side
@@ -23,14 +23,14 @@
  * Covered:
  *   - GET /status/decoder/:chain/:network returns block_hash (not
  *     ledger_hash/actions_hash/contract_hash).
- *   - GET /transparency/decoder/:chain/:network/roots → 400 (decoder
+ *   - GET /transparency/decoder/:chain/:network/roots => 400 (decoder
  *     has no transparency log).
  *   - Cold bootstrap: replica receives full snapshot, blocks +
- *     transactions + transaction_outputs match source.
+ *     transactions + transaction_outputs + events + pubkeys match source.
  *   - Live sync: new source blocks reach replica via WebSocket; payload
  *     carries block_hash and no ledger/actions/contract_hash.
  *   - Incremental snapshot: replica catches up from a since-block,
- *     including tx-scoped tables (transaction_outputs).
+ *     including tx-scoped tables (transaction_outputs) and events/pubkeys.
  *   - Reorg / rollback: blocks + tx-scoped rows roll back while
  *     append-only index tables stay intact.
  *
@@ -148,7 +148,7 @@ function buildServer(sourceDb, broadcaster, snapshotBuilder){
         }
     });
 
-    // Transparency is indexer-only — decoder requests must 400.
+    // Transparency is indexer-only; decoder requests must return 400.
     app.get('/transparency/:dbType/:chain/:network/roots', (req, res) => {
         if(req.params.dbType !== 'indexer')
             return res.status(400).json({ error: 'Transparency log is indexer-only' });
@@ -181,7 +181,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
         this.timeout(30000);
 
         // Create both databases via an admin account BEFORE constructing any
-        // src/db.js Database — that class' constructor eagerly opens a pool
+        // src/db.js Database. That class' constructor eagerly opens a pool
         // bound to the database name, and if the DB doesn't exist yet the pool
         // drives a retry storm that exhausts MariaDB's connection slots. The
         // MARIADB_USER user has no global CREATE/GRANT privilege; defaults
@@ -246,7 +246,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
         server = buildServer(sourceDb, broadcaster, snapshotBuilder);
         await new Promise(r => server.listen(SERVER_PORT, r));
 
-        // Drive the poller manually — match the indexer e2e harness pattern.
+        // Drive the poller manually; match the indexer e2e harness pattern.
         poller.lastPolledBlock = await sourceDb.getLastBlock();
         await poller._updateStatus();
         pollInterval = setInterval(async () => {
@@ -306,7 +306,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
             assert.strictEqual(res.data.contract_hash, undefined, 'decoder status must not expose contract_hash');
         });
 
-        it('GET /transparency/decoder/... → 400 (indexer-only)', async function() {
+        it('GET /transparency/decoder/... returns 400 (indexer-only)', async function() {
             this.timeout(10000);
             await startServer();
 
@@ -334,8 +334,15 @@ describe('E2E: Decoder DB Lifecycle', function() {
             let replicaLast = await replicaDb.getLastBlock();
             assert.strictEqual(replicaLast, 10);
 
-            // Row-count parity for the core tables.
-            let tables = ['blocks', 'transactions', 'transaction_outputs', 'index_addresses', 'index_transactions'];
+            // Row-count parity for all replicated decoder tables.
+            // events: re-dumped in full on every snapshot (INSERT IGNORE on PK),
+            //   so the replica count converges to source at bootstrap.
+            // pubkeys: fetched per-block by address_id; idempotent INSERT IGNORE.
+            // dispensers: intentionally excluded from per-block replication (soft-
+            //   expire/hard-purge mutations don't ride the block stream), but the
+            //   full snapshot dumps current rows, so count should match here too.
+            let tables = ['blocks', 'transactions', 'transaction_outputs',
+                          'index_addresses', 'index_transactions', 'events', 'pubkeys'];
             for(let t of tables){
                 let s = await sourceDb.getTableCount(t);
                 let r = await replicaDb.getTableCount(t);
@@ -357,7 +364,8 @@ describe('E2E: Decoder DB Lifecycle', function() {
 
             // Seed first window, bootstrap, then seed second window and trigger
             // /snapshot/.../since/N. The replica should converge to the full set
-            // including transaction_outputs (tx-scoped — the failure mode pre-Finding-A).
+            // including transaction_outputs (tx-scoped, the failure mode pre-fix),
+            // and events/pubkeys (full-dump on each incremental snapshot).
             await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 5);
             await startServer();
 
@@ -365,18 +373,19 @@ describe('E2E: Decoder DB Lifecycle', function() {
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 5);
 
-            // Add a second window on source. Don't connect the WS — we want the
-            // incremental endpoint to be the only path that carries these blocks.
+            // Add a second window on source. No WS connection here; the incremental
+            // snapshot endpoint is the only path that carries these blocks.
             await decoderFixtures.seedDecoderBlocks(sourceDb, 6, 12);
 
             await client.incrementalCatchUp(6);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 12);
 
-            // Row-count parity confirms transaction_outputs (tx-scoped),
-            // index_addresses (full-dump), and pubkeys (full-dump, idempotent)
-            // all came through.
-            for(let t of ['blocks', 'transactions', 'transaction_outputs', 'index_addresses', 'index_transactions']){
+            // Row-count parity: transaction_outputs (tx-scoped), index_addresses
+            // and index_transactions (append-only), events and pubkeys (full-dump
+            // on each incremental snapshot, so counts must match after catch-up).
+            for(let t of ['blocks', 'transactions', 'transaction_outputs',
+                          'index_addresses', 'index_transactions', 'events', 'pubkeys']){
                 let s = await sourceDb.getTableCount(t);
                 let r = await replicaDb.getTableCount(t);
                 assert.strictEqual(r, s, t + ' row count mismatch: source=' + s + ' replica=' + r);
