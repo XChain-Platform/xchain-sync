@@ -194,6 +194,33 @@ describe('SyncService', function(){
             assert.strictEqual(newChains.length, 0);
         });
 
+        it('SYNC_EXCLUDE drops a listed chain before any DB pool / ClientSync is created', async function(){
+            config.SYNC_MODE = 'client';
+            config.SYNC_EXCLUDE = ['bitcoin:mainnet:indexer'];
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
+                indexerCfg(), // bitcoin:mainnet:indexer -> excluded
+                indexerCfg({ coin: 'litecoin', db_name: 'ltc_idx' }) // kept
+            ]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            let createDb = sinon.stub(Database.prototype, 'createDatabase').resolves(true);
+            sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
+            sinon.stub(Database.prototype, 'replicateSchema').resolves();
+            sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'close').resolves();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            let newChains = await service._discoverChains();
+
+            assert.strictEqual(newChains.length, 1, 'only the non-excluded chain is set up');
+            assert.strictEqual(service.databases.has('bitcoin:mainnet:indexer'), false, 'excluded chain absent');
+            assert.strictEqual(service.databases.has('litecoin:mainnet:indexer'), true, 'kept chain present');
+            // The excluded chain is skipped before createDatabase, so it never opens a pool.
+            assert.strictEqual(createDb.callCount, 1);
+            assert.strictEqual(startSync.callCount, 1);
+        });
+
         it('client mode (source reachable): replicates schema, verifies tables, starts a ClientSync', async function(){
             config.SYNC_MODE = 'client';
             service = new SyncService(config);

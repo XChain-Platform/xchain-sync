@@ -74,6 +74,13 @@ class ClientSync {
         this.lastHashes           = null;
         this.lastKnownServerBlock = null;
 
+        // Truncated-replica join block. Set by _bootstrapFromHeight when this chain
+        // is seeded from a recent height (SYNC_BOOTSTRAP_DEPTH_*) rather than full
+        // history. The join block has no in-replica predecessor, so its chained
+        // previous_hash cannot be recomputed; _verifyRecompute skips ONLY this block.
+        // null = full-history replica (every block is independently recomputed).
+        this._bootstrapBase = null;
+
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
 
@@ -187,9 +194,20 @@ class ClientSync {
         this.lastAppliedBlock = await this.db.getLastBlock();
 
         if(this.lastAppliedBlock === null){
-            // Empty database: bootstrap from full snapshot.
-            console.log('No local data found, bootstrapping from full snapshot...');
-            await this._bootstrapFromSnapshot();
+            // Empty database. Choose the bootstrap strategy: a chain with a
+            // configured SYNC_BOOTSTRAP_DEPTH seeds from a recent height (fast
+            // chains whose full snapshot can't be applied in one pass); everything
+            // else takes the full-history snapshot.
+            let depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
+            let depth = depthMap[(this.chain + ':' + this.network).toUpperCase()];
+            if(this.dbType === 'indexer' && depth >= 1){
+                console.log('No local data found; bootstrapping ' + this.chain + '/' + this.network +
+                    ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + depth + ', truncated replica)...');
+                await this._bootstrapFromHeightRetry(depth);
+            } else {
+                console.log('No local data found, bootstrapping from full snapshot...');
+                await this._bootstrapFromSnapshot();
+            }
         } else {
             // Partial data: incremental catch-up.
             // Pass the next needed block (lastAppliedBlock + 1): the server uses
@@ -473,6 +491,131 @@ class ClientSync {
             console.error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
             return false;
         }
+    }
+
+    // Bounded retry-with-backoff wrapper around _bootstrapFromHeight, mirroring
+    // _bootstrapFromSnapshot's contract: a truncated bootstrap that keeps failing
+    // must NEVER fall through to live-follow on an empty replica. Success returns;
+    // exhaustion THROWS, propagating to start() and on to the supervisor for a
+    // clean container restart. Reuses BOOTSTRAP_* tuning.
+    async _bootstrapFromHeightRetry(depth){
+        if(!this.sources[0]){
+            throw new Error('Bootstrap-from-height failed: no sync sources configured for ' +
+                this.chain + '/' + this.network + '/' + this.dbType);
+        }
+        let maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
+        maxRetries = Number.isFinite(maxRetries) ? Math.max(0, maxRetries) : 5;
+        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'] || 2000;
+        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS']  || 60000;
+
+        for(let round = 0; ; round++){
+            try {
+                if(await this._bootstrapFromHeight(depth)) return; // success: tip committed
+            } catch(e){
+                console.error('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
+                    this.chain + '/' + this.network + ':', e);
+            }
+            if(round >= maxRetries){
+                throw new Error('Bootstrap-from-height failed: exhausted after ' + (round + 1) +
+                    ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
+            }
+            let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
+            console.warn('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
+                this.chain + '/' + this.network + '; retrying in ' + delay + 'ms');
+            await this.util.sleep(delay);
+        }
+    }
+
+    // Seed a TRUNCATED replica from a recent height instead of full history.
+    // Opt-in per chain (SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>) for fast chains
+    // whose full-history snapshot cannot be buffered+applied in one client pass.
+    // Returns true once the tip is committed; throws on a failure the caller can
+    // retry. Indexer-only (the recompute join handling below is indexer-specific).
+    //
+    // CONSENSUS NOTE (load-bearing): the join block `base` has no `base-1`
+    // predecessor on a truncated replica, so BlockHasher.computeBlockHashes(base)
+    // folds a NULL previous_hash and would false-HALT on recompute. We record
+    // this._bootstrapBase so _verifyRecompute skips recompute for ONLY that one
+    // block; base's committed hashes arrive verbatim in the snapshot, and every
+    // block > base recomputes normally (each folds its predecessor's committed
+    // hash, which is present in [base..tip] and replicated verbatim). The chained
+    // verification is therefore intact from base+1 upward.
+    async _bootstrapFromHeight(depth){
+        let source = this.sources[0];
+        if(!source) throw new Error('Bootstrap-from-height: no sync source');
+
+        // 1. Discover the source tip.
+        let statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        let statusResp = await axios.get(statusUrl, { timeout: 30000 });
+        let status = statusResp.data || {};
+        // A server reports block_height (last broadcast position) and source_height
+        // (DB tip). The incremental snapshot is built from the DB, so prefer the DB
+        // tip; fall back to block_height. Either way `base` only needs to be recent.
+        let tip = (typeof status.source_height === 'number') ? status.source_height
+                : (typeof status.block_height === 'number') ? status.block_height : null;
+        if(typeof tip !== 'number'){
+            throw new Error('Bootstrap-from-height: source tip unavailable from ' + statusUrl);
+        }
+        let base = Math.max(0, tip - depth);
+        console.log('Bootstrap-from-height: source tip=' + tip + ', depth=' + depth +
+            ', base=' + base + ' for ' + this.chain + '/' + this.network);
+
+        // 2. Apply schema before any data (same as the full-bootstrap path).
+        await this._fetchAndApplySchema(source);
+
+        // 3. Fetch and apply the incremental snapshot from `base`. The server's
+        //    /snapshot/.../since/<base> route accepts any since >= 0 and delivers
+        //    blocks [base..tip] plus the index_* full-dumps and balances the range
+        //    references, exactly the apply surface applyIncrementalSnapshot expects.
+        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base;
+        let response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 600000,
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+        }
+        let snapshotData = JSON.parse(jsonStr.toString());
+
+        // Record the join block BEFORE apply so a recompute triggered during/after
+        // apply already sees the skip. since_block is authoritative (the server
+        // echoes the exact bound it served); fall back to our requested base.
+        this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
+
+        await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+        if(typeof snapshotData.block_height === 'number'){
+            this.lastAppliedBlock = snapshotData.block_height;
+        }
+
+        // 4. Verify the TERMINAL block (folds tip-1's committed hash, which is
+        //    present in [base..tip]). The join block `base` is intentionally NOT
+        //    recomputed here (no base-1 predecessor); _verifyRecompute skips it.
+        if(this.config['VERIFY_RECOMPUTE'] && typeof this.lastAppliedBlock === 'number' &&
+           this.lastAppliedBlock > this._bootstrapBase){
+            let termCommitted = await this.db.getBlockHashRow(this.lastAppliedBlock);
+            if(termCommitted && termCommitted.ledger_hash){
+                let termMismatches = await this._verifyRecompute({ block_index: this.lastAppliedBlock }, {
+                    ledger_hash:   termCommitted.ledger_hash,
+                    actions_hash:  termCommitted.actions_hash,
+                    contract_hash: termCommitted.contract_hash
+                });
+                if(termMismatches){
+                    await this._haltOnDivergence(this.lastAppliedBlock, termMismatches,
+                        this.sources.slice(0, 1), 'local-recompute-divergence');
+                    // Halted: leave lastAppliedBlock as-is so start()'s empty-replica
+                    // guard does not fire; the durable halt blocks all further applies.
+                    return true;
+                }
+            }
+        }
+
+        console.log('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
+            ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
+            ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
+        return true;
     }
 
     // Serialize all replica-mutating operations (live block apply, incremental
@@ -1065,6 +1208,15 @@ class ClientSync {
     // validator off the chain (halts are reserved for genuine DATA divergence).
     async _verifyRecompute(event, committedOverride){
         if(this.dbType !== 'indexer') return null;
+        // Truncated-replica join block: `base` has no in-replica `base-1`
+        // predecessor, so its chained previous_hash cannot be reproduced and a
+        // recompute would false-HALT. Its committed hashes arrived verbatim in the
+        // bootstrap snapshot; every block > base still recomputes normally (folds a
+        // present predecessor). Skip ONLY this one block. null replica (full
+        // history) leaves _bootstrapBase null and never matches.
+        if(this._bootstrapBase !== null && event && event.block_index === this._bootstrapBase){
+            return null;
+        }
         let computed;
         try {
             computed = await this.blockHasher.computeBlockHashes(event.block_index);

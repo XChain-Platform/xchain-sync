@@ -132,6 +132,15 @@ class SyncService {
             let key = cfg.coin + ':' + cfg.network + ':' + cfg.dbType;
             if(this.databases.has(key)) continue;
 
+            // Per-chain exclude (SYNC_EXCLUDE): drop a chain the client must not
+            // replicate (e.g. a fast chain that cannot full-snapshot bootstrap).
+            // Skipped before any DB pool / ClientSync is created, so an excluded
+            // chain can never crash-loop the process.
+            if(this.config['SYNC_EXCLUDE'] && this.config['SYNC_EXCLUDE'].includes(key)){
+                console.log('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
+                continue;
+            }
+
             console.log('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
 
             let db;

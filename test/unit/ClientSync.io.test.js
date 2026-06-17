@@ -322,6 +322,157 @@ describe('ClientSync — _bootstrapFromSnapshot', function(){
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 2b. _bootstrapFromHeight (truncated/fast-chain bootstrap)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync _bootstrapFromHeight', function(){
+    let sync, db, applier;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    // axios.get is called twice: /status (JSON tip) then /snapshot/.../since/<base>
+    // (gzip/raw buffer). Branch the stub on the URL.
+    function stubTransport(opts){
+        opts = opts || {};
+        let tip  = (opts.tip  === undefined) ? 1000000 : opts.tip;
+        let snap = opts.snapshot || { schema_version: 3, block_height: tip, since_block: (opts.base === undefined ? tip - 50000 : opts.base), tables: {} };
+        sinon.stub(axios, 'get').callsFake(async (url) => {
+            if(url.indexOf('/status/') !== -1) return { data: { source_height: tip } };
+            if(url.indexOf('/snapshot/') !== -1) return { data: Buffer.from(JSON.stringify(snap)) };
+            throw new Error('unexpected url ' + url);
+        });
+    }
+
+    it('seeds [base..tip] from one incremental snapshot and records the join block', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        stubTransport({ tip: 1000000, base: 950000 });
+
+        let ok = await sync._bootstrapFromHeight(50000);
+
+        assert.strictEqual(ok, true);
+        assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'applies one incremental snapshot');
+        assert.strictEqual(sync.lastAppliedBlock, 1000000, 'tip committed');
+        assert.strictEqual(sync._bootstrapBase, 950000, 'join block recorded from since_block');
+    });
+
+    it('clamps base to 0 when depth exceeds the tip', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        // tip 30, depth 50000 -> base must clamp to 0. Server echoes since_block=0.
+        stubTransport({ tip: 30, snapshot: { schema_version: 3, block_height: 30, since_block: 0, tables: {} } });
+
+        await sync._bootstrapFromHeight(50000);
+
+        let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
+        assert.ok(snapCall.args[0].endsWith('/since/0'), 'requests since/0 when depth > tip');
+        assert.strictEqual(sync._bootstrapBase, 0);
+    });
+
+    it('throws when the source tip is unavailable (so the retry wrapper can restart)', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(axios, 'get').callsFake(async (url) => {
+            if(url.indexOf('/status/') !== -1) return { data: {} }; // no height fields
+            return { data: Buffer.from('{}') };
+        });
+
+        await assert.rejects(() => sync._bootstrapFromHeight(50000), /source tip unavailable/);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+    });
+
+    it('VERIFY_RECOMPUTE: recomputes the terminal block and HALTS on mismatch', async function(){
+        ({ sync, db, applier } = makeSync({ VERIFY_RECOMPUTE: true }));
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        stubTransport({ tip: 1000000, base: 950000 });
+        db.getBlockHashRow.resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+        sinon.stub(sync, '_verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh' }]);
+        let halt = sinon.stub(sync, '_haltOnDivergence').resolves();
+
+        await sync._bootstrapFromHeight(50000);
+
+        assert.ok(sync._verifyRecompute.calledOnce, 'terminal block recomputed');
+        assert.strictEqual(sync._verifyRecompute.firstCall.args[0].block_index, 1000000);
+        assert.ok(halt.calledOnce, 'halts durably on a terminal mismatch');
+    });
+
+    it('retry wrapper throws (never live-follows empty) when no sources configured', async function(){
+        ({ sync } = makeSync({ SYNC_SOURCES: '' }));
+        await assert.rejects(() => sync._bootstrapFromHeightRetry(50000), /no sync sources configured/);
+    });
+
+    it('retry wrapper retries with backoff then succeeds', async function(){
+        ({ sync, db, applier } = makeSync({ BOOTSTRAP_MAX_RETRIES: 3 }));
+        let sleep = sinon.stub(sync.util, 'sleep').resolves();
+        let fromHeight = sinon.stub(sync, '_bootstrapFromHeight');
+        fromHeight.onCall(0).rejects(new Error('transient'));
+        fromHeight.onCall(1).resolves(true);
+
+        await sync._bootstrapFromHeightRetry(50000);
+
+        assert.strictEqual(fromHeight.callCount, 2);
+        assert.ok(sleep.calledOnce, 'backed off once between rounds');
+    });
+
+    it('retry wrapper THROWS on exhaustion', async function(){
+        ({ sync } = makeSync({ BOOTSTRAP_MAX_RETRIES: 0 }));
+        sinon.stub(sync, '_bootstrapFromHeight').rejects(new Error('boom'));
+        await assert.rejects(() => sync._bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2c. _verifyRecompute join-block skip (truncated replica)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync _verifyRecompute join-block skip', function(){
+    let sync;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('skips recompute for the bootstrap join block (no base-1 predecessor)', async function(){
+        ({ sync } = makeSync());
+        sync._bootstrapBase = 950000;
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes');
+
+        let result = await sync._verifyRecompute({ block_index: 950000 }, { ledger_hash: 'lh' });
+
+        assert.strictEqual(result, null, 'join block treated as clean');
+        assert.strictEqual(compute.called, false, 'computeBlockHashes never invoked for the join block');
+    });
+
+    it('still recomputes every block above the join block', async function(){
+        ({ sync } = makeSync());
+        sync._bootstrapBase = 950000;
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
+            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        let result = await sync._verifyRecompute({ block_index: 950001 },
+            { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        assert.strictEqual(result, null, 'matching block is clean');
+        assert.ok(compute.calledOnceWith(950001), 'block above the join is recomputed');
+    });
+
+    it('full-history replica (null base) recomputes the lowest block too', async function(){
+        ({ sync } = makeSync());
+        // _bootstrapBase stays null
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
+            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        await sync._verifyRecompute({ block_index: 0 }, { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        assert.ok(compute.calledOnceWith(0), 'no skip when not a truncated replica');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 3. _runIncrementalCatchUp
 // ─────────────────────────────────────────────────────────────────────────────
 describe('ClientSync — _runIncrementalCatchUp', function(){

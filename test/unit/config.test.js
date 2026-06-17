@@ -18,7 +18,9 @@ describe('config', function(){
         'CORS_ORIGIN', 'BLOCK_POLL_INTERVAL', 'WS_MAX_PER_IP',
         'SNAPSHOT_RATE_FULL', 'SNAPSHOT_RATE_INCR', 'SYNC_SOURCES',
         'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
-        'REPLICA_DB_USER', 'REPLICA_DB_PASS'
+        'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'SYNC_EXCLUDE',
+        'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
+        'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET'
     ];
     let savedEnv = {};
 
@@ -136,6 +138,42 @@ describe('config', function(){
         it('passes REPLICA_DB_HOST', function(){
             process.env.REPLICA_DB_HOST = 'dbhost';
             assert.strictEqual(config.getConfig().REPLICA_DB_HOST, 'dbhost');
+        });
+    });
+
+    describe('SYNC_EXCLUDE', function(){
+        it('defaults to an empty array', function(){
+            assert.deepStrictEqual(config.getConfig().SYNC_EXCLUDE, []);
+        });
+        it('parses, trims, and deduplicates a comma list', function(){
+            process.env.SYNC_EXCLUDE = ' DOGE:testnet:indexer , LTC:mainnet:decoder ,DOGE:testnet:indexer';
+            assert.deepStrictEqual(config.getConfig().SYNC_EXCLUDE,
+                ['DOGE:testnet:indexer', 'LTC:mainnet:decoder']);
+        });
+        it('drops empty segments', function(){
+            process.env.SYNC_EXCLUDE = ',,DOGE:testnet:indexer,,';
+            assert.deepStrictEqual(config.getConfig().SYNC_EXCLUDE, ['DOGE:testnet:indexer']);
+        });
+    });
+
+    describe('SYNC_BOOTSTRAP_DEPTH', function(){
+        it('defaults to an empty map', function(){
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
+        });
+        it('parses SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK> into an uppercased CHAIN:NETWORK map', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '50000';
+            process.env.SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET = '1000';
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH,
+                { 'DOGE:TESTNET': 50000, 'LTC:TESTNET': 1000 });
+        });
+        it('ignores non-positive / non-numeric depths', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '0';
+            process.env.SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET = 'abc';
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
+        });
+        it('ignores a malformed key with no CHAIN_NETWORK split', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_BADKEY = '500';
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
         });
     });
 });

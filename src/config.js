@@ -75,6 +75,46 @@ module.exports = {
         config['SNAPSHOT_RATE_FULL']  = parseIntMin0(process.env.SNAPSHOT_RATE_FULL, 12);
         config['SNAPSHOT_RATE_INCR']  = parseIntMin0(process.env.SNAPSHOT_RATE_INCR, 600);
 
+        // Per-chain replication exclude (client mode). Comma-separated list of
+        // `coin:network:dbType` keys (e.g. `DOGE:testnet:indexer`) that the client
+        // must NOT replicate. A discovered chain whose key is listed is skipped in
+        // _discoverChains, so no ClientSync is started for it and it can never
+        // crash-loop the process. Used to drop a chain that cannot full-snapshot
+        // bootstrap (fast chains with tens of millions of blocks) until the
+        // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is deployed.
+        // Trimmed + deduplicated; empty/unset -> [] (no chain excluded).
+        config['SYNC_EXCLUDE'] = [...new Set(
+            (process.env.SYNC_EXCLUDE || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0)
+        )];
+
+        // Per-chain start-from-recent-height bootstrap (client mode). Opt-in via
+        // SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>=N (e.g.
+        // SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET=50000). When set for a chain, an empty
+        // replica bootstraps from (sourceTip - N) using one incremental snapshot
+        // instead of a full-history snapshot. This is the only way to seed a fast
+        // chain whose full snapshot (tens of millions of blocks) cannot be buffered
+        // and applied in one pass on the client. Absent -> unchanged full bootstrap
+        // with full history + full verification.
+        //
+        // A truncated replica CANNOT answer pre-base history and its aggregate
+        // balances are recent-window only; it is acceptable ONLY for a non-consensus
+        // explorer mirror, never a trusted validator. Parsed into a map keyed by
+        // 'CHAIN:NETWORK' (uppercased); values clamped to >= 1.
+        let bootstrapDepth = {};
+        for(let envKey in process.env){
+            if(envKey.indexOf('SYNC_BOOTSTRAP_DEPTH_') !== 0) continue;
+            let rest = envKey.slice('SYNC_BOOTSTRAP_DEPTH_'.length); // e.g. DOGE_TESTNET
+            let sep = rest.lastIndexOf('_');
+            if(sep <= 0 || sep >= rest.length - 1) continue; // need CHAIN_NETWORK
+            let chainKey = rest.slice(0, sep) + ':' + rest.slice(sep + 1);
+            let depth = parseIntSafe(process.env[envKey], 0);
+            if(depth >= 1) bootstrapDepth[chainKey.toUpperCase()] = depth;
+        }
+        config['SYNC_BOOTSTRAP_DEPTH'] = bootstrapDepth;
+
         // Client mode settings
         config['SYNC_SOURCES']   = process.env.SYNC_SOURCES || '';
         config['VERIFY_HASHES']  = (process.env.VERIFY_HASHES || '').toLowerCase() !== 'false';
