@@ -265,7 +265,7 @@ async function createDatabase(dbName, host, port, user, pass) {
     return await createDb(dbName, h, p, u, pw);
 }
 
-// The schema-seed SQL lives on the REDACTED-LOCAL-PATH Parallels share, which
+// The schema-seed SQL may live on a shared network filesystem, which
 // intermittently blips ENOENT on an existing file/dir between calls (see the
 // project's parallels-fs-enoent-race note). A bare readdirSync/readFileSync here
 // would crash a whole chaos/e2e suite's `before all` hook and cascade-fail every
