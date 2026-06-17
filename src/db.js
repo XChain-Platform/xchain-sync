@@ -440,6 +440,44 @@ class Database {
             console.log('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
             await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
         }
+
+        // AUTO_INCREMENT repair for hub-mirror id cursors. The indexer reconciler
+        // previously stripped AUTO_INCREMENT from the id column of these four tables
+        // on every startup (migration 2026-06-10-mirror-id-autoincrement-repair).
+        // Origins self-heal via that migration, but replicas bootstrapped from a
+        // stripped-state origin cloned the stripped DDL and have no automated path.
+        // Detect a missing AUTO_INCREMENT on the id column and restore it here.
+        // Idempotent: MODIFY to the same definition is a no-op; table absent = skip.
+        // #3713
+        let autoIncTables = [
+            'price_snapshots',
+            'cross_chain_matches',
+            'capability_snapshots',
+            'state_checkpoints'
+        ];
+        for(let table of autoIncTables){
+            let colRows = await this.doQuery(
+                "SELECT EXTRA FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = 'id'",
+                [this.dbName, table]
+            );
+            if(colRows.length === 0) continue;   // table absent or has no id column; skip
+            let extra = colRows[0].EXTRA || colRows[0].extra || '';
+            if(String(extra).toLowerCase().indexOf('auto_increment') !== -1) continue;  // already correct; no-op
+
+            console.log('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
+            // Re-key any id=0 row before the ALTER rebuilds the index (avoids
+            // collision when the attribute is restored). Mirrors the indexer migration.
+            try {
+                await this.doQuery(
+                    'UPDATE `' + table + '` SET id = (SELECT next_id FROM (SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM `' + table + '`) t) WHERE id = 0'
+                );
+                await this.doQuery('ALTER TABLE `' + table + '` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
+                console.log('Repaired AUTO_INCREMENT on ' + table + '.id');
+            } catch(e){
+                // errno 1146 (table absent) or 1054 (column absent) can race; log and continue.
+                console.error('Failed to repair AUTO_INCREMENT on ' + table + '.id:', e);
+            }
+        }
     }
 
     // Get a database connection (with exponential backoff + circuit breaker).

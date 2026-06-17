@@ -93,9 +93,9 @@ describe('Database.close()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1b. constructor — dbType default
+// 1b. constructor: dbType default
 // ═══════════════════════════════════════════════════════════════════════════
-describe('Database constructor — dbType default', function () {
+describe('Database constructor: dbType default', function () {
     afterEach(async function () { sinon.restore(); });
 
     it('defaults dbType to "indexer" when not provided', async function () {
@@ -203,9 +203,9 @@ describe('Database.doQuery()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. getConnection() — circuit breaker
+// 3. getConnection(): circuit breaker
 // ═══════════════════════════════════════════════════════════════════════════
-describe('Database.getConnection() — circuit breaker', function () {
+describe('Database.getConnection(): circuit breaker', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
     afterEach(async function () { sinon.restore(); await db.close(); });
@@ -279,7 +279,7 @@ describe('Database.getConnection() — circuit breaker', function () {
     it('maxAttempts exhaustion: throws when failures < threshold', async function () {
         // Set threshold above maxAttempts so the attempts cap fires first.
         db.circuitThreshold = 9999;
-        // Override maxAttempts by patching — we can't easily do that, so instead
+        // Override maxAttempts by patching (we can't easily do that), so instead
         // set circuitThreshold just above maxAttempts (30). On each failure
         // circuitFailures increments; we need it to stay < threshold.
         // Simple approach: fail 30 times (maxAttempts), each time circuitFailures
@@ -513,8 +513,8 @@ describe('Database.commitReadSnapshot() / rollbackReadSnapshot()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 9. verifyDatabase() — retry loop
-// (Uses proxyquire because mariadb is an ES module — sinon can't stub it directly)
+// 9. verifyDatabase(): retry loop
+// (Uses proxyquire because mariadb is an ES module; sinon can't stub it directly)
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.verifyDatabase()', function () {
     afterEach(async function () { sinon.restore(); });
@@ -688,7 +688,7 @@ describe('Database.verifySyncTables()', function () {
         let doQueryStub = sinon.stub(dec, 'doQuery').resolves([]);
         let result = await dec.verifySyncTables();
         assert.strictEqual(result, true);
-        // Only sync_halt is probed and created — one information_schema check,
+        // Only sync_halt is probed and created: one information_schema check,
         // one CREATE; sync_meta/merkle_epochs never touched on a decoder DB.
         assert.strictEqual(conn.query.callCount, 1);
         assert.strictEqual(doQueryStub.callCount, 1);
@@ -791,7 +791,13 @@ describe('Database.ensureReplicatedColumns()', function () {
         sinon.stub(db, 'doQuery').callsFake(async (sql, args) => {
             calls.push(sql);
             if (/information_schema\.tables/.test(sql)) return [{ table_name: args[1] }];
-            // Column exists
+            // AUTO_INCREMENT-check reads (SELECT EXTRA ...): return 'auto_increment' so the
+            // repair is correctly skipped when the column is already in the right state.
+            // These reads are intentional new behavior added by the #3713 AUTO_INCREMENT
+            // self-heal; the real intent of this test is that no ADD COLUMN or MODIFY is
+            // issued when all columns are already present.
+            if (/SELECT EXTRA FROM information_schema\.columns/.test(sql)) return [{ EXTRA: 'auto_increment' }];
+            // Ownership/nullability column-presence checks: column exists on replica
             if (/information_schema\.columns/.test(sql)) return [{ COLUMN_NAME: args[2] }];
             return [];
         });
@@ -830,10 +836,10 @@ describe('Database.getLastBlock()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 14b. addMissingColumns() — remaining branch coverage
+// 14b. addMissingColumns(): remaining branch coverage
 // (The basic happy-path cases live in db-schema-evolution.test.js)
 // ═══════════════════════════════════════════════════════════════════════════
-describe('Database.addMissingColumns() — edge branches', function () {
+describe('Database.addMissingColumns(): edge branches', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
     afterEach(async function () { sinon.restore(); await db.close(); });
@@ -927,7 +933,7 @@ describe('Database.addMissingColumns() — edge branches', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 15. getBlockHashRow() — indexer vs decoder branching
+// 15. getBlockHashRow(): indexer vs decoder branching
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getBlockHashRow()', function () {
     afterEach(async function () { sinon.restore(); });
@@ -977,7 +983,7 @@ describe('Database.getBlockHashRow()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 16. getBlockRows() — indexer vs decoder
+// 16. getBlockRows(): indexer vs decoder
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getBlockRows()', function () {
     afterEach(async function () { sinon.restore(); });
@@ -1248,7 +1254,7 @@ describe('Database halt methods', function () {
         assert.strictEqual(result, 0);
     });
 
-    it('recordHalt: idempotent — returns existing when block_index matches', async function () {
+    it('recordHalt: idempotent (returns existing when block_index matches)', async function () {
         let existing = { id: 1, block_index: 100 };
         sinon.stub(db, 'getActiveHalt').resolves(existing);
         let doQ = sinon.stub(db, 'doQuery').resolves([]);
@@ -1298,7 +1304,7 @@ describe('Database halt methods', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 26. replicateSchema() — integration of stubbed higher-level paths
+// 26. replicateSchema(): integration of stubbed higher-level paths
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.replicateSchema()', function () {
     let db, sourceDb;
@@ -1373,7 +1379,7 @@ describe('Database.replicateSchema()', function () {
             if (/information_schema\.tables/.test(sql))
                 return [{ table_name: 'blocks' }];
             if (/SHOW CREATE TABLE/.test(sql))
-                return [];   // ← empty rows — triggers the continue
+                return [];   // ← empty rows, triggers the continue
             return [];
         });
         sinon.stub(db, 'doQuery').resolves([]);
@@ -1386,7 +1392,7 @@ describe('Database.replicateSchema()', function () {
             if (/information_schema\.tables/.test(sql))
                 return [{ table_name: 'blocks' }];
             if (/SHOW CREATE TABLE/.test(sql))
-                return [{}];   // ← row with no 'Create Table' field — triggers continue
+                return [{}];   // ← row with no 'Create Table' field, triggers continue
             return [];
         });
         sinon.stub(db, 'doQuery').resolves([]);
@@ -1573,7 +1579,7 @@ describe('Database.replicateSchema()', function () {
             if (/information_schema\.tables/.test(sql)) {
                 targetInfoCalls++;
                 if (targetInfoCalls === 1) return [];
-                // retry pass: return uppercase TABLE_NAME — retrySet uses TABLE_NAME fallback
+                // retry pass: return uppercase TABLE_NAME so retrySet uses the TABLE_NAME fallback
                 return [{ TABLE_NAME: 'child' }];
             }
             if (/CREATE TABLE/.test(sql)) throw new Error('FK fail');
@@ -1622,7 +1628,7 @@ describe('Database.replicateSchema()', function () {
 // ═══════════════════════════════════════════════════════════════════════════
 // Table-identifier guard (getTableCount / getTablePage / truncateTable)
 // ═══════════════════════════════════════════════════════════════════════════
-describe('Database — table identifier guard', function () {
+describe('Database: table identifier guard', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
     afterEach(async function () { sinon.restore(); await db.close(); });
