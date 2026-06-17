@@ -497,6 +497,21 @@ describe('ClientSync _syncLookupTablesPaged', function(){
 
         assert.strictEqual(get.callCount, 1, 'stopped after one page despite has_more');
     });
+
+    it('decoder: pages pubkeys by its address_id cursor', async function(){
+        ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
+        sinon.stub(rt, 'getTopology').returns({ index: ['pubkeys'] });
+        db.doQuery.resolves([{ m: 42 }]); // replica MAX(address_id) = 42
+        // decoder schema_version is 2 (indexer is 3); the page must match it.
+        let get = sinon.stub(axios, 'get').resolves(
+            { data: Buffer.from(JSON.stringify({ schema_version: 2, table: 'pubkeys', max_id: 42, has_more: false, rows: [] })) });
+
+        await sync._syncLookupTablesPaged('http://src:3006');
+
+        let maxQ = db.doQuery.getCalls().find(c => /MAX\(`address_id`\)/.test(c.args[0]));
+        assert.ok(maxQ, 'queries MAX(address_id) for pubkeys, not MAX(id)');
+        assert.ok(get.firstCall.args[0].indexOf('after_id=42') !== -1, 'cursor starts at replica address_id high-water');
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -538,6 +553,21 @@ describe('ClientSync truncated catch-up', function(){
         assert.ok(paged.notCalled, 'no paged lookup sync for full-history chains');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
         assert.ok(snapCall.args[0].indexOf('skip_lookups') === -1, 'no skip_lookups for full-history');
+    });
+
+    it('decoder chain is truncated by the same depth and pages lookups + skip_lookups', async function(){
+        // Depth is keyed by chain:network (not dbType), so it truncates the decoder too.
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }, { dbType: 'decoder' }));
+        assert.ok(sync._truncatedDepth >= 1, 'decoder picks up the chain depth (gate removed)');
+        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        db.getLastBlock.resolves(100);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 2, block_height: 105, since_block: 101, tables: {} })) });
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(paged.calledOnce, 'decoder pages lookups in truncated mode');
+        let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
+        assert.ok(snapCall.args[0].indexOf('skip_lookups=1') !== -1, 'decoder block window fetched with skip_lookups');
     });
 });
 

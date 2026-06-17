@@ -91,10 +91,12 @@ class ClientSync {
         // 0 = full-history replica (unchanged bundled-snapshot path). Read from
         // config (always available), NOT from _bootstrapBase, so it governs catch-up
         // correctly after a restart (when the replica is non-empty and _bootstrapBase
-        // is null). Indexer-only (decoder truncation is a separate follow-up).
+        // is null). Applies to BOTH dbTypes of the chain: the indexer recompute/join
+        // handling is indexer-specific, but the decoder (no synthetic chain hash, just
+        // block_hash continuity) seeds the same way and its 2.4M-row index_transactions
+        // is the same content-limit wall, so a depth-configured chain truncates both.
         let _depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
-        this._truncatedDepth = (this.dbType === 'indexer')
-            ? (_depthMap[(this.chain + ':' + this.network).toUpperCase()] || 0) : 0;
+        this._truncatedDepth = _depthMap[(this.chain + ':' + this.network).toUpperCase()] || 0;
 
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
@@ -543,9 +545,12 @@ class ClientSync {
     // Opt-in per chain (SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>) for fast chains
     // whose full-history snapshot cannot be buffered+applied in one client pass.
     // Returns true once the tip is committed; throws on a failure the caller can
-    // retry. Indexer-only (the recompute join handling below is indexer-specific).
+    // retry. Works for BOTH dbTypes: the terminal-block recompute below is a no-op
+    // for the decoder (_verifyRecompute returns null; it has no synthetic chain
+    // hashes), so the decoder simply seeds [base..tip] and live-follows by block_hash
+    // continuity, which only needs the immediate predecessor (present from base up).
     //
-    // CONSENSUS NOTE (load-bearing): the join block `base` has no `base-1`
+    // CONSENSUS NOTE (load-bearing, indexer): the join block `base` has no `base-1`
     // predecessor on a truncated replica, so BlockHasher.computeBlockHashes(base)
     // folds a NULL previous_hash and would false-HALT on recompute. We record
     // this._bootstrapBase so _verifyRecompute skips recompute for ONLY that one
@@ -661,10 +666,12 @@ class ClientSync {
         let pageSize = this._lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
         for(let table of tables){
-            // Replica's current high-water id for this table (0 if empty/absent).
+            // Replica's current high-water cursor for this table (0 if empty/absent).
+            // Cursor column is per-table (id, or address_id for decoder pubkeys).
+            let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
             try {
-                let r = await this.db.doQuery('SELECT MAX(id) AS m FROM `' + table + '`');
+                let r = await this.db.doQuery('SELECT MAX(`' + col + '`) AS m FROM `' + table + '`');
                 if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
             } catch(e){
                 afterId = 0; // table not present yet -> treat as empty (schema applied earlier)

@@ -470,11 +470,13 @@ class SnapshotBuilder {
         let lim   = Number.isFinite(limit) ? Math.floor(limit) : SnapshotBuilder.ROWS_PAGE_DEFAULT;
         lim = Math.max(1, Math.min(SnapshotBuilder.ROWS_PAGE_MAX, lim));
 
+        // Per-table cursor column (almost always `id`; decoder pubkeys uses address_id).
+        let col = replicatedTables.lookupCursorColumn(table);
         let rows = await db.doQuery(
-            "SELECT * FROM `" + table + "` WHERE id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
             [after, lim]
         );
-        let maxId   = rows.length ? Number(rows[rows.length - 1].id) : after;
+        let maxId   = rows.length ? Number(rows[rows.length - 1][col]) : after;
         let hasMore = rows.length === lim;
         let schemaVersion = SCHEMA_VERSION[dbType];
 

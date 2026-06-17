@@ -395,7 +395,7 @@ describe('SnapshotBuilder', function(){
             let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
             assert.strictEqual(parsed.has_more, true, 'rows.length === limit -> more pages remain');
             let q = db.doQuery.firstCall.args[0];
-            assert.ok(/WHERE id > \? ORDER BY id ASC LIMIT \?/.test(q), 'paged id-cursor query');
+            assert.ok(/WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(q), 'paged id-cursor query');
             assert.deepStrictEqual(db.doQuery.firstCall.args[1], [0, 3], 'after_id and limit bound as params');
         });
 
@@ -410,6 +410,27 @@ describe('SnapshotBuilder', function(){
                 builder.streamTableRowsById(db, 'index_transactions', 0, 9999999, res);
             });
             assert.strictEqual(db.doQuery.firstCall.args[1][1], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
+        });
+
+        // The decoder pubkeys table is keyed by address_id (its PK, FK into
+        // index_addresses.id) and has NO id column, so it must page by address_id.
+        it('decoder: pages the pubkeys table by its address_id cursor (no id column)', async function(){
+            let db = createMockDb('decoder_db');
+            db.dbType = 'decoder';
+            db.doQuery.resolves([{ address_id: 5, pubkey: 'p1' }, { address_id: 9, pubkey: 'p2' }]);
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamTableRowsById(db, 'pubkeys', 0, 50000, res);
+            });
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.table, 'pubkeys');
+            assert.strictEqual(parsed.max_id, 9, 'cursor high-water is the max address_id');
+            let q = db.doQuery.firstCall.args[0];
+            assert.ok(/WHERE `address_id` > \? ORDER BY `address_id` ASC LIMIT \?/.test(q), 'pages by address_id, not id');
         });
     });
 

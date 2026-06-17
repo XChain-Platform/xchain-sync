@@ -232,4 +232,14 @@ function getReplicatedTables(dbType){
     return [...new Set(all)];
 }
 
-module.exports = { getTopology, getReplicatedTables };
+// The cursor column for id-ordered paging of an append-only lookup table
+// (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged). Almost
+// every lookup table has an AUTO_INCREMENT `id` PK, but the decoder `pubkeys` table
+// is keyed by `address_id` (its PK, an FK into index_addresses.id) and has NO `id`
+// column, so paging it by `id` would error. Both columns are monotonic and the
+// tables are INSERT-only, so `<col> > cursor ORDER BY <col>` is a stable cursor.
+function lookupCursorColumn(table){
+    return table === 'pubkeys' ? 'address_id' : 'id';
+}
+
+module.exports = { getTopology, getReplicatedTables, lookupCursorColumn };
