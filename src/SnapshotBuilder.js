@@ -190,7 +190,15 @@ class SnapshotBuilder {
     //     repeated full dump is idempotent (existing ids no-op, new ones insert).
     //     Without this, an incrementally-caught-up follower would never receive
     //     events rows for the gap and would silently drift behind the source.
-    async streamIncrementalSnapshot(db, sinceBlock, res, coin){
+    async streamIncrementalSnapshot(db, sinceBlock, res, coin, opts){
+        // opts.skipLookups: omit the append-only `.index` lookup tables (index_*,
+        // and for the decoder pubkeys/events) from this response. A truncated /
+        // fast-chain replica syncs those separately via the id-cursor paged route
+        // (streamTableRowsById) because a single full-dump of a multi-million-row
+        // lookup table (e.g. DOGE-testnet index_transactions ~8.5M rows) alone
+        // exceeds SNAPSHOT_MAX_CONTENT and aborts the client download. Default off:
+        // existing callers (4 args) keep the full bundled behaviour unchanged.
+        let skipLookups = !!(opts && opts.skipLookups);
         // Same REPEATABLE READ snapshot discipline as streamFullSnapshot: the
         // anchor, hash headers, and all per-table reads must observe one block
         // height so the catch-up payload can't mix rows from two heights while
@@ -319,6 +327,11 @@ class SnapshotBuilder {
                 'markets',
                 'attest_validator_stats',
             ]);
+            // The append-only, id-PK lookup tables a skipLookups caller syncs out of
+            // band via streamTableRowsById. Only these are omitted; the mutated
+            // aggregates folded into indexerFullDump (merkle_epochs/markets/
+            // attest_validator_stats) stay in the bundled response (small, no id cursor).
+            let lookupSet          = new Set(replicatedTables.getTopology(dbType).index);
             let firstActionIndex   = (dbType === 'indexer') ? await db.getFirstActionIndex(sinceBlock, conn) : null;
 
             for(let table of tableOrder){
@@ -338,6 +351,7 @@ class SnapshotBuilder {
                                 conn
                             );
                         } else if(decoderFullDump.has(table)){
+                            if(skipLookups && lookupSet.has(table)) continue;
                             rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
                         } else {
                             continue;
@@ -346,6 +360,7 @@ class SnapshotBuilder {
                         if(indexerBlockScoped.has(table)){
                             rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
                         } else if(indexerFullDump.has(table)){
+                            if(skipLookups && lookupSet.has(table)) continue;
                             rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
                         } else if(firstActionIndex !== null){
                             try {
@@ -425,6 +440,60 @@ class SnapshotBuilder {
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);
             throw e;
         }
+    }
+
+    // Default + ceiling page sizes for streamTableRowsById. The ceiling bounds the
+    // server's single-query result set and the client's per-page buffer so no one
+    // request can approach SNAPSHOT_MAX_CONTENT, which is the whole point.
+    static get ROWS_PAGE_DEFAULT(){ return 50000; }
+    static get ROWS_PAGE_MAX(){ return 100000; }
+
+    // Stream one id-ordered page of an append-only lookup table to an HTTP response.
+    // Powers the truncated/fast-chain replica's out-of-band lookup sync: instead of
+    // a single full-dump of a multi-million-row table (which exceeds
+    // SNAPSHOT_MAX_CONTENT and aborts the client), the client pages by id cursor and
+    // applies each bounded page. Only the append-only id-PK lookup tables (the
+    // topology `.index` set: index_*, plus pubkeys/events for the decoder) are
+    // pageable; they are INSERT-only with a monotonic AUTO_INCREMENT `id`, so
+    // `id > cursor ORDER BY id` is stable across requests without a long-lived read
+    // view. Returns {schema_version, table, max_id, has_more, rows:[...]}.
+    async streamTableRowsById(db, table, afterId, limit, res){
+        let dbType = (db && db.dbType) || 'indexer';
+        let allowed = new Set(replicatedTables.getTopology(dbType).index);
+        if(!allowed.has(table)){
+            // Not an allowlisted append-only lookup table. Refuse rather than run an
+            // arbitrary `SELECT *` (the allowlist is also the SQL-identifier guard:
+            // only these hardcoded names are ever interpolated into the query).
+            return res.status(400).json({ error: 'Table not pageable: ' + table });
+        }
+        let after = Number.isFinite(afterId) ? Math.max(0, Math.floor(afterId)) : 0;
+        let lim   = Number.isFinite(limit) ? Math.floor(limit) : SnapshotBuilder.ROWS_PAGE_DEFAULT;
+        lim = Math.max(1, Math.min(SnapshotBuilder.ROWS_PAGE_MAX, lim));
+
+        let rows = await db.doQuery(
+            "SELECT * FROM `" + table + "` WHERE id > ? ORDER BY id ASC LIMIT ?",
+            [after, lim]
+        );
+        let maxId   = rows.length ? Number(rows[rows.length - 1].id) : after;
+        let hasMore = rows.length === lim;
+        let schemaVersion = SCHEMA_VERSION[dbType];
+
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
+        res.setHeader('X-Max-Id', String(maxId));
+        res.setHeader('X-Has-More', hasMore ? 'true' : 'false');
+
+        let gzip = zlib.createGzip();
+        gzip.pipe(res);
+        gzip.write('{"schema_version":' + schemaVersion + ',"table":"' + table +
+            '","max_id":' + maxId + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
+        for(let i = 0; i < rows.length; i++){
+            if(i > 0) gzip.write(',');
+            gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+        }
+        gzip.write(']}');
+        gzip.end();
     }
 
 }

@@ -31,6 +31,8 @@ const axios       = require('axios');
 const zlib        = require('zlib');
 const validation  = require('./validation');
 const BlockHasher = require('./BlockHasher');
+const replicatedTables = require('./replicatedTables');
+const { SCHEMA_VERSION } = require('./schema-version');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 
 class ClientSync {
@@ -80,6 +82,19 @@ class ClientSync {
         // previous_hash cannot be recomputed; _verifyRecompute skips ONLY this block.
         // null = full-history replica (every block is independently recomputed).
         this._bootstrapBase = null;
+
+        // Truncated-mode depth (blocks) for THIS chain, from
+        // SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>. >= 1 means this is a fast/large
+        // chain seeded from a recent height: both bootstrap AND catch-up sync the
+        // append-only lookup tables out of band via the id-cursor paged route
+        // (a single full-dump of e.g. index_transactions exceeds the content limit).
+        // 0 = full-history replica (unchanged bundled-snapshot path). Read from
+        // config (always available), NOT from _bootstrapBase, so it governs catch-up
+        // correctly after a restart (when the replica is non-empty and _bootstrapBase
+        // is null). Indexer-only (decoder truncation is a separate follow-up).
+        let _depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
+        this._truncatedDepth = (this.dbType === 'indexer')
+            ? (_depthMap[(this.chain + ':' + this.network).toUpperCase()] || 0) : 0;
 
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
@@ -198,12 +213,10 @@ class ClientSync {
             // configured SYNC_BOOTSTRAP_DEPTH seeds from a recent height (fast
             // chains whose full snapshot can't be applied in one pass); everything
             // else takes the full-history snapshot.
-            let depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
-            let depth = depthMap[(this.chain + ':' + this.network).toUpperCase()];
-            if(this.dbType === 'indexer' && depth >= 1){
+            if(this._truncatedDepth >= 1){
                 console.log('No local data found; bootstrapping ' + this.chain + '/' + this.network +
-                    ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + depth + ', truncated replica)...');
-                await this._bootstrapFromHeightRetry(depth);
+                    ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + this._truncatedDepth + ', truncated replica)...');
+                await this._bootstrapFromHeightRetry(this._truncatedDepth);
             } else {
                 console.log('No local data found, bootstrapping from full snapshot...');
                 await this._bootstrapFromSnapshot();
@@ -563,11 +576,18 @@ class ClientSync {
         // 2. Apply schema before any data (same as the full-bootstrap path).
         await this._fetchAndApplySchema(source);
 
-        // 3. Fetch and apply the incremental snapshot from `base`. The server's
-        //    /snapshot/.../since/<base> route accepts any since >= 0 and delivers
-        //    blocks [base..tip] plus the index_* full-dumps and balances the range
-        //    references, exactly the apply surface applyIncrementalSnapshot expects.
-        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base;
+        // 3. Sync the append-only lookup tables (index_*) by id-cursor paging BEFORE
+        //    the block window. A single full-dump of e.g. index_transactions (~8.5M
+        //    rows on DOGE testnet) exceeds SNAPSHOT_MAX_CONTENT and aborts the
+        //    download; paging keeps each request bounded. Done first so the block
+        //    window's FK targets (blocks.*_hash_id -> index_transactions) are present.
+        await this._syncLookupTablesPaged(source);
+
+        // 4. Fetch and apply the block window from `base` with skip_lookups=1 (the
+        //    lookups were just paged in). Bounded by the truncation window, so this
+        //    response stays small. applyIncrementalSnapshot also applies updated_rows,
+        //    cooldown credits, and rebuilds touched balances (all still bundled here).
+        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
         let response = await axios.get(url, {
             responseType: 'arraybuffer',
             timeout: 600000,
@@ -616,6 +636,83 @@ class ClientSync {
             ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
             ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
         return true;
+    }
+
+    // Per-page row count for _syncLookupTablesPaged. Bounded so no single request
+    // approaches SNAPSHOT_MAX_CONTENT (the server clamps to its own ceiling too).
+    _lookupPageSize(){
+        let n = parseInt(this.config['LOOKUP_PAGE_SIZE'], 10);
+        if(isNaN(n) || n < 1) n = 50000;
+        return Math.min(100000, n);
+    }
+
+    // Sync the append-only lookup tables (topology `.index` set: index_*) by id
+    // cursor instead of a single full-dump. For each table, start at the replica's
+    // current MAX(id) (0 when empty) and page /snapshot-rows/.../<table>?after_id=
+    // until has_more=false, applying each bounded page. This is the fix for fast/
+    // large chains where one full-dump of e.g. index_transactions (~8.5M rows)
+    // exceeds SNAPSHOT_MAX_CONTENT and aborts the download. Used by BOTH the
+    // truncated bootstrap (max id 0 -> all rows) and truncated catch-up (current
+    // max -> only new rows, since the tables are INSERT-only with monotonic ids).
+    // Each page is applied via the existing incremental surface; index_* are in
+    // ClientApplier.ignoreTables (INSERT IGNORE), so re-sent rows are idempotent.
+    async _syncLookupTablesPaged(source){
+        let tables = replicatedTables.getTopology(this.dbType).index || [];
+        let pageSize = this._lookupPageSize();
+        let expected = SCHEMA_VERSION[this.dbType];
+        for(let table of tables){
+            // Replica's current high-water id for this table (0 if empty/absent).
+            let afterId = 0;
+            try {
+                let r = await this.db.doQuery('SELECT MAX(id) AS m FROM `' + table + '`');
+                if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
+            } catch(e){
+                afterId = 0; // table not present yet -> treat as empty (schema applied earlier)
+            }
+            let pages = 0;
+            while(true){
+                let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
+                    this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
+                let response = await axios.get(url, {
+                    responseType: 'arraybuffer',
+                    timeout: 600000,
+                    decompress: true,
+                    maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+                });
+                let jsonStr = response.data;
+                if(Buffer.isBuffer(jsonStr)){
+                    try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+                }
+                let page = JSON.parse(jsonStr.toString());
+                if(page.schema_version !== expected){
+                    throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
+                        page.schema_version + ' client=' + expected);
+                }
+                let rows = page.rows || [];
+                if(rows.length){
+                    // Apply through the existing incremental surface, carrying just this
+                    // table. index_* are INSERT IGNORE, so re-sent rows no-op; a lookup
+                    // page has no credits/debits/updated_rows, so the balance/escrow
+                    // rebuilds inside applyIncrementalSnapshot are skipped.
+                    await this._withApplyLock(() => this.applier.applyIncrementalSnapshot({
+                        schema_version: expected,
+                        tables: { [table]: rows }
+                    }));
+                }
+                pages++;
+                if(!page.has_more) break;
+                // Advance the cursor; max_id is the server's last returned id. Guard
+                // against non-progress so a misbehaving server can't spin us forever.
+                let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
+                if(nextAfter <= afterId){
+                    console.warn('Lookup paging for ' + table + ' made no progress past id ' +
+                        afterId + '; stopping');
+                    break;
+                }
+                afterId = nextAfter;
+            }
+            if(pages > 1) console.log('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
+        }
     }
 
     // Serialize all replica-mutating operations (live block apply, incremental
@@ -708,7 +805,18 @@ class ClientSync {
 
         console.log('Incremental catch-up from block ' + sinceBlock + '...');
         try {
-            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock;
+            // Truncated/fast chains: sync the append-only lookup tables by id cursor
+            // first (only NEW rows, since the replica's MAX(id) is the cursor), then
+            // fetch the block window with skip_lookups=1. Without this the bundled
+            // snapshot re-full-dumps multi-million-row lookups on EVERY catch-up and
+            // exceeds the content limit (the same wall as bootstrap). Full-history
+            // chains keep the single bundled snapshot (lookups included) unchanged.
+            let skipLookups = this._truncatedDepth >= 1;
+            if(skipLookups){
+                await this._syncLookupTablesPaged(source);
+            }
+            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
+                (skipLookups ? '?skip_lookups=1' : '');
             let response = await axios.get(url, {
                 responseType: 'arraybuffer',
                 timeout: 300000,

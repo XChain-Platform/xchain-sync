@@ -334,7 +334,8 @@ describe('ClientSync _bootstrapFromHeight', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    // axios.get is called twice: /status (JSON tip) then /snapshot/.../since/<base>
+    // axios.get sequence: /status (JSON tip), then per-lookup-table /snapshot-rows
+    // pages (empty here), then /snapshot/.../since/<base>?skip_lookups=1 block window
     // (gzip/raw buffer). Branch the stub on the URL.
     function stubTransport(opts){
         opts = opts || {};
@@ -342,6 +343,8 @@ describe('ClientSync _bootstrapFromHeight', function(){
         let snap = opts.snapshot || { schema_version: 3, block_height: tip, since_block: (opts.base === undefined ? tip - 50000 : opts.base), tables: {} };
         sinon.stub(axios, 'get').callsFake(async (url) => {
             if(url.indexOf('/status/') !== -1) return { data: { source_height: tip } };
+            if(url.indexOf('/snapshot-rows/') !== -1)
+                return { data: Buffer.from(JSON.stringify({ schema_version: 3, table: 'x', max_id: 0, has_more: false, rows: [] })) };
             if(url.indexOf('/snapshot/') !== -1) return { data: Buffer.from(JSON.stringify(snap)) };
             throw new Error('unexpected url ' + url);
         });
@@ -369,7 +372,8 @@ describe('ClientSync _bootstrapFromHeight', function(){
         await sync._bootstrapFromHeight(50000);
 
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
-        assert.ok(snapCall.args[0].endsWith('/since/0'), 'requests since/0 when depth > tip');
+        assert.ok(snapCall.args[0].indexOf('/since/0') !== -1, 'requests since/0 when depth > tip');
+        assert.ok(snapCall.args[0].indexOf('skip_lookups=1') !== -1, 'block window requested with skip_lookups');
         assert.strictEqual(sync._bootstrapBase, 0);
     });
 
@@ -422,6 +426,118 @@ describe('ClientSync _bootstrapFromHeight', function(){
         ({ sync } = makeSync({ BOOTSTRAP_MAX_RETRIES: 0 }));
         sinon.stub(sync, '_bootstrapFromHeight').rejects(new Error('boom'));
         await assert.rejects(() => sync._bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b-ii. _syncLookupTablesPaged (id-cursor paged lookup sync)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync _syncLookupTablesPaged', function(){
+    let sync, db, applier, rt;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+        rt = require('../../src/replicatedTables');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    function page(rows, has_more, max_id){
+        return { data: Buffer.from(JSON.stringify({ schema_version: 3, table: 'index_transactions', max_id, has_more, rows })) };
+    }
+
+    it('pages one table by id cursor until has_more=false, applying each non-empty page', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        db.doQuery.resolves([{ m: null }]); // replica empty -> cursor starts at 0
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).resolves(page([{ id: 1 }, { id: 2 }], true, 2));
+        get.onCall(1).resolves(page([{ id: 3 }], false, 3));
+
+        await sync._syncLookupTablesPaged('http://src:3006');
+
+        assert.strictEqual(get.callCount, 2, 'two pages fetched');
+        assert.ok(get.firstCall.args[0].indexOf('after_id=0') !== -1, 'first page from id 0');
+        assert.ok(get.secondCall.args[0].indexOf('after_id=2') !== -1, 'cursor advanced to max_id');
+        assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 2, 'each non-empty page applied');
+        // Pages are applied as a minimal single-table incremental snapshot object.
+        assert.deepStrictEqual(
+            Object.keys(applier.applyIncrementalSnapshot.firstCall.args[0].tables),
+            ['index_transactions']);
+    });
+
+    it('catch-up: starts from the replica MAX(id) so only NEW rows are fetched', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        db.doQuery.resolves([{ m: 8547252 }]); // replica already holds up to this id
+        let get = sinon.stub(axios, 'get').resolves(page([], false, 8547252));
+
+        await sync._syncLookupTablesPaged('http://src:3006');
+
+        assert.ok(get.firstCall.args[0].indexOf('after_id=8547252') !== -1, 'cursor starts at replica max id');
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false, 'empty page applies nothing');
+    });
+
+    it('throws on a schema-version mismatch (fail closed)', async function(){
+        ({ sync, db } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        db.doQuery.resolves([{ m: 0 }]);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 99, has_more: false, rows: [] })) });
+
+        await assert.rejects(() => sync._syncLookupTablesPaged('http://src:3006'), /schema mismatch/);
+    });
+
+    it('stops if has_more is true but the cursor cannot advance (no infinite spin)', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        db.doQuery.resolves([{ m: 0 }]);
+        let get = sinon.stub(axios, 'get').resolves(page([{ id: 5 }], true, 0)); // has_more but max_id <= afterId
+
+        await sync._syncLookupTablesPaged('http://src:3006');
+
+        assert.strictEqual(get.callCount, 1, 'stopped after one page despite has_more');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b-iii. truncated catch-up uses paged lookups + skip_lookups
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync truncated catch-up', function(){
+    let sync, db, applier;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('truncated chain pages lookups then fetches the block window with skip_lookups=1', async function(){
+        // makeSync builds ClientSync('bitcoin','mainnet'); depth keyed by uppercased chain:network.
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        assert.ok(sync._truncatedDepth >= 1, 'chain is in truncated mode');
+        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        db.getLastBlock.resolves(100);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(paged.calledOnce, 'lookups paged before the block window');
+        let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
+        assert.ok(snapCall.args[0].indexOf('skip_lookups=1') !== -1, 'block window fetched with skip_lookups');
+    });
+
+    it('full-history chain does NOT page lookups and uses no skip_lookups (unchanged path)', async function(){
+        ({ sync, db, applier } = makeSync()); // no depth -> _truncatedDepth 0
+        assert.strictEqual(sync._truncatedDepth, 0);
+        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        db.getLastBlock.resolves(100);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(paged.notCalled, 'no paged lookup sync for full-history chains');
+        let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
+        assert.ok(snapCall.args[0].indexOf('skip_lookups') === -1, 'no skip_lookups for full-history');
     });
 });
 

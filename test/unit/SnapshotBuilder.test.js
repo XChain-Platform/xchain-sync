@@ -320,6 +320,97 @@ describe('SnapshotBuilder', function(){
             assert.ok(parsed.tables.index_addresses, 'index_addresses present in incremental snapshot');
             assert.strictEqual(parsed.tables.index_addresses.length, 3, 'all index_addresses rows re-dumped');
         });
+
+        // skipLookups: a truncated/fast-chain replica syncs the append-only `.index`
+        // lookup tables out of band (paged), so this response must OMIT them while
+        // still streaming the block-scoped data the window needs.
+        it('skipLookups omits the .index lookup tables but keeps block-scoped data', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getFirstActionIndex.resolves(500);
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema'))
+                    return [{ table_name: 'index_addresses' }, { table_name: 'blocks' }];
+                if(/SELECT \* FROM `index_addresses`/.test(query))
+                    return [{ id: 1, address: 'a1' }];
+                if(/SELECT \* FROM `blocks`/.test(query))
+                    return [{ block_index: 90 }];
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamIncrementalSnapshot(db, 80, res, 'BTC', { skipLookups: true });
+            });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.tables.index_addresses, undefined, 'lookup table omitted under skipLookups');
+            assert.ok(parsed.tables.blocks, 'block-scoped table still streamed');
+        });
+    });
+
+    describe('streamTableRowsById', function(){
+        it('rejects a non-pageable table with 400', async function(){
+            let db = createMockDb();
+            let res = createMockRes();
+            await builder.streamTableRowsById(db, 'balances', 0, 100, res);
+            assert.ok(res.status.calledWith(400), 'only allowlisted .index tables are pageable');
+        });
+
+        it('streams an id-ordered page with max_id and has_more=false when short', async function(){
+            let db = createMockDb();
+            db.doQuery.resolves([{ id: 11, x: 'a' }, { id: 12, x: 'b' }]);
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamTableRowsById(db, 'index_transactions', 10, 50000, res);
+            });
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.table, 'index_transactions');
+            assert.strictEqual(parsed.rows.length, 2);
+            assert.strictEqual(parsed.max_id, 12, 'max_id is the last returned id');
+            assert.strictEqual(parsed.has_more, false, 'short page -> no more');
+        });
+
+        it('queries id > after_id ORDER BY id LIMIT, and sets has_more when a full page returns', async function(){
+            let db = createMockDb();
+            db.doQuery.resolves([{ id: 1 }, { id: 2 }, { id: 3 }]);
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamTableRowsById(db, 'index_transactions', 0, 3, res);
+            });
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.has_more, true, 'rows.length === limit -> more pages remain');
+            let q = db.doQuery.firstCall.args[0];
+            assert.ok(/WHERE id > \? ORDER BY id ASC LIMIT \?/.test(q), 'paged id-cursor query');
+            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [0, 3], 'after_id and limit bound as params');
+        });
+
+        it('clamps an oversized limit to the ceiling', async function(){
+            let db = createMockDb();
+            db.doQuery.resolves([]);
+            let res = new PassThrough();
+            res.on('data', () => {});
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamTableRowsById(db, 'index_transactions', 0, 9999999, res);
+            });
+            assert.strictEqual(db.doQuery.firstCall.args[1][1], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
+        });
     });
 
     // The snapshot must be read inside a single REPEATABLE READ transaction so

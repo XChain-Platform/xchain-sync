@@ -425,12 +425,53 @@ async function startApi(){
         let builder = syncService.getSnapshotBuilder();
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
 
+        // skip_lookups=1: omit the append-only `.index` lookup tables (index_*,
+        // decoder pubkeys/events). A truncated/fast-chain replica syncs those via the
+        // paged /snapshot-rows route so a single multi-million-row full-dump can't
+        // blow past the client's content limit. Default off (full bundled snapshot).
+        let skipLookups = (req.query.skip_lookups === '1' || req.query.skip_lookups === 'true');
+
         try {
             // `chain` is the coin key (e.g. 'BTC'); the builder needs it to resolve the
             // frozen ACTIVATION_DELAY_BLOCKS for the in-place updated-rows channel.
-            await builder.streamIncrementalSnapshot(db, sinceBlock, res, chain);
+            await builder.streamIncrementalSnapshot(db, sinceBlock, res, chain, { skipLookups });
         } catch(e){
             console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e);
+            if(!res.headersSent)
+                res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    // GET /snapshot-rows/:dbType/:chain/:network/:table?after_id=&limit= : one
+    // id-ordered page of an append-only lookup table (server mode). Lets a truncated
+    // replica sync a multi-million-row lookup table (e.g. index_transactions) in
+    // bounded pages instead of one full-dump that would exceed the content limit.
+    // The builder allowlists :table to the pageable `.index` set (also the
+    // SQL-identifier guard). Rate-limited as an incremental fetch.
+    app.get('/snapshot-rows/:dbType/:chain/:network/:table', incrSnapshotLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+
+        let { chain, network, table } = req.params;
+        let afterId = parseInt(req.query.after_id);
+        if(isNaN(afterId)) afterId = 0;
+        if(afterId < 0) return res.status(400).json({ error: 'Invalid after_id' });
+        let limit = parseInt(req.query.limit);
+        if(isNaN(limit)) limit = undefined; // builder applies its default
+
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+
+        let builder = syncService.getSnapshotBuilder();
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+
+        try {
+            await builder.streamTableRowsById(db, table, afterId, limit, res);
+        } catch(e){
+            console.error('[API error] /snapshot-rows/:dbType/:chain/:network/:table:', e);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error' });
         }
