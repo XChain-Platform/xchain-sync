@@ -38,9 +38,10 @@
  ********************************************************************/
 
 // Consensus block-hash scheme version. MUST stay identical to
-// xchain-indexer/src/db.js BLOCK_HASH_VERSION — see the conformance-pair banner above.
-//   v1 — hashed raw AUTO_INCREMENT lookup ids (diverged across nodes after a reorg).
-//   v2 — hashes the resolved canonical strings (address/tick/action/status); id-independent.
+// xchain-indexer/src/db.js BLOCK_HASH_VERSION; see the conformance-pair banner above.
+// The scheme hashes the resolved canonical strings (address/tick/action/status) rather
+// than raw AUTO_INCREMENT lookup ids (which diverge across nodes after a reorg); it is
+// id-independent. This resolved-string scheme is the only one that has shipped: version 1.
 // Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
 const BLOCK_HASH_VERSION = 1;
 
