@@ -1606,12 +1606,12 @@ class ClientSync {
             // with the data apply) and exposed them on applier._lastComputedRoots. Compare
             // to the source's committed roots and HALT durably on divergence, the same as
             // the state_hash check. APPLY-TIME ONLY (the roots were computed against the
-            // just-applied replica state). Phase 1 verifies balances_root + block_merkle_root
-            // only; stakes_root/state_root are deferred until the BTC stake-weight query is
-            // ported (the source still carries state_root, so enabling it later is no wire
-            // change). A NULL event.balances_root (block before the flag-day) or a null
-            // _lastComputedRoots (block skipped/duplicate this apply, already verified when
-            // first applied) is skipped, never a divergence.
+            // just-applied replica state). Verifies balances_root + block_merkle_root +
+            // state_root; state_root folds the BTC-only stakes_root (now recomputed by the
+            // follower, see stateCommitment.gatherStakeEntries), so a stakes divergence
+            // surfaces as a state_root mismatch. A NULL event.balances_root (block before
+            // the flag-day) or a null _lastComputedRoots (block skipped/duplicate this
+            // apply, already verified when first applied) is skipped, never a divergence.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
                     && event.balances_root != null && this.applier._lastComputedRoots){
                 let computed   = this.applier._lastComputedRoots;
@@ -1620,6 +1620,8 @@ class ClientSync {
                     mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
                 if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
                     mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
+                if(event.state_root != null && computed.state_root !== event.state_root)
+                    mismatches.push({ field: 'state_root', a: event.state_root, b: computed.state_root });
                 if(mismatches.length){
                     await this._haltOnDivergence(event.block_index, mismatches,
                         this.sources.slice(0, 1), 'state-commitment-divergence');

@@ -292,6 +292,29 @@ describe('Rollback coverage guard @regression', function(){
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
 
+    // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
+    // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
+    // byte-identical to xchain-indexer/src/db.js _stakeWeightsSql, or the follower's
+    // stakes_root (hence state_root) diverges from the source and the state-commitment
+    // check false-halts. Both files carry the method verbatim; this extracts the body
+    // and asserts whitespace-normalised equality. If you edit one, edit the other.
+    it('_stakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function stakeSql(p){
+            const src = fs.readFileSync(p, 'utf8');
+            const m = src.match(/_stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
+            assert.ok(m, `_stakeWeightsSql not found in ${p}`);
+            return m[1].replace(/\s+/g, ' ').trim();
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/db.js');
+        let indexerPath;
+        try { indexerPath = require('path').resolve(__dirname, '../../../xchain-indexer/src/db.js'); }
+        catch(e){ this.skip(); return; }
+        if(!fs.existsSync(indexerPath)) this.skip();
+        assert.strictEqual(stakeSql(syncPath), stakeSql(indexerPath),
+            '_stakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (the stakes_root is consensus-critical)');
+    });
+
     // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
     // in-place reset on SURVIVING credits/unstakes/contract_unstakes rows. Those tables are
     // already in both rollback lists, so the table-membership guard above structurally cannot

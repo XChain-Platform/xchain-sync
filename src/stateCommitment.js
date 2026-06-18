@@ -29,12 +29,13 @@
  *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
  *     normalises both to the identical leaf value. xchain-sync has no mathjs
  *     dependency.
- *   - stakes_root is NOT recomputed here yet (Phase 1): it is BTC-only, low-churn,
- *     and its stake-weight query is a volatile consensus surface. The placeholder
- *     EMPTY_SMT_ROOT is stored and NOT compared to the source; only balances_root
- *     + block_merkle_root are verified. The TODO below is where the ported BTC
- *     stake-weight query slots in to enable full state_root verification (no wire
- *     change: the source already carries state_root).
+ *   - stakes_root IS recomputed here (BTC-only) from the ported _stakeWeightsSql +
+ *     the frozen BTC capability config (consensus-constants.js), mirroring the
+ *     indexer's gatherStakeEntries. Non-BTC chains commit the EMPTY_SMT_ROOT.
+ *     ClientSync now verifies balances_root + block_merkle_root + state_root (the
+ *     last folds stakes_root). The stake-weight query is a consensus surface, so
+ *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
+ *     drift guard in test/unit/rollback-coverage.test.js.
  *
  * The PersistentSMT / DbNodeStore / MemoryNodeStore engine, the leaf encoders,
  * buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to the
@@ -46,6 +47,7 @@
 'use strict';
 
 const M = require('./merkle.js');
+const CC = require('./consensus-constants.js');
 const { minimalDecimal } = require('./balance-helpers.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT
@@ -257,6 +259,31 @@ async function buildFullBalancesRoot(db, chain, network){
     return root;
 }
 
+// ---- Stakes sub-tree (BTC-only, sec.4.1) ------------------------------------
+// Mirror of the indexer's gatherStakeEntries: one leaf per (pubkey, capability)
+// over the frozen BTC capability set, source-deduped weight via db
+// getStakeWeightsByCapability (the ported _stakeWeightsSql), keyed by canonical
+// pubkey+capability strings. Non-BTC chains commit the empty-SMT root (capability
+// staking is BTC-only). The capability set + per-capability MIN_STAKE floors and
+// the VALIDATOR_QUERY_LIMIT cap come from consensus-constants.js, mirrored from
+// the indexer BTC config; any drift forks the stakes_root.
+async function gatherStakeEntries(db, chain, blockIndex){
+    if(chain !== 'BTC') return [];
+    const caps  = CC.btcStakeCapabilities();
+    const limit = CC.VALIDATOR_QUERY_LIMIT;
+    const entries = [];
+    for(const capability of Object.keys(caps)){
+        const rows = await db.getStakeWeightsByCapability(capability, blockIndex, caps[capability], limit);
+        for(const r of (rows || [])){
+            if(!r || r.pubkey == null) continue;
+            const leaf = _leafOrNull(r.weight);
+            if(leaf == null) continue;   // zero weight cannot qualify; defensive
+            entries.push([ M.toHex(M.stakeKey(String(r.pubkey), capability)), leaf ]);
+        }
+    }
+    return entries;
+}
+
 // ---- Follower orchestrator --------------------------------------------------
 // Compute + persist the per-block roots over the REPLICA, INSIDE the apply txn
 // (ClientApplier runs this after the row inserts + balance rebuild, before
@@ -266,10 +293,9 @@ async function buildFullBalancesRoot(db, chain, network){
 // boundary block the touched set is ignored and the balances tree is fully
 // initialized from pre-existing state.
 //
-// stakes_root is the empty-SMT placeholder in Phase 1 (see header). The returned
-// state_root therefore folds an empty stakes sub-root; ClientSync compares only
-// balances_root + block_merkle_root, never state_root/stakes_root, until the BTC
-// stake-weight query is ported.
+// stakes_root is rebuilt fresh each block from the BTC capability stake set
+// (gatherStakeEntries; EMPTY on non-BTC), so the returned state_root is fully
+// verifiable; ClientSync compares balances_root + block_merkle_root + state_root.
 async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys, isActivationBlock){
     const smt = new PersistentSMT(new DbNodeStore(db));
 
@@ -289,10 +315,14 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
         balancesRoot = root;
     }
 
-    // stakes_root: Phase-1 placeholder (empty SMT) on every chain. TODO(Phase-1.5):
-    // port xchain-indexer/src/db.js getStakeWeightsByCapability + BTC STAKING.CAPABILITIES
-    // and rebuild the BTC stakes tree here to enable full state_root verification.
-    const stakesRoot = EMPTY_ROOT_HEX;
+    // stakes_root: BTC-only; non-BTC commit the empty-SMT root. Rebuilt fresh from
+    // the authoritative capability stake set (small, bounded by VALIDATOR_QUERY_LIMIT),
+    // matching the indexer's gatherStakeEntries.
+    let stakesRoot = EMPTY_ROOT_HEX;
+    if(chain === 'BTC'){
+        const stakeEntries = await gatherStakeEntries(db, chain, blockIndex);
+        stakesRoot = await smt.buildFull(stakeEntries);
+    }
 
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
     const blockMerkleRoot = await computeBlockMerkleRoot(db, blockIndex);
@@ -319,7 +349,11 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
 // forward.
 async function seedSnapshotRoots(db, chain, network, blockHeight){
     const balancesRoot    = await buildFullBalancesRoot(db, chain, network);
-    const stakesRoot      = EMPTY_ROOT_HEX;
+    let   stakesRoot      = EMPTY_ROOT_HEX;
+    if(chain === 'BTC'){
+        const smt = new PersistentSMT(new DbNodeStore(db));
+        stakesRoot = await smt.buildFull(await gatherStakeEntries(db, chain, blockHeight));
+    }
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
     const blockMerkleRoot = await computeBlockMerkleRoot(db, blockHeight);
     await db.doQuery(
@@ -340,6 +374,7 @@ module.exports = {
     PersistentSMT,
     assembleStateRoot,
     getNetBalance,
+    gatherStakeEntries,
     computeBlockMerkleRoot,
     buildFullBalancesRoot,
     computeFollowerRoots,

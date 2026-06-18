@@ -996,6 +996,92 @@ class Database {
         return rows.length > 0 ? Number(rows[0].id) : null;
     }
 
+    // Light-client stakes_root support (SPV spec sec.4.1, BTC-only). Source-deduped
+    // capability stake-weight query, ported VERBATIM from xchain-indexer/src/db.js
+    // _stakeWeightsSql: it MUST produce a byte-identical SQL string + arg order or
+    // the follower's stakes_root diverges from the indexer's committed root and the
+    // state-commitment check false-halts. The cross-repo drift guard in
+    // test/unit/rollback-coverage.test.js locks the two together. Reads only tables
+    // xchain-sync replicates (stakes, delegations, stake_key_revocations,
+    // capability_slash_events, index_addresses, index_pubkeys).
+    _stakeWeightsSql(valid_id, blockIndex, minStake){
+        // Precision: DECIMAL(30,8) (22 integer digits, 8 fractional) is sufficient because the
+        // staking tick is XCHAIN at 8 decimals and total supply stays far below 10^22; every
+        // same-version node truncates identically, so the stake-weight tally is deterministic.
+        // If a >8-decimal staking tick is ever introduced, widen these casts to
+        // DECIMAL(60, <tick-decimals>) AND pin a consistent sql_mode fleet-wide (an overflow at
+        // >22 integer digits is otherwise sql_mode-dependent) before that tick can stake.
+        // Permanent disqualification - see _effectiveCapabilitySetSql. Excludes equivocation-
+        // slashed keys from the effective-key set (both stake-key and delegated-key branches)
+        // so the source-deduped stake-weight tally matches the count-quorum set exactly.
+        const slashExcl = (keyCol) =>
+            `AND NOT EXISTS (SELECT 1 FROM capability_slash_events cse
+                             WHERE cse.signing_pubkey_id = ${keyCol} AND cse.block_index <= ?)`;
+        let sql = `SELECT ip.pubkey AS pubkey,
+                          sa.address AS source,
+                          q.total    AS weight
+                   FROM (
+                       SELECT s.source_id AS source_id,
+                              SUM(CAST(s.amount AS DECIMAL(30,8))) AS total
+                       FROM stakes s
+                       WHERE s.status_id = ?
+                         AND s.activation_block <= ?
+                         AND (s.deactivation_block IS NULL OR s.deactivation_block > ?)
+                       GROUP BY s.source_id
+                       HAVING total >= CAST(? AS DECIMAL(30,8))
+                   ) q
+                   JOIN index_addresses sa ON sa.id = q.source_id
+                   JOIN (
+                       SELECT s2.source_id AS source_id, s2.signing_pubkey_id AS pubkey_id
+                       FROM stakes s2
+                       WHERE s2.status_id = ?
+                         AND s2.activation_block <= ?
+                         AND (s2.deactivation_block IS NULL OR s2.deactivation_block > ?)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM stake_key_revocations r
+                             WHERE r.source_id = s2.source_id
+                               AND r.signing_pubkey_id = s2.signing_pubkey_id
+                               AND r.status_id = ?
+                               AND r.deactivation_block <= ?
+                               AND r.action_index > s2.action_index)
+                         ${slashExcl('s2.signing_pubkey_id')}
+                       GROUP BY s2.source_id, s2.signing_pubkey_id
+                       UNION
+                       SELECT d.source_id AS source_id, d.signing_pubkey_id AS pubkey_id
+                       FROM delegations d
+                       WHERE d.status_id = ?
+                         AND d.activation_block <= ?
+                         AND (d.deactivation_block IS NULL OR d.deactivation_block > ?)
+                         ${slashExcl('d.signing_pubkey_id')}
+                   ) ek ON ek.source_id = q.source_id
+                   JOIN index_pubkeys ip ON ip.id = ek.pubkey_id`;
+        let args = [valid_id, blockIndex, blockIndex, minStake,
+                    valid_id, blockIndex, blockIndex, valid_id, blockIndex, blockIndex,
+                    valid_id, blockIndex, blockIndex, blockIndex];
+        return { sql, args };
+    }
+
+    // Source-keyed capability stake weights at a block, mirroring the indexer's
+    // getStakeWeightsByCapability BTC path (the follower only builds the BTC
+    // stakes_root, so the off-BTC hub-mirror branch is not needed here). minStake
+    // is the capability's frozen MIN_STAKE floor; limit is the frozen
+    // VALIDATOR_QUERY_LIMIT. Same ORDER BY + cap as the source so the selected set
+    // is identical even on truncation.
+    async getStakeWeightsByCapability(capability, blockIndex, minStake, limit){
+        let valid_id = await this.getStatusId('valid');
+        if(valid_id === null) return [];
+        let sw = this._stakeWeightsSql(valid_id, blockIndex, String(minStake));
+        let query = `${sw.sql} ORDER BY source, pubkey LIMIT ?`;
+        let rows = await this.doQuery(query, [...sw.args, limit]);
+        if(rows.length >= limit)
+            console.warn('getStakeWeightsByCapability(' + capability + ') hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
+        return rows.map(r => ({
+            pubkey: String(r.pubkey),
+            source: String(r.source),
+            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+        }));
+    }
+
     // Get all rows from a table for a given block (block_index-scoped tables).
     // ORDER BY block_index, then by the first column for deterministic ordering
     // across sources with differing insert histories (matches the snapshot path).
