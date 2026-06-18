@@ -34,6 +34,7 @@ const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { activationDelayBlocks } = require('./consensus-constants');
+const { isStateCommitmentActive } = require('./state_commitment_activation');
 
 class ServerPoller {
 
@@ -288,6 +289,23 @@ class ServerPoller {
             // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
             // for blocks indexed before the feature (the follower then skips the check).
             payload.state_hash    = hashRow.state_hash;
+
+            // Light-client state-commitment roots (SPV spec sec.4-5). Top-level fields
+            // ONLY, like state_hash: NOT in payload.data (the follower computes its own
+            // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
+            // before the flag-day (the follower then skips the check). The follower
+            // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
+            // for the later full-state_root verification (no wire change needed then).
+            if(isStateCommitmentActive(block_index, this.network)){
+                let roots = await this.db.getStateRootsRow(this.chain, this.network, block_index);
+                payload.balances_root    = roots ? roots.balances_root    : null;
+                payload.block_merkle_root = roots ? roots.block_merkle_root : null;
+                payload.state_root       = roots ? roots.state_root       : null;
+            } else {
+                payload.balances_root    = null;
+                payload.block_merkle_root = null;
+                payload.state_root       = null;
+            }
 
             // Replicate the per-block transparency-log row (sync_meta) live. The
             // table is otherwise only carried by snapshots (SnapshotBuilder includes

@@ -689,6 +689,16 @@ class ClientSync {
             }
         }
 
+        // Decoder: seed + converge `dispensers` (never carried by the incremental
+        // block window or the id-cursor lookup paging) and verify the replica is
+        // row-complete against the source. Without this a truncated decoder replica
+        // starts with ZERO dispenser rows and no completeness signal ever fires.
+        // Best-effort; the reconcile leaves the local table intact on failure.
+        if(this.dbType === 'decoder'){
+            await this._reconcileDispensers(source);
+            await this._verifyDecoderCompleteness(source, this.lastAppliedBlock);
+        }
+
         console.log('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
             ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
             ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
@@ -960,6 +970,24 @@ class ClientSync {
                     }
                 }
             }
+
+            // Decoder: converge `dispensers` and verify row counts. dispensers
+            // cannot ride the block stream or the id-cursor lookup paging, so it
+            // drifts between reconciles; re-dump + atomic replace every Nth catch-up
+            // (cheap: the table is bounded by the decoder's hard-purge depth), and
+            // INCLUDE dispensers in the completeness check only on those same cycles
+            // so the interim drift does not spam TABLE_COUNT_MISMATCH. Other decoder
+            // tables converge via the block stream / full-dumps and are checked on
+            // every catch-up. Best-effort; gated to the decoder dbType.
+            if(this.dbType === 'decoder'){
+                this._catchUpCount = (this._catchUpCount || 0) + 1;
+                let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
+                if(isNaN(every) || every < 1) every = 20;
+                let didReconcile = (this._catchUpCount % every === 0);
+                if(didReconcile) await this._reconcileDispensers(source);
+                await this._verifyDecoderCompleteness(source, this.lastAppliedBlock,
+                    didReconcile ? null : new Set(['dispensers']));
+            }
         } catch(e){
             console.error('Incremental catch-up failed:', e);
             // Schema-gap failures are fixable right now: heal and retry once.
@@ -1049,14 +1077,14 @@ class ClientSync {
     // Best-effort and additive: a shortfall is logged loudly so operators see an
     // incomplete bootstrap; a transient /status fetch failure is swallowed so it
     // doesn't abort an otherwise-good snapshot.
-    async _verifyDecoderCompleteness(source, blockHeight){
+    async _verifyDecoderCompleteness(source, blockHeight, excludeTables){
         if(this.dbType !== 'decoder') return;
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { timeout: 10000 });
             let remoteStatus = response.data;
 
-            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
+            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts, excludeTables);
             if(countMismatches.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
                     '; decoder snapshot may be truncated or incomplete:');
@@ -1076,10 +1104,14 @@ class ClientSync {
     // rows are ignored: only source-ahead deltas signal incomplete replication.
     // Best-effort: a table that can't be counted locally (absent in this replica's
     // schema) is reported as a full shortfall rather than silently skipped.
-    async _verifyTableCounts(remoteCounts){
+    async _verifyTableCounts(remoteCounts, excludeTables){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
         for(let table of Object.keys(remoteCounts)){
+            // Callers can exclude a table whose drift is expected between convergence
+            // passes (e.g. `dispensers` between replace-table reconciles) so a known,
+            // separately-tracked divergence does not spam TABLE_COUNT_MISMATCH.
+            if(excludeTables && excludeTables.has(table)) continue;
             // table names here come straight from the remote source's /status
             // payload: validate before they reach getTableCount's identifier
             // interpolation, mirroring the schema-application loop above. Skip
@@ -1103,6 +1135,51 @@ class ClientSync {
                 mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
         }
         return mismatches;
+    }
+
+    // Re-fetch the decoder `dispensers` table in full and replace the local copy.
+    // dispensers cannot ride the block stream or the id-cursor lookup paging (no
+    // monotonic id; the decoder soft-expires then hard-purges rows), so a truncated
+    // bootstrap never seeds it and an incremental catch-up lets it drift. This keyset-
+    // paged re-dump + atomic replace (ClientApplier.applyDispensersReplace) is the
+    // convergence path; _verifyDecoderCompleteness then verifies row counts without
+    // false alarms. Decoder-only, best-effort: any fetch/parse failure aborts WITHOUT
+    // touching the local table (the replace runs only once every page is in hand).
+    async _reconcileDispensers(source){
+        if(this.dbType !== 'decoder') return;
+        if(!source) return;
+        try {
+            let all = [];
+            let afterTx = null, afterAddr = null;
+            let pageSize = this._lookupPageSize();
+            for(let guard = 0; guard < 1000000; guard++){
+                let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
+                    '?limit=' + pageSize +
+                    (afterTx !== null ? '&after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
+                let response = await axios.get(url, {
+                    responseType: 'arraybuffer',
+                    timeout: 300000,
+                    decompress: true,
+                    maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+                });
+                let jsonStr = response.data;
+                if(Buffer.isBuffer(jsonStr)){
+                    try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+                }
+                let page = JSON.parse(jsonStr.toString());
+                let rows = Array.isArray(page.rows) ? page.rows : [];
+                for(let r of rows) all.push(r);
+                if(!page.has_more || rows.length === 0) break;
+                afterTx = page.max_tx; afterAddr = page.max_addr;
+            }
+            await this._withApplyLock(() => this.applier.applyDispensersReplace(all));
+            console.log('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
+                ' for ' + this.chain + '/' + this.network);
+        } catch(e){
+            // Best-effort: leave the existing local dispensers intact on any failure.
+            console.error('Dispensers reconcile failed against ' + source +
+                ' (local table left intact):', (e && e.message) ? e.message : e);
+        }
     }
 
     // Connect WebSocket to all sources for live sync
@@ -1521,6 +1598,31 @@ class ClientSync {
                     await this._haltOnDivergence(event.block_index,
                         [{ field: 'state_hash', a: event.state_hash, b: localState }],
                         this.sources.slice(0, 1), 'state-hash-divergence');
+                    return; // halted: do not advance lastAppliedBlock
+                }
+            }
+            // Light-client state-commitment check (SPV spec sec.4-5). applyBlock recomputed
+            // + persisted the per-block SMT roots over the replica INSIDE its txn (atomic
+            // with the data apply) and exposed them on applier._lastComputedRoots. Compare
+            // to the source's committed roots and HALT durably on divergence, the same as
+            // the state_hash check. APPLY-TIME ONLY (the roots were computed against the
+            // just-applied replica state). Phase 1 verifies balances_root + block_merkle_root
+            // only; stakes_root/state_root are deferred until the BTC stake-weight query is
+            // ported (the source still carries state_root, so enabling it later is no wire
+            // change). A NULL event.balances_root (block before the flag-day) or a null
+            // _lastComputedRoots (block skipped/duplicate this apply, already verified when
+            // first applied) is skipped, never a divergence.
+            if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
+                    && event.balances_root != null && this.applier._lastComputedRoots){
+                let computed   = this.applier._lastComputedRoots;
+                let mismatches = [];
+                if(computed.balances_root !== event.balances_root)
+                    mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
+                if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
+                    mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
+                if(mismatches.length){
+                    await this._haltOnDivergence(event.block_index, mismatches,
+                        this.sources.slice(0, 1), 'state-commitment-divergence');
                     return; // halted: do not advance lastAppliedBlock
                 }
             }

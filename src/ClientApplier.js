@@ -7,7 +7,7 @@
  *
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md. A commercial
- * license (without AGPL source-disclosure terms) is available —
+ * license (without AGPL source-disclosure terms) is available -
  * contact legal@dankest.llc.
  *
  **********************************************************************
@@ -24,17 +24,19 @@ const balanceHelpers      = require('./balance-helpers');
 const { SCHEMA_VERSION }  = require('./schema-version');
 const { decodeValue }     = require('./wireCodec');
 const { rederiveEscrowGate } = require('./ClientRollback');
+const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
+const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
-// to a full recompute anyway) — fall back to the unscoped rebuild.
+// to a full recompute anyway); fall back to the unscoped rebuild.
 const MAX_SCOPED_REBUILD_IDS = 1000;
 
 // Tables whose presence in a block/catch-up payload can change a token's
 // ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
 // closed state). When any appears, re-derive tokens.escrow_action_index from the
-// already-replicated offer/status tables — the forward-apply counterpart to the
-// reorg re-derive in ClientRollback (the gate is never carried on the wire because
+// already-replicated offer/status tables (the forward-apply counterpart to the
+// reorg re-derive in ClientRollback; the gate is never carried on the wire because
 // it is fully replica-derivable). See _maybeRederiveEscrow.
 const ESCROW_TRIGGER_TABLES = new Set([
     'orders', 'order_statuses', 'swaps', 'swap_statuses',
@@ -43,9 +45,17 @@ const ESCROW_TRIGGER_TABLES = new Set([
 
 class ClientApplier {
 
-    constructor(db, util) {
+    constructor(db, util, chain, network) {
         this.db   = db;
         this.util = util;
+        // chain (COIN) + network are needed to key the light-client state_tree_roots
+        // rows and the SMT balance/escrow keys (SPV spec sec.4). null on callers that
+        // predate the feature; the state-commitment path is then simply skipped.
+        this.chain   = chain || null;
+        this.network = network || null;
+        // Roots the most recent applyBlock computed over the replica, for ClientSync's
+        // VERIFY_STATE_COMMITMENT comparison; null when the block predates the flag-day.
+        this._lastComputedRoots = null;
 
         // Index/dedup tables use INSERT IGNORE (rows may already exist).
         // pubkeys (decoder DB) is included: incremental snapshots and per-block
@@ -72,6 +82,12 @@ class ClientApplier {
 
     // Apply a single block payload from a WebSocket event
     async applyBlock(payload){
+        // Clear any prior block's computed roots up front: on an early return
+        // (malformed payload or an already-applied duplicate) ClientSync must NOT
+        // compare stale roots against this event. A null here means "not recomputed
+        // this apply" and the state-commitment check is skipped, never treated as a
+        // divergence (a duplicate block was already verified when first applied).
+        this._lastComputedRoots = null;
         if(!payload || !payload.data || !payload.block_index) return;
 
         // Check if this block already exists (duplicate detection)
@@ -95,14 +111,14 @@ class ClientApplier {
             // action-scoped JOIN (the balances table has no action_index
             // column), so the only way the replica's balances table can stay
             // consistent with credits/debits during live sync is to recompute
-            // it from the (now-updated) credit/debit data — scoped to the ids
-            // the new rows touched where possible. Indexer-shaped DBs only —
+            // it from the (now-updated) credit/debit data, scoped to the ids
+            // the new rows touched where possible. Indexer-shaped DBs only;
             // decoder has no balances/credits/debits tables.
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer'){
                 // Apply in-place mutations to SURVIVING rows (deactivation_block,
                 // SLASH amounts, request_status) the action-scoped insert loop above
-                // can't reach — they live on rows created by an earlier block. Without
+                // can't reach (they live on rows created by an earlier block). Without
                 // this UPSERT every forward in-place mutation is silently dropped.
                 if(payload.updated_rows)
                     await this._applyUpdatedRows(payload.updated_rows);
@@ -111,6 +127,23 @@ class ClientApplier {
                 await this._maybeRederiveEscrow(data);
                 if(data.credits || data.debits)
                     await this._rebuildBalancesTouchedBy(data.credits, data.debits);
+                // Light-client state commitment (SPV spec sec.4-5): recompute + persist
+                // the per-block SMT roots over the replica INSIDE this txn (atomic with
+                // the data apply, so block B+1's incremental update always finds B's
+                // balances_root). The touched (address,tick) set comes from the applied
+                // event rows (credits/debits/escrows; cooldown refunds already merged by
+                // the source), mirroring the indexer's ledger-choke-point set. ClientSync
+                // reads _lastComputedRoots after commit and HALTs on divergence.
+                if(isStateCommitmentActive(payload.block_index, this.network)){
+                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network);
+                    let touchedKeys  = isActivation ? [] : await this._collectSmtTouchedKeys(data);
+                    this._lastComputedRoots = await computeFollowerRoots(
+                        this.db, this.chain, this.network, payload.block_index, touchedKeys, isActivation);
+                } else {
+                    this._lastComputedRoots = null;
+                }
+            } else {
+                this._lastComputedRoots = null;
             }
             await this.db.commitTransaction();
         } catch(e){
@@ -122,9 +155,9 @@ class ClientApplier {
 
     // Collect the distinct (keyField, tick_id) ids touched by freshly applied
     // rows so the derived-aggregate rebuild can be limited to them. Returns
-    // null when the rows can't be scoped — a row missing either id (NULL ids
+    // null when the rows can't be scoped: a row missing either id (NULL ids
     // can't be matched by an IN-list), or more distinct ids than an IN-list
-    // should carry — in which case the caller falls back to the full rebuild.
+    // should carry (in which case the caller falls back to the full rebuild).
     _collectRebuildScope(rowArrays, keyField){
         let keys  = new Set();
         let ticks = new Set();
@@ -150,6 +183,48 @@ class ClientApplier {
         await this._rebuildBalances(scope);
     }
 
+    // Distinct (address, tick) string pairs the applied block touched, for the
+    // light-client SMT update (SPV spec sec.4). Mirrors the indexer's _smtTouched
+    // set, which captures EXACT pairs at its ledger choke point. Collects pairs
+    // (not the address x tick cross-product) from the applied credits/debits/escrows
+    // rows (the source has already merged backdated cooldown-refund credits into
+    // data.credits), skips native-coin rows with a NULL address_id/tick_id (matching
+    // the indexer guard `address != null && tick != null && tick !== ''`), and
+    // resolves the surrogate ids to canonical strings. NO cap: every touched pair
+    // must be recomputed (unlike the balance-cache rebuild, which can fall back to a
+    // full recompute). Runs inside the apply txn so freshly-inserted index rows resolve.
+    async _collectSmtTouchedKeys(data){
+        let pairs   = new Set();
+        let addrIds = new Set();
+        let tickIds = new Set();
+        for(let arr of [data.credits, data.debits, data.escrows]){
+            for(let row of (arr || [])){
+                if(!row || row.address_id == null || row.tick_id == null) continue;
+                pairs.add(row.address_id + '\t' + row.tick_id);
+                addrIds.add(row.address_id);
+                tickIds.add(row.tick_id);
+            }
+        }
+        if(!pairs.size) return [];
+        let aIn = Array.from(addrIds);
+        let tIn = Array.from(tickIds);
+        let addrRows = await this.db.doQuery(
+            'SELECT id, address FROM index_addresses WHERE id IN (' + aIn.map(() => '?').join(',') + ')', aIn);
+        let tickRows = await this.db.doQuery(
+            'SELECT id, tick FROM index_tickers WHERE id IN (' + tIn.map(() => '?').join(',') + ')', tIn);
+        let addrMap = new Map(); for(let r of addrRows) addrMap.set(String(r.id), r.address);
+        let tickMap = new Map(); for(let r of tickRows) tickMap.set(String(r.id), r.tick);
+        let out = [];
+        for(let key of pairs){
+            let parts   = key.split('\t');
+            let address = addrMap.get(parts[0]);
+            let tick    = tickMap.get(parts[1]);
+            if(address == null || tick == null || tick === '') continue;
+            out.push({ address: address, tick: tick });
+        }
+        return out;
+    }
+
     // Recompute the balances table from the current credits/debits rows.
     // SQL lives in balance-helpers so ClientRollback uses the same query.
     // scope (optional): { keys, ticks } from _collectRebuildScope; null/absent
@@ -160,7 +235,7 @@ class ClientApplier {
                 scope ? { addressIds: scope.keys, tickIds: scope.ticks } : undefined);
         } catch(e){
             if(e.errno !== 1146) throw e;
-            // Tables may not exist on a decoder replica — the dbType guard above
+            // Tables may not exist on a decoder replica. The dbType guard above
             // should prevent this from being reached, but the catch keeps the
             // applier's containing transaction from blowing up if it is.
         }
@@ -177,7 +252,7 @@ class ClientApplier {
         let dbType = (this.db && this.db.dbType) || 'indexer';
         let expectedVersion = SCHEMA_VERSION[dbType];
         if(snapshotData.schema_version !== expectedVersion){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + ' — restart the validator after upgrading the server');
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
         }
 
         console.log('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
@@ -209,6 +284,13 @@ class ClientApplier {
                     console.log('  ' + table + ': ' + rows.length + ' rows');
             }
 
+            // Seed the light-client SMT at the snapshot tip so the first live block
+            // (block_height+1) finds a prior balances_root (SPV spec sec.4.3). Full
+            // build over the replicated state; block_merkle_root is NULL (state-at-
+            // height, not the tip block's content rows). Indexer + post-flag-day only.
+            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network))
+                await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
+
             await this.db.commitTransaction();
             console.log('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
@@ -225,7 +307,7 @@ class ClientApplier {
         let dbType = (this.db && this.db.dbType) || 'indexer';
         let expectedVersion = SCHEMA_VERSION[dbType];
         if(snapshotData.schema_version !== expectedVersion){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + ' — restart the validator after upgrading the server');
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
         }
 
         console.log('Applying incremental snapshot (since block ' + snapshotData.since_block + ')...');
@@ -240,11 +322,10 @@ class ClientApplier {
             }
             // Rebuild balances if this snapshot touched credits/debits. The
             // incremental catch-up inserts new credit/debit rows, but the
-            // balances table is a derived aggregate — without recomputing it
+            // balances table is a derived aggregate. Without recomputing it
             // here the replica's balances stay stale until the next live block
             // happens to touch credits/debits (mirrors applyBlock above).
-            // Indexer-shaped DBs only — decoder has no balances table.
-            let dbType = (this.db && this.db.dbType) || 'indexer';
+            // Indexer-shaped DBs only; decoder has no balances table.
             if(dbType === 'indexer'){
                 // Mirror applyBlock: in-place mutations to below-window surviving rows
                 // ride a separate updated_rows map (the incremental's action_index
@@ -254,12 +335,44 @@ class ClientApplier {
                 await this._maybeRederiveEscrow(snapshotData.tables);
                 if(snapshotData.tables.credits || snapshotData.tables.debits)
                     await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
+                // Re-seed the SMT at the new tip: the incremental window's blocks never
+                // had per-block roots computed, so without this the next live block would
+                // find no prior balances_root. Full build over the now-complete replica
+                // (correct only on a non-truncated replica; truncated / incremental-
+                // bootstrapped replicas must run VERIFY_STATE_COMMITMENT=false).
+                if(isStateCommitmentActive(snapshotData.block_height, this.network))
+                    await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
             console.error('Error applying incremental snapshot:', e);
+            throw e;
+        }
+    }
+
+    // Replace the decoder `dispensers` table wholesale from a freshly-fetched full
+    // set. dispensers is excluded from the block stream and the id-cursor lookup
+    // paging (no monotonic id; the decoder soft-expires then hard-purges rows), so
+    // neither the incremental catch-up nor the truncated bootstrap can converge it.
+    // The client re-fetches the full table (ClientSync._reconcileDispensers) and
+    // swaps it in atomically: DELETE + INSERT inside one transaction, so a reader
+    // outside the txn never observes an empty table and a mid-apply failure rolls
+    // back to the prior contents. dispensers is not in ignoreTables, so the post-
+    // DELETE INSERT is a plain INSERT (no PK collisions against the emptied table).
+    // Decoder-only; a no-op (and a safety guard) on indexer-shaped DBs.
+    async applyDispensersReplace(rows){
+        if((this.db && this.db.dbType) !== 'decoder') return;
+        if(!Array.isArray(rows)) return;
+        await this.db.beginTransaction();
+        try {
+            await this.db.doQuery('DELETE FROM `dispensers`');
+            if(rows.length) await this._insertRows('dispensers', rows);
+            await this.db.commitTransaction();
+        } catch(e){
+            await this.db.rollbackTransaction();
+            console.error('Error applying dispensers reconcile:', e);
             throw e;
         }
     }
@@ -318,8 +431,8 @@ class ClientApplier {
     // Apply the in-place "updated rows" channel: each entry is the CURRENT full
     // state of a surviving row the source mutated in place (deactivation_block,
     // SLASH amount, request_status). These rows already exist on the replica with
-    // their stale values, so they must be UPSERTed (INSERT … ON DUPLICATE KEY
-    // UPDATE) — a plain INSERT would collide on the row's UNIQUE action_index.
+    // their stale values, so they must be UPSERTed (INSERT ... ON DUPLICATE KEY
+    // UPDATE); a plain INSERT would collide on the row's UNIQUE action_index.
     // updated is a { table: [rows] } map; an old payload simply omits it.
     async _applyUpdatedRows(updated){
         if(!updated || typeof updated !== 'object') return;
@@ -330,7 +443,7 @@ class ClientApplier {
         }
     }
 
-    // INSERT … ON DUPLICATE KEY UPDATE for a batch of full rows. Every column is
+    // INSERT ... ON DUPLICATE KEY UPDATE for a batch of full rows. Every column is
     // written on both insert and update, so an already-present surviving row has
     // its mutated columns overwritten to the source's current values while a
     // not-yet-present row (e.g. created and mutated within the same window) is
@@ -379,7 +492,7 @@ class ClientApplier {
     // Re-derive tokens.escrow_action_index from the already-replicated offer/status
     // tables when this payload moved any escrow-relevant row. The gate is fully
     // replica-derivable (it is never carried on the wire), so the forward-apply
-    // path runs the SAME re-derive ClientRollback runs on reorg — keeping source
+    // path runs the SAME re-derive ClientRollback runs on reorg, keeping source
     // and replica byte-identical with no new payload field. `tables` is the payload's
     // table map (live block `data` or incremental `tables`).
     async _maybeRederiveEscrow(tables){
@@ -392,7 +505,7 @@ class ClientApplier {
         try {
             await rederiveEscrowGate(this.db);
         } catch(e){
-            // Tables/columns may not exist on older/thin replica schemas — skip.
+            // Tables/columns may not exist on older/thin replica schemas; skip.
         }
     }
 }

@@ -413,6 +413,22 @@ describe('Rollback coverage guard @regression', function(){
             'stateHash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
     });
 
+    // Light-client state commitment (SPV spec sec.4-5): merkle.js (the SMT + leaf
+    // encoders) and state_commitment_activation.js (the flag-day map) are copied
+    // VERBATIM from xchain-indexer. The follower recomputes the per-block roots from
+    // these and HALTs on divergence, so any drift turns the divergence detector into
+    // a false-halt generator. Lock both byte-identical (skip if the sibling repo absent).
+    for(const twin of ['merkle.js', 'state_commitment_activation.js']){
+        it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
+            const fs = require('fs'), pathMod = require('path');
+            const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
+            const indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/' + twin);
+            if(!fs.existsSync(indexerPath)) this.skip();
+            assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+                twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+        });
+    }
+
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
     // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
     // block columns, or the integrity hash covers a different row set than it protects.

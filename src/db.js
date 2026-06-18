@@ -478,8 +478,11 @@ class Database {
                 let baseRows = await this.doQuery('SELECT COALESCE(MAX(id), 0) AS base FROM `' + table + '`');
                 let base = (baseRows && baseRows.length) ? Number(baseRows[0].base || baseRows[0].BASE || 0) : 0;
                 // Seed the counter at MAX(id); the per-row `@n := @n + 1` yields
-                // base+1, base+2, ... for each id=0 row in id order. Ordering by a
-                // stable column keeps the assignment deterministic across replicas.
+                // base+1, base+2, ... for each id=0 row. The ORDER BY is a no-op
+                // tiebreak here (every matched row has id=0); the requirement is only
+                // that the rewritten ids are DISTINCT, not any particular assignment
+                // order. These AUTO_INCREMENT re-key tables are replication-local and
+                // never enter a hash preimage, so cross-replica order is immaterial.
                 await this.doQuery('SET @n := ?', [base]);
                 await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
                 await this.doQuery('ALTER TABLE `' + table + '` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
@@ -820,6 +823,125 @@ class Database {
         if(rows.length > 0)
             return rows[0];
         return null;
+    }
+
+    // Light-client state-commitment roots for a block (SPV spec sec.4-5). Returns
+    // { balances_root, stakes_root, state_root, block_merkle_root } or null. Used by
+    // the follower's incremental SMT (reads block-1's balances_root) and by
+    // ServerPoller to attach the committed roots to the outgoing block payload.
+    async getStateRootsRow(chain, network, block_index, conn){
+        let rows = await this.doQuery(
+            `SELECT balances_root, stakes_root, state_root, block_merkle_root
+             FROM state_tree_roots
+             WHERE chain=? AND network=? AND block_index=? LIMIT 1`,
+            [chain, network, block_index], conn);
+        return rows.length ? rows[0] : null;
+    }
+
+    // Gather a block's content rows for the block_merkle_root (SPV spec sec.5), in
+    // the frozen cross-kind order stateCommitment.computeBlockMerkleRoot expects:
+    // { ledger:{credits,debits,escrows}, actions, contracts:{contracts,state,
+    //   executions,emissions,deposits,withdrawals} }.
+    //
+    // !!! CONFORMANCE: the SELECT column sets + ORDER BY below MUST stay
+    // byte-identical to BlockHasher.computeBlockHashes (and the indexer's
+    // getBlockHashes), since block_merkle_root covers the same rows the consensus
+    // ledger/actions/contract hashes do. The xchain-e2e consensusHashConformance
+    // test is the drift guard. !!!
+    async getBlockLeafRows(block_index, conn){
+        let q;
+        let ledger = { credits: [], debits: [], escrows: [] };
+        // credits
+        q = `SELECT c.action_index, a1.address AS address, t1.tick AS tick, c.amount
+             FROM credits c
+                INNER JOIN actions        a  ON (a.action_index=c.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=c.address_id)
+                LEFT  JOIN index_tickers   t1 ON (t1.id=c.tick_id)
+             WHERE a.block_index=?
+             ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
+        ledger.credits = await this.doQuery(q, [block_index], conn);
+        // debits
+        q = `SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount
+             FROM debits d
+                INNER JOIN actions        a  ON (a.action_index=d.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=d.address_id)
+                LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
+             WHERE a.block_index=?
+             ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
+        ledger.debits = await this.doQuery(q, [block_index], conn);
+        // escrows
+        q = `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount
+             FROM escrows e
+                INNER JOIN actions        a  ON (a.action_index=e.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=e.address_id)
+                LEFT  JOIN index_tickers   t1 ON (t1.id=e.tick_id)
+             WHERE a.block_index=?
+             ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
+        ledger.escrows = await this.doQuery(q, [block_index], conn);
+        // actions
+        q = `SELECT a.action_index, a.tx_index, ia.action AS action
+             FROM actions a
+                LEFT JOIN index_actions ia ON (ia.id=a.action_id)
+             WHERE a.block_index=?
+             ORDER BY a.action_index ASC`;
+        let actions = await this.doQuery(q, [block_index], conn);
+        let contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
+        // new deployments
+        q = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
+             FROM contracts c
+                INNER JOIN actions a ON (a.action_index=c.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=c.source_id)
+                LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
+             WHERE a.block_index=?
+             ORDER BY c.action_index ASC`;
+        contracts.contracts = await this.doQuery(q, [block_index], conn);
+        // contract state (latest value per key written in this block)
+        q = `SELECT cs.contract_index, cs.state_key, cs.state_value
+             FROM contract_state cs
+                INNER JOIN (
+                    SELECT MAX(id) as max_id FROM contract_state
+                    WHERE block_index=? GROUP BY contract_index, state_key
+                ) latest ON cs.id = latest.max_id
+             ORDER BY cs.contract_index ASC, cs.state_key ASC`;
+        contracts.state = await this.doQuery(q, [block_index], conn);
+        // executions
+        q = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
+             FROM contract_executions ce
+                INNER JOIN actions a ON (a.action_index=ce.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=ce.caller_id)
+                LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
+             WHERE a.block_index=?
+             ORDER BY ce.action_index ASC`;
+        contracts.executions = await this.doQuery(q, [block_index], conn);
+        // emissions (join through executions to get block scope)
+        q = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
+             FROM contract_emissions em
+                INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index)
+                INNER JOIN actions a ON (a.action_index=ce.action_index)
+             WHERE a.block_index=?
+             ORDER BY em.execution_index ASC, em.position ASC`;
+        contracts.emissions = await this.doQuery(q, [block_index], conn);
+        // deposits
+        q = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
+             FROM deposits d
+                INNER JOIN actions a ON (a.action_index=d.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=d.source_id)
+                LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
+                LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
+             WHERE a.block_index=?
+             ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
+        contracts.deposits = await this.doQuery(q, [block_index], conn);
+        // withdrawals
+        q = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
+             FROM withdrawals w
+                INNER JOIN actions a ON (a.action_index=w.action_index)
+                LEFT  JOIN index_addresses a1 ON (a1.id=w.source_id)
+                LEFT  JOIN index_tickers   t1 ON (t1.id=w.tick_id)
+                LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
+             WHERE a.block_index=?
+             ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
+        contracts.withdrawals = await this.doQuery(q, [block_index], conn);
+        return { ledger, actions, contracts };
     }
 
     // Get block data for a range of blocks (for building payloads).

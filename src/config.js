@@ -64,11 +64,11 @@ module.exports = {
         // Server mode settings
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
         // A replica/validator follows EVERY chain a server hosts over its own WS, all
-        // from one IP — node-host-b alone serves 12 chain/network/dbType streams. The old
+        // from one IP; node-host-b alone serves 12 chain/network/dbType streams. The old
         // default of 3 closed 9 of them with 1008 "Too many connections", causing a
         // permanent reconnect storm that also broke gap-detection-driven catch-up.
         config['WS_MAX_PER_IP']       = parseIntMin1(process.env.WS_MAX_PER_IP, 100);
-        // Per-resource (IP + chain/network/dbType) limits — see snapshotKey in api.js.
+        // Per-resource (IP + chain/network/dbType) limits; see snapshotKey in api.js.
         // Defaults give a multi-chain replica headroom for bootstrap retries (full) and
         // frequent gap catch-ups (incremental) instead of a single global-per-IP bucket
         // that starves other chains.
@@ -160,7 +160,7 @@ module.exports = {
 
         // Consensus safety: on a CONFIRMED cross-source hash divergence (two honest
         // sources committed different ledger/actions/contract hashes for the same
-        // block — one is on a forked/Byzantine chain), HALT durably instead of just
+        // block; one is on a forked/Byzantine chain), HALT durably instead of just
         // logging and silently stalling. Default ON. Set HALT_ON_DIVERGENCE=false to
         // revert to log-only (not recommended for validators).
         config['HALT_ON_DIVERGENCE'] = (process.env.HALT_ON_DIVERGENCE || 'true').toLowerCase() !== 'false';
@@ -169,7 +169,7 @@ module.exports = {
         // hashes (ledger/actions/contract) from the replicated raw rows and confirm
         // they match the committed hash. Catches a replica whose DATA does not hash
         // to the committed hash (replication corruption / partial apply / a source
-        // serving rows inconsistent with its committed hash) — which the verbatim
+        // serving rows inconsistent with its committed hash), which the verbatim
         // hash comparison cannot. A mismatch HALTs durably. Default ON.
         //
         // VERIFY_RECOMPUTE=false is DECLARED UNSAFE (operator decision 2026-06-12)
@@ -182,13 +182,23 @@ module.exports = {
         // read-only convenience mirrors whose state nothing downstream trusts.
         config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
 
-        // VERIFY_STATE_HASH — apply-time recompute of the per-block state_hash (the
+        // VERIFY_STATE_HASH: apply-time recompute of the per-block state_hash (the
         // in-place mutations + backdated refund credits the three consensus hashes
         // can't cover). Default ON; a mismatch HALTs durably, the same as a recompute
         // divergence. Additive + fail-soft: a NULL state_hash (block indexed before the
         // source had the feature) is skipped, so enabling it can never false-halt a
         // back-level source. Set VERIFY_STATE_HASH=false only for throwaway mirrors.
         config['VERIFY_STATE_HASH'] = (process.env.VERIFY_STATE_HASH || 'true').toLowerCase() !== 'false';
+
+        // VERIFY_STATE_COMMITMENT: apply-time recompute of the per-block light-client
+        // SMT roots (SPV spec sec.4-5) over the replica, HALTing on divergence. Default
+        // ON; NULL roots (blocks before the flag-day) are skipped (additive + fail-soft).
+        // Phase 1 verifies balances_root + block_merkle_root only (stakes_root/state_root
+        // are deferred until the BTC stake-weight query is ported). Set
+        // VERIFY_STATE_COMMITMENT=false on truncated / incremental-bootstrapped replicas
+        // (their balances history is incomplete, so the SMT full-build would be wrong)
+        // and on throwaway mirrors.
+        config['VERIFY_STATE_COMMITMENT'] = (process.env.VERIFY_STATE_COMMITMENT || 'true').toLowerCase() !== 'false';
 
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
@@ -201,13 +211,13 @@ module.exports = {
 
         // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
         // exhausts every configured source must NOT fall through to live-follow on an
-        // empty replica — instead it retries the whole source rotation with bounded
-        // exponential backoff, then propagates failure (start() throws → the process
+        // empty replica; instead it retries the whole source rotation with bounded
+        // exponential backoff, then propagates failure (start() throws, and the process
         // supervisor restarts the container). This is the only recovery for the
         // single-source topology, where there is no second source to rotate to.
-        //   BOOTSTRAP_MAX_RETRIES  — extra full-rotation rounds after the first (0 = no retry)
-        //   BOOTSTRAP_RETRY_BASE_MS — first backoff delay; doubles each round
-        //   BOOTSTRAP_RETRY_MAX_MS  — backoff ceiling
+        //   BOOTSTRAP_MAX_RETRIES: extra full-rotation rounds after the first (0 = no retry)
+        //   BOOTSTRAP_RETRY_BASE_MS: first backoff delay; doubles each round
+        //   BOOTSTRAP_RETRY_MAX_MS: backoff ceiling
         config['BOOTSTRAP_MAX_RETRIES']   = parseIntMin0(process.env.BOOTSTRAP_MAX_RETRIES, 5);
         config['BOOTSTRAP_RETRY_BASE_MS'] = parseIntMin1(process.env.BOOTSTRAP_RETRY_BASE_MS, 2000);
         config['BOOTSTRAP_RETRY_MAX_MS']  = parseIntMin1(process.env.BOOTSTRAP_RETRY_MAX_MS, 60000);
@@ -225,9 +235,9 @@ module.exports = {
         // ids/pubkeys. When set, /validator-status reports an `expected_total`
         // denominator alongside the observed count and flags roster members that
         // have never reported a heartbeat as status 'absent'. This is the only
-        // in-band signal for a validator that silently fell off the federation —
+        // in-band signal for a validator that silently fell off the federation,
         // e.g. a replaced machine configured with the wrong sync server URL, or a
-        // node network-partitioned before it ever POSTed. Empty/unset → [] (the
+        // node network-partitioned before it ever POSTed. Empty/unset -> [] (the
         // service runs exactly as before, with no roster anchor). Deduplicated and
         // trimmed so the denominator is accurate.
         config['EXPECTED_VALIDATORS'] = [...new Set(

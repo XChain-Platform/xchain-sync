@@ -18,7 +18,7 @@
  *
  * Both helpers accept an optional scope: when the caller knows exactly which
  * (key, tick_id) ids the just-applied rows touched, the DELETE and the
- * re-aggregation are limited to those ids instead of the whole table — the
+ * re-aggregation are limited to those ids instead of the whole table; the
  * unscoped recompute is O(full history) per call, which on a large mainnet
  * replica means re-summing millions of credit/debit rows for every live
  * block.  The scope is a superset rectangle (key IN (...) AND tick_id IN
@@ -39,11 +39,11 @@ function inList(ids) {
 // All amount arithmetic must run at DECIMAL(65,18): a bare VARCHAR amount in
 // numeric context is promoted to DOUBLE, which silently corrupts anything
 // past ~16 significant digits (a 20-digit amount came back as
-// '1.2345678901234567e19' — the source indexer holds the exact string).
+// '1.2345678901234567e19'; the source indexer holds the exact string).
 const SUM_LEDGER = "SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,18)) ELSE -CAST(t.amount AS DECIMAL(65,18)) END)";
 
 // Render a DECIMAL(65,18) aggregate the way the source indexer writes amounts
-// (mathjs bignumber String(): minimal decimal — '600', '10.5'), so a rebuilt
+// (mathjs bignumber String(): minimal decimal, e.g. '600', '10.5'), so a rebuilt
 // row is byte-identical to the source row, not just numerically equal.
 // CAST(decimal AS CHAR) always emits all 18 decimals, so the '.' is always
 // present to stop the zero-trim eating integer digits.
@@ -52,7 +52,7 @@ function minimalDecimal(sumExpr) {
 }
 
 // Recompute the balances table from the surviving credits/debits rows.
-// scope (optional): { addressIds: [...], tickIds: [...] } — limits the
+// scope (optional): { addressIds: [...], tickIds: [...] }; limits the
 // rebuild to those ids; an empty list means nothing was touched (no-op).
 async function rebuildBalances(db, scope) {
     let pred = '';
@@ -77,4 +77,4 @@ async function rebuildBalances(db, scope) {
         args.concat(args));
 }
 
-module.exports = { rebuildBalances };
+module.exports = { rebuildBalances, minimalDecimal };

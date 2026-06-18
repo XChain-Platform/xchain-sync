@@ -64,7 +64,14 @@ class ClientRollback {
             // slash_events / contract_slash_debits. The capability_slash_debits restore below
             // copies back the pre-slash stakes/unstakes amount on reorg; mirrors the source.
             'capability_slash_events',
-            'capability_slash_debits'
+            'capability_slash_debits',
+            // Light-client per-block SMT roots (SPV spec sec.4). Block-scoped: drop
+            // orphaned-fork roots so the follower's incremental balances_root threading
+            // (which reads state_tree_roots[B-1]) re-seeds from the surviving fork-point
+            // root and rebuilds forward. state_tree_nodes is deliberately NOT listed:
+            // it is content-addressed + immutable (COW), so orphaned nodes are simply
+            // unreferenced and reorg-safe; pruning them is deferred.
+            'state_tree_roots'
         ];
 
         // Tables that store data using action_index
