@@ -236,15 +236,26 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     //    in stateHash.js); this is a pure replication/serving fix, so this class has no twin
     //    in buildStateHashData and adding it cannot trigger a state-hash divergence HALT.
     try {
+        // Join each ledger table to `actions` independently and UNION the tick_ids,
+        // rather than UNION ALL-ing the three full tables into a derived table and
+        // joining once. The derived-table form forces MariaDB to materialise every
+        // credits/debits/escrows row before the block-range predicate can apply (it
+        // cannot push `a.block_index BETWEEN ? AND ?` down into the UNION ALL), an
+        // O(total ledger size) scan on every block/catch-up window. Per-branch joins
+        // let the optimiser drive from `actions` (block_index range) into each table
+        // via its action_index index. UNION (not UNION ALL) preserves the original
+        // SELECT DISTINCT semantics, so the emitted tick set is byte-identical.
         let tokenRows = await db.doQuery(
             "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
-                "SELECT DISTINCT l.tick_id FROM ( " +
-                    "SELECT tick_id, action_index FROM credits " +
-                    "UNION ALL SELECT tick_id, action_index FROM debits " +
-                    "UNION ALL SELECT tick_id, action_index FROM escrows " +
-                ") l JOIN actions a ON a.action_index = l.action_index " +
-                "WHERE a.block_index BETWEEN ? AND ? AND l.tick_id IS NOT NULL)",
-            [from, to], conn);
+                "SELECT c.tick_id FROM credits c JOIN actions a ON a.action_index = c.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
+                "UNION " +
+                "SELECT d.tick_id FROM debits d JOIN actions a ON a.action_index = d.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
+                "UNION " +
+                "SELECT e.tick_id FROM escrows e JOIN actions a ON a.action_index = e.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL)",
+            [from, to, from, to, from, to], conn);
         add('tokens', tokenRows);
     } catch(e){
         // Table/columns may not exist on older source schemas; skip.

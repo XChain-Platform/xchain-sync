@@ -513,6 +513,62 @@ class SnapshotBuilder {
         gzip.end();
     }
 
+    // Stream one keyset-ordered page of the decoder `dispensers` table. dispensers
+    // is excluded from both the incremental block stream and the id-cursor lookup
+    // paging (streamTableRowsById): it has no monotonic surrogate id (PK is
+    // (tx_index, address_id)) and the decoder soft-expires then hard-purges rows, so
+    // an insert-only delta cannot replay the UPDATE/DELETE convergence. A truncated
+    // replica therefore never seeds it and an incrementally-caught-up replica drifts.
+    // This endpoint powers the client's periodic replace-table reconcile
+    // (ClientSync._reconcileDispensers): it pages the FULL current table by the
+    // composite (tx_index, address_id) keyset so the client can rebuild it verbatim.
+    // Decoder-only. Returns {schema_version, max_tx, max_addr, has_more, rows:[...]}.
+    async streamDispensers(db, afterTx, afterAddr, limit, res){
+        let dbType = (db && db.dbType) || 'indexer';
+        if(dbType !== 'decoder'){
+            return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
+        }
+        let lim = Number.isFinite(limit) ? Math.floor(limit) : SnapshotBuilder.ROWS_PAGE_DEFAULT;
+        lim = Math.max(1, Math.min(SnapshotBuilder.ROWS_PAGE_MAX, lim));
+
+        // Keyset pagination on the composite PK. The first page (no cursor) has no
+        // lower bound; later pages use the strict (tx_index, address_id) > (last)
+        // tuple, which ORDER BY tx_index, address_id makes stable across requests.
+        let rows;
+        if(Number.isFinite(afterTx) && Number.isFinite(afterAddr)){
+            rows = await db.doQuery(
+                "SELECT * FROM `dispensers` WHERE (tx_index > ? OR (tx_index = ? AND address_id > ?)) " +
+                "ORDER BY tx_index ASC, address_id ASC LIMIT ?",
+                [afterTx, afterTx, afterAddr, lim]
+            );
+        } else {
+            rows = await db.doQuery(
+                "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC LIMIT ?",
+                [lim]
+            );
+        }
+        let hasMore = rows.length === lim;
+        let maxTx   = rows.length ? Number(rows[rows.length - 1].tx_index)   : (Number.isFinite(afterTx)   ? afterTx   : 0);
+        let maxAddr = rows.length ? Number(rows[rows.length - 1].address_id) : (Number.isFinite(afterAddr) ? afterAddr : 0);
+        let schemaVersion = SCHEMA_VERSION[dbType];
+
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
+        res.setHeader('X-Has-More', hasMore ? 'true' : 'false');
+
+        let gzip = zlib.createGzip();
+        gzip.pipe(res);
+        gzip.write('{"schema_version":' + schemaVersion + ',"max_tx":' + maxTx +
+            ',"max_addr":' + maxAddr + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
+        for(let i = 0; i < rows.length; i++){
+            if(i > 0) gzip.write(',');
+            gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+        }
+        gzip.write(']}');
+        gzip.end();
+    }
+
 }
 
 module.exports = SnapshotBuilder;

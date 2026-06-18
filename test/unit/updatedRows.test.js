@@ -104,10 +104,13 @@ describe('updatedRows.collectUpdatedRows', function(){
         ]);
         let out = await collectUpdatedRows(db, 200, 200, 6);
         // The tokens refresh query joins credits/debits/escrows to actions on the
-        // [from, to] block window (200..200) and carries the full current row.
+        // [from, to] block window (200..200) and carries the full current row. Each
+        // ledger table is its own UNION branch (so the block-range predicate pushes
+        // down per table instead of materialising a UNION ALL derived table), so the
+        // [from, to] pair is bound once per branch -> three (200, 200) pairs.
         let tq = db.calls.find(c => c.sql.indexOf('FROM `tokens` t WHERE t.tick_id IN') !== -1);
         assert.ok(tq, 'expected the tokens-supply refresh query');
-        assert.deepStrictEqual(tq.args, [200, 200]);
+        assert.deepStrictEqual(tq.args, [200, 200, 200, 200, 200, 200]);
         assert.ok(tq.sql.indexOf('FROM credits') !== -1);
         assert.ok(tq.sql.indexOf('FROM debits') !== -1);
         assert.ok(tq.sql.indexOf('FROM escrows') !== -1);

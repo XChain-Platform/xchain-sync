@@ -444,6 +444,71 @@ describe('SnapshotBuilder', function(){
     // one consistent point in time. These tests pin that boundary: the snapshot
     // opens before the anchor read, and the connection is always released
     // (commit on success/empty, rollback on error) so it can't leak.
+    describe('streamDispensers', function(){
+        it('rejects a non-decoder dbType with 400', async function(){
+            let db = createMockDb(); // dbType defaults to indexer-shaped (undefined)
+            let res = createMockRes();
+            await builder.streamDispensers(db, NaN, NaN, 50000, res);
+            assert.ok(res.status.calledWith(400), 'dispensers reconcile is decoder-only');
+        });
+
+        it('first page (no cursor) selects the full table ordered by the composite PK', async function(){
+            let db = createMockDb();
+            db.dbType = 'decoder';
+            db.doQuery.resolves([{ tx_index: 5, address_id: 9 }, { tx_index: 7, address_id: 2 }]);
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamDispensers(db, NaN, NaN, 50000, res);
+            });
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.rows.length, 2);
+            assert.strictEqual(parsed.max_tx, 7, 'max_tx is the last row tx_index');
+            assert.strictEqual(parsed.max_addr, 2, 'max_addr is the last row address_id');
+            assert.strictEqual(parsed.has_more, false, 'short page -> no more');
+            let q = db.doQuery.firstCall.args[0];
+            assert.ok(/ORDER BY tx_index ASC, address_id ASC LIMIT \?/.test(q));
+            assert.ok(!/WHERE/.test(q), 'first page has no cursor predicate');
+            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [50000]);
+        });
+
+        it('paged cursor binds the composite (tx_index, address_id) keyset and sets has_more on a full page', async function(){
+            let db = createMockDb();
+            db.dbType = 'decoder';
+            db.doQuery.resolves([{ tx_index: 8, address_id: 1 }, { tx_index: 8, address_id: 4 }, { tx_index: 9, address_id: 0 }]);
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamDispensers(db, 8, 1, 3, res);
+            });
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.strictEqual(parsed.has_more, true, 'rows.length === limit -> more pages remain');
+            let q = db.doQuery.firstCall.args[0];
+            assert.ok(/WHERE \(tx_index > \? OR \(tx_index = \? AND address_id > \?\)\)/.test(q), 'composite keyset predicate');
+            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [8, 8, 1, 3]);
+        });
+
+        it('clamps an oversized limit to the ceiling', async function(){
+            let db = createMockDb();
+            db.dbType = 'decoder';
+            db.doQuery.resolves([]);
+            let res = new PassThrough();
+            res.on('data', () => {});
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamDispensers(db, NaN, NaN, 9999999, res);
+            });
+            assert.strictEqual(db.doQuery.firstCall.args[1][0], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
+        });
+    });
+
     describe('transactional boundary', function(){
         it('full: opens read snapshot before reading the block anchor', async function(){
             let db = createMockDb();

@@ -345,4 +345,48 @@ describe('ClientApplier', function(){
             assert.ok(console.error.getCalls().some(c => /Rejected column name/.test(c.args[0])));
         });
     });
+
+    describe('applyDispensersReplace', function(){
+        it('is a no-op on a non-decoder DB', async function(){
+            // createMockDb has no dbType (indexer-shaped); the guard short-circuits.
+            await applier.applyDispensersReplace([{ tx_index: 1, address_id: 2 }]);
+            assert.strictEqual(db.beginTransaction.called, false);
+            assert.strictEqual(db.doQuery.called, false);
+        });
+
+        it('replaces atomically: DELETE then INSERT inside one transaction (decoder)', async function(){
+            db.dbType = 'decoder';
+            await applier.applyDispensersReplace([
+                { tx_index: 5, address_id: 9, expiration: 1700000000, expired_block_index: null },
+                { tx_index: 7, address_id: 2, expiration: 1700000001, expired_block_index: 42 }
+            ]);
+            assert.ok(db.beginTransaction.calledOnce, 'opened a transaction');
+            assert.ok(db.commitTransaction.calledOnce, 'committed');
+            assert.strictEqual(db.rollbackTransaction.called, false);
+            let calls = db.doQuery.getCalls().map(c => c.args[0]);
+            assert.ok(/^DELETE FROM `dispensers`/.test(calls[0]), 'DELETE runs first');
+            assert.ok(calls.some(q => /^INSERT INTO `dispensers`/.test(q)), 'rows re-inserted with plain INSERT (not IGNORE)');
+        });
+
+        it('clears the table even when the new set is empty (decoder)', async function(){
+            db.dbType = 'decoder';
+            await applier.applyDispensersReplace([]);
+            assert.ok(db.beginTransaction.calledOnce);
+            assert.ok(db.commitTransaction.calledOnce);
+            let calls = db.doQuery.getCalls().map(c => c.args[0]);
+            assert.ok(/^DELETE FROM `dispensers`/.test(calls[0]));
+            assert.ok(!calls.some(q => /^INSERT/.test(q)), 'no INSERT for an empty set');
+        });
+
+        it('rolls back and rethrows if a write fails (decoder, table left intact)', async function(){
+            db.dbType = 'decoder';
+            db.doQuery.rejects(new Error('boom'));
+            let threw = false;
+            try { await applier.applyDispensersReplace([{ tx_index: 1, address_id: 2 }]); }
+            catch(e){ threw = true; }
+            assert.ok(threw, 'error propagates so the caller can leave the table intact');
+            assert.ok(db.rollbackTransaction.calledOnce, 'transaction rolled back');
+            assert.strictEqual(db.commitTransaction.called, false);
+        });
+    });
 });

@@ -481,6 +481,45 @@ async function startApi(){
         }
     });
 
+    // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=&limit=
+    // One keyset page of the decoder `dispensers` table for the client's replace-table
+    // reconcile. dispensers rides neither the block stream nor the id-cursor lookup
+    // paging (no monotonic id; the decoder soft-expires/hard-purges rows), so the
+    // client periodically re-dumps the full table and swaps it in atomically; see
+    // SnapshotBuilder.streamDispensers + ClientSync._reconcileDispensers. Decoder-only;
+    // rate-limited as an incremental fetch.
+    app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(dbType !== 'decoder') return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
+
+        let { chain, network } = req.params;
+        let afterTx   = (req.query.after_tx   !== undefined) ? parseInt(req.query.after_tx)   : NaN;
+        let afterAddr = (req.query.after_addr !== undefined) ? parseInt(req.query.after_addr) : NaN;
+        if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
+           (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
+            return res.status(400).json({ error: 'Invalid cursor' });
+        let limit = parseInt(req.query.limit);
+        if(isNaN(limit)) limit = undefined; // builder applies its default
+
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+
+        let builder = syncService.getSnapshotBuilder();
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+
+        try {
+            await builder.streamDispensers(db, afterTx, afterAddr, limit, res);
+        } catch(e){
+            console.error('[API error] /snapshot-dispensers/:dbType/:chain/:network:', e);
+            if(!res.headersSent)
+                res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
     // Validator heartbeat endpoints (server mode only)
 
     // POST /validator-heartbeat/:dbType/:chain/:network
