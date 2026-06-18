@@ -1,6 +1,6 @@
 {
   "name": "xchain-sync",
-  "description": "Database replication service for the XChain Platform — syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
+  "description": "Database replication service for the XChain Platform: syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
   "version": "1.7.1",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -34,8 +34,8 @@
     "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
-    "test:e2e": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
-    "test:e2e:ci": "mocha --timeout 120000 --slow 30000 --recursive 'test/e2e/**/*.test.js' --exit",
+    "test:e2e": "mocha --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
+    "test:e2e:ci": "mocha --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js' --exit",
     "test:regression": "mocha --timeout 10000 --exit --grep @regression --recursive 'test/unit/**/*.test.js'",
     "test:fuzz": "mocha --timeout 0 --recursive 'test/fuzz/suites/**/*.fuzz.js'",
     "test:fuzz:tier1": "mocha --timeout 0 --recursive 'test/fuzz/suites/tier1-*.fuzz.js'",

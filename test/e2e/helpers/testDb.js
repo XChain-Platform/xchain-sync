@@ -36,10 +36,13 @@ const SOURCE2_DB_NAME = 'xchain_e2e_source2';
 const util = new Utility();
 
 class TestDatabase {
-    constructor(pool, dbName) {
+    constructor(pool, dbName, connCfg) {
         this.pool   = pool;
         this.dbName = dbName;
         this.transactionConnection = null;
+        // Connection params (sans pool options) so the schema seeder can open a
+        // one-off multipleStatements connection without re-deriving host/port/user.
+        this.connCfg = connCfg || null;
     }
 
     async doQuery(query, args) {
@@ -236,7 +239,13 @@ async function createDb(dbName, host, port, user, pass) {
         // in every snapshot).
         dateStrings: true
     });
-    return new TestDatabase(pool, dbName);
+    return new TestDatabase(pool, dbName, {
+        host: host || TEST_DB_HOST,
+        port: port || TEST_DB_PORT,
+        user: user || TEST_DB_USER,
+        password: pass || TEST_DB_PASS,
+        database: dbName
+    });
 }
 
 async function createDatabase(dbName, host, port, user, pass) {
@@ -284,6 +293,29 @@ async function _fsReadRetry(fn) {
     throw lastErr;
 }
 
+// Apply one schema file's statements over a multipleStatements connection. The
+// indexer schema is ~650 statements across ~110 files; running each statement as
+// its own pooled round-trip made the e2e `before all` seed take ~2 minutes per
+// database (source + replica), blowing past mocha's hook timeout and presenting
+// as a "hang" on indexer-dbType suites. Batching each file into a single
+// multi-statement query collapses the per-statement round-trips. We split first
+// (splitSqlStatements strips `--` comments so a ';' inside prose never reaches
+// the driver's own splitter, the attests.sql comment-split bug) then re-join, so
+// the driver only ever sees clean `stmt; stmt`. On any batch error we fall back
+// to per-statement execution with the same swallow-and-continue tolerance the
+// original loop had (DROP-then-CREATE on a fresh DB, re-seed idempotency).
+async function _applySqlBatch(conn, sqlText) {
+    let queries = splitSqlStatements(sqlText);
+    if (queries.length === 0) return;
+    try {
+        await conn.query(queries.join(';\n'));
+    } catch (e) {
+        for (let query of queries) {
+            try { await conn.query(query); } catch (_) {}
+        }
+    }
+}
+
 async function seedSchema(db) {
     // The canonical indexer schema lives in the sibling repo checkout. CI checks
     // xchain-indexer out elsewhere and points here via XCHAIN_INDEXER_SQL_PATH.
@@ -295,18 +327,43 @@ async function seedSchema(db) {
     let otherFiles = files.filter(f => !f.startsWith('index_'));
     let ordered = [...indexFiles, ...otherFiles];
 
+    let syncSqlDir = path.join(__dirname, '..', '..', '..', 'src', 'sql');
+    let syncFiles = (await _fsReadRetry(() => fs.readdirSync(syncSqlDir))).filter(f => f.endsWith('.sql')).sort();
+
+    // One dedicated multipleStatements connection for the whole seed. Falls back
+    // to the pooled per-statement path if a raw connection can't be opened.
+    let mariadb = await getMariadb();
+    let conn = null;
+    if (db.connCfg) {
+        try { conn = await mariadb.createConnection({ ...db.connCfg, multipleStatements: true }); }
+        catch (e) { conn = null; }
+    }
+
+    if (conn) {
+        try {
+            for (let file of ordered) {
+                let data = await _fsReadRetry(() => fs.readFileSync(path.join(sqlDir, file), 'utf8'));
+                await _applySqlBatch(conn, data);
+            }
+            // Sync-service-owned tables (sync_meta, merkle_epochs). Idempotent: in
+            // e2e the spawned server also creates these via db.js#verifyTables.
+            for (let file of syncFiles) {
+                let sql = await _fsReadRetry(() => fs.readFileSync(path.join(syncSqlDir, file), 'utf8'));
+                await _applySqlBatch(conn, sql);
+            }
+        } finally {
+            try { await conn.end(); } catch (_) {}
+        }
+        return;
+    }
+
+    // Fallback: original per-statement pooled path.
     for (let file of ordered) {
         let data = await _fsReadRetry(() => fs.readFileSync(path.join(sqlDir, file), 'utf8'));
-        let queries = splitSqlStatements(data);
-        for (let query of queries) {
+        for (let query of splitSqlStatements(data)) {
             try { await db.doQuery(query); } catch (e) {}
         }
     }
-
-    // Sync-service-owned tables (sync_meta, merkle_epochs). Idempotent: in e2e
-    // the spawned server also creates these via db.js#verifyTables at startup.
-    let syncSqlDir = path.join(__dirname, '..', '..', '..', 'src', 'sql');
-    let syncFiles = (await _fsReadRetry(() => fs.readdirSync(syncSqlDir))).filter(f => f.endsWith('.sql')).sort();
     for (let file of syncFiles) {
         let sql = await _fsReadRetry(() => fs.readFileSync(path.join(syncSqlDir, file), 'utf8'));
         for (let query of splitSqlStatements(sql)) {
