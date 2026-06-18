@@ -37,26 +37,39 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
- *   - dispensers (decoder)            soft-expired each block (UPDATE expired_block_index)
- *                                     with hard-purge deferred to purgeExpiredDispensers;
- *                                     neither mutation rides the block stream, so counts
- *                                     would diverge. Converges via full-snapshot only.
+ *   - dispensers (decoder)            soft-expired (UPDATE expired_block_index) with
+ *                                     hard-purge deferred to purgeExpiredDispensers;
+ *                                     neither mutation rides the per-block stream, so it
+ *                                     is NOT per-block-streamed. It IS listed in the
+ *                                     decoder `special` bucket so it joins the /status
+ *                                     completeness count: the source's live count drift
+ *                                     (soft-expire UPDATEs + hard-purge DELETEs the
+ *                                     bootstrap full dump cannot replay) now surfaces as
+ *                                     a TABLE_COUNT_MISMATCH a complete replica can act
+ *                                     on, instead of drifting silently. Full convergence
+ *                                     of the UPDATE/DELETE mutations needs an apply-side
+ *                                     replace-table reconcile in ClientApplier (followup,
+ *                                     out of this change's file scope); the count signal
+ *                                     is the in-scope fix.
  *   - cross_chain_calls,              hub-mirrored (hub_db_sync), NOT produced by
  *     cross_chain_matches,            block processing. Pushed/retracted by the hub
  *     oracle_prices,                  (pushpricereorg / pushdexreorg) out-of-band with
  *     capability_snapshots,           block apply, so they cannot ride the per-block
- *     state_checkpoints               stream. On a source node they converge via
- *                                     hub_db_sync; on a synced replica they arrive by
- *                                     full snapshot only (frozen at bootstrap; the live
- *                                     stream and incremental catch-up both skip them).
- *                                     This is an accepted trade-off: replicas are
- *                                     read-only API surfaces and hub-side retraction
- *                                     protects consensus. oracle_prices / cross_chain_calls
- *                                     are not served from the replica copy at all; the
- *                                     explorer reads the consensus-relevant ones
+ *     state_checkpoints               stream. They are NEVER replicated by xchain-sync:
+ *                                     excluded from the per-block stream, the incremental
+ *                                     catch-up, AND the full/incremental snapshots
+ *                                     (SnapshotBuilder.OPERATOR_LOCAL_TABLES). On a source
+ *                                     node they converge via hub_db_sync. The serving node
+ *                                     does NOT serve these from any local replica copy:
+ *                                     the explorer reads the consensus-relevant ones
  *                                     (state_checkpoints, capability_snapshots,
- *                                     cross_chain_matches) directly from the co-located
- *                                     hub DB rather than the stale replica mirror.
+ *                                     cross_chain_matches) authoritatively from the
+ *                                     MANDATORY co-located hub DB on the same server. There
+ *                                     is no local-mirror fallback: a serving node without a
+ *                                     co-located hub DB fails loud (explorer db.js
+ *                                     _checkpointSource / _matchSource throw, and the
+ *                                     explorer asserts the hub DB at startup) rather than
+ *                                     silently serving stale/empty local rows (#4138).
  *
  ********************************************************************/
 
@@ -72,23 +85,28 @@ const TOPOLOGY = {
         // Block-scoped tables (key off block_index directly)
         blockScoped:  ['blocks', 'transactions'],
         // Tx-scoped tables (key off tx_index -> transactions.block_index).
-        // dispensers is deliberately excluded: per-block replication captures only
-        // rows *inserted* in a block (via the tx_index->block_index join), but the
-        // decoder soft-expires dispensers each block (UPDATE expired_block_index)
-        // and defers the hard-purge to purgeExpiredDispensers. Neither mutation
-        // rides the block stream. Streaming inserts alone would let a follower's
-        // dispensers count grow monotonically above the source forever and publish
-        // a /status count no complete replica could match. It converges via the
-        // full snapshot instead (SnapshotBuilder.streamFullSnapshot dumps current
-        // rows in full).
+        // dispensers is deliberately NOT per-block-streamed: per-block replication
+        // captures only rows *inserted* in a block (via the tx_index->block_index
+        // join), but the decoder also soft-expires dispensers (UPDATE
+        // expired_block_index) and defers the hard-purge to purgeExpiredDispensers.
+        // Neither mutation rides the block stream, so streaming inserts alone would
+        // let a follower's dispensers count drift away from the source. dispensers
+        // is instead listed in `special` below so it joins the /status completeness
+        // count, turning that previously-silent drift into a detectable mismatch.
         txScoped:     ['transaction_outputs'],
         // Decoder doesn't have action-scoped tables
         actionScoped: [],
         // Append-only lookup tables that may grow as new blocks are processed.
         // events is operational/logging; included so consumers see decoder activity.
         index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
-        // Decoder has no transparency log (sync_meta), so nothing here.
-        special:      []
+        // Replicated-for-completeness-counting but NOT extracted by ServerPoller's
+        // per-scope loops (ServerPoller reads only blockScoped/txScoped/actionScoped/
+        // index). dispensers lives here so it enters the /status row-count
+        // completeness check (getReplicatedTables) without being streamed per block:
+        // it converges via full snapshot + per-catch-up re-dump, and any residual
+        // drift (the hard-purge DELETE gap) surfaces as a TABLE_COUNT_MISMATCH a
+        // complete replica can act on, instead of drifting silently.
+        special:      ['dispensers']
     },
 
     // Indexer schema: full set of 60+ tables
@@ -234,12 +252,22 @@ function getReplicatedTables(dbType){
 
 // The cursor column for id-ordered paging of an append-only lookup table
 // (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged). Almost
-// every lookup table has an AUTO_INCREMENT `id` PK, but the decoder `pubkeys` table
-// is keyed by `address_id` (its PK, an FK into index_addresses.id) and has NO `id`
-// column, so paging it by `id` would error. Both columns are monotonic and the
-// tables are INSERT-only, so `<col> > cursor ORDER BY <col>` is a stable cursor.
+// every lookup table has an AUTO_INCREMENT `id` PK and pages by it. The decoder
+// `pubkeys` table is the special case: its PRIMARY KEY is `address_id` (an FK into
+// index_addresses.id), which is NOT monotonic with respect to INSERT order. A
+// pubkeys row is inserted at first-SPEND, but its address_id was assigned earlier
+// at first-SEEN, so a freshly inserted row can carry an address_id BELOW the
+// replica's current high-water and would be permanently skipped by an address_id
+// cursor (an indexer getDecoderBlockData() LEFT JOIN then resolves source_pubkey to
+// NULL -> consensus divergence; #4413). pubkeys therefore pages by the surrogate
+// AUTO_INCREMENT `id` (added in src/sql/pubkeys.sql + the
+// 2026-06-17-pubkeys-add-monotonic-id migration), which increases with insert
+// (first-spend) order. That `id` is a replication cursor only and is never hashed.
+// All cursor columns are now monotonic and the tables are INSERT-only, so
+// `<col> > cursor ORDER BY <col>` is a stable cursor.
 function lookupCursorColumn(table){
-    return table === 'pubkeys' ? 'address_id' : 'id';
+    // eslint-disable-next-line no-unused-vars
+    return 'id';
 }
 
 module.exports = { getTopology, getReplicatedTables, lookupCursorColumn };

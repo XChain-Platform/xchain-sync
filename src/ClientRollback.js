@@ -187,8 +187,8 @@ class ClientRollback {
         // (the sync stream re-introduces them with INSERT IGNORE).
         //
         // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
-        // purely local artifacts that no longer feed any consensus value: as of
-        // BLOCK_HASH_VERSION 2 the block hashes are computed from the RESOLVED strings
+        // purely local artifacts that no longer feed any consensus value: under the
+        // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
         // (address/tick/action/status), not from address_id/tick_id/etc. (see
         // xchain-indexer/src/db.js getBlockHashes + xchain-sync/src/BlockHasher.js). If a
         // lookup id is ever reintroduced into a consensus-visible projection, these orphan
@@ -737,7 +737,7 @@ class ClientRollback {
             //
             // "Harmless" holds because these surrogate ids are local-only and feed no
             // consensus value; block hashes are computed from resolved strings, not lookup
-            // ids (BLOCK_HASH_VERSION 2). Never let a lookup id back into a hashed projection.
+            // ids (the current BLOCK_HASH_VERSION). Never let a lookup id back into a hashed projection.
 
             await this.db.commitTransaction();
             console.log('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');

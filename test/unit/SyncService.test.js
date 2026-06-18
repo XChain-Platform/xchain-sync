@@ -257,7 +257,7 @@ describe('SyncService', function(){
             await service._discoverChains();
             assert.strictEqual(repl.called, false, 'no schema replication when the source DB is unreachable');
             // verifySyncTables runs for decoder replicas too (it is dbType-aware
-            // internally: decoder gets sync_halt only) — without it the halt
+            // internally: decoder gets sync_halt only). Without it the halt
             // table never exists and every client start logs a 1146 probe error.
             assert.strictEqual(vst.called, true, 'verifySyncTables runs for decoder replicas');
             assert.strictEqual(service.databases.size, 1);
@@ -392,7 +392,7 @@ describe('SyncService', function(){
         it('exits the process after MAX_HUB_WAIT_MS with no hub', async function(){
             config.MAX_HUB_WAIT_MS = 0;
             service = new SyncService(config);
-            // process.exit is already stubbed in beforeEach — reconfigure it to throw so
+            // process.exit is already stubbed in beforeEach; reconfigure it to throw so
             // the otherwise-infinite while(true) loop unwinds after the timeout branch.
             process.exit.callsFake(() => { throw new Error('PROC_EXIT'); });
             sinon.stub(service.hubClient, 'ping').resolves(false);
@@ -417,26 +417,34 @@ describe('SyncService', function(){
     describe('getClientSyncState', function(){
         it('returns nulls/false when no sync exists for the key', function(){
             assert.deepStrictEqual(service.getClientSyncState('bitcoin', 'mainnet'),
-                { lastKnownServerBlock: null, halted: false, haltInfo: null });
+                { lastKnownServerBlock: null, halted: false, haltInfo: null,
+                  truncated: false, bootstrapBase: null });
         });
         it('reports a live sync, including halt info when halted', function(){
             let fakeSync = {
                 lastKnownServerBlock: 42,
                 isHalted: () => true,
-                getHaltInfo: () => ({ blockIndex: 42, reason: 'divergence' })
+                getHaltInfo: () => ({ blockIndex: 42, reason: 'divergence' }),
+                isTruncated: () => true,
+                getBootstrapBase: () => 850000
             };
             service.clientSyncs.set('bitcoin:mainnet:indexer', fakeSync);
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.lastKnownServerBlock, 42);
             assert.strictEqual(state.halted, true);
             assert.deepStrictEqual(state.haltInfo, { blockIndex: 42, reason: 'divergence' });
+            assert.strictEqual(state.truncated, true);
+            assert.strictEqual(state.bootstrapBase, 850000);
         });
         it('omits halt info for a healthy sync', function(){
             service.clientSyncs.set('bitcoin:mainnet:indexer',
-                { lastKnownServerBlock: 7, isHalted: () => false, getHaltInfo: () => ({}) });
+                { lastKnownServerBlock: 7, isHalted: () => false, getHaltInfo: () => ({}),
+                  isTruncated: () => false, getBootstrapBase: () => null });
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.halted, false);
             assert.strictEqual(state.haltInfo, null);
+            assert.strictEqual(state.truncated, false);
+            assert.strictEqual(state.bootstrapBase, null);
         });
     });
 

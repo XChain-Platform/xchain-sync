@@ -36,6 +36,11 @@ const OPERATOR_LOCAL_TABLES = new Set([
     'icons', 'price_snapshots', 'pending_hub_pushes',
     // Hub-mirrored tables: pushed/retracted by hub_db_sync out-of-band with block
     // apply, so they vary by WS arrival timing and must not appear in consensus snapshots.
+    // These are NEVER replicated by xchain-sync (excluded from the per-block stream, the
+    // incremental catch-up, AND these snapshots). A serving node does not converge them via
+    // sync: the explorer serves the consensus-relevant ones (state_checkpoints,
+    // capability_snapshots, cross_chain_matches) from the MANDATORY co-located hub DB on the
+    // same server, with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
     'oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches',
     'state_checkpoints',
 ]);
@@ -253,13 +258,18 @@ class SnapshotBuilder {
             let decoderBlockScoped = new Set(['blocks', 'transactions']);
             let decoderTxScoped    = new Set(['transaction_outputs']);
             let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys', 'events']);
-            // dispensers is skipped here for the same reason it is excluded from the
-            // per-block replicated topology: the decoder soft-expires dispensers each
-            // block (UPDATE expired_block_index) and defers the hard-purge to
-            // purgeExpiredDispensers. An insert-only incremental delta (the tx_index->
-            // block_index join) would re-introduce the upward count divergence on any
-            // follower that catches up incrementally. dispensers converges via the full
-            // snapshot only (streamFullSnapshot dumps current rows).
+            // dispensers is skipped here for the same reason it is not per-block
+            // streamed: the decoder soft-expires dispensers (UPDATE expired_block_index)
+            // and defers the hard-purge to purgeExpiredDispensers. An insert-only
+            // incremental delta (the tx_index->block_index join) would re-introduce the
+            // count divergence on any follower that catches up incrementally, and a plain
+            // re-dump would collide on the (tx_index, address_id) PK (dispensers is not in
+            // ClientApplier.ignoreTables, so it is not INSERT IGNORE). dispensers seeds
+            // from the full snapshot; it is now in the decoder /status completeness count
+            // (replicatedTables `special`), so the soft-expire/hard-purge drift the
+            // bootstrap dump cannot replay surfaces as a TABLE_COUNT_MISMATCH rather than
+            // drifting silently. Full UPDATE/DELETE convergence needs an apply-side
+            // replace-table reconcile (followup).
             let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
@@ -456,7 +466,10 @@ class SnapshotBuilder {
     // topology `.index` set: index_*, plus pubkeys/events for the decoder) are
     // pageable; they are INSERT-only with a monotonic AUTO_INCREMENT `id`, so
     // `id > cursor ORDER BY id` is stable across requests without a long-lived read
-    // view. Returns {schema_version, table, max_id, has_more, rows:[...]}.
+    // view. (Decoder pubkeys also pages by this surrogate `id`: its PK address_id is
+    // non-monotonic w.r.t. insert order, so it would skip rows; see
+    // replicatedTables.lookupCursorColumn and the pubkeys monotonic-id migration.)
+    // Returns {schema_version, table, max_id, has_more, rows:[...]}.
     async streamTableRowsById(db, table, afterId, limit, res){
         let dbType = (db && db.dbType) || 'indexer';
         let allowed = new Set(replicatedTables.getTopology(dbType).index);
@@ -470,7 +483,9 @@ class SnapshotBuilder {
         let lim   = Number.isFinite(limit) ? Math.floor(limit) : SnapshotBuilder.ROWS_PAGE_DEFAULT;
         lim = Math.max(1, Math.min(SnapshotBuilder.ROWS_PAGE_MAX, lim));
 
-        // Per-table cursor column (almost always `id`; decoder pubkeys uses address_id).
+        // Per-table cursor column. All pageable lookup tables (including decoder
+        // pubkeys, via its surrogate monotonic `id`) page by `id`; address_id is
+        // non-monotonic w.r.t. insert order and must NOT be used as the cursor.
         let col = replicatedTables.lookupCursorColumn(table);
         let rows = await db.doQuery(
             "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",

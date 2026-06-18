@@ -98,6 +98,29 @@ class ClientSync {
         let _depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
         this._truncatedDepth = _depthMap[(this.chain + ':' + this.network).toUpperCase()] || 0;
 
+        // Guard: a truncation depth must exceed MAX_ROLLBACK_DEPTH. The join floor
+        // `base = tip - depth` is the deepest block the replica holds; a reorg that
+        // rewinds further than `depth` blocks would need to roll back BELOW the floor,
+        // which the replica cannot do (no pre-base history). MAX_ROLLBACK_DEPTH (default
+        // 100) is the deepest reorg the client will roll back, so a depth <=
+        // MAX_ROLLBACK_DEPTH lets an in-window reorg request a rollback past the floor.
+        // Clamp the effective depth up to MAX_ROLLBACK_DEPTH + 1 and warn loudly so a
+        // misconfigured small depth can't quietly strand the replica. (depth 0 = full-
+        // history replica, not truncated, so it is exempt.)
+        if(this._truncatedDepth >= 1){
+            let maxRollback = Number(this.config['MAX_ROLLBACK_DEPTH']);
+            if(!Number.isFinite(maxRollback) || maxRollback < 1) maxRollback = 100;
+            if(this._truncatedDepth <= maxRollback){
+                let clamped = maxRollback + 1;
+                console.warn('SYNC_BOOTSTRAP_DEPTH for ' + this.chain + '/' + this.network +
+                    ' is ' + this._truncatedDepth + ', which is <= MAX_ROLLBACK_DEPTH (' + maxRollback +
+                    '). A reorg within the rollback window could request a rollback below the truncation ' +
+                    'floor, which a truncated replica cannot perform. Clamping bootstrap depth up to ' +
+                    clamped + ' so the held window always exceeds the max rollback depth.');
+                this._truncatedDepth = clamped;
+            }
+        }
+
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
 
@@ -206,6 +229,13 @@ class ClientSync {
                 return;
             }
         } catch(e){ console.error('halt-state check failed (continuing):', e); }
+
+        // Reload the durable truncation join floor (set by a prior _bootstrapFromHeight).
+        // _bootstrapBase is otherwise in-memory only, so after a restart the incremental
+        // resume path below would leave it null: the join-block recompute skip and the
+        // truncation floor would be silently lost. Must run before the resume branch so
+        // _verifyRecompute and the depth guard see the persisted floor.
+        await this._loadBootstrapBase();
 
         // Check local replica state
         this.lastAppliedBlock = await this.db.getLastBlock();
@@ -609,11 +639,33 @@ class ClientSync {
         // apply already sees the skip. since_block is authoritative (the server
         // echoes the exact bound it served); fall back to our requested base.
         this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
+        // Persist the join floor durably. _bootstrapBase is otherwise an in-memory-
+        // only field: after a restart the incremental path leaves it null, dropping
+        // both the join-block recompute skip (a false-HALT on the join block) and the
+        // truncation floor. Reloaded by _loadBootstrapBase() at startup.
+        await this._persistBootstrapBase(this._bootstrapBase);
 
         await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
         if(typeof snapshotData.block_height === 'number'){
             this.lastAppliedBlock = snapshotData.block_height;
         }
+
+        // 4b. Re-page the append-only lookups AFTER the block window. Step 3 paged
+        //     index_* up to the source's high-water T1, but the step-4 snapshot is a
+        //     fresh REPEATABLE READ at the source's CURRENT tip T2, which is higher
+        //     whenever the source produced a block during paging (the normal case on
+        //     a fast chain like DOGE testnet, where paging spans millions of rows /
+        //     many seconds). Blocks (T1..T2] then carry blocks.*_hash_id pointing at
+        //     index_transactions rows that were never paged in; getBlockHashRow
+        //     resolves them as NULL (LEFT JOIN miss), which (a) commits gap blocks
+        //     with unresolvable consensus hashes, (b) silently skips the terminal
+        //     recompute below (its NULL-ledger_hash guard goes false), and (c) halts
+        //     the first live block when it folds a NULL predecessor hash. Re-paging
+        //     now (cursor = current MAX(id), so only the new (T1..T2] rows) fills
+        //     those FK targets before recompute + live-follow. Idempotent and cheap
+        //     when no block landed (one MAX(id) probe per table, zero pages).
+        //     <SYNC-LOOKUP-REPAGE> keep aligned with _runIncrementalCatchUp.
+        await this._syncLookupTablesPaged(source);
 
         // 4. Verify the TERMINAL block (folds tip-1's committed hash, which is
         //    present in [base..tip]). The join block `base` is intentionally NOT
@@ -840,6 +892,18 @@ class ClientSync {
             await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
+
+            // Re-page lookups AFTER the block window, same reason as bootstrap: the
+            // skip_lookups snapshot is a fresh REPEATABLE READ at the source tip T2,
+            // which exceeds the paging high-water T1 whenever the source advanced
+            // during paging, so blocks (T1..T2] reference index_* rows not yet pulled.
+            // Re-paging (cursor = current MAX(id)) fills (T1..T2] before recompute so
+            // getBlockHashRow resolves non-NULL and the join/terminal recompute below
+            // actually runs instead of silently skipping on a NULL ledger_hash.
+            // <SYNC-LOOKUP-REPAGE> keep aligned with _bootstrapFromHeight.
+            if(skipLookups){
+                await this._syncLookupTablesPaged(source);
+            }
 
             // Verify the catch-up range. The live path recomputes every applied
             // block's consensus hashes, but a catch-up jumps a range in one
@@ -1355,7 +1419,51 @@ class ClientSync {
 
     isHalted(){ return this._halted !== null; }
     getHaltInfo(){ return this._halted; }
+
+    // Returns the truncation join floor (the lowest block this replica holds),
+    // or null when the replica holds full history.
+    getBootstrapBase(){ return this._bootstrapBase; }
+
+    // True when this replica was seeded from a recent height and therefore
+    // cannot answer pre-base history queries.
+    isTruncated(){ return typeof this._bootstrapBase === 'number' && this._bootstrapBase > 0; }
+
     _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }
+
+    // Durable-marker key for this client's truncation join floor. Namespaced by
+    // dbType so the indexer and decoder replicas of one chain don't clobber each
+    // other (they share neither DB nor floor, but the key space is shared if they
+    // ever did).
+    _bootstrapBaseKey(){ return 'bootstrap_base:' + this.dbType; }
+
+    // Persist the truncation join floor durably so it survives a restart. Guarded:
+    // the durable store is optional (older db instances / test mocks may not expose
+    // it), so a missing setSyncState degrades to in-memory-only behaviour rather
+    // than throwing. Fail-soft (the db helper itself swallows persistence errors).
+    async _persistBootstrapBase(base){
+        if(base === null || base === undefined) return;
+        if(!this.db || typeof this.db.setSyncState !== 'function') return;
+        await this.db.setSyncState(this._bootstrapBaseKey(), String(base));
+    }
+
+    // Reload the persisted truncation join floor at startup. Only overwrites the
+    // in-memory _bootstrapBase when a durable value exists AND the field is not
+    // already set (a fresh bootstrap in this same process already set it). A
+    // full-history replica never wrote one, so this is a no-op there and the floor
+    // stays null (every block recomputes). Guarded for db instances without the
+    // durable store.
+    async _loadBootstrapBase(){
+        if(this._bootstrapBase !== null && this._bootstrapBase !== undefined) return;
+        if(!this.db || typeof this.db.getSyncState !== 'function') return;
+        let v = await this.db.getSyncState(this._bootstrapBaseKey());
+        if(v === null || v === undefined) return;
+        let n = Number(v);
+        if(Number.isFinite(n)){
+            this._bootstrapBase = n;
+            console.log('Reloaded truncation join floor _bootstrapBase=' + n + ' for ' +
+                this.chain + '/' + this.network + '/' + this.dbType + ' (survives restart)');
+        }
+    }
 
     // Operator clear: acknowledge an investigated divergence and allow resume.
     // Never automatic: a halted validator must not self-resume onto a contested

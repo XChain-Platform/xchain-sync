@@ -120,7 +120,7 @@ class SyncService {
     // Discover chains from the hub and create DB pools for both indexer
     // and decoder DBs. Decoder DBs use the same connection/sync machinery
     // as indexer DBs but skip the transparency log (decoder content is
-    // deterministic from the coin node — no synthetic chain-of-state hash
+    // deterministic from the coin node; no synthetic chain-of-state hash
     // needed).
     async _discoverChains(){
         let indexerConfigs = await this.hubClient.getIndexerConfigs();
@@ -163,7 +163,7 @@ class SyncService {
                     let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                     // Single-attempt probe: a node-internal source DB host is often
                     // unreachable from the replica box, and verifyDatabase() would
-                    // retry forever — hanging discovery instead of falling through to
+                    // retry forever, hanging discovery instead of falling through to
                     // the server /schema fetch below.
                     let sourceExists = await sourceDb.verifyDatabaseOnce();
                     if(sourceExists){
@@ -171,10 +171,10 @@ class SyncService {
                     }
                     await sourceDb.close();
                 } catch(e){
-                    // Source DB not reachable — schema will be fetched from server via /schema endpoint
-                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + ' — schema will be fetched from sync server');
+                    // Source DB not reachable; schema will be fetched from server via /schema endpoint
+                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
                 }
-                // Sync-owned tables: verifySyncTables is dbType-aware — indexer
+                // Sync-owned tables: verifySyncTables is dbType-aware. Indexer
                 // replicas get the full set (sync_meta/merkle_epochs/sync_halt),
                 // decoder replicas get only sync_halt (the durable divergence
                 // halt applies to both shapes; the transparency log does not).
@@ -201,7 +201,7 @@ class SyncService {
                     db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                 }
                 // Sync-owned tables (dbType-aware: indexer = full set, decoder =
-                // sync_halt only) — same rationale as the client branch above.
+                // sync_halt only); same rationale as the client branch above.
                 await db.verifySyncTables();
             }
 
@@ -243,7 +243,7 @@ class SyncService {
     }
 
     // Start a poller for a single chain/network/dbType.
-    // TransparencyLog is created only for indexer DBs — decoder content is
+    // TransparencyLog is created only for indexer DBs. Decoder content is
     // deterministic from the coin node and doesn't need a synthetic hash chain.
     _startPollerForChain(key, db, cfg){
         if(this.pollers.has(key)) return;
@@ -252,12 +252,12 @@ class SyncService {
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
-        // Start polling in background (don't await — runs indefinitely).
+        // Start polling in background (fire and forget; runs indefinitely).
         // A throw here means this chain's poller is permanently dead, which is
         // invisible at the /status endpoint (stale block_height, live timestamp).
         // Log the full error and exit so the container restart policy surfaces it.
         poller.start().catch(e => {
-            console.error('Poller crashed for ' + key + ' — exiting for restart:', e);
+            console.error('Poller crashed for ' + key + '; exiting for restart:', e);
             process.exit(1);
         });
     }
@@ -285,7 +285,7 @@ class SyncService {
         // sync is permanently dead while the process still appears healthy.
         // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
-            console.error('ClientSync crashed for ' + key + ' — exiting for restart:', e);
+            console.error('ClientSync crashed for ' + key + '; exiting for restart:', e);
             process.exit(1);
         });
     }
@@ -340,15 +340,17 @@ class SyncService {
     }
 
     // Get client sync state for a chain/network/dbType (client mode only).
-    // Returns { lastKnownServerBlock } — null values when not yet observed.
+    // Returns an object with null values for fields not yet observed.
     getClientSyncState(chain, network, dbType){
         let type = dbType || 'indexer';
         let key  = chain + ':' + network + ':' + type;
         let sync = this.clientSyncs.get(key);
         return {
             lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null,
-            halted:   sync ? sync.isHalted() : false,
-            haltInfo: (sync && sync.isHalted()) ? sync.getHaltInfo() : null
+            halted:        sync ? sync.isHalted() : false,
+            haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
+            truncated:     sync ? sync.isTruncated() : false,
+            bootstrapBase: sync ? sync.getBootstrapBase() : null
         };
     }
 
@@ -357,9 +359,9 @@ class SyncService {
         return this.clientSyncs.get(chain + ':' + network + ':' + (dbType || 'indexer')) || null;
     }
 
-    // Get the transparency log for a chain/network. Always indexer-only —
-    // the decoder DB does not maintain a transparency log (see decoder-DB
-    // architecture decisions: skip TransparencyLog for decoder).
+    // Get the transparency log for a chain/network. Indexer-only: the decoder
+    // DB does not maintain a transparency log (see decoder-DB architecture
+    // decisions: skip TransparencyLog for decoder).
     getTransparencyLog(chain, network){
         let key = chain + ':' + network + ':indexer';
         let entry = this.databases.get(key);

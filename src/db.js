@@ -465,12 +465,23 @@ class Database {
             if(String(extra).toLowerCase().indexOf('auto_increment') !== -1) continue;  // already correct; no-op
 
             console.log('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
-            // Re-key any id=0 row before the ALTER rebuilds the index (avoids
-            // collision when the attribute is restored). Mirrors the indexer migration.
+            // Re-key any id=0 rows before the ALTER rebuilds the index (avoids a
+            // collision when the AUTO_INCREMENT attribute is restored). Mirrors the
+            // indexer migration. The old scalar-subquery UPDATE assigned EVERY id=0
+            // row the SAME MAX(id)+1 value, so with more than one id=0 row the
+            // statement aborted mid-flight on a duplicate-key error (caught/logged,
+            // leaving AUTO_INCREMENT unrestored). Re-key each id=0 row to a DISTINCT
+            // value instead: a session-counter UPDATE assigns MAX(id)+1, MAX(id)+2,
+            // ... in a single ordered pass (each row gets its own id, no collision).
+            // Idempotent: with zero id=0 rows it is a no-op; fail-soft on race errors.
             try {
-                await this.doQuery(
-                    'UPDATE `' + table + '` SET id = (SELECT next_id FROM (SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM `' + table + '`) t) WHERE id = 0'
-                );
+                let baseRows = await this.doQuery('SELECT COALESCE(MAX(id), 0) AS base FROM `' + table + '`');
+                let base = (baseRows && baseRows.length) ? Number(baseRows[0].base || baseRows[0].BASE || 0) : 0;
+                // Seed the counter at MAX(id); the per-row `@n := @n + 1` yields
+                // base+1, base+2, ... for each id=0 row in id order. Ordering by a
+                // stable column keeps the assignment deterministic across replicas.
+                await this.doQuery('SET @n := ?', [base]);
+                await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
                 await this.doQuery('ALTER TABLE `' + table + '` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
                 console.log('Repaired AUTO_INCREMENT on ' + table + '.id');
             } catch(e){
@@ -715,6 +726,57 @@ class Database {
             [dbType]
         );
         return (rows && rows.length) ? rows[0] : null;
+    }
+
+    // --- Durable client key/value markers (sync_state) ------------------------
+    // Small durable store for per-client state that must survive a restart but is
+    // not block data (mirrors the sync_halt durable-state pattern). Created on
+    // demand so no schema file / migration is needed on existing replicas. Keys are
+    // namespaced by the caller (e.g. 'bootstrap_base:indexer'). Used by ClientSync
+    // to persist the truncated-replica join floor (_bootstrapBase): an in-memory-only
+    // field is lost on restart, dropping the join-block recompute skip and the
+    // truncation floor that protects against an in-window reorg below `base`.
+    async _ensureSyncStateTable(){
+        if(this._syncStateReady) return;
+        await this.doQuery(
+            "CREATE TABLE IF NOT EXISTS sync_state (" +
+            "  state_key   VARCHAR(128) NOT NULL PRIMARY KEY," +
+            "  state_value TEXT," +
+            "  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP" +
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci"
+        );
+        this._syncStateReady = true;
+    }
+
+    // Read a durable client marker. Returns the stored string, or null if absent
+    // (or if the table cannot be reached: fail-soft, the caller treats null as
+    // "no persisted value" and falls back to its in-memory default).
+    async getSyncState(key){
+        try {
+            await this._ensureSyncStateTable();
+            let rows = await this.doQuery("SELECT state_value FROM sync_state WHERE state_key=? LIMIT 1", [key]);
+            return (rows && rows.length) ? rows[0].state_value : null;
+        } catch(e){
+            console.error('getSyncState(' + key + ') failed (treating as unset):', e);
+            return null;
+        }
+    }
+
+    // Write a durable client marker (upsert). Fail-soft: a persistence failure is
+    // logged, never thrown, so it cannot abort a bootstrap/catch-up.
+    async setSyncState(key, value){
+        try {
+            await this._ensureSyncStateTable();
+            await this.doQuery(
+                "INSERT INTO sync_state (state_key, state_value) VALUES (?, ?) " +
+                "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=CURRENT_TIMESTAMP",
+                [key, value == null ? null : String(value)]
+            );
+            return true;
+        } catch(e){
+            console.error('setSyncState(' + key + ') failed (continuing):', e);
+            return false;
+        }
     }
 
     async clearHalt(dbType){

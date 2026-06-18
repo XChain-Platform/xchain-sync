@@ -206,6 +206,10 @@ async function startApi(){
             // peers see a forked/Byzantine validator immediately.
             row.halted = clientState.halted || false;
             if(clientState.halted) row.halt = clientState.haltInfo;
+            // Truncated-replica visibility: lets an explorer or operator know
+            // this replica cannot answer pre-base history queries.
+            row.truncated      = clientState.truncated || false;
+            row.bootstrap_base = clientState.bootstrapBase != null ? clientState.bootstrapBase : null;
         }
         // Per-table row counts for replica-completeness verification.
         //

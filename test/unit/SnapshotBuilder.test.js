@@ -286,7 +286,7 @@ describe('SnapshotBuilder', function(){
 
         // Regression: indexer index_* lookup tables have no block_index/action_index
         // cursor, so they previously fell through to the action_index branch, threw on
-        // the missing column, and were skipped — an incremental gap-heal left the
+        // the missing column, and were skipped; an incremental gap-heal left the
         // follower short on index rows (row-count + ledger-hash mismatch). They must be
         // re-dumped in full (the client applies them with INSERT IGNORE).
         it('indexer: re-dumps index_* lookup tables in full on incremental', async function(){
@@ -300,7 +300,7 @@ describe('SnapshotBuilder', function(){
                 // Full-dump query has no WHERE clause (whole table). If the code instead
                 // tried the action_index branch the query would carry a WHERE and this
                 // would not match, so the table would come back empty and the assert below
-                // would fail — exactly the bug being guarded against.
+                // would fail, exactly the bug being guarded against.
                 if(/SELECT \* FROM `index_addresses`\s*$/.test(query))
                     return [{ id: 1, address: 'a1' }, { id: 2, address: 'a2' }, { id: 3, address: 'a3' }];
                 return [];
@@ -412,12 +412,17 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(db.doQuery.firstCall.args[1][1], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
         });
 
-        // The decoder pubkeys table is keyed by address_id (its PK, FK into
-        // index_addresses.id) and has NO id column, so it must page by address_id.
-        it('decoder: pages the pubkeys table by its address_id cursor (no id column)', async function(){
+        // The decoder pubkeys table's PK (address_id) is NOT monotonic w.r.t. insert
+        // order (inserted at first-SPEND, address_id assigned at first-SEEN), so an
+        // address_id cursor would permanently skip late-inserted rows (#4413). pubkeys
+        // now carries a surrogate monotonic AUTO_INCREMENT `id` and must page by it.
+        it('decoder: pages the pubkeys table by its surrogate monotonic id cursor', async function(){
             let db = createMockDb('decoder_db');
             db.dbType = 'decoder';
-            db.doQuery.resolves([{ address_id: 5, pubkey: 'p1' }, { address_id: 9, pubkey: 'p2' }]);
+            db.doQuery.resolves([
+                { id: 5, address_id: 90, pubkey: 'p1' },
+                { id: 9, address_id: 12, pubkey: 'p2' }
+            ]);
             let res = new PassThrough();
             let chunks = [];
             res.on('data', c => chunks.push(c));
@@ -428,9 +433,9 @@ describe('SnapshotBuilder', function(){
             });
             let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
             assert.strictEqual(parsed.table, 'pubkeys');
-            assert.strictEqual(parsed.max_id, 9, 'cursor high-water is the max address_id');
+            assert.strictEqual(parsed.max_id, 9, 'cursor high-water is the max surrogate id, not address_id');
             let q = db.doQuery.firstCall.args[0];
-            assert.ok(/WHERE `address_id` > \? ORDER BY `address_id` ASC LIMIT \?/.test(q), 'pages by address_id, not id');
+            assert.ok(/WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(q), 'pages by surrogate id, not address_id');
         });
     });
 
@@ -513,7 +518,7 @@ describe('SnapshotBuilder', function(){
 
     describe('branch coverage', function(){
         // gzip.pipe(res) needs a REAL writable stream (removeListener etc.), so use a
-        // genuine PassThrough with a setHeader stub + chunk collection — the plain
+        // genuine PassThrough with a setHeader stub + chunk collection; the plain
         // createMockRes() object only works on the early-return (404) paths.
         function streamRes(){
             let res = new PassThrough();

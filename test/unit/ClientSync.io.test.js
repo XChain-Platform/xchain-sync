@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// ClientSync IO/branch coverage — NEW tests only.
+// ClientSync IO/branch coverage. NEW tests only.
 // Covers _fetchAndApplySchema, _bootstrapFromSnapshot, _runIncrementalCatchUp,
 // _incrementalCatchUp, _verifyAgainstSource, _verifyDecoderCompleteness (catch),
 // _connectWebSocket/_scheduleReconnect, stop, _scheduleHeartbeat/_flushHeartbeat/
@@ -76,7 +76,7 @@ function makeSync(configOverrides, dbOverrides){
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. _fetchAndApplySchema
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _fetchAndApplySchema', function(){
+describe('ClientSync: _fetchAndApplySchema', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -189,7 +189,7 @@ describe('ClientSync — _fetchAndApplySchema', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. _bootstrapFromSnapshot
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _bootstrapFromSnapshot', function(){
+describe('ClientSync: _bootstrapFromSnapshot', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -363,6 +363,24 @@ describe('ClientSync _bootstrapFromHeight', function(){
         assert.strictEqual(sync._bootstrapBase, 950000, 'join block recorded from since_block');
     });
 
+    it('re-pages lookups AFTER applying the block window (closes the T1<T2 FK gap)', async function(){
+        // The block window snapshot is taken at the source tip T2, higher than the
+        // lookup high-water T1 reached by the first paging pass on a fast chain. A
+        // second paging pass after apply pulls the (T1..T2] index_* rows so the
+        // terminal recompute and first live block resolve non-NULL consensus hashes.
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        stubTransport({ tip: 1000000, base: 950000 });
+
+        await sync._bootstrapFromHeight(50000);
+
+        assert.ok(paged.calledTwice, 'paged before and re-paged after the block window');
+        assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'block window applied once');
+        assert.ok(paged.secondCall.calledAfter(applier.applyIncrementalSnapshot.firstCall),
+            're-page runs AFTER the block window apply');
+    });
+
     it('clamps base to 0 when depth exceeds the tip', async function(){
         ({ sync, db, applier } = makeSync());
         sinon.stub(sync, '_fetchAndApplySchema').resolves();
@@ -498,19 +516,19 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         assert.strictEqual(get.callCount, 1, 'stopped after one page despite has_more');
     });
 
-    it('decoder: pages pubkeys by its address_id cursor', async function(){
+    it('decoder: pages pubkeys by its surrogate id cursor', async function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sinon.stub(rt, 'getTopology').returns({ index: ['pubkeys'] });
-        db.doQuery.resolves([{ m: 42 }]); // replica MAX(address_id) = 42
+        db.doQuery.resolves([{ m: 42 }]); // replica MAX(id) = 42
         // decoder schema_version is 2 (indexer is 3); the page must match it.
         let get = sinon.stub(axios, 'get').resolves(
             { data: Buffer.from(JSON.stringify({ schema_version: 2, table: 'pubkeys', max_id: 42, has_more: false, rows: [] })) });
 
         await sync._syncLookupTablesPaged('http://src:3006');
 
-        let maxQ = db.doQuery.getCalls().find(c => /MAX\(`address_id`\)/.test(c.args[0]));
-        assert.ok(maxQ, 'queries MAX(address_id) for pubkeys, not MAX(id)');
-        assert.ok(get.firstCall.args[0].indexOf('after_id=42') !== -1, 'cursor starts at replica address_id high-water');
+        let maxQ = db.doQuery.getCalls().find(c => /MAX\(`id`\)/.test(c.args[0]));
+        assert.ok(maxQ, 'queries MAX(id) for pubkeys (surrogate key added by fix #4413)');
+        assert.ok(get.firstCall.args[0].indexOf('after_id=42') !== -1, 'cursor starts at replica id high-water');
     });
 });
 
@@ -536,9 +554,26 @@ describe('ClientSync truncated catch-up', function(){
 
         await sync._runIncrementalCatchUp();
 
-        assert.ok(paged.calledOnce, 'lookups paged before the block window');
+        assert.ok(paged.calledTwice, 'lookups paged before AND re-paged after the block window');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
         assert.ok(snapCall.args[0].indexOf('skip_lookups=1') !== -1, 'block window fetched with skip_lookups');
+    });
+
+    it('re-pages lookups AFTER the block window apply so (T1..T2] FK targets are present before recompute', async function(){
+        // Regression: the skip_lookups snapshot is taken at the source tip T2 > the
+        // paging high-water T1, so blocks (T1..T2] reference index_* rows not pulled
+        // in the first page. The second _syncLookupTablesPaged must run after apply.
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        db.getLastBlock.resolves(100);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(paged.calledTwice, 'paged twice: before and after the block window');
+        assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'block window applied once');
+        assert.ok(paged.secondCall.calledAfter(applier.applyIncrementalSnapshot.firstCall),
+            're-page runs AFTER the block window is applied');
     });
 
     it('full-history chain does NOT page lookups and uses no skip_lookups (unchanged path)', async function(){
@@ -565,7 +600,7 @@ describe('ClientSync truncated catch-up', function(){
 
         await sync._runIncrementalCatchUp();
 
-        assert.ok(paged.calledOnce, 'decoder pages lookups in truncated mode');
+        assert.ok(paged.calledTwice, 'decoder pages lookups before AND re-pages after the window');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
         assert.ok(snapCall.args[0].indexOf('skip_lookups=1') !== -1, 'decoder block window fetched with skip_lookups');
     });
@@ -621,7 +656,7 @@ describe('ClientSync _verifyRecompute join-block skip', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. _runIncrementalCatchUp
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _runIncrementalCatchUp', function(){
+describe('ClientSync: _runIncrementalCatchUp', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -681,7 +716,7 @@ describe('ClientSync — _runIncrementalCatchUp', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. _incrementalCatchUp coalescing
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _incrementalCatchUp coalescing', function(){
+describe('ClientSync: _incrementalCatchUp coalescing', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -708,7 +743,7 @@ describe('ClientSync — _incrementalCatchUp coalescing', function(){
         sync._catchUpInFlight = neverResolve;
         sinon.stub(sync, '_runIncrementalCatchUp').resolves();
 
-        // Call it (do NOT await — the in-flight guard returns synchronously)
+        // Call it (do NOT await; the in-flight guard returns synchronously)
         sync._incrementalCatchUp(1);
 
         assert.strictEqual(sync._catchUpPending, true, '_catchUpPending must be set');
@@ -755,7 +790,7 @@ describe('ClientSync — _incrementalCatchUp coalescing', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. _verifyAgainstSource
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _verifyAgainstSource', function(){
+describe('ClientSync: _verifyAgainstSource', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -906,9 +941,9 @@ describe('ClientSync — _verifyAgainstSource', function(){
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. _verifyDecoderCompleteness — catch branch
+// 6. _verifyDecoderCompleteness catch branch
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _verifyDecoderCompleteness catch', function(){
+describe('ClientSync: _verifyDecoderCompleteness catch', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -931,7 +966,7 @@ describe('ClientSync — _verifyDecoderCompleteness catch', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. stop()
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — stop()', function(){
+describe('ClientSync: stop()', function(){
     let sync;
 
     beforeEach(function(){
@@ -972,7 +1007,7 @@ describe('ClientSync — stop()', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. _scheduleHeartbeat / _flushHeartbeat / _sendRestHeartbeat
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — heartbeat', function(){
+describe('ClientSync: heartbeat', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1081,7 +1116,7 @@ describe('ClientSync — heartbeat', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 9. _connectWebSocket / _scheduleReconnect
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _connectWebSocket', function(){
+describe('ClientSync: _connectWebSocket', function(){
     // Use proxyquire to inject a fake ws constructor
     let ClientSyncWS, fakeWsInstance, FakeWS;
 
@@ -1262,7 +1297,7 @@ describe('ClientSync — _connectWebSocket', function(){
 
         // Stub _connectWebSocket so it doesn't actually try to create another WS
         sinon.stub(sync, '_connectWebSocket');
-        // Only the schedule — not the one registered in constructor
+        // Only the schedule, not the one registered in constructor
         sync._scheduleReconnect('http://src1:3006', 0);
         assert.strictEqual(sync._connectWebSocket.called, false);
 
@@ -1298,7 +1333,7 @@ describe('ClientSync — _connectWebSocket', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 10a. _handleEvent lastKnownServerBlock branches
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — _handleEvent lastKnownServerBlock branches', function(){
+describe('ClientSync: _handleEvent lastKnownServerBlock branches', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1332,7 +1367,7 @@ describe('ClientSync — _handleEvent lastKnownServerBlock branches', function()
 // ─────────────────────────────────────────────────────────────────────────────
 // 10b. Misc branch coverage (_haltOnDivergence, _verifyRecompute, clearHalt, _safeParse)
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — misc branch coverage', function(){
+describe('ClientSync: misc branch coverage', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1450,7 +1485,7 @@ describe('ClientSync — misc branch coverage', function(){
 // ─────────────────────────────────────────────────────────────────────────────
 // 10. Small branches
 // ─────────────────────────────────────────────────────────────────────────────
-describe('ClientSync — small branches', function(){
+describe('ClientSync: small branches', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -1584,7 +1619,7 @@ describe('ClientSync — small branches', function(){
         await sync._handleReorg({ type: 'reorg', block_index: 10 }); // depth = 91 > 5
 
         assert.strictEqual(rb.rollback.called, false);
-        assert.ok(sync.isHalted(), 'decoder must halt durably — it has no recompute fallback');
+        assert.ok(sync.isHalted(), 'decoder must halt durably; it has no recompute fallback');
         assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
     });

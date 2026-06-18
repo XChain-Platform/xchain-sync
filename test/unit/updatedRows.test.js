@@ -50,9 +50,10 @@ describe('updatedRows.collectUpdatedRows', function(){
         // No query should reference deactivation_block (delay unknown, so skip).
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
-        // The slash + request_status + cooldown-status + anchor_invalid classes still run,
-        // none of which depend on the activation delay (4 slash + 2 request + 2 cooldown-status + 1 anchor = 9).
-        assert.strictEqual(db.calls.length, 9);
+        // The slash + request_status + cooldown-status + anchor_invalid + tokens-supply
+        // classes still run, none of which depend on the activation delay
+        // (4 slash + 2 request + 2 cooldown-status + 1 anchor + 1 tokens = 10).
+        assert.strictEqual(db.calls.length, 10);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -95,6 +96,25 @@ describe('updatedRows.collectUpdatedRows', function(){
         // must be emitted once (same UNIQUE action_index).
         assert.strictEqual(out.stakes.length, 1);
         assert.strictEqual(out.stakes[0].action_index, 9);
+    });
+
+    it('refreshes surviving tokens rows for ticks touched by ledger changes in the window', async function(){
+        let db = fakeDb([
+            { match: 'FROM `tokens` t WHERE t.tick_id IN', rows: [{ id: 5, tick_id: 42, action_index: 100, last_action_index: 100, supply: '1000' }] }
+        ]);
+        let out = await collectUpdatedRows(db, 200, 200, 6);
+        // The tokens refresh query joins credits/debits/escrows to actions on the
+        // [from, to] block window (200..200) and carries the full current row.
+        let tq = db.calls.find(c => c.sql.indexOf('FROM `tokens` t WHERE t.tick_id IN') !== -1);
+        assert.ok(tq, 'expected the tokens-supply refresh query');
+        assert.deepStrictEqual(tq.args, [200, 200]);
+        assert.ok(tq.sql.indexOf('FROM credits') !== -1);
+        assert.ok(tq.sql.indexOf('FROM debits') !== -1);
+        assert.ok(tq.sql.indexOf('FROM escrows') !== -1);
+        // SELECT t.* carries the source `id` so the follower's upsert lands on the PK.
+        assert.ok(tq.sql.indexOf('SELECT t.*') !== -1);
+        assert.ok(out.tokens && out.tokens.length === 1);
+        assert.strictEqual(out.tokens[0].supply, '1000');
     });
 
     it('uses target_table to separate contract_stakes vs contract_unstakes', async function(){

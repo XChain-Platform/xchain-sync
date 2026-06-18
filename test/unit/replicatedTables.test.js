@@ -5,7 +5,7 @@
 //
 // This file is part of XChain Platform. Licensed under the GNU Affero
 // General Public License v3.0 or later; see LICENSE.md. A commercial
-// license (without AGPL source-disclosure terms) is available —
+// license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
 const assert = require('assert');
@@ -18,7 +18,7 @@ describe('replicatedTables', function(){
         before(function(){ tables = getReplicatedTables('indexer'); });
 
         it('covers the core block/action tables a follower must hold', function(){
-            // balances is intentionally NOT replicated per-block — it is a
+            // balances is intentionally NOT replicated per-block; it is a
             // derived aggregate the follower recomputes locally (see replicatedTables.js
             // and rollback-coverage.test.js RECOMPUTED). So it must NOT appear here.
             for(let t of ['blocks', 'transactions', 'actions',
@@ -44,10 +44,10 @@ describe('replicatedTables', function(){
 
         it('excludes snapshot-only / operator-local / non-deterministic tables', function(){
             // These converge via other channels (full snapshot, hub mirror) and
-            // legitimately diverge between nodes — comparing their counts would
+            // legitimately diverge between nodes, so comparing their counts would
             // raise false incompleteness alarms.
             for(let t of ['markets', 'icons', 'price_snapshots',
-                          'attestation_validator_stats', 'mempool_transactions']){
+                          'attest_validator_stats', 'mempool_transactions']){
                 assert.ok(!tables.includes(t), 'expected replicated set to exclude ' + t);
             }
         });
@@ -73,14 +73,22 @@ describe('replicatedTables', function(){
             }
         });
 
-        it('excludes dispensers (live-pruned each block; full-snapshot only)', function(){
-            // The decoder prunes expired dispensers every block with a
-            // count-reducing DELETE that the insert-only per-block stream cannot
-            // represent, so a per-block-replicated count would diverge upward
-            // forever. dispensers converges via the full snapshot instead and is
-            // therefore deliberately absent from the per-block replicated set.
-            assert.ok(!getReplicatedTables('decoder').includes('dispensers'),
-                      'expected decoder set to exclude dispensers');
+        it('includes dispensers in the completeness count set but NOT per-block-streamed', function(){
+            // #3835: the decoder soft-expires dispensers (UPDATE) and hard-purges
+            // them (DELETE) off the block stream, so it is NOT per-block-streamed
+            // (absent from blockScoped/txScoped/actionScoped/index). It IS listed in
+            // `special` so it enters the /status completeness count: the drift the
+            // bootstrap full dump cannot replay now surfaces as a TABLE_COUNT_MISMATCH
+            // instead of drifting silently.
+            let topo = getTopology('decoder');
+            for(let bucket of ['blockScoped', 'txScoped', 'actionScoped', 'index']){
+                assert.ok(!topo[bucket].includes('dispensers'),
+                          'dispensers must not be per-block-streamed (bucket ' + bucket + ')');
+            }
+            assert.ok((topo.special || []).includes('dispensers'),
+                      'dispensers must be in the decoder special bucket');
+            assert.ok(getReplicatedTables('decoder').includes('dispensers'),
+                      'dispensers must join the decoder completeness count set');
         });
 
         it('has no action-scoped tables', function(){

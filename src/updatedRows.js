@@ -55,6 +55,14 @@
  *     Forward twin of ClientRollback's reverse 'unverified' reset (which joins on
  *     exactly this predicate). status_id is not hashed raw; it is resolved via
  *     status name by the follower's upsert using the replicated index_statuses table.
+ *   - supply refresh on a surviving tokens row (db.createToken / db.updateTokens UPDATE
+ *     tokens.supply in place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). The
+ *     row's action_index AND last_action_index both stay at the DEPLOY action, below the
+ *     cursor, so the action-scoped stream misses every later supply bump. Found via the
+ *     ticks touched by a credit / debit / escrow row in this window (those ledger tables
+ *     are action-scoped, so they pin the supply-change to a block). Carries the full
+ *     current tokens row; the follower's upsert overwrites supply on the PRIMARY-KEY match.
+ *     NOT mirrored in stateHash.js: supply is deliberately not in any hash preimage.
  *
  * tokens.escrow_action_index is intentionally NOT carried here: it is re-derived
  * on the follower from the already-replicated offer/status tables (the same
@@ -200,6 +208,44 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             "WHERE p.version = 1 AND c.block_index BETWEEN ? AND ?",
             [from, to], conn);
         add('anchor_actions', anchorRows);
+    } catch(e){
+        // Table/columns may not exist on older source schemas; skip.
+    }
+
+    // 6. tokens.supply refresh on surviving token rows. The indexer materialises
+    //    tokens.supply as an in-place UPDATE (db.createToken on DEPLOY/ISSUE/MINT and
+    //    db.updateTokens after order/swap/dispense settlement and STAKE rebalances). The
+    //    row's action_index stays at the DEPLOY action, and last_action_index is also
+    //    written back to that same DEPLOY index (createToken sets both from the first
+    //    valid issuance), so BOTH columns sit below the catch-up cursor: the
+    //    action-scoped stream keyed on action_index never carries the later supply bump.
+    //    Followers therefore served a stale supply (invisible to /status counts and not
+    //    covered by any hash). Supply changes exactly when a credit / debit / escrow row
+    //    is written for the tick, and those ledger tables ARE action-scoped (they ride the
+    //    per-block / catch-up stream). So the set of ticks whose supply moved in this
+    //    window is exactly the set of tick_ids touched by a credit / debit / escrow row
+    //    whose action falls in [from, to]. We carry the CURRENT full tokens row for those
+    //    ticks (SELECT t.* -> the source `id`, which followers replicate verbatim, so the
+    //    follower's INSERT ... ON DUPLICATE KEY UPDATE lands on the matching PRIMARY KEY
+    //    row and overwrites supply to the source's current value). Idempotent: re-sending
+    //    an already-current row is a no-op. Reorg-safe: on rollback the source
+    //    re-materialises supply (rollback.js -> updateTokens) and the next forward window's
+    //    ledger changes re-emit the refreshed row; in-order block apply means a later
+    //    window's row never lands before an earlier one. tokens.supply is deliberately NOT
+    //    added to any hash preimage (consensus block hashes or the non-consensus state_hash
+    //    in stateHash.js); this is a pure replication/serving fix, so this class has no twin
+    //    in buildStateHashData and adding it cannot trigger a state-hash divergence HALT.
+    try {
+        let tokenRows = await db.doQuery(
+            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
+                "SELECT DISTINCT l.tick_id FROM ( " +
+                    "SELECT tick_id, action_index FROM credits " +
+                    "UNION ALL SELECT tick_id, action_index FROM debits " +
+                    "UNION ALL SELECT tick_id, action_index FROM escrows " +
+                ") l JOIN actions a ON a.action_index = l.action_index " +
+                "WHERE a.block_index BETWEEN ? AND ? AND l.tick_id IS NOT NULL)",
+            [from, to], conn);
+        add('tokens', tokenRows);
     } catch(e){
         // Table/columns may not exist on older source schemas; skip.
     }
