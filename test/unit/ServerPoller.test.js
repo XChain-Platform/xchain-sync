@@ -245,7 +245,7 @@ describe('ServerPoller', function(){
         it('does not skip blocks advanced during downtime when polling resumes', async function(){
             // Restart-mid-advance: recorded through block 100, source now at 105.
             // After seeding the cursor from the high-water mark, _poll must record
-            // every block in [101, 105] — none may be skipped.
+            // every block in [101, 105]: none may be skipped.
             log.getHighWaterMark.resolves(100);
             db.getLastBlock.resolves(105);
             db.getBlockHashRow.callsFake(async (idx) => ({
@@ -341,7 +341,7 @@ describe('ServerPoller', function(){
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
-            // Internal SLASH emission: action_index is NULL — getActionScopedRows would drop it.
+            // Internal SLASH emission: action_index is NULL; getActionScopedRows would drop it.
             db.getEmissionRowsForBlock.resolves([
                 { execution_index: 10, emitted_action: 'SLASH', action_index: null, position: 0 }
             ]);
@@ -464,7 +464,7 @@ describe('ServerPoller', function(){
             db.getBlockScopedRows.resolves([]);
             db.getTransactions.resolves([{ tx_index: 1, source_id: 10 }]);
             // An action interning a brand-new action name (action_id) + status (status_id),
-            // and a send interning a new ticker (tick_id) — the mid-stream "new value" case.
+            // and a send interning a new ticker (tick_id): the mid-stream "new value" case.
             db.getActions.resolves([{ action_index: 1, action_id: 7, status_id: 3 }]);
             db.getActionScopedRows.callsFake(async (table) => {
                 if(table === 'sends') return [{ action_index: 1, tick_id: 42, get_coin_id: 5 }];

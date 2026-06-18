@@ -26,16 +26,16 @@
  *     block, so it misses the credit at the maturity block (wrong block) and at
  *     the original block (the credit did not exist yet);
  *   - the updated_rows channel is keyed by a UNIQUE action_index and applied
- *     with ON DUPLICATE KEY UPDATE — credits has no unique key, so it cannot
+ *     with ON DUPLICATE KEY UPDATE; credits has no unique key, so it cannot
  *     ride that channel;
  *   - the incremental snapshot scopes credits by action_index >= cursor, and
  *     the backdated credit sits below the cursor.
  * A follower (which does not run processCooldownCompletions) therefore stays
- * permanently short by every matured refund — steady-state, hash-blind balance
+ * permanently short by every matured refund: steady-state, hash-blind balance
  * divergence (the credit is in no per-block ledger hash at the maturity height).
  *
  * This selects those credits by MATURITY block (cooldown_end_block) so they can
- * be merged into the normal `credits` table payload — the exact FORWARD mirror
+ * be merged into the normal `credits` table payload; this is the exact FORWARD mirror
  * of ClientRollback's reverse delete (same join keys, same cooldown_end_block /
  * status='completed' predicate, GAS tick for the capability refund). They then
  * flow through the existing credits apply path (_insertRows + balance rebuild),
@@ -49,11 +49,11 @@ const { gasTickSymbol } = require('./consensus-constants');
 // Select the matured cooldown-refund credit rows whose maturity block
 // (cooldown_end_block) falls in the inclusive window [fromBlock, toBlock].
 // Returns raw `credits` rows (action_index, address_id, tick_id, amount),
-// deduped by their logical identity (action_index, address_id, tick_id) — the
+// deduped by their logical identity (action_index, address_id, tick_id); the
 // credits table has no unique key, so the dedup is explicit. The caller merges
 // these into the block / snapshot `credits` array (and dedups the union).
 //
-//   db        the source Database (indexer dbType only — callers must gate)
+//   db        the source Database (indexer dbType only; callers must gate)
 //   fromBlock inclusive lower maturity-block bound
 //   toBlock   inclusive upper maturity-block bound (for a single live block,
 //             pass fromBlock === toBlock)
@@ -78,7 +78,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
         }
     }
 
-    // Capability maturity refund — paid in GAS, keyed by the unstake's
+    // Capability maturity refund: paid in GAS, keyed by the unstake's
     // action_index. Forward mirror of ClientRollback's capability reverse delete
     // (same join keys + cooldown_end_block/status predicate); the GAS tick is the
     // frozen consensus constant, never a hub poll.
@@ -93,11 +93,11 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
                 [gasTick, completedStatusId, from, to], conn);
             add(rows);
         } catch(e){
-            // Table/column may not exist on older source schemas — skip.
+            // Table/column may not exist on older source schemas; skip.
         }
     }
 
-    // Contract maturity refund — paid in the unstake's own tick. Forward mirror
+    // Contract maturity refund: paid in the unstake's own tick. Forward mirror
     // of ClientRollback's contract reverse delete.
     try {
         let rows = await db.doQuery(
@@ -107,7 +107,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
             [completedStatusId, from, to], conn);
         add(rows);
     } catch(e){
-        // Table may not exist on older source schemas — skip.
+        // Table may not exist on older source schemas; skip.
     }
 
     return Array.from(acc.values());

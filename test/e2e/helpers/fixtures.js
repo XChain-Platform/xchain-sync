@@ -21,10 +21,10 @@ function blockHash(blockIndex, label) {
 
 // Compute the REAL consensus-hash triple for a block being seeded (from the
 // raw rows already inserted, chained off the previous block's committed
-// hashes — exactly what the indexer commits and what VERIFY_RECOMPUTE
+// hashes (exactly what the indexer commits and what VERIFY_RECOMPUTE
 // re-derives), insert the three hashes into index_transactions, and return
 // their ids. Fixtures used to fabricate these hashes, which made the data
-// hash-INCONSISTENT — any client running the production-default
+// hash-INCONSISTENT: any client running the production-default
 // VERIFY_RECOMPUTE would halt on fixture data, so the whole verification
 // track was untestable end-to-end.
 //
@@ -32,7 +32,7 @@ function blockHash(blockIndex, label) {
 // transactions joins) and the PREVIOUS block's blocks row, so the caller
 // seeds raw rows first, calls this, and inserts the blocks row LAST, fully
 // formed. The blocks row is what makes a block visible to ServerPoller
-// (getLastBlock), so visibility is atomic — a poller may never observe a
+// (getLastBlock), so visibility is atomic: a poller may never observe a
 // block whose hash links are still NULL (that broadcast would carry null
 // committed hashes and trip every client's recompute halt). Seeding must run
 // in ascending block order (the chain folds in the previous block's hashes).
@@ -51,7 +51,7 @@ async function computeAndInsertBlockHashes(db, blockIndex) {
 
 // Get-or-create an index_actions row, mirroring the real indexer's db.createAction.
 // index_actions carries only a NON-unique index on `action`, so a blind
-// `INSERT IGNORE` does NOT dedup — it inserts one duplicate row per call. The real
+// `INSERT IGNORE` does NOT dedup; it inserts one duplicate row per call. The real
 // indexer SELECTs first and inserts only when absent, so a given action type is a
 // single row referenced by actions.action_id. Without this, the fixtures pile up an
 // unreferenced duplicate index_actions row per block (nothing points at their id);
@@ -135,7 +135,7 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
     // chain that reorgs and re-mines block N assigns FRESH indexes to the
     // replacement transactions. Reorg scenarios that re-seed a block range
     // must pass a distinct offset, or the replacement rows would collide with
-    // (and silently overwrite) the orphaned originals — hiding exactly the
+    // (and silently overwrite) the orphaned originals, hiding exactly the
     // divergence those scenarios exist to create.
     let off = opts.indexOffset || 0;
     let blocks = [];

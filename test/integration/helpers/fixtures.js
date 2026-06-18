@@ -13,7 +13,7 @@
 // rebuilt balances with DOUBLE-promoting SQL the applier no longer uses, and
 // had missed the ensureIndexAction dedup fix. The integration tier uses only
 // a subset of the e2e fixture API (seedBlocks / deleteBlocksFrom), so it now
-// re-exports the single maintained implementation — which commits REAL
+// re-exports the single maintained implementation, which commits REAL
 // computed block hashes (hash-consistent data) and rebuilds balances with the
 // shared src/balance-helpers.js SQL.
 module.exports = require('../../e2e/helpers/fixtures');

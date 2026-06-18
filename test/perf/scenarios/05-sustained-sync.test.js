@@ -23,7 +23,7 @@ const DURATION_MS       = parseInt(process.env.PERF_SUSTAINED_MS || '60000');
 const BLOCKS_PER_BATCH  = 50;
 
 describe('05 Sustained Sync', function () {
-    this.timeout(0); // no timeout — duration controlled by PERF_SUSTAINED_MS
+    this.timeout(0); // no timeout; duration controlled by PERF_SUSTAINED_MS
 
     const reporter = new ReportGenerator();
     let sourceDb, replicaDb, server, client;
@@ -126,7 +126,7 @@ describe('05 Sustained Sync', function () {
         // Memory check: heap growth should be bounded
         const heapGrowth = parseFloat(stats.memory.heapGrowthMb);
         assert.ok(heapGrowth < 50,
-            `Heap grew by ${heapGrowth}MB during sustained sync — possible memory leak`);
+            `Heap grew by ${heapGrowth}MB during sustained sync (possible memory leak)`);
 
         // Verify replica is consistent
         const replicaBlock = await replicaDb.getLastBlock();

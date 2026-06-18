@@ -15,7 +15,7 @@
  * XChain Indexer Sync - Merkle Tree
  *
  * Pure binary SHA-256 Merkle tree for transparency log proofs.
- * No external dependencies — uses Node.js built-in crypto.
+ * No external dependencies; uses Node.js built-in crypto.
  *
  ********************************************************************/
 
@@ -83,7 +83,7 @@ class MerkleTree {
                     position: isRight ? 'left' : 'right'
                 });
             } else {
-                // Odd node — sibling is self (duplicated)
+                // Odd node: sibling is self (duplicated)
                 proof.push({
                     hash:     layer[index],
                     position: 'right'

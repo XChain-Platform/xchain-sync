@@ -10,7 +10,7 @@
  *
  **********************************************************************
  *
- * Generator for test/fixtures/state-hash-vectors.json — the state_hash
+ * Generator for test/fixtures/state-hash-vectors.json: the state_hash
  * conformance lock (sibling of gen-block-hash-vectors.js). It runs the shared
  * buildStateHashData over canned RESOLVED rows but computes the final hash with
  * the REAL xchain-indexer getDataHash, so the expected hash is authentically the
@@ -34,7 +34,7 @@ const { buildStateHashData } = require('../../src/stateHash');
 const IndexerUtil = require('../../../xchain-indexer/src/utility.js');
 
 const BLOCK_INDEX     = 1000;
-const ACTIVATION_DELAY = 6;       // BTC regtest ACTIVATION_DELAY_BLOCKS — deactivation stamp = 1000 + 6
+const ACTIVATION_DELAY = 6;       // BTC regtest ACTIVATION_DELAY_BLOCKS; deactivation stamp = 1000 + 6
 const GAS_TICK        = 'XCHAIN';
 const COMPLETED_ID    = 7;
 

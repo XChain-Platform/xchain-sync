@@ -12,11 +12,11 @@
  *
  **********************************************************************
  *
- * decoderFixtures — seed/inspect helpers for a decoder-shaped MariaDB.
+ * decoderFixtures: seed/inspect helpers for a decoder-shaped MariaDB.
  *
  * Companion to fixtures.js (which seeds the indexer schema). Each block
  * here gets one transaction with one output, all from a single source
- * address — enough to round-trip through the decoder sync path.
+ * address, enough to round-trip through the decoder sync path.
  *
  ********************************************************************/
 
@@ -114,7 +114,7 @@ async function seedDecoderBlocks(db, startBlock, endBlock, opts){
             [txIndex, 0, dstId, '0.001']
         );
 
-        // events (operational, not block-scoped — fine if it drifts in count)
+        // events (operational, not block-scoped; fine if it drifts in count)
         await db.doQuery(
             "INSERT INTO events (time, code, data) VALUES (FROM_UNIXTIME(?), ?, ?)",
             [blockTime, 'BLOCK_PARSED', JSON.stringify({ block_index: i })]

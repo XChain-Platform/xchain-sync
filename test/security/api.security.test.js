@@ -47,7 +47,7 @@ describe('API security', function(){
 
         // Open-access mode: no key provisioned (single-host / regtest / managed
         // deployments). api.js warns at startup; /halt/clear stays disabled.
-        it('passes through when no API key is configured (empty string) — open mode', function(done){
+        it('passes through when no API key is configured (empty string, open mode)', function(done){
             let middleware = createApiKeyMiddleware('');
             let req = createMockReq();
             let res = createMockRes();
@@ -57,7 +57,7 @@ describe('API security', function(){
             });
         });
 
-        it('passes through when no API key is configured (null) — open mode', function(done){
+        it('passes through when no API key is configured (null, open mode)', function(done){
             let middleware = createApiKeyMiddleware(null);
             let req = createMockReq();
             let res = createMockRes();
@@ -66,7 +66,7 @@ describe('API security', function(){
             });
         });
 
-        it('passes through when no API key is configured (undefined) — open mode', function(done){
+        it('passes through when no API key is configured (undefined, open mode)', function(done){
             let middleware = createApiKeyMiddleware(undefined);
             let req = createMockReq();
             let res = createMockRes();
@@ -162,7 +162,7 @@ describe('API security', function(){
             assert.strictEqual(genericError.error.includes('172.18'), false);
             assert.strictEqual(genericError.error, 'Internal server error');
 
-            // A sensitive error would contain them — this is what we prevent
+            // A sensitive error would contain them; this is what we prevent
             assert.strictEqual(sensitiveError.error.includes('Access denied'), true);
         });
 

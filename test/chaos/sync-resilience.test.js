@@ -13,7 +13,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Chaos Engineering — Sync Resilience
+ * Chaos Engineering: Sync Resilience
  *
  * Experiment IDs:
  *   CE-SYNC-01  Server crash → WebSocket reconnect → gap healing
@@ -21,7 +21,7 @@
  *   CE-SYNC-03  Reorg during active sync (with source latency)
  *   CE-SYNC-04  Compound: source down + server crash + recovery → full integrity
  *
- * These are the highest-level chaos scenarios — they combine infrastructure
+ * These are the highest-level chaos scenarios; they combine infrastructure
  * faults with specific sync state conditions (gaps, reorgs, compound failures).
  * Tests manage server/client lifecycle per-test (not shared across describe).
  *
@@ -184,10 +184,10 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         await server.poll();
         await sleep(1000);
 
-        // Reconnect client — simulates resumption from block 30
+        // Reconnect client; simulates resumption from block 30
         client = createClient(server.getUrl(), { reconnectDelay: 500 });
 
-        // Don't do full bootstrap — just connect live sync
+        // Don't do full bootstrap; just connect live sync
         // The client's replica already has blocks 1-30
         await client.connectLive();
 
@@ -236,14 +236,14 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
         const initialSync = await waitForSyncRecovery(20, 30000);
         expect(initialSync).to.be.above(-1);
 
-        // Inject latency on source DB reads — reorg detection will be slow
+        // Inject latency on source DB reads; reorg detection will be slow
         await sourceFaults.addLatency(1000);
 
         // Simulate reorg: delete blocks 18-20 from source
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         await fixtures.deleteBlocksFrom(sourceDbDirect, 18);
 
-        // Force server poll — will detect reorg (currentBlock=17 < lastPolled=20)
+        // Force server poll; will detect reorg (currentBlock=17 < lastPolled=20)
         try { await server.poll(); } catch { /* may fail under latency */ }
         await sleep(2000);
 
@@ -281,10 +281,10 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
 });
 
 // -------------------------------------------------------------------------
-// CE-SYNC-04: Compound — Source Down + Server Crash + Recovery
+// CE-SYNC-04: Compound Failure (Source Down + Server Crash + Recovery)
 // -------------------------------------------------------------------------
 
-describe('CE-SYNC-04: Compound Failure — Source Down + Server Crash', function () {
+describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function () {
 
     let server, client;
 
@@ -324,7 +324,7 @@ describe('CE-SYNC-04: Compound Failure — Source Down + Server Crash', function
         // Client loses WebSocket connection
         await sleep(3000);
 
-        // Phase 3: Recovery — source comes back, server restarts
+        // Phase 3: Recovery (source comes back, server restarts)
         await sourceFaults.dbUp();
         await sleep(2000);
 

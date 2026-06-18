@@ -76,7 +76,7 @@ describe('E2E: Multi-Chain Synchronization', function() {
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
-        // Routes mirror src/api.js — namespaced by :dbType.
+        // Routes mirror src/api.js, namespaced by :dbType.
         app.get('/status/:dbType/:chain/:network', async (req, res) => {
             let lastBlock = await sourceDb.getLastBlock();
             let hashRow = lastBlock !== null ? await sourceDb.getBlockHashRow(lastBlock) : null;

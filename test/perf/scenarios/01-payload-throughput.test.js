@@ -81,7 +81,7 @@ describe('01 Payload Throughput', function () {
                 collector.endBlock(newBlock, { poll: pollMs });
                 processed += blocksThisPoll;
             } else {
-                // No progress — poll again
+                // No progress, poll again
                 collector.endBlock(startBlock, { poll: pollMs });
             }
         }

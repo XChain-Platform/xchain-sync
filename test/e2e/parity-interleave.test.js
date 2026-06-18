@@ -16,7 +16,7 @@
 // live server/client pair, then quiesces and demands the S1/S2 property:
 //
 //   the replica is BYTE-IDENTICAL to the source (full replicated set +
-//   per-block recompute conformance), OR it is durably HALTED — and a halt is
+//   per-block recompute conformance), OR it is durably HALTED. A halt is
 //   legitimate only when a reorg crossed a DELIVERY INTERRUPTION: it fired
 //   inside an explicit disconnect window, or its replacement blocks were
 //   still in flight when a disconnect/server-restart cut the stream (either
@@ -96,12 +96,12 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
     }
 
     // A reorg is "absorbed" once the replica's tip blocks row equals the
-    // source's — same height + same consensus hash ids means the chained
-    // per-block recompute already verified everything beneath it. Checked at
+    // source's (same height + same consensus hash ids means the chained
+    // per-block recompute already verified everything beneath it). Checked at
     // delivery interruptions (disconnect / server-restart): a reorg whose
     // replacement blocks were still in flight leaves the replica on an
     // orphaned tip, and the catch-up join recompute will (correctly) halt on
-    // resume — the same class as a reorg inside an explicit disconnect window.
+    // resume, the same class as a reorg inside an explicit disconnect window.
     async function replicaAbsorbedSourceTip() {
         const q = 'SELECT block_index, ledger_hash_id, actions_hash_id, contract_hash_id ' +
                   'FROM blocks ORDER BY block_index DESC LIMIT 1';
@@ -121,7 +121,7 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
         let tip = 10;
         let generation = 0;            // bumped per reorg → fresh index space
         let connected = true;
-        // Halt legitimacy: a reorg crossed a delivery interruption — it fired
+        // Halt legitimacy: a reorg crossed a delivery interruption (it fired
         // while disconnected, or its replacement blocks were unabsorbed when a
         // disconnect/server-restart cut the stream. (Over-approximates by one
         // sided checks at the interruption point, never under-approximates: a
@@ -173,7 +173,7 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
                 if (!connected) { trace.push('disc-noop'); continue; }
                 await client.stop();
                 connected = false;
-                // stop() drained in-flight applies — the replica's state for
+                // stop() drained in-flight applies; the replica's state for
                 // this window is final. An unabsorbed reorg here can orphan-
                 // join on resume, so a later halt is legitimate.
                 if (pendingReorg) {
@@ -193,7 +193,7 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
             } else if (action === 'serverRestart') {
                 await server.stop();
                 // The WS stream is cut even though the harness still counts
-                // the client as connected — same interruption hazard as a
+                // the client as connected; same interruption hazard as a
                 // disconnect for a reorg whose replacements were in flight.
                 if (pendingReorg) {
                     if (await replicaAbsorbedSourceTip()) pendingReorg = false;
@@ -214,7 +214,7 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
                 assert.ok(reorgCrossedInterruption,
                     'seed=' + seed + ' [' + trace.join(' ') + ']: client halted (' +
                     JSON.stringify(client.sync.getHaltInfo()) +
-                    ') without a reorg crossing a delivery interruption — halts are only legitimate there');
+                    ') without a reorg crossing a delivery interruption; halts are only legitimate there');
                 await client.stop();
                 await testDb.truncateAll(replicaDb);
                 client = new ClientProcess(replicaDb, server.getUrl());

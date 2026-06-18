@@ -13,7 +13,7 @@
  **********************************************************************
  * Tier 1 Fuzz: HashVerifier
  *
- * Pure synchronous module with no I/O — ideal for exhaustive property assertions.
+ * Pure synchronous module with no I/O, ideal for exhaustive property assertions.
  * Tests crash safety and correctness invariants for cross-source hash comparison
  * and hash chain continuity verification.
  */

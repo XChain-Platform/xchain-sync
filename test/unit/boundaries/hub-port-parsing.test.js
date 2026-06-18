@@ -22,11 +22,11 @@ describe('Boundary: HubClient Port Parsing', function(){
     afterEach(function(){ sinon.restore(); });
 
     describe('_parsePort static method', function(){
-        it('valid port — returns as-is', function(){
+        it('valid port: returns as-is', function(){
             assert.strictEqual(HubClient._parsePort('3306', undefined), 3306);
         });
 
-        it('zero — preserved (not treated as falsy)', function(){
+        it('zero: preserved (not treated as falsy)', function(){
             assert.strictEqual(HubClient._parsePort('0', undefined), 0);
         });
 
@@ -59,7 +59,7 @@ describe('Boundary: HubClient Port Parsing', function(){
         });
 
         it('uses secondary when primary is non-numeric', function(){
-            // primary 'abc' → fallback to secondary? No — primary is not empty/null/undefined
+            // primary 'abc' → fallback to secondary? No; primary is not empty/null/undefined
             // so it's used directly → parseInt('abc') = NaN → defaults to 3306
             assert.strictEqual(HubClient._parsePort('abc', '5432'), 3306);
         });

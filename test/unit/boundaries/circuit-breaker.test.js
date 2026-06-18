@@ -38,7 +38,7 @@ describe('Boundary: Circuit Breaker', function(){
     afterEach(function(){ sinon.restore(); });
 
     describe('failure threshold (10)', function(){
-        it('9 failures — circuit stays closed', async function(){
+        it('9 failures: circuit stays closed', async function(){
             let conn = { release: sinon.stub() };
             let callCount = 0;
             pool = {
@@ -59,7 +59,7 @@ describe('Boundary: Circuit Breaker', function(){
             assert.strictEqual(db.circuitFailures, 0);
         });
 
-        it('10 failures — circuit opens and throws', async function(){
+        it('10 failures: circuit opens and throws', async function(){
             pool = {
                 getConnection: sinon.stub().rejects(new Error('fail')),
                 end: sinon.stub()

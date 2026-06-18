@@ -12,7 +12,7 @@ const assert = require('assert');
 const { BINARY_TAG, encodeRow, encodeTables, decodeValue } = require('../../src/wireCodec');
 
 // Simulate the wire trip: a row is encoded, JSON-serialized, parsed back, and
-// each column value decoded — exactly what SnapshotBuilder/BlockBroadcaster do
+// each column value decoded, exactly what SnapshotBuilder/BlockBroadcaster do
 // on serialize and ClientApplier does on apply.
 function roundTripValue(row, col){
     let wire = JSON.parse(JSON.stringify(encodeRow(row)));

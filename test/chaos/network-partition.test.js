@@ -13,7 +13,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Chaos Engineering — Network Partition
+ * Chaos Engineering: Network Partition
  *
  * Experiment IDs:
  *   CE-NET-01  Full WebSocket partition → reconnection + gap healing
@@ -122,7 +122,7 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
         await wsFaults.reset();
     });
 
-    it('baseline — client is synced to block 20 before partition', async function () {
+    it('baseline: client is synced to block 20 before partition', async function () {
         const lastBlock = client.getLastAppliedBlock();
         expect(lastBlock).to.be.at.least(20);
     });
@@ -273,7 +273,7 @@ describe('CE-NET-04: Packet Slicing', function () {
         await seedSourceBlocks(21, 40);
         await server.poll();
 
-        // Blocks should arrive intact — TCP reassembly handles sliced data
+        // Blocks should arrive intact; TCP reassembly handles sliced data
         const recoveryMs = await waitForSyncRecovery(40, 90000);
         expect(recoveryMs).to.be.above(-1,
             'All blocks should arrive despite packet slicing');

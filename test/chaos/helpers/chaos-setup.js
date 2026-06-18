@@ -11,7 +11,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Chaos test setup — bootstraps the full sync stack against MariaDB
+ * Chaos test setup: bootstraps the full sync stack against MariaDB
  * instances routed through Toxiproxy, and provides utilities for
  * seeding data, monitoring sync progress, and measuring recovery.
  *
@@ -34,7 +34,7 @@ const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
 
 // -------------------------------------------------------------------------
-// Connection constants — proxied ports from docker-compose.chaos.yml
+// Connection constants: proxied ports from docker-compose.chaos.yml
 // -------------------------------------------------------------------------
 
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
@@ -51,9 +51,9 @@ const REPLICA_DB_NAME = 'xchain_chaos_replica';
 // Database singletons
 // -------------------------------------------------------------------------
 
-let sourceDb       = null;   // through proxy (33060) — used by ServerProcess
-let replicaDb      = null;   // through proxy (33061) — used by ClientProcess
-let sourceDbDirect = null;   // direct (33065) — for seeding while proxy is down
+let sourceDb       = null;   // through proxy (33060), used by ServerProcess
+let replicaDb      = null;   // through proxy (33061), used by ClientProcess
+let sourceDbDirect = null;   // direct (33065), for seeding while proxy is down
 
 // -------------------------------------------------------------------------
 // Database lifecycle
@@ -206,7 +206,7 @@ async function waitForSyncRecovery(expectedBlock, timeoutMs = 60000) {
                 return Date.now() - start;
             }
         } catch {
-            // DB may be temporarily unreachable — keep trying
+            // DB may be temporarily unreachable; keep trying
         }
         await new Promise(r => setTimeout(r, 250));
     }

@@ -13,7 +13,7 @@
  *
  * Internal contract emissions (e.g. SLASH) deduct ledger state but mint no
  * on-wire action, so contract_emissions.action_index is NULL for them. The
- * consensus contract_hash (BlockHasher) counts those rows — it scopes them by
+ * consensus contract_hash (BlockHasher) counts those rows, scoping them by
  * block through the execution_index -> contract_executions -> actions chain, NOT
  * by action_index. The server therefore MUST stream them the same way; the old
  * getActionScopedRows() path joins on contract_emissions.action_index and its
@@ -25,9 +25,9 @@
  * block whose single contract execution emits one on-wire emission (action_index
  * set) and one internal SLASH (action_index NULL), then assert
  *   - getEmissionRowsForBlock()  returns BOTH (the streamed, hash-aligned set), and
- *   - getActionScopedRows()      returns only ONE (drops the SLASH) — the bug.
+ *   - getActionScopedRows()      returns only ONE (drops the SLASH). This is the bug.
  *
- * Venue: needs the integration MariaDB (docker-compose.e2e or a stack box) — run
+ * Venue: needs the integration MariaDB (docker-compose.e2e or a stack box); run
  * with `npm run test:integration`. It cannot run where no real DB is reachable.
  ********************************************************************/
 

@@ -222,7 +222,7 @@ describe('Integration: Client Live Sync', function() {
                 payload = { block_index: 5, data: {} };
             }
 
-            // Apply — should not throw
+            // Apply: should not throw
             await applier.applyBlock(payload);
 
             // Count unchanged

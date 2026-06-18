@@ -12,7 +12,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const Database = require('../../src/db');
 
-// Minimal util stub — addMissingColumns only touches this.doQuery (stubbed
+// Minimal util stub: addMissingColumns only touches this.doQuery (stubbed
 // below) and the pure validation helpers, so util is never exercised here.
 function makeDb(){
     let util = { isNull: (v) => v === null || v === undefined };
@@ -106,7 +106,7 @@ describe('Database.addMissingColumns', function(){
     });
 });
 
-describe('Database.ensureReplicatedColumns — nullability relaxation', function(){
+describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
 
     let db;
 
@@ -167,7 +167,7 @@ describe('Database.ensureReplicatedColumns — nullability relaxation', function
         assert.strictEqual(altered, false);
     });
 
-    it('never tightens — leaves a nullable column alone and issues no MODIFY', async function(){
+    it('never tightens: leaves a nullable column alone and issues no MODIFY', async function(){
         // Defensive: even if upstream were NOT NULL, this method only relaxes;
         // a replica reporting YES must never be MODIFYed back to NOT NULL.
         let modifies = 0;

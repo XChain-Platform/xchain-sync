@@ -140,7 +140,7 @@ function partialSnapshotPayload() {
     );
 }
 
-/** Hub getallconfigs response — nested coin → network → module → params */
+/** Hub getallconfigs response: nested coin to network to module to params */
 function hubConfigResponse() {
     return fc.array(
         fc.tuple(
@@ -175,7 +175,7 @@ function hubConfigResponse() {
     });
 }
 
-/** Adversarial hub response — anything goes */
+/** Adversarial hub response: anything goes */
 function adversarialHubResponse() {
     return fc.oneof(
         hubConfigResponse(),
@@ -187,7 +187,7 @@ function adversarialHubResponse() {
     );
 }
 
-/** WebSocket event message — block, reorg, status, or garbage */
+/** WebSocket event message: block, reorg, status, or garbage */
 function wsEventMessage() {
     return fc.oneof(
         blockPayload(),

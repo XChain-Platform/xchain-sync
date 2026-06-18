@@ -148,7 +148,7 @@ describe('06 Incremental Catch-Up', function () {
     });
 
     it('catch-up rate scales linearly', async function () {
-        // Compare blocks/second across gap sizes — should not degrade significantly
+        // Compare blocks/second across gap sizes; should not degrade significantly
         const small = allStats['gap-10'];
         const large = allStats['gap-500'] || allStats['gap-100'];
 

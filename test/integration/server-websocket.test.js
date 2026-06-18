@@ -192,7 +192,7 @@ describe('Integration: WebSocket Broadcasting', function() {
             broadcaster.updateStatus('bitcoin', 'mainnet', { block_height: 1 });
 
             let btcConn = await connectWs('bitcoin', 'mainnet');
-            // litecoin subscriber — no status data for it
+            // litecoin subscriber, no status data for it
             let ltcWs = new WebSocket('ws://127.0.0.1:' + WS_PORT + '/subscribe/indexer/litecoin/mainnet');
             await new Promise(resolve => ltcWs.on('open', resolve));
             let ltcMessages = [];

@@ -66,7 +66,7 @@ describe('MerkleTree @consensus @regression', function () {
 
     describe('generateProof() / verifyProof() round-trip', function () {
         // The consensus-critical property: for a tree of N leaves, EVERY leaf
-        // must produce a proof that reconstructs the root — for both even and
+        // must produce a proof that reconstructs the root, for both even and
         // odd N (odd exercises the self-duplication path).
         for (const n of [1, 2, 3, 4, 5, 8, 13]) {
             it(`every one of ${n} leaves proves inclusion against the root`, function () {

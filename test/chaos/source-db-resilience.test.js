@@ -13,7 +13,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Chaos Engineering — Source Database Resilience
+ * Chaos Engineering: Source Database Resilience
  *
  * Experiment IDs:
  *   CE-SRC-01  Complete source DB unavailability (circuit breaker validation)
@@ -117,7 +117,7 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
         await sourceFaults.reset();
     });
 
-    it('baseline — server /status returns 200 before fault injection', async function () {
+    it('baseline: server /status returns 200 before fault injection', async function () {
         const res = await httpGet('/status', { baseUrl: server.getUrl() });
         expect(res.statusCode).to.equal(200);
         const status = JSON.parse(res.body);
@@ -131,7 +131,7 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
         // Wait long enough for the server to attempt several poll cycles
         await sleep(5000);
 
-        // Server must still accept HTTP connections — not crash
+        // Server must still accept HTTP connections and not crash
         const alive = await isServerAlive(server.getUrl());
         expect(alive).to.equal(true, 'Server must stay alive during source DB outage');
     });
@@ -182,13 +182,13 @@ describe('CE-SRC-02: Slow Query Responses', function () {
         // Inject 3s latency on all source DB responses
         await sourceFaults.addLatency(3000);
 
-        // Seed new blocks into source (through the latent proxy — will be slow)
+        // Seed new blocks into source (through the latent proxy; will be slow)
         // Use direct connection for seeding to avoid the latency ourselves
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         const fixtures = require('../e2e/helpers/fixtures');
         await fixtures.seedBlocks(sourceDbDirect, 21, 25);
 
-        // Force poll — will be slow due to 3s latency per query
+        // Force poll; will be slow due to 3s latency per query
         await server.poll();
 
         // Wait for sync with generous timeout (3s latency × multiple queries per block)
@@ -201,7 +201,7 @@ describe('CE-SRC-02: Slow Query Responses', function () {
         await sourceFaults.addLatency(3000);
         await sourceFaults.reset();
 
-        // Measure a poll cycle — should be fast again
+        // Measure a poll cycle; should be fast again
         const t0 = Date.now();
         await server.poll();
         const elapsed = Date.now() - t0;
@@ -223,7 +223,7 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
     });
 
     it('server stays alive when all DB connections are held for 30s', async function () {
-        // Inject timeout toxic — holds connections without responding for 30s
+        // Inject timeout toxic: holds connections without responding for 30s
         await sourceFaults.timeout(30000);
 
         // Wait for several poll cycles to fail (exhaust the 10-connection pool)
@@ -275,7 +275,7 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
         // Inject 30% connection reset probability
         await sourceFaults.resetConnections(0.3);
 
-        // Force multiple poll cycles — some will fail, some will succeed
+        // Force multiple poll cycles; some will fail, some will succeed
         for (let i = 0; i < 20; i++) {
             try { await server.poll(); } catch { /* expected failures */ }
             await sleep(200);

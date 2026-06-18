@@ -117,7 +117,7 @@ describe('ClientSync', function(){
 
     describe('_logGap throttling', function(){
         // On a fast chain (e.g. Dogecoin testnet) the replica trails the tip and
-        // would log a gap line per block — thousands/min. _logGap collapses that
+        // would log a gap line per block (thousands/min). _logGap collapses that
         // into one line per window, folding in a suppressed count.
         it('logs the first occurrence immediately', function(){
             sync._gapLogIntervalMs = 30000;
@@ -167,7 +167,7 @@ describe('ClientSync', function(){
 
         it('bootstraps from a full snapshot when the replica is empty', async function(){
             db.getLastBlock.resolves(null);
-            // A successful bootstrap commits a tip — required now that start() refuses
+            // A successful bootstrap commits a tip, required now that start() refuses
             // to enter live-follow while lastAppliedBlock is still null.
             sinon.stub(sync, '_bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
             sinon.stub(sync, '_incrementalCatchUp').resolves();
@@ -185,7 +185,7 @@ describe('ClientSync', function(){
         // The defect: a swallowed bootstrap failure let start() proceed into
         // live-follow with lastAppliedBlock=null, applying the first WS block onto an
         // empty DB with every continuity/fork/duplicate guard (all gated on
-        // lastAppliedBlock !== null) disabled — durable halt or silent block loss.
+        // lastAppliedBlock !== null) disabled: risking a durable halt or silent block loss.
 
         it('start() refuses live-follow when bootstrap leaves the replica empty', async function(){
             db.getLastBlock.resolves(null);
@@ -390,7 +390,7 @@ describe('ClientSync', function(){
                 let s = decoderSync();
                 sinon.stub(s, '_incrementalCatchUp').resolves();
 
-                // Normal multi-source duplicate of the current tip — plain skip, no catch-up.
+                // Normal multi-source duplicate of the current tip: plain skip, no catch-up.
                 await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'hash100' }, 0);
 
                 assert.strictEqual(s._incrementalCatchUp.called, false);
@@ -434,7 +434,7 @@ describe('ClientSync', function(){
         it('handles apply error gracefully', async function(){
             applier.applyBlock.rejects(new Error('apply fail'));
             await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
-            // Should not throw — error is caught and logged
+            // Should not throw; error is caught and logged
             assert.strictEqual(console.error.called, true);
         });
 
@@ -499,7 +499,7 @@ describe('ClientSync', function(){
             let gz = require('zlib').gzipSync(JSON.stringify(snapshot));
             sinon.stub(axios, 'get').resolves({ data: gz });
             // Persistent schema-gap failure (e.g. the DDL was rejected): the
-            // first failure heals + retries, the second failure is debounced —
+            // first failure heals + retries, the second failure is debounced:
             // exactly two apply attempts, no spin.
             applier.applyIncrementalSnapshot.rejects(Object.assign(new Error('no table'), { errno: 1146 }));
             sinon.stub(sync, '_fetchAndApplySchema').resolves();

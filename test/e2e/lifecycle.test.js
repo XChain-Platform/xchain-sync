@@ -132,7 +132,7 @@ describe('E2E: Full Lifecycle', function() {
         });
     });
 
-    describe('1.4 Idle period — no new data', function() {
+    describe('1.4 Idle period (no new data)', function() {
         it('remains stable with no new blocks', async function() {
             this.timeout(15000);
 

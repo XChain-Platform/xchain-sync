@@ -65,7 +65,7 @@ function validateDdl(sql){
 
 // Extract the ordered list of column names from a CREATE TABLE DDL
 // (as produced by SHOW CREATE TABLE). Column definition lines are the
-// only lines that start with a backtick-quoted identifier — the opening
+// only lines that start with a backtick-quoted identifier; the opening
 // `CREATE TABLE \`name\` (` line begins with CREATE, and constraint lines
 // begin with PRIMARY/UNIQUE/KEY/CONSTRAINT/FULLTEXT etc. Returns [] for
 // non-string input or a DDL with no parseable columns.
@@ -94,7 +94,7 @@ function extractColumnNames(ddl){
 //   2. Reject any line carrying a bare comma at parenthesis-depth 0 (after
 //      the trailing comma is stripped). MariaDB treats a single
 //      "ADD COLUMN `c` int, DROP COLUMN victim" ALTER as ONE valid
-//      statement — no semicolon, so guard 1 and multipleStatements:false
+//      statement; no semicolon, so guard 1 and multipleStatements:false
 //      both miss it. Commas inside parentheses (decimal(18,8),
 //      enum('a','b'), etc.) are part of the type and must survive, so the
 //      scan only trips on a comma at depth 0.

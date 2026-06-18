@@ -209,12 +209,12 @@ describe('Integration: Client Bootstrap', function() {
             sinon.stub(cs2, '_connectWebSockets').callsFake(() => { cs2.running = false; });
             await cs2.start();
 
-            // Catch-up must complete to the source tip — with the off-by-one the
+            // Catch-up must complete to the source tip. With the off-by-one the
             // duplicate-key error would roll back and leave the replica stuck at 5.
             assert.strictEqual(cs2.lastAppliedBlock, 10);
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 10);
 
-            // No duplicate action rows — replica matches source exactly.
+            // No duplicate action rows; replica matches source exactly.
             assert.strictEqual(
                 await testDb.getRowCount(replicaDb, 'actions'),
                 await testDb.getRowCount(sourceDb, 'actions')

@@ -60,7 +60,7 @@ describe('E2E: Transparency Log', function() {
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            // Wait on the transparency endpoint itself — /status reads sourceDb
+            // Wait on the transparency endpoint itself; /status reads sourceDb
             // directly, so it reports block_height=20 the instant the seed is
             // done, before the poller has had a chance to call recordBlock.
             await waitFor(async () => {
@@ -80,7 +80,7 @@ describe('E2E: Transparency Log', function() {
             assert.strictEqual(res.data.total, 20);
             assert.strictEqual(res.data.results.length, 20);
 
-            // Results are ordered DESC — first result is block 20
+            // Results are ordered DESC; first result is block 20
             assert.strictEqual(Number(res.data.results[0].block_index), 20);
             assert.strictEqual(Number(res.data.results[19].block_index), 1);
 
@@ -213,7 +213,7 @@ describe('E2E: Transparency Log', function() {
         it('proof validates against the root returned by /root/latest', async function() {
             this.timeout(30000);
 
-            // Seed exactly 100 blocks — block 100 crosses the epoch boundary and
+            // Seed exactly 100 blocks; block 100 crosses the epoch boundary and
             // triggers commitEpoch(1), making proofs available.
             await fixtures.seedBlocks(sourceDb, 1, 100);
 
@@ -259,7 +259,7 @@ describe('E2E: Transparency Log', function() {
         it('returns null epoch and merkle_root before any blocks are recorded', async function() {
             this.timeout(15000);
 
-            // No blocks seeded — start server against an empty database
+            // No blocks seeded; start server against an empty database
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 

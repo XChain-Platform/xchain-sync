@@ -14,7 +14,7 @@ let sourceDb  = null;
 let replicaDb = null;
 let source2Db = null;
 
-// Global setup — create databases and seed schema
+// Global setup: create databases and seed schema
 async function globalSetup(opts = {}) {
     console.log('    [e2e setup] Creating test databases...');
 
@@ -48,7 +48,7 @@ async function globalSetup(opts = {}) {
     }
 }
 
-// Global teardown — drop databases and close pools
+// Global teardown: drop databases and close pools
 async function globalTeardown() {
     console.log('    [e2e teardown] Dropping test databases...');
     if (sourceDb)  await sourceDb.close();

@@ -11,7 +11,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Toxiproxy client — manages two named proxies (source DB + replica DB)
+ * Toxiproxy client: manages two named proxies (source DB + replica DB)
  * and an optional WebSocket proxy for chaos engineering experiments.
  *
  * Two-proxy model: source and replica are faulted independently via named
@@ -98,7 +98,7 @@ async function createProxy(def) {
             enabled:  true
         });
     } catch (e) {
-        // 409 = proxy already exists — that's fine
+        // 409 = proxy already exists; that's fine
         if (e.statusCode !== 409) throw e;
     }
 }
@@ -165,7 +165,7 @@ async function removeAllToxics(proxyName) {
 }
 
 // -------------------------------------------------------------------------
-// Fault factory — creates a faults object bound to a specific proxy
+// Fault factory: creates a faults object bound to a specific proxy
 // -------------------------------------------------------------------------
 
 function createProxyFaults(proxyName) {
@@ -247,7 +247,7 @@ const sourceFaults  = createProxyFaults(SOURCE_PROXY.name);
 const replicaFaults = createProxyFaults(REPLICA_PROXY.name);
 
 // -------------------------------------------------------------------------
-// WebSocket proxy — created on-demand for CE-NET tests
+// WebSocket proxy, created on-demand for CE-NET tests
 // -------------------------------------------------------------------------
 
 async function createWsProxy(serverPort) {
@@ -277,7 +277,7 @@ async function resetBoth() {
 }
 
 // -------------------------------------------------------------------------
-// Health check — wait for toxiproxy to be ready
+// Health check: wait for toxiproxy to be ready
 // -------------------------------------------------------------------------
 
 async function waitForToxiproxy(timeoutMs = 15000) {

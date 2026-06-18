@@ -14,7 +14,7 @@
 // connection history played out (clean resume, reorg during downtime, torn
 // bootstrap, divergence halt, schema drift, flapping), it must end either
 // BYTE-IDENTICAL to the source (assertReplicaByteIdentical: full replicated
-// table set + per-block recompute conformance) or DURABLY HALTED — never
+// table set + per-block recompute conformance) or DURABLY HALTED, never
 // silently diverged. June 2026 production background: five replicas halted
 // holding orphaned pre-reorg blocks their origins had deleted; the remediation
 // was a re-seed. 10.2 pins that whole lifecycle as a regression test.
@@ -33,7 +33,7 @@ const { assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29500;
 
-// Wait until a resumed client's WebSocket is actually OPEN — a block seeded
+// Wait until a resumed client's WebSocket is actually OPEN; a block seeded
 // before the subscription lands broadcasts to nobody, and nothing re-delivers
 // it until the NEXT block triggers gap detection.
 async function waitForConnected(c) {
@@ -63,7 +63,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
         sourceDb  = setup.getSourceDb();
         replicaDb = setup.getReplicaDb();
 
-        // Second replica (the "control" that never disconnects) — same MariaDB
+        // Second replica (the "control" that never disconnects), same MariaDB
         // endpoint as the primary replica, name-scoped.
         replicaBDb = await testDb.createDatabase(REPLICA_B_NAME,
             testDb.REPLICA_DB_HOST, testDb.REPLICA_DB_PORT,
@@ -116,8 +116,8 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await fixtures.seedBlocks(sourceDb, 21, 50);
             await waitForReplicaBlock(replicaBDb, 50, 30000);
 
-            // A resumes: fresh client session over the same replica DB — the
-            // production restart shape (gap detection + incremental catch-up).
+            // A resumes: fresh client session over the same replica DB (the
+            // production restart shape: gap detection + incremental catch-up).
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.connectLive();
             await waitForConnected(client);
@@ -128,7 +128,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await waitForQuiesce(sourceDb, replicaDb);
             await waitForQuiesce(sourceDb, replicaBDb);
 
-            // Both replicas must be byte-identical to the source — and thereby
+            // Both replicas must be byte-identical to the source, and thereby
             // to each other: resume path ≡ always-connected path.
             await assertReplicaByteIdentical(sourceDb, replicaDb);
             await assertReplicaByteIdentical(sourceDb, replicaBDb);
@@ -136,7 +136,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
     });
 
     describe('10.2 Reorg while disconnected (June 2026 production scenario)', function() {
-        it('a replica holding orphaned blocks must not silently follow the new chain — and a re-seed converges it', async function() {
+        it('a replica holding orphaned blocks must not silently follow the new chain; a re-seed converges it', async function() {
             this.timeout(90000);
 
             await fixtures.seedBlocks(sourceDb, 1, 25);
@@ -152,7 +152,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await client.stop();
             await fixtures.deleteBlocksFrom(sourceDb, 18);
             // indexOffset: replacement transactions get FRESH global indexes,
-            // as on a real chain — they must not collide with the orphans.
+            // as on a real chain; they must not collide with the orphans.
             await fixtures.seedBlocks(sourceDb, 18, 28, { creditAmount: '7777', indexOffset: 5000 });
 
             // Resume. The replica still holds the orphaned 18-25; the reorg
@@ -234,7 +234,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await waitForReplicaBlock(replicaDb, 10, 15000);
 
             // Seed block 11, then corrupt its RAW DATA on the source after its
-            // hashes were committed (a silently corrupted origin — the same
+            // hashes were committed (a silently corrupted origin, the same
             // class as the production DOUBLE-promotion bug): the streamed
             // block's rows can no longer reproduce the committed ledger hash.
             // The committed hash chain itself stays intact, so descendant
@@ -268,15 +268,15 @@ describe('E2E: Disconnect/Resume Parity', function() {
 
             // Operator remediation. Two steps, BOTH required:
             // 1. Fix the source's corrupted row (the origin itself).
-            // 2. Re-seed the replica — the live path APPLIES a block before
+            // 2. Re-seed the replica: the live path APPLIES a block before
             //    recomputing, so the divergent block's rows are already in the
             //    replica even though the cursor never advanced.
-            //    Clear-halt-alone is NOT enough — exactly the June production
-            //    lesson.
+            //    Clear-halt-alone is NOT enough (exactly the June production
+            //    lesson).
             await sourceDb.doQuery(
                 "UPDATE credits SET amount = '1000' WHERE action_index = 1100");
             // Later seeds rebuilt the source's balances while the corrupted
-            // amount was live — rebuild them now that the ledger is honest.
+            // amount was live; rebuild them now that the ledger is honest.
             await require('../../src/balance-helpers').rebuildBalances(sourceDb);
             await client.stop();
             await testDb.truncateAll(replicaDb);
@@ -293,7 +293,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             this.timeout(60000);
 
             // Blocks 1-10 carry NO debits (default debitAmount '0'), so the
-            // debits table is empty history — the replica losing it costs no
+            // debits table is empty history; the replica losing it costs no
             // rows, exactly like production's anchor_actions wedge (a table
             // whose first-ever row arrives while the replica's schema predates
             // it; errno 1146 on apply).

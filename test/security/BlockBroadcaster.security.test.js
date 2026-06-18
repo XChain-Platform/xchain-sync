@@ -46,9 +46,9 @@ describe('BlockBroadcaster security', function(){
         sinon.restore();
     });
 
-    // ── _getIp — TRUST_PROXY=false (default) ──
+    // ── _getIp: TRUST_PROXY=false (default) ──
 
-    describe('_getIp — TRUST_PROXY=false', function(){
+    describe('_getIp: TRUST_PROXY=false', function(){
 
         it('ignores x-forwarded-for when TRUST_PROXY is false', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: false, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
@@ -72,9 +72,9 @@ describe('BlockBroadcaster security', function(){
         });
     });
 
-    // ── _getIp — TRUST_PROXY=true ──
+    // ── _getIp: TRUST_PROXY=true ──
 
-    describe('_getIp — TRUST_PROXY=true', function(){
+    describe('_getIp: TRUST_PROXY=true', function(){
 
         it('uses x-forwarded-for when TRUST_PROXY is true', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
@@ -127,7 +127,7 @@ describe('BlockBroadcaster security', function(){
             let ws3 = createMockWs();
             let req3 = createMockReq('1.1.1.1', '10.0.0.3');
             let added3 = broadcaster.addSubscription(ws3, req3, 'bitcoin', 'mainnet');
-            // Third connection should be rejected — all are from 1.1.1.1 regardless of spoofed header
+            // Third connection should be rejected: all are from 1.1.1.1 regardless of spoofed header
             assert.strictEqual(added3, false);
             assert.strictEqual(ws3.close.calledOnce, true);
         });

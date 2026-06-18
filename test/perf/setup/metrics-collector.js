@@ -105,7 +105,7 @@ class MetricsCollector {
         const times = measured.map(b => b.totalMs);
         const blockTiming = this._computeDistribution(times);
 
-        // Phase timing stats — collect all unique phase names
+        // Phase timing stats: collect all unique phase names
         const phaseNames = new Set();
         for (const b of measured) {
             if (b.phases) {

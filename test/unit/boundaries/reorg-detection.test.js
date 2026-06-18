@@ -44,7 +44,7 @@ describe('Boundary: Reorg Detection', function(){
 
     afterEach(function(){ sinon.restore(); });
 
-    it('no change (currentBlock === lastPolledBlock) — no-op', async function(){
+    it('no change (currentBlock === lastPolledBlock): no-op', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(10);
         await poller._poll();
@@ -52,7 +52,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(poller.lastPolledBlock, 10);
     });
 
-    it('one new block — no reorg', async function(){
+    it('one new block: no reorg', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(11);
         await poller._poll();
@@ -61,7 +61,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(poller.lastPolledBlock, 11);
     });
 
-    it('one block rollback — reorg detected', async function(){
+    it('one block rollback: reorg detected', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(9);
         await poller._poll();
@@ -71,7 +71,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(poller.lastPolledBlock, 9);
     });
 
-    it('deep rollback (10 blocks) — reorg at correct index', async function(){
+    it('deep rollback (10 blocks): reorg at correct index', async function(){
         poller.lastPolledBlock = 100;
         db.getLastBlock.resolves(90);
         await poller._poll();
@@ -81,7 +81,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(poller.lastPolledBlock, 90);
     });
 
-    it('currentBlock = null (all blocks deleted) — early return', async function(){
+    it('currentBlock = null (all blocks deleted): early return', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(null);
         await poller._poll();
@@ -89,7 +89,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(poller.lastPolledBlock, 10); // unchanged
     });
 
-    it('first poll (lastPolledBlock = null) — initializes without processing', async function(){
+    it('first poll (lastPolledBlock = null): initializes without processing', async function(){
         poller.lastPolledBlock = null;
         db.getLastBlock.resolves(50);
         await poller._poll();
@@ -98,7 +98,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
     });
 
-    it('first poll with empty DB — remains null', async function(){
+    it('first poll with empty DB: remains null', async function(){
         poller.lastPolledBlock = null;
         db.getLastBlock.resolves(null);
         await poller._poll();
@@ -106,7 +106,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(broadcaster.broadcast.called, false);
     });
 
-    it('same-height non-detection — no event when data changes at same block', async function(){
+    it('same-height non-detection: no event when data changes at same block', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(10);
         // Even if underlying data changed at block 10, poller does not detect it

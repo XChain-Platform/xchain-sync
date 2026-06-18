@@ -10,7 +10,7 @@
  *
  **********************************************************************
  *
- * Generator for test/fixtures/block-hash-vectors.json — the BlockHasher
+ * Generator for test/fixtures/block-hash-vectors.json: the BlockHasher
  * conformance lock. It runs BlockHasher's assembly over canned replica rows
  * but computes the final hash with the REAL xchain-indexer getDataHash, so the
  * expected hashes are authentically the indexer's (not a sync-side echo). The
@@ -37,7 +37,7 @@ const IndexerUtil  = require('../../../xchain-indexer/src/utility.js');
 // credits, debits, escrows, actions, contracts, state, executions,
 // emissions, deposits, withdrawals, previous-block-hash-row.
 // As of BLOCK_HASH_VERSION 2 the consensus projections carry the RESOLVED canonical
-// strings (address/tick/action/status) the JOINs produce, never the raw lookup ids — so
+// strings (address/tick/action/status) the JOINs produce, never the raw lookup ids; so
 // these canned rows model the resolved column set exactly as the live queries return it.
 const BLOCK_INDEX = 1000;
 const results = [

@@ -49,7 +49,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
         await setup.resetDatabases();
     });
 
-    describe('5.1 Two matching sources — normal operation', function() {
+    describe('5.1 Two matching sources (normal operation)', function() {
         it('syncs when both sources agree on hashes', async function() {
             this.timeout(30000);
 
@@ -82,7 +82,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
         });
     });
 
-    describe('5.3 Secondary source unavailable — timeout fallback', function() {
+    describe('5.3 Secondary source unavailable (timeout fallback)', function() {
         it('applies from primary after timeout when secondary is unavailable', async function() {
             this.timeout(30000);
 
@@ -106,7 +106,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
         });
     });
 
-    describe('5.4 Verification disabled — immediate apply', function() {
+    describe('5.4 Verification disabled (immediate apply)', function() {
         it('syncs without waiting for second source when verification is off', async function() {
             this.timeout(20000);
 

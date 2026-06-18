@@ -14,7 +14,7 @@ const { getMariadb } = require('./mariadbLoader');
 const Utility = require('../../../src/utility');
 const { splitSqlStatements } = require('../../../src/sqlUtil');
 
-// These suites connect to a REAL MariaDB — credentials come from the
+// These suites connect to a REAL MariaDB; credentials come from the
 // environment only. No fallback value: a committed default is a published
 // password the moment the repo is public.
 const TEST_DB_HOST = process.env.TEST_DB_HOST || '127.0.0.1';
@@ -38,13 +38,13 @@ class TestDatabase {
     }
 
     // conn (optional): run on an explicit connection (read-snapshot path) instead
-    // of acquiring one — mirrors src/db.js. The caller owns that connection's
+    // of acquiring one (mirrors src/db.js). The caller owns that connection's
     // lifecycle (commit/rollback/release).
     async doQuery(query, args, conn) {
         if (Array.isArray(args)) {
             for (let i = 0; i < args.length; i++) {
                 // Mirror src/db.js: Buffers (binary columns) must reach the driver
-                // intact — toString() would UTF-8-decode and corrupt them.
+                // intact; toString() would UTF-8-decode and corrupt them.
                 if (args[i] !== null && args[i] !== undefined && typeof args[i] === 'object' && !Buffer.isBuffer(args[i]))
                     args[i] = args[i].toString();
             }
@@ -98,7 +98,7 @@ class TestDatabase {
 
     // Mirror of src/db.js getEmissionRowsForBlock(): block-scopes contract_emissions
     // through execution_index -> contract_executions -> actions (NOT em.action_index),
-    // so NULL-action_index internal emissions (e.g. SLASH) are included — the rows the
+    // so NULL-action_index internal emissions (e.g. SLASH) are included. These are the rows the
     // action-scoped INNER JOIN drops. Must stay byte-identical to the production query.
     async getEmissionRowsForBlock(block_index) {
         return await this.doQuery(`SELECT em.execution_index, em.emitted_action, em.action_index, em.position

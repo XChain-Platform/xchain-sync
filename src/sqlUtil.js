@@ -12,7 +12,7 @@
 //
 // Schema `.sql` files are split into individual statements on ';'. A ';' that
 // appears inside a `--` line comment (prose punctuation in a column/header
-// comment) must NOT be treated as a statement terminator — doing so truncates
+// comment) must NOT be treated as a statement terminator; doing so truncates
 // the CREATE TABLE into a bogus standalone query and silently fails schema
 // creation. This is the exact bug xchain-indexer hit ("attests.sql's header
 // split its comment, crash-looping the indexer"); keep this in sync with

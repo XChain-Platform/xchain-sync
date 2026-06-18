@@ -12,13 +12,13 @@
  *
  **********************************************************************
  *
- * XChain Indexer Sync — Block Hasher (independent recomputation)
+ * XChain Indexer Sync - Block Hasher (independent recomputation)
  *
  * Recomputes a block's chained consensus hashes (ledger / actions /
  * contract) from the RAW ROWS this validator replicated, rather than
  * trusting the committed hash a source published. Comparing the recomputed
  * hash to the committed hash detects a replica whose data does NOT match
- * the hash that was committed for it — replication corruption, a partial /
+ * the hash that was committed for it: replication corruption, a partial /
  * truncated apply, or a source serving rows inconsistent with its own
  * committed hash. (It composes with HashVerifier's cross-source check, which
  * catches two internally-consistent-but-divergent honest sources; neither
@@ -52,7 +52,7 @@ class BlockHasher {
 
     // db:   a DB handle exposing async doQuery(sql, params) against the REPLICA
     //       (schema-identical to the indexer, with surrogate ids preserved).
-    // util: xchain-sync Utility — its getDataHash() is the conformance copy of
+    // util: xchain-sync Utility; its getDataHash() is the conformance copy of
     //       the indexer's (JSON.stringify(Object.assign({}, data), bigint->string),
     //       SHA-256 hex).
     constructor(db, util){
@@ -72,7 +72,7 @@ class BlockHasher {
         };
         let info    = [];
         let hashes  = [];
-        // credits (hash RESOLVED address/tick strings, never the local AUTO_INCREMENT ids —
+        // credits (hash RESOLVED address/tick strings, never the local AUTO_INCREMENT ids;
         // see BLOCK_HASH_VERSION; LEFT JOIN preserves NULL-id native-coin rows; ORDER BY pins a
         // BINARY collation so the tie-break order is id- and collation-independent across nodes)
         query = `SELECT
@@ -236,11 +236,11 @@ class BlockHasher {
     }
 
     // Recompute the replication-integrity state_hash for a block from the replicated
-    // raw rows — the fourth hash covering the in-place mutations + backdated refund
+    // raw rows (the fourth hash covering the in-place mutations + backdated refund
     // credits the three consensus hashes structurally cannot see (see stateHash.js).
     // Conformance twin of xchain-indexer/src/db.js getBlockHashes' state_hash branch:
     // both call the byte-identical buildStateHashData + the shared getDataHash. The
-    // caller MUST invoke this APPLY-TIME (tip = block_index) — never via a historical
+    // caller MUST invoke this APPLY-TIME (tip = block_index), never via a historical
     // recompute, where the in-place-mutated rows have since moved on (see ClientSync).
     // activationDelay is the frozen per-chain ACTIVATION_DELAY_BLOCKS; gasTick defaults
     // to the consensus GAS constant.

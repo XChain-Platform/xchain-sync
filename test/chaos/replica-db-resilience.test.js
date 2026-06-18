@@ -13,7 +13,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Chaos Engineering — Replica Database Resilience
+ * Chaos Engineering: Replica Database Resilience
  *
  * Experiment IDs:
  *   CE-DST-01  Complete replica DB unavailability during block application
@@ -114,7 +114,7 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
         await replicaFaults.reset();
     });
 
-    it('baseline — replica has blocks 1-10 before fault injection', async function () {
+    it('baseline: replica has blocks 1-10 before fault injection', async function () {
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const lastBlock = await replicaDb.getLastBlock();
         expect(lastBlock).to.be.at.least(10);
@@ -123,7 +123,7 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
     it('client process stays alive while replica DB is down', async function () {
         await replicaFaults.dbDown();
 
-        // Seed new blocks into source — server will broadcast them
+        // Seed new blocks into source; server will broadcast them
         await seedSourceBlocks(11, 15);
         await server.poll();
 
@@ -185,7 +185,7 @@ describe('CE-DST-02: Slow Write Responses', function () {
         await seedSourceBlocks(11, 18);
         await server.poll();
 
-        // Wait with generous timeout — each block application involves
+        // Wait with generous timeout; each block application involves
         // multiple queries, each adding 2s latency
         const recoveryMs = await waitForSyncRecovery(18, 120000);
         expect(recoveryMs).to.be.above(-1,
@@ -197,7 +197,7 @@ describe('CE-DST-02: Slow Write Responses', function () {
         await replicaFaults.addLatency(2000);
         await replicaFaults.reset();
 
-        // Seed and sync a block — should be fast
+        // Seed and sync a block; should be fast
         await seedSourceBlocks(19, 20);
         await server.poll();
 
@@ -224,7 +224,7 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
     it('client stays alive when replica DB connections are held for 30s', async function () {
         await replicaFaults.timeout(30000);
 
-        // Seed blocks — server broadcasts, client receives but can't write
+        // Seed blocks; server broadcasts, client receives but can't write
         await seedSourceBlocks(11, 15);
         await server.poll();
         await sleep(8000);
@@ -233,7 +233,7 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
         // Verify server is still serving (not blocked by client issues)
         const alive = await isServerAlive(server.getUrl());
         expect(alive).to.equal(true,
-            'Server must stay alive — client pool exhaustion must not affect server');
+            'Server must stay alive; client pool exhaustion must not affect server');
     });
 
     it('client recovers after timeout toxic is removed', async function () {

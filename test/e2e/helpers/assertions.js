@@ -21,7 +21,7 @@ const testDbModule = require('./testDb');
 //     (DELETE + re-INSERT), so its AUTO_INCREMENT ids legitimately differ
 //     from the source's; the (address, tick, amount) content is the
 //     replicated contract. (A full-snapshot bootstrap copies source ids
-//     verbatim, so id equality WOULD hold right after bootstrap — comparing
+//     verbatim, so id equality WOULD hold right after bootstrap (comparing
 //     it would make the oracle pass or fail depending on which path
 //     populated the table, which is exactly the kind of path-dependence the
 //     oracle exists to reject.)
@@ -40,14 +40,14 @@ const COLUMN_EXCLUSIONS = {
 //     (ClientSync._verifyTableCounts). A row the replica has that the source
 //     does NOT, or one that differs byte-wise, is still a hard failure.
 //   - index_* dedup tables: the indexer's rollback NEVER deletes index rows
-//     (they're in neither blockTables nor dataTables — append-only dedup), so
+//     (they're in neither blockTables nor dataTables, append-only dedup), so
 //     after a reorg the SOURCE retains residue rows created by orphaned
 //     blocks. Block payloads deliver index rows BY REFERENCED ID
 //     (ServerPoller._buildBlockPayload), so a replica that never received the
-//     orphan blocks legitimately never receives their residue — and that is
+//     orphan blocks legitimately never receives their residue. That is
 //     safe: any later block that dedups onto a residue row re-delivers it by
 //     reference (ClientApplier INSERT IGNOREs it). Content of every
-//     REFERENCED row is still verified — the per-block recompute joins
+//     REFERENCED row is still verified: the per-block recompute joins
 //     through these tables, and the strict data tables pin the ids.
 const SUBSET_TABLES = new Set([
     'sync_meta',
@@ -59,7 +59,7 @@ const SUBSET_TABLES = new Set([
 // Derived aggregates the follower REBUILDS rather than receives. They are not
 // in the per-block replicated set, but a complete replica must still hold
 // content-identical rows (the rebuild SQL is required to render amounts
-// exactly the way the source indexer writes them — that contract broke in
+// exactly the way the source indexer writes them (that contract broke in
 // production twice: DOUBLE-promotion corruption and trailing-zero format
 // drift).
 const DERIVED_AGGREGATES = { indexer: ['balances'], decoder: [] };
@@ -90,8 +90,8 @@ async function tableContent(db, table, excludedColumns) {
 
 /**
  * THE parity oracle: the replica must be row-for-row, byte-for-byte identical
- * to the source on every replicated table (plus the derived aggregates), and —
- * for indexer DBs — the consensus-hash triple recomputed from the REPLICA's
+ * to the source on every replicated table (plus the derived aggregates). For
+ * indexer DBs, the consensus-hash triple recomputed from the REPLICA's
  * raw rows must equal the hashes the SOURCE committed for every block
  * (behavioral VERIFY_RECOMPUTE: data → hash conformance).
  *
@@ -114,7 +114,7 @@ async function assertReplicaByteIdentical(sourceDb, replicaDb, opts = {}) {
     let maxDiffRows = opts.maxDiffRows || 3;
 
     // A replicated table missing from the replica is a FAILURE (it was a
-    // silent skip before — exactly how a schema wedge hides).
+    // silent skip before, exactly how a schema wedge hides).
     let replicaTables = new Set(await testDbModule.getTables(replicaDb));
     let missing = tables.filter(t => !replicaTables.has(t));
     assert.deepStrictEqual(missing, [],

@@ -155,7 +155,7 @@ describe('07 Rollback Performance', function () {
             const ratio = large.rollbackMs / small.rollbackMs;
             const depthRatio = 100 / 5; // 20x more blocks
             assert.ok(ratio < depthRatio * 2,
-                `Rollback scaling: depth-100 (${large.rollbackMs}ms) is ${ratio.toFixed(1)}x slower than depth-5 (${small.rollbackMs}ms) — expected < ${depthRatio * 2}x`);
+                `Rollback scaling: depth-100 (${large.rollbackMs}ms) is ${ratio.toFixed(1)}x slower than depth-5 (${small.rollbackMs}ms), expected < ${depthRatio * 2}x`);
         }
     });
 
@@ -179,7 +179,7 @@ describe('07 Rollback Performance', function () {
         const lastBlock = await replicaDb.getLastBlock();
         assert.ok(lastBlock < 10, 'All blocks >= 10 should be removed');
 
-        // Verify remaining data is consistent — credits/debits should match balances
+        // Verify remaining data is consistent: credits/debits should match balances
         const balanceCount = await testDb.getRowCount(replicaDb, 'balances');
         const creditCount = await testDb.getRowCount(replicaDb, 'credits');
         // After rollback with balance rebuild, balances should be non-negative

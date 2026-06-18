@@ -17,7 +17,7 @@ const ClientApplier  = require('../../src/ClientApplier');
 
 // Behavioural proof for the scoped rebuild optimisation: against a real
 // MariaDB, a rebuild scoped to the ids a batch of new rows touched must
-// leave the aggregate table EXACTLY as a full-table rebuild would — same
+// leave the aggregate table EXACTLY as a full-table rebuild would, with the same
 // rows, same string amounts, untouched pairs preserved, zeroed pairs
 // pruned, invalid-status custody excluded. The unit suite pins the SQL
 // shape; this pins the arithmetic the database actually performs.
@@ -87,7 +87,7 @@ describe('Integration: scoped balance rebuilds', function() {
         // New rows touch addresses {2,3} × ticks {1,2}; they drive pair (2,1)
         // to exactly zero, so the scoped rebuild must also PRUNE it. The scope
         // rectangle includes pair (3,1) (no rows at all) and pair (2,2)
-        // (history only, untouched by the new rows) — both must come out
+        // (history only, untouched by the new rows); both must come out
         // exactly as the full rebuild leaves them.
         const newCredits = [
             { action_index: 10, address_id: 3, tick_id: 2, amount: '13' }

@@ -46,7 +46,7 @@ class TestDatabase {
         if (Array.isArray(args)) {
             for (let i = 0; i < args.length; i++) {
                 // Mirror src/db.js: Buffers (binary columns) must reach the driver
-                // intact — toString() would UTF-8-decode and corrupt them.
+                // intact; toString() would UTF-8-decode and corrupt them.
                 if (args[i] !== null && args[i] !== undefined && typeof args[i] === 'object' && !Buffer.isBuffer(args[i]))
                     args[i] = args[i].toString();
             }
@@ -55,13 +55,13 @@ class TestDatabase {
         // suite disables/re-enables the DB proxy (toxiproxy) to simulate outages,
         // which leaves dead connections in the pool; a stale one handed out here
         // throws "Cannot execute new commands: connection closed" and would otherwise
-        // spuriously fail a test — frequently the NEXT test's setup, since the pool is
-        // reused across the describe. Re-acquiring discards the dead connection and
+        // spuriously fail a test (frequently the NEXT test's setup, since the pool is
+        // reused across the describe). Re-acquiring discards the dead connection and
         // gets a fresh one. Transaction connections are not retried (a broken
         // transaction can't be resumed).
         // Retry enough to drain a whole pool of dead connections (connectionLimit is
         // 10): each stale connection is destroyed so the pool replaces it with a fresh
-        // one, and only a query-level connection error is retried — a real outage makes
+        // one, and only a query-level connection error is retried. A real outage makes
         // getConnection() itself throw (outside the try) and propagates immediately, so
         // this never spins on a genuinely-down DB.
         let maxAttempts = this.transactionConnection ? 1 : 12;
@@ -146,7 +146,7 @@ class TestDatabase {
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
     }
 
-    // Durable divergence-halt records — mirrors src/db.js so ClientSync's halt
+    // Durable divergence-halt records (mirrors src/db.js so ClientSync's halt
     // machinery (recordHalt at divergence, getActiveHalt at startup, clearHalt
     // by the operator) runs for real against the test replica instead of
     // failing into the in-memory-only fallback.
@@ -229,7 +229,7 @@ async function createDb(dbName, host, port, user, pass) {
         connectionLimit: 10,
         insertIdAsNumber: true,
         bigIntAsNumber: true,
-        // Match src/db.js — without this, DATETIME/TIMESTAMP columns come back
+        // Match src/db.js: without this, DATETIME/TIMESTAMP columns come back
         // as JS Dates, JSON.stringify emits ISO format, and MariaDB rejects
         // them on re-insert. Affects sync_meta.logged_at (which the poller
         // writes in the background during e2e tests, so the column shows up
@@ -255,7 +255,7 @@ async function createDatabase(dbName, host, port, user, pass) {
     let adminPass = process.env.E2E_DB_ADMIN_PASS !== undefined ? process.env.E2E_DB_ADMIN_PASS : 'test';
     let admin = await mariadb.createConnection({ host: h, port: p, user: adminUser, password: adminPass });
     await admin.query("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
-    // Granting to yourself is a no-op that needs GRANT OPTION — skip it when the
+    // Granting to yourself is a no-op that needs GRANT OPTION; skip it when the
     // test user IS the admin user.
     if (u !== adminUser) {
         await admin.query("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO `" + u + "`@'%'");

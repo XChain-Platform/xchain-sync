@@ -139,7 +139,7 @@ describe('Boundary: Source Array Parsing', function(){
             axios.get.restore();
         });
 
-        it('no sources configured — returns false', async function(){
+        it('no sources configured: returns false', async function(){
             let cs = createSync('');
             assert.strictEqual(await cs._bootstrapRotateSources(), false);
         });

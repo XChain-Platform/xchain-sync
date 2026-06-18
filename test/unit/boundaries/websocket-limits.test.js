@@ -105,7 +105,7 @@ describe('Boundary: WebSocket Limits', function(){
             sinon.stub(console, 'log');
         });
 
-        it('49 buffered sends — connection maintained', function(){
+        it('49 buffered sends: connection maintained', function(){
             let ws = mockWs();
             ws.bufferedAmount = 100;
             ws._syncBuffered = 49;
@@ -115,7 +115,7 @@ describe('Boundary: WebSocket Limits', function(){
             assert.strictEqual(ws._syncBuffered, 50);
         });
 
-        it('50 buffered sends — connection maintained (> not >=)', function(){
+        it('50 buffered sends: connection maintained (> not >=)', function(){
             let ws = mockWs();
             ws.bufferedAmount = 100;
             ws._syncBuffered = 50;
@@ -125,7 +125,7 @@ describe('Boundary: WebSocket Limits', function(){
             assert.strictEqual(ws.close.calledOnce, true);
         });
 
-        it('51 buffered sends — connection dropped', function(){
+        it('51 buffered sends: connection dropped', function(){
             let ws = mockWs();
             ws.bufferedAmount = 100;
             ws._syncBuffered = 51;

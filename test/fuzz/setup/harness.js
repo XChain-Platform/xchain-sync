@@ -11,7 +11,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Fuzz test harness — shared helpers for all fuzz suites
+ * Fuzz test harness: shared helpers for all fuzz suites
  *
  * Provides mock factories and NUM_RUNS configuration for property-based testing.
  */

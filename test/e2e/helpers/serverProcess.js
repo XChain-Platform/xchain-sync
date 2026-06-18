@@ -61,7 +61,7 @@ class ServerProcess {
 
         // Routes mirror src/api.js (all namespaced by :dbType). This helper
         // backs the e2e suite, so its surface needs to match the real API
-        // after the Phase 3 path migration — otherwise the suite would
+        // after the Phase 3 path migration; otherwise the suite would
         // either 404 on status checks or pass-by-accident on snapshots.
         // :dbType is one of 'indexer' or 'decoder'; this helper only seeds
         // indexer-shaped data, so 'decoder' requests respond as a stub.
@@ -108,7 +108,7 @@ class ServerProcess {
                     last_updated: new Date().toISOString()
                 };
                 if (dbType === 'decoder') {
-                    body.block_hash = hashRow ? hashRow.ledger_hash : null;  // stub — helper seeds indexer rows
+                    body.block_hash = hashRow ? hashRow.ledger_hash : null;  // stub: helper seeds indexer rows
                 } else {
                     body.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
                     body.actions_hash  = hashRow ? hashRow.actions_hash  : null;
@@ -230,7 +230,7 @@ class ServerProcess {
             });
         });
 
-        // Initialize poller state — match production semantics: lastPolledBlock
+        // Initialize poller state to match production semantics: lastPolledBlock
         // starts at the current chain tip, so the poll loop only streams *new*
         // blocks. Tests that need the poller to also process pre-seeded blocks
         // (e.g. transparency tests asserting on sync_meta) should set
@@ -241,12 +241,12 @@ class ServerProcess {
 
         // Start polling loop
         // Serialize poll cycles. Production's ServerPoller.start() is a
-        // sequential while-loop — one _poll() can never overlap the next. A
+        // sequential while-loop; one _poll() can never overlap the next. A
         // bare setInterval breaks that invariant whenever a cycle runs longer
         // than the interval (easy against a remote/loaded MariaDB): two
         // concurrent _poll()s race the cursor and broadcast blocks out of
         // order. Skip the tick if the previous cycle is still in flight, and
-        // remember the in-flight promise so stop() can drain it — an
+        // remember the in-flight promise so stop() can drain it. An
         // un-awaited zombie poll outliving stop() kept writing to the shared
         // test DB across test boundaries.
         this.pollInterval = setInterval(() => {
@@ -267,7 +267,7 @@ class ServerProcess {
         if (this.pollInterval)   clearInterval(this.pollInterval);
         if (this.statusInterval) clearInterval(this.statusInterval);
         if (this.poller)         this.poller.stop();
-        // Drain an in-flight poll cycle — clearInterval stops future ticks but
+        // Drain an in-flight poll cycle; clearInterval stops future ticks but
         // not one already running against the (shared) test DB.
         if (this._pollInFlight)  await this._pollInFlight;
 
@@ -282,7 +282,7 @@ class ServerProcess {
             // close() only stops accepting new connections and waits for existing
             // ones to drain. A live-follow client reconnecting (CLIENT_RECONNECT_DELAY)
             // keeps opening sockets, so close() can hang and the port is never
-            // released — the next start() on the same port then hits EADDRINUSE.
+            // released; the next start() on the same port then hits EADDRINUSE.
             // Force-close lingering sockets so close() completes promptly.
             if (typeof this.server.closeAllConnections === 'function') {
                 this.server.closeAllConnections();
@@ -292,7 +292,7 @@ class ServerProcess {
     }
 
     // Force a poll cycle (useful for tests that need immediate response).
-    // Serialized with the background loop — a manual poll overlapping a
+    // Serialized with the background loop; a manual poll overlapping a
     // background cycle is the same cursor race the loop guard prevents.
     async poll() {
         while (this._pollInFlight) await this._pollInFlight;

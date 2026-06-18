@@ -46,7 +46,7 @@ describe('E2E: Error Handling & Recovery', function() {
         await setup.resetDatabases();
     });
 
-    describe('4.3 Server restart — client reconnects and catches up', function() {
+    describe('4.3 Server restart (client reconnects and catches up)', function() {
         it('recovers after server stops and restarts', async function() {
             this.timeout(30000);
 
@@ -94,7 +94,7 @@ describe('E2E: Error Handling & Recovery', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            // First client session — bootstrap
+            // First client session: bootstrap
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
@@ -103,7 +103,7 @@ describe('E2E: Error Handling & Recovery', function() {
             // Add blocks while client is down
             await fixtures.seedBlocks(sourceDb, 21, 40);
 
-            // New client session — incremental catch-up
+            // New client session: incremental catch-up
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.incrementalCatchUp(21);
 
@@ -112,7 +112,7 @@ describe('E2E: Error Handling & Recovery', function() {
         });
     });
 
-    describe('4.6 Hub unavailable at startup — server waits', function() {
+    describe('4.6 Hub unavailable at startup (server waits)', function() {
         it('server handles missing hub gracefully', async function() {
             this.timeout(15000);
 

@@ -12,7 +12,7 @@ const assert = require('assert');
 const { rebuildBalances } = require('../../src/balance-helpers');
 
 // These helpers are pure SQL emitters (the real arithmetic happens in MariaDB),
-// so a unit test can only guard the SQL *semantics* — call order, target tables,
+// so a unit test can only guard the SQL *semantics*: call order, target tables,
 // credit/debit sign handling, the precision casts, and the HAVING pruning that
 // drops zeroed/negative rows. A behavioural rebuild test belongs in the Tier-2
 // DB suite; this is the regression net that catches a silent SQL edit.
@@ -42,7 +42,7 @@ describe('balance-helpers @money @regression', function () {
             assert.ok(/GROUP BY address_id, tick_id/i.test(sql));
         });
 
-        it('sums at DECIMAL(65,18) — bare VARCHAR amounts promote to DOUBLE and corrupt >16-digit amounts', function () {
+        it('sums at DECIMAL(65,18) (bare VARCHAR amounts promote to DOUBLE and corrupt >16-digit amounts)', function () {
             const sql = db.queries[1];
             assert.ok(!/THEN t\.amount/i.test(sql), 'no un-cast amount may reach the SUM');
             assert.ok(/CAST\(t\.amount AS DECIMAL\(65,18\)\)/i.test(sql));
@@ -63,7 +63,7 @@ describe('balance-helpers @money @regression', function () {
         });
     });
 
-    describe('rebuildBalances() — scoped', function () {
+    describe('rebuildBalances(): scoped', function () {
         const scope = { addressIds: [7, 9], tickIds: [3] };
         let db;
         beforeEach(async function () { db = fakeDb(); await rebuildBalances(db, scope); });

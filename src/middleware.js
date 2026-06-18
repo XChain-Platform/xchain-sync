@@ -21,7 +21,7 @@
 // Create an API key authentication middleware.
 // When a key is configured, requests fail closed: they must include
 // "Authorization: Bearer <apiKey>" or they are rejected (401).
-// When apiKey is falsy the middleware passes requests through (open access —
+// When apiKey is falsy the middleware passes requests through (open access;
 // single-host / regtest / managed deployments where no key is provisioned;
 // xchain-node injects none). api.js logs a startup warning in that mode, and
 // the destructive /halt/clear route refuses to run at all without a key.

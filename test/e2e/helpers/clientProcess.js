@@ -55,16 +55,16 @@ class ClientProcess {
 
     // Start live WebSocket sync. Mirror ClientSync.start():
     //  - `running` must be true or _scheduleReconnect() bails out (if(!this.running)
-    //    return), which would silently disable reconnect-after-disconnect — the very
-    //    behavior the recovery tests exercise.
+    //    return), which would silently disable reconnect-after-disconnect (the very
+    //    behavior the recovery tests exercise).
     //  - lastAppliedBlock must be initialized from the replica DB when resuming
     //    without a fresh bootstrap. Gap detection in _handleEvent/_handleBlock guards
     //    on `lastAppliedBlock !== null`; a resumed client whose replica already holds
     //    blocks but whose cursor is still null never detects the gap and can't catch
-    //    up (ClientSync.start() does this init before connecting — connectLive must
+    //    up (ClientSync.start() does this init before connecting; connectLive must
     //    too). Skip when a preceding bootstrap() already set it.
     async connectLive() {
-        // Honor a durable halt, like production ClientSync.start() does — a
+        // Honor a durable halt, like production ClientSync.start() does: a
         // fresh client session over a halted replica must come up halted, not
         // sail past the recorded divergence.
         if (typeof this.replicaDb.getActiveHalt === 'function') {
@@ -95,7 +95,7 @@ class ClientProcess {
     }
 
     // Stop all WebSocket connections and DRAIN in-flight work. ClientSync.stop()
-    // only flips flags and closes sockets — an apply or catch-up already running
+    // only flips flags and closes sockets; an apply or catch-up already running
     // keeps writing to the replica DB after "stop", which corrupts the NEXT
     // test's freshly reset databases (the same zombie-write class the server
     // helper's poll-drain closed). Await this wherever the same DBs are reused.

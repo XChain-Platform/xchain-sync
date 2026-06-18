@@ -13,7 +13,7 @@ const testDb = require('./testDb');
 let sourceDb  = null;
 let replicaDb = null;
 
-// Global setup — create databases and seed schema
+// Global setup: create databases and seed schema
 async function globalSetup() {
     console.log('    [setup] Creating test databases...');
 
@@ -22,13 +22,13 @@ async function globalSetup() {
     await testDb.seedSchema(sourceDb);
     console.log('    [setup] Source database ready: ' + testDb.SOURCE_DB_NAME);
 
-    // Create replica database (empty — schema replicated by sync service)
+    // Create replica database (empty; schema replicated by sync service)
     replicaDb = await testDb.createDatabase(testDb.REPLICA_DB_NAME);
     await testDb.seedSchema(replicaDb);
     console.log('    [setup] Replica database ready: ' + testDb.REPLICA_DB_NAME);
 }
 
-// Global teardown — drop test databases
+// Global teardown: drop test databases
 async function globalTeardown() {
     console.log('    [teardown] Dropping test databases...');
     if (sourceDb)  await sourceDb.close();

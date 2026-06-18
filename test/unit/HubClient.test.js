@@ -178,7 +178,7 @@ describe('HubClient', function(){
         });
     });
 
-    describe('constructor — array form', function(){
+    describe('constructor: array form', function(){
         it('uses an explicit endpoint array verbatim', function(){
             let h = new HubClient(['https://a:1', 'http://b:2']);
             assert.deepStrictEqual(h.urls, ['https://a:1', 'http://b:2']);

@@ -92,9 +92,9 @@ describe('ClientSync security', function(){
         sinon.restore();
     });
 
-    // ── _fetchAndApplySchema — DDL validation ──
+    // ── _fetchAndApplySchema: DDL validation ──
 
-    describe('_fetchAndApplySchema — DDL validation', function(){
+    describe('_fetchAndApplySchema: DDL validation', function(){
 
         let ClientSync, axiosStub;
 
@@ -216,7 +216,7 @@ describe('ClientSync security', function(){
         // A compromised/MITM'd sync server returns a CREATE TABLE for an
         // already-existing table whose new-column line embeds a bare comma:
         //   `evil` int DEFAULT 0, DROP COLUMN balance,
-        // No semicolon, valid column name, single MariaDB statement — it slips
+        // No semicolon, valid column name, single MariaDB statement: it slips
         // past validateDdl, validateIdentifier, and multipleStatements:false.
         // The schema-catch-up path (addMissingColumns) must skip the column
         // rather than splice it into a multi-action ALTER TABLE.
@@ -259,9 +259,9 @@ describe('ClientSync security', function(){
         });
     });
 
-    // ── _handleReorg — max rollback depth ──
+    // ── _handleReorg: max rollback depth ──
 
-    describe('_handleReorg — max rollback depth', function(){
+    describe('_handleReorg: max rollback depth', function(){
 
         let ClientSync;
 
@@ -308,7 +308,7 @@ describe('ClientSync security', function(){
             assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
             assert.strictEqual(db.recordHalt.calledOnce, true);
             assert.strictEqual(db.recordHalt.firstCall.args[2], 'max-rollback-depth-exceeded');
-            // lastAppliedBlock is left untouched — we did not advance, but we also
+            // lastAppliedBlock is left untouched: we did not advance, but we also
             // halt so the stale value can no longer be used to drop canonical blocks.
             assert.strictEqual(sync.lastAppliedBlock, 100);
         });
@@ -353,9 +353,9 @@ describe('ClientSync security', function(){
         });
     });
 
-    // ── _handleBlock — strict cross-source timeout ──
+    // ── _handleBlock: strict cross-source timeout ──
 
-    describe('_handleBlock — strict cross-source timeout', function(){
+    describe('_handleBlock: strict cross-source timeout', function(){
 
         let ClientSync;
 
@@ -386,7 +386,7 @@ describe('ClientSync security', function(){
                 data: {}
             };
 
-            // Only primary source (sourceIndex 0) reports — no second source
+            // Only primary source (sourceIndex 0) reports, no second source
             await sync._handleBlock(event, 0);
 
             // Advance past the timeout
@@ -433,9 +433,9 @@ describe('ClientSync security', function(){
         });
     });
 
-    // ── _connectWebSocket — maxPayload option ──
+    // ── _connectWebSocket: maxPayload option ──
 
-    describe('_connectWebSocket — maxPayload', function(){
+    describe('_connectWebSocket: maxPayload', function(){
 
         it('passes maxPayload to WebSocket constructor', function(){
             let wsConstructorCalls = [];
@@ -461,9 +461,9 @@ describe('ClientSync security', function(){
         });
     });
 
-    // ── WebSocket message handler — event validation ──
+    // ── WebSocket message handler: event validation ──
 
-    describe('WebSocket message handler — event validation', function(){
+    describe('WebSocket message handler: event validation', function(){
 
         it('rejects message with unknown event type', function(done){
             let messageHandler = null;

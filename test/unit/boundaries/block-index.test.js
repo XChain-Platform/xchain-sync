@@ -121,17 +121,17 @@ describe('Boundary: Block Index Values', function(){
             assert.strictEqual(result.valid, true);
         });
 
-        it('beyond safe integer — precision loss documented', function(){
+        it('beyond safe integer: precision loss documented', function(){
             // Two distinct BigInts collapse to the same JS Number
             let a = Number(BigInt('9007199254740992'));
             let b = Number(BigInt('9007199254740993'));
-            assert.strictEqual(a, b); // Both become 9007199254740992 — precision lost
+            assert.strictEqual(a, b); // Both become 9007199254740992 (precision lost)
             // This means two different block_indices would be indistinguishable as Numbers
         });
     });
 
     describe('reorg boundary at block 1', function(){
-        it('reorg from 10 to 0 — reorg event at block_index 1', async function(){
+        it('reorg from 10 to 0: reorg event at block_index 1', async function(){
             let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
             let log = { recordBlock: sinon.stub().resolves(), pruneFrom: sinon.stub().resolves() };
             let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, util);

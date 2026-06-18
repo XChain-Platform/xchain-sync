@@ -84,7 +84,7 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                     let committed = db.commitTransaction.callCount;
                     let rolledBack = db.rollbackTransaction.callCount;
 
-                    // A transaction was opened — verify it was resolved
+                    // A transaction was opened; verify it was resolved
                     if (began > 0) {
                         // Commit is always attempted. If it fails, rollback is also called.
                         // Valid states: committed=1,rolledBack=0 (success) or committed=1,rolledBack=1 (commit failed)

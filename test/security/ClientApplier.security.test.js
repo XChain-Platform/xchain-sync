@@ -53,9 +53,9 @@ describe('ClientApplier security', function(){
         sinon.restore();
     });
 
-    // ── _insertRows — table name validation ──
+    // ── _insertRows: table name validation ──
 
-    describe('_insertRows — table name validation', function(){
+    describe('_insertRows: table name validation', function(){
 
         it('allows valid table name', async function(){
             await applier._insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
@@ -100,9 +100,9 @@ describe('ClientApplier security', function(){
         });
     });
 
-    // ── _insertRows — column name validation ──
+    // ── _insertRows: column name validation ──
 
-    describe('_insertRows — column name validation', function(){
+    describe('_insertRows: column name validation', function(){
 
         it('allows valid column names', async function(){
             await applier._insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
@@ -140,9 +140,9 @@ describe('ClientApplier security', function(){
         });
     });
 
-    // ── applyFullSnapshot — table name validation on truncate ──
+    // ── applyFullSnapshot: table name validation on truncate ──
 
-    describe('applyFullSnapshot — table name validation', function(){
+    describe('applyFullSnapshot: table name validation', function(){
 
         it('truncates valid table names', async function(){
             let snapshotData = {
@@ -168,7 +168,7 @@ describe('ClientApplier security', function(){
                 }
             };
             await applier.applyFullSnapshot(snapshotData);
-            // evil table should NOT be cleared — no DELETE issued referencing it
+            // evil table should NOT be cleared: no DELETE issued referencing it
             for(let call of db.doQuery.getCalls()){
                 assert.strictEqual(call.args[0].includes('evil'), false);
             }
@@ -206,9 +206,9 @@ describe('ClientApplier security', function(){
         });
     });
 
-    // ── applyBlock — table name validation in data object ──
+    // ── applyBlock: table name validation in data object ──
 
-    describe('applyBlock — data key validation', function(){
+    describe('applyBlock: data key validation', function(){
 
         it('applies data with valid table name', async function(){
             db.getBlockHashRow.resolves(null);

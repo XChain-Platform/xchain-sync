@@ -76,7 +76,7 @@ describe('Integration: binary column replication (F2)', function(){
         replicaDb = setup.getReplicaDb();
     });
 
-    it('source stores true binary (sanity — seed not corrupted by the helper)', async function(){
+    it('source stores true binary (sanity check: seed not corrupted by the helper)', async function(){
         await fixtures.seedBlocks(sourceDb, 1, 1);
         await seedGatedFile(sourceDb, 100);
         let src = await readRawData(sourceDb, 100);

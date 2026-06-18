@@ -11,11 +11,11 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * ClientSync — durable consensus-divergence HALT.
+ * ClientSync: durable consensus-divergence HALT.
  *
  * On a CONFIRMED cross-source hash divergence (two honest sources committed
- * different consensus hashes for the same block — one is on a forked/Byzantine
- * chain) the client must HALT: stop applying, persist the halt durably (so it
+ * different consensus hashes for the same block; one is on a forked/Byzantine
+ * chain. The client must HALT: stop applying, persist the halt durably (so it
  * survives restart), and require an explicit operator clear. It must never
  * silently pick one source and replicate onto a contested chain.
  ********************************************************************/
@@ -41,7 +41,7 @@ function createMockDb(){
     };
 }
 
-describe('ClientSync — divergence halt @regression', function(){
+describe('ClientSync: divergence halt @regression', function(){
     let sync, db, applier, config, util;
 
     beforeEach(function(){
@@ -81,7 +81,7 @@ describe('ClientSync — divergence halt @regression', function(){
         assert.strictEqual(applier.applyBlock.called, false, 'no block may be applied while halted');
     });
 
-    it('is idempotent — a second divergence does not double-record or change the halt block', async function(){
+    it('is idempotent: a second divergence does not double-record or change the halt block', async function(){
         await sync._haltOnDivergence(101, mism, []);
         await sync._haltOnDivergence(102, mism, []);
         assert.strictEqual(sync.getHaltInfo().blockIndex, 101, 'stays halted at the first contested block');
@@ -115,7 +115,7 @@ describe('ClientSync — divergence halt @regression', function(){
     });
 });
 
-describe('ClientSync — independent recompute halt @regression', function(){
+describe('ClientSync: independent recompute halt @regression', function(){
     let sync, db, applier, config, util;
 
     // db.doQuery feeds BlockHasher the canned golden rows IN CALL ORDER (one
@@ -149,11 +149,11 @@ describe('ClientSync — independent recompute halt @regression', function(){
 
     // The headline RED->GREEN: rows that do NOT hash to the committed hash the
     // source published. The old verbatim transport check (committed-vs-committed)
-    // PASSES this; independent recompute HALTS it — from a SINGLE source.
+    // PASSES this; independent recompute HALTS it, from a SINGLE source.
     it('HALTS when replicated rows do not hash to the committed block hash', async function(){
         const event = {
             block_index: vectors.block_index, block_time: 123,
-            // committed hashes the source CLAIMS — deliberately not the rows' hash
+            // committed hashes the source CLAIMS (deliberately not the rows' hash)
             ledger_hash: 'forged_ledger', actions_hash: 'forged_actions', contract_hash: 'forged_contract'
         };
         await sync._applyBlockEvent(event);
@@ -199,7 +199,7 @@ describe('ClientSync — independent recompute halt @regression', function(){
     });
 });
 
-describe('ClientSync — state_hash apply-time integrity halt @regression', function(){
+describe('ClientSync: state_hash apply-time integrity halt @regression', function(){
     let sync, db, applier, config, util;
 
     beforeEach(function(){
@@ -256,7 +256,7 @@ describe('ClientSync — state_hash apply-time integrity halt @regression', func
     });
 });
 
-describe('ClientSync — VERIFY_RECOMPUTE=false is declared unsafe @regression', function(){
+describe('ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression', function(){
     // Operator decision 2026-06-12: the recompute is the only verification of
     // the catch-up JOIN block, so disabling it lets a reorg that crosses a
     // disconnect silently fork the replica. The constructor must warn loudly.
