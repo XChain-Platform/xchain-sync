@@ -25,10 +25,10 @@
  *   - The follower has no write choke point, so computeFollowerRoots takes the
  *     touched (address, tick) set EXPLICITLY (ClientApplier derives it from the
  *     applied block event rows, which already carry merged cooldown refunds).
- *   - getNetBalance / getLockedEscrow render the DECIMAL sum to a minimal-decimal
- *     string in SQL (balance-helpers.minimalDecimal), instead of mathjs bcsub;
- *     canonicalAmount normalises both to the identical leaf value. xchain-sync
- *     has no mathjs dependency.
+ *   - getNetBalance renders the DECIMAL sum to a minimal-decimal string in SQL
+ *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
+ *     normalises both to the identical leaf value. xchain-sync has no mathjs
+ *     dependency.
  *   - stakes_root is NOT recomputed here yet (Phase 1): it is BTC-only, low-churn,
  *     and its stake-weight query is a volatile consensus surface. The placeholder
  *     EMPTY_SMT_ROOT is stored and NOT compared to the source; only balances_root
@@ -185,15 +185,15 @@ async function getNetBalance(db, address, tick){
     return rows.length ? String(rows[0].net) : '0';
 }
 
-async function getLockedEscrow(db, address, tick){
-    const rows = await db.doQuery(
-        `SELECT ${minimalDecimal('COALESCE(SUM(CAST(e.amount AS DECIMAL(60,18))),0)')} AS esc FROM escrows e
-            INNER JOIN index_addresses a ON a.id=e.address_id
-            INNER JOIN index_tickers   t ON t.id=e.tick_id
-            WHERE a.address=? AND t.tick=?`,
-        [address, tick]);
-    return rows.length ? String(rows[0].esc) : '0';
-}
+// Locked-escrow leaf is DEFERRED out of v1 (SPV spec §4.2 D2, revised), matching
+// the indexer twin. The escrows table keys a lock (+amount) to the order SOURCE
+// but keys the match release (-amount) to the recipient GET_ADDRESS, so
+// SUM(escrows) per (address, tick) does NOT net to zero on a match: the locker
+// key is left stale-positive and the recipient key goes negative (only the
+// per-tick GLOBAL sum nets to zero). A per-address locked leaf therefore cannot
+// be derived from SUM(escrows). balances_root commits ONLY the net-spendable
+// balance leaf in v1 (already net of escrow); per-address locked is a Phase 2
+// open-order-derived commitment.
 
 // ---- Block-content Merkle root (sec.5) --------------------------------------
 // Leaves over the EXACT canonical rows + order the flat consensus hashes cover
@@ -231,9 +231,9 @@ async function computeBlockMerkleRoot(db, blockIndex){
 
 // ---- Full balances-tree initialization (flag-day cutover + snapshot seed) ----
 // One-time at the activation boundary block (or snapshot bootstrap): seed the
-// balances SMT from ALL pre-existing nonzero net balances + nonzero locked
-// escrows. Byte-identical to the indexer's buildFullBalancesRoot (CAST AS CHAR,
-// normalised by canonicalAmount). Persists nodes.
+// balances SMT from ALL pre-existing nonzero net balances (escrow leaf deferred
+// from v1, see note above). Mirrors the indexer's buildFullBalancesRoot (CAST AS
+// CHAR, normalised by canonicalAmount). Persists nodes.
 async function buildFullBalancesRoot(db, chain, network){
     const smt = new PersistentSMT(new DbNodeStore(db));
     let root = EMPTY_ROOT_HEX;
@@ -253,18 +253,7 @@ async function buildFullBalancesRoot(db, chain, network){
         if(leaf == null) continue;
         root = await smt.update(root, M.balanceKey(chain, network, r.address, r.tick), leaf);
     }
-    const escs = await db.doQuery(
-        `SELECT a.address AS address, t.tick AS tick, CAST(SUM(CAST(e.amount AS DECIMAL(60,18))) AS CHAR) AS esc FROM escrows e
-         INNER JOIN index_addresses a ON a.id=e.address_id
-         INNER JOIN index_tickers   t ON t.id=e.tick_id
-         GROUP BY e.address_id, e.tick_id
-         HAVING SUM(CAST(e.amount AS DECIMAL(60,18))) <> 0`, []);
-    for(const r of escs){
-        if(r.address == null || r.tick == null) continue;
-        const leaf = _leafOrNull(r.esc);
-        if(leaf == null) continue;
-        root = await smt.update(root, M.escrowKey(chain, network, r.address, r.tick), leaf);
-    }
+    // Escrow (locked) leaf intentionally omitted from v1 (see deferral note above).
     return root;
 }
 
@@ -295,8 +284,7 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
             if(address == null || tick == null || tick === '') continue;
             const balLeaf = _leafOrNull(await getNetBalance(db, address, tick));
             root = await smt.update(root, M.balanceKey(chain, network, address, tick), balLeaf);
-            const escLeaf = _leafOrNull(await getLockedEscrow(db, address, tick));
-            root = await smt.update(root, M.escrowKey(chain, network, address, tick), escLeaf);
+            // Escrow (locked) leaf intentionally omitted from v1 (see deferral note above).
         }
         balancesRoot = root;
     }
@@ -352,7 +340,6 @@ module.exports = {
     PersistentSMT,
     assembleStateRoot,
     getNetBalance,
-    getLockedEscrow,
     computeBlockMerkleRoot,
     buildFullBalancesRoot,
     computeFollowerRoots,
