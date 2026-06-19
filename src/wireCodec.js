@@ -15,9 +15,9 @@
  * XChain Sync - Wire Codec (binary-safe row serialization)
  *
  * MariaDB returns BLOB/binary columns as Node Buffers. JSON.stringify turns a
- * Buffer into {"type":"Buffer","data":[...]}, and the apply path's object→
+ * Buffer into {"type":"Buffer","data":[...]}, and the apply path's object->
  * toString() arg coercion (see src/db.js) then collapses that into the literal
- * string "[object Object]" on insert — so binary columns replicate corrupted on
+ * string "[object Object]" on insert, so binary columns replicate corrupted on
  * both the snapshot and the live-broadcast paths.
  *
  * Fix: tag each Buffer column value with a reserved single-key sentinel
@@ -25,7 +25,7 @@
  * apply time. Encoding is driven by Buffer.isBuffer (the driver only returns a
  * Buffer for binary column types), so there are no encode-side false positives;
  * decoding only fires on the exact reserved-key shape. Row values are scalars,
- * strings, JSON text, or Buffers — never nested Buffers — so a shallow walk of
+ * strings, JSON text, or Buffers (never nested Buffers), so a shallow walk of
  * each row's own columns is sufficient.
  *
  * This is a wire-format change: SCHEMA_VERSION must be bumped alongside it so a
@@ -63,7 +63,7 @@ function encodeTables(tables){
     return out;
 }
 
-// Decode one column value from the wire: a sentinel object → Buffer, everything
+// Decode one column value from the wire: a sentinel object -> Buffer, everything
 // else passthrough. The strict shape check (plain object, exactly one key, the
 // reserved key, string value) keeps a JSON-typed column from being misread as
 // binary.

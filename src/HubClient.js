@@ -24,7 +24,7 @@ const axios = require('axios');
 
 // Fold a getallconfigs delta (only the rows that changed since our cursor) into
 // the cached nested config map, mutating and returning `base`. The hub's configs
-// table is upsert-only — rows are never deleted — so applying successive deltas
+// table is upsert-only (rows are never deleted), so applying successive deltas
 // reconstructs exactly the tree a full fetch would have produced.
 function mergeConfigDelta(base, delta){
     for(let coin in delta){
@@ -60,7 +60,7 @@ class HubClient {
         // (which would cost the full timeout per call before falling back).
         this._lastGoodIdx = 0;
         // Per-endpoint failure detail from the most recent _call(). Populated with
-        // "url → code|message" strings for each unreachable endpoint so callers
+        // "url => code|message" strings for each unreachable endpoint so callers
         // can report exactly what was tried and why, instead of a bare null.
         this.lastFailures = [];
         // Cached full config tree + its high-water mark (epoch seconds). The mark
@@ -68,7 +68,7 @@ class HubClient {
         // since the previous poll; the delta is merged into this cache and the
         // full map returned, so _extractDbConfigs is unaffected. 0 (initial /
         // post-restart / old hub) requests the full tree. The client is long-lived
-        // (one per SyncService), so the cursor persists across poll cycles — and
+        // (one per SyncService), so the cursor persists across poll cycles, and
         // getIndexerConfigs + getDecoderConfigs within one cycle share the cache.
         this.configs       = null;
         this.lastWatermark = 0;
@@ -129,7 +129,7 @@ class HubClient {
         // _extractDbConfigs (which treats null as "no configs") stays unchanged.
         if(result === null) return null;
         this.configs = this._applyConfigResult(result);
-        // A non-null result means at least one endpoint answered — record the fetch time
+        // A non-null result means at least one endpoint answered; record the fetch time
         // even on a delta poll that changed nothing, so the age reflects last hub contact.
         this.lastSuccessfulFetchAt = Date.now();
         return this.configs;
@@ -140,7 +140,7 @@ class HubClient {
     // watermark is present the payload is a delta (only rows changed since the
     // cursor we sent), so we MERGE it into the cache and advance the cursor.
     // Older hubs return the bare map (or a { configs, seq } wrapper without a
-    // watermark) — those are the full tree, so we REPLACE. _extractDbConfigs sees
+    // watermark); those are the full tree, so we REPLACE. _extractDbConfigs sees
     // the same full-map shape regardless of hub version. seq is 0 against an old
     // hub. The configs table is upsert-only (no row deletes), so merging
     // successive deltas reconstructs exactly what a full fetch would have returned.
@@ -158,7 +158,7 @@ class HubClient {
         this.lastSeq = seq;
 
         if(watermark === undefined || watermark === null){
-            // Hub doesn't report a watermark — payload is the full tree. Reset the
+            // Hub doesn't report a watermark; payload is the full tree. Reset the
             // cursor so the next poll also requests in full.
             this.lastWatermark = 0;
             return payload;
@@ -171,7 +171,7 @@ class HubClient {
             // Delta against the cursor we sent: merge changed rows into the cache.
             return mergeConfigDelta(this.configs, payload || {});
         }
-        // First fetch (or post-restart) — payload is the full tree.
+        // First fetch (or post-restart): payload is the full tree.
         return payload;
     }
 
@@ -219,7 +219,7 @@ class HubClient {
         return configs;
     }
 
-    // Parse a port value safely — returns defaultPort when the value is
+    // Parse a port value safely: returns defaultPort when the value is
     // absent, empty, or non-numeric.  Handles 0 correctly (unlike parseInt(x) || default).
     static _parsePort(primary, fallback){
         let val = primary !== undefined && primary !== null && primary !== '' ? primary : fallback;

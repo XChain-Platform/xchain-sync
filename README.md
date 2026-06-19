@@ -6,7 +6,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-1.6.1-blue" alt="Version">
   <img src="https://img.shields.io/badge/tests-725%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/node-%3E%3D18-green" alt="Node">
+  <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-Dankest%20Community-orange" alt="License">
 </p>
 
@@ -16,25 +16,25 @@
 
 Database replication service for the XChain Platform. Syncs indexer and decoder databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
 
-> **Breaking API change (2026-05):** REST and WebSocket paths now carry a `/:dbType/` segment (`indexer` or `decoder`) — for example `/status/indexer/BTC/mainnet`, `WS /subscribe/decoder/BTC/mainnet`. The bare `/status` endpoint now returns a nested `{coin: {network: {dbType: {...}}}}` structure. Clients must update their URLs. Transparency endpoints return HTTP 400 for `dbType=decoder` (decoder has no transparency log by design).
+> **Breaking API change (2026-05):** REST and WebSocket paths now carry a `/:dbType/` segment (`indexer` or `decoder`). For example: `/status/indexer/BTC/mainnet`, `WS /subscribe/decoder/BTC/mainnet`. The bare `/status` endpoint now returns a nested `{coin: {network: {dbType: {...}}}}` structure. Clients must update their URLs. Transparency endpoints return HTTP 400 for `dbType=decoder` (decoder has no transparency log by design).
 
 ## Features
 
-- **Dual mode** — server mode serves data from authoritative indexer databases; client mode replicates data into local MariaDB instances
-- **Multi-chain single instance** — discovers all installed chains/networks via the hub and serves them from one process on one port
-- **Hub auto-discovery** — calls xchain-hub `getallconfigs` at startup; re-polls every 5 minutes to detect newly installed chains
-- **Full snapshot export** — compressed, streamed JSON database dumps for bootstrapping new validators
-- **Incremental snapshots** — delta exports since any block height for catch-up after downtime
-- **Real-time WebSocket streaming** — per-chain/network subscriptions for new blocks and reorg events
-- **Hash chain verification** — leverages the indexer's existing per-block chained SHA256 hashes (ledger, actions, contracts) for data integrity
-- **Cross-source comparison** — clients can sync from 2+ independent servers and compare block hashes to detect tampered data
-- **Transparency log** — append-only per-block hash record for public auditability
-- **Rate limiting** — configurable per-IP limits on snapshot downloads and WebSocket connections
-- **Reorg propagation** — detects chain reorganizations from the indexer database and broadcasts rollback events to all subscribers
-- **Automatic catch-up** — clients detect block gaps on reconnect and self-heal via incremental REST snapshots
-- **Circuit-breaker DB connections** — automatic failure detection and recovery with configurable thresholds
-- **Input validation** — SQL identifier sanitization, DDL whitelisting, WebSocket event schema validation
-- **725 tests** — unit, integration, e2e, fuzz, chaos, mutation, boundary, security, performance, smoke
+- **Dual mode**: server mode serves data from authoritative indexer databases; client mode replicates data into local MariaDB instances
+- **Multi-chain single instance**: discovers all installed chains/networks via the hub and serves them from one process on one port
+- **Hub auto-discovery**: calls xchain-hub `getallconfigs` at startup; re-polls every 5 minutes to detect newly installed chains
+- **Full snapshot export**: compressed, streamed JSON database dumps for bootstrapping new validators
+- **Incremental snapshots**: delta exports since any block height for catch-up after downtime
+- **Real-time WebSocket streaming**: per-chain/network subscriptions for new blocks and reorg events
+- **Hash chain verification**: leverages the indexer's existing per-block chained SHA256 hashes (ledger, actions, contracts) for data integrity
+- **Cross-source comparison**: clients can sync from 2+ independent servers and compare block hashes to detect tampered data
+- **Transparency log**: append-only per-block hash record for public auditability
+- **Rate limiting**: configurable per-IP limits on snapshot downloads and WebSocket connections
+- **Reorg propagation**: detects chain reorganizations from the indexer database and broadcasts rollback events to all subscribers
+- **Automatic catch-up**: clients detect block gaps on reconnect and self-heal via incremental REST snapshots
+- **Circuit-breaker DB connections**: automatic failure detection and recovery with configurable thresholds
+- **Input validation**: SQL identifier sanitization, DDL whitelisting, WebSocket event schema validation
+- **725 tests**: unit, integration, e2e, fuzz, chaos, mutation, boundary, security, performance, smoke
 
 ## Documentation
 
@@ -73,7 +73,7 @@ HUB_PORT=10000
 # MAX_HUB_WAIT_MS=300000
 ```
 
-In server mode, database credentials are discovered automatically from the hub — no database environment variables are needed. The service calls `getallconfigs` on the hub and connects to every installed indexer database.
+In server mode, database credentials are discovered automatically from the hub. No database environment variables are needed. The service calls `getallconfigs` on the hub and connects to every installed indexer database.
 
 For client mode:
 
@@ -133,8 +133,8 @@ npm run api
 
 | Type | Tests | Description |
 |---|---|---|
-| Unit — Core | ~205 | `SyncService.test.js`, `ServerPoller.test.js`, `BlockBroadcaster.test.js`, `ClientSync.test.js`, `ClientApplier.test.js`, `ClientRollback.test.js`, `HashVerifier.test.js`, `HubClient.test.js`, `TransparencyLog.test.js`, `SnapshotBuilder.test.js`, `config.test.js`, `utility.test.js` |
-| Unit — Boundary | ~159 | Block index limits, poll limits, config parsing, reorg detection, WebSocket limits, hash continuity, transparency pagination, batch insert, rollback scope, circuit breaker, source arrays |
+| Unit - Core | ~205 | `SyncService.test.js`, `ServerPoller.test.js`, `BlockBroadcaster.test.js`, `ClientSync.test.js`, `ClientApplier.test.js`, `ClientRollback.test.js`, `HashVerifier.test.js`, `HubClient.test.js`, `TransparencyLog.test.js`, `SnapshotBuilder.test.js`, `config.test.js`, `utility.test.js` |
+| Unit - Boundary | ~159 | Block index limits, poll limits, config parsing, reorg detection, WebSocket limits, hash continuity, transparency pagination, batch insert, rollback scope, circuit breaker, source arrays |
 | Security | ~114 | Input validation, SQL injection, DDL whitelisting, API auth, WebSocket auth, client sync safety, applier safety |
 | Smoke | ~21 | Server + client startup, config loading, liveness |
 | Fuzz | ~57 | Property-based testing via fast-check: client applier, hash verifier, rollback, server poller, hub client, config |
