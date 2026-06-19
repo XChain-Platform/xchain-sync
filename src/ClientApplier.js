@@ -76,7 +76,20 @@ class ClientApplier {
             // now streamed live per block AND carried by snapshots; INSERT IGNORE
             // makes a row already present (bootstrap snapshot, or a catch-up/live
             // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
-            'sync_meta'
+            'sync_meta',
+            // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
+            // full-dump re-send on an incremental catch-up idempotent (item 4622).
+            'merkle_epochs'
+        ]);
+
+        // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
+        // value (markets = OHLCV; attest_validator_stats = running counters). On a
+        // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
+        // which aborts the catch-up transaction) and INSERT IGNORE would keep the
+        // STALE row, so they must UPSERT to overwrite with the source values (4622).
+        this.upsertFullDumpTables = new Set([
+            'markets',
+            'attest_validator_stats'
         ]);
     }
 
@@ -389,6 +402,7 @@ class ClientApplier {
         }
 
         let useIgnore = this.ignoreTables.has(table);
+        let useUpsert = this.upsertFullDumpTables.has(table);
         let columns   = Object.keys(rows[0]);
 
         // Validate all column names
@@ -405,6 +419,11 @@ class ClientApplier {
         let insertPrefix = useIgnore
             ? 'INSERT IGNORE INTO `' + table + '` (' + colList + ') VALUES '
             : 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
+        // Mutable-aggregate full-dump tables overwrite their existing row so a
+        // re-dump on a non-empty replica refreshes (not skips) stale values.
+        let updateSuffix = useUpsert
+            ? ' ON DUPLICATE KEY UPDATE ' + columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ')
+            : '';
 
         // Batch inserts in groups of 100 for efficiency
         let batchSize = 100;
@@ -423,7 +442,7 @@ class ClientApplier {
                 }
             }
 
-            let query = insertPrefix + valueClauses.join(', ');
+            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
             await this.db.doQuery(query, args);
         }
     }
