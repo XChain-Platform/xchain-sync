@@ -70,6 +70,11 @@ function meetsStakeThreshold(validators, signerPubkeys){
     let weightBySource = new Map();   // source -> weight (first wins; all equal per source)
     let pubkeyToSource = new Map();   // pubkey(lower) -> source
     for(let v of (validators || [])){
+        // Fail CLOSED on a blank/missing source: an empty-string (snapshot schema NOT NULL
+        // DEFAULT '') or undefined source collapses every row into ONE dedupe bucket, dropping
+        // the threshold to 1-of-N (a single signature would finalize). A malformed snapshot
+        // must never finalize. Mirrors xchain-hub / xchain-indexer (cross-service conformance).
+        if(!v || v.source === null || v.source === undefined || String(v.source).trim() === '') return false;
         let src = String(v && v.source);
         let pk  = String(v && v.pubkey).toLowerCase();
         pubkeyToSource.set(pk, src);
