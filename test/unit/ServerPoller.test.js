@@ -169,6 +169,38 @@ describe('ServerPoller', function(){
             assert.strictEqual(poller.lastPolledBlock, 95);
         });
 
+        it('detects a net-forward reorg via a changed same-height hash (item 4623)', async function(){
+            poller.lastPolledBlock = 100;
+            poller.lastPolledBlockHash = 'old-ledger-hash';
+            db.getLastBlock.resolves(100); // height unchanged: rollback + readvance within one interval
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 100,
+                ledger_hash: 'new-ledger-hash', actions_hash: 'a', contract_hash: 'c'
+            });
+
+            await poller._poll();
+
+            assert.strictEqual(broadcaster.broadcast.calledOnce, true);
+            let event = broadcaster.broadcast.firstCall.args[2];
+            assert.strictEqual(event.type, 'reorg');
+            assert.strictEqual(event.block_index, 100); // the divergent block itself
+            assert.strictEqual(poller.lastPolledBlock, 99); // rolled back one for the next-poll walk-back
+        });
+
+        it('does not flag a net-forward reorg when the same-height hash is unchanged', async function(){
+            poller.lastPolledBlock = 100;
+            poller.lastPolledBlockHash = 'lh';
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 100,
+                ledger_hash: 'lh', actions_hash: 'a', contract_hash: 'c'
+            });
+
+            await poller._poll();
+
+            assert.strictEqual(broadcaster.broadcast.called, false);
+        });
+
         it('prunes the source transparency log on reorg (to currentBlock + 1)', async function(){
             poller.lastPolledBlock = 100;
             db.getLastBlock.resolves(95);

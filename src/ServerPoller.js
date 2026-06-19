@@ -57,6 +57,10 @@ class ServerPoller {
         this.activationDelay = (delay === undefined) ? null : delay;
 
         this.lastPolledBlock = null;
+        // Hash of lastPolledBlock's content on the source, so a net-forward reorg
+        // (rollback + readvance within one poll interval, which keeps the height
+        // monotonic) is detectable by a changed hash, not just a lower height (4623).
+        this.lastPolledBlockHash = null;
         this.running = false;
 
         // Per-block replicated table topology (single source of truth shared with
@@ -89,6 +93,8 @@ class ServerPoller {
     // Start the polling loop
     async start(){
         this.lastPolledBlock = await this._resumeCursor();
+        this.lastPolledBlockHash = (this.lastPolledBlock !== null)
+            ? await this._sourceBlockHash(this.lastPolledBlock) : null;
         this.running = true;
         console.log('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
@@ -199,8 +205,36 @@ class ServerPoller {
         // Initialize if first poll
         if(this.lastPolledBlock === null){
             this.lastPolledBlock = currentBlock;
+            this.lastPolledBlockHash = await this._sourceBlockHash(currentBlock);
             await this._updateStatus();
             return;
+        }
+
+        // Net-forward reorg guard: a rollback then readvance within one poll interval
+        // leaves currentBlock >= lastPolledBlock, so the height-only check below never
+        // fires, yet the block we already broadcast was orphaned and re-mined. Detect
+        // it by re-reading the source hash at lastPolledBlock; a change means the chain
+        // forked at or below it. Roll back one block and re-read the prior hash so a
+        // deeper reorg is walked back over subsequent polls (item 4623).
+        if(this.lastPolledBlockHash !== null){
+            let srcHash = await this._sourceBlockHash(this.lastPolledBlock);
+            if(srcHash !== null && srcHash !== this.lastPolledBlockHash){
+                console.log('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + this.lastPolledBlock + ' (content hash changed)');
+                if(this.transparencyLog)
+                    await this.transparencyLog.pruneFrom(this.lastPolledBlock);
+                this.broadcaster.broadcast(this.chain, this.network, {
+                    type: 'reorg',
+                    chain: this.chain,
+                    network: this.network,
+                    dbType: this.dbType,
+                    block_index: this.lastPolledBlock
+                });
+                this.lastPolledBlock = this.lastPolledBlock - 1;
+                this.lastPolledBlockHash = (this.lastPolledBlock >= 0)
+                    ? await this._sourceBlockHash(this.lastPolledBlock) : null;
+                await this._updateStatus();
+                return;
+            }
         }
 
         // Detect reorgs: if current block is less than last polled, a rollback occurred
@@ -225,6 +259,7 @@ class ServerPoller {
                 block_index: currentBlock + 1
             });
             this.lastPolledBlock = currentBlock;
+            this.lastPolledBlockHash = await this._sourceBlockHash(currentBlock);
             await this._updateStatus();
             return;
         }
@@ -247,6 +282,13 @@ class ServerPoller {
                 this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
 
                 console.log('Synced block ' + nextBlock + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
+                // Track the hash we just broadcast so the next poll can detect a
+                // net-forward reorg that rewrites this block (item 4623).
+                this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+            } else {
+                // No payload (block vanished mid-poll): disable the hash check for this
+                // step rather than compare against a stale hash next poll.
+                this.lastPolledBlockHash = null;
             }
             this.lastPolledBlock = nextBlock;
             blocksProcessed++;
@@ -256,6 +298,14 @@ class ServerPoller {
             await this._updateStatus(currentBlock);
 
         return blocksProcessed;
+    }
+
+    // Source content hash at a block, for net-forward reorg detection. Indexer uses
+    // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
+    async _sourceBlockHash(blockIndex){
+        let row = await this.db.getBlockHashRow(blockIndex);
+        if(!row) return null;
+        return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
     }
 
     // Build a complete block payload for broadcasting.
