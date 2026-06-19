@@ -42,8 +42,8 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 8 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 8);
+        it('has 9 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 9);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
@@ -51,6 +51,9 @@ describe('ClientRollback', function(){
             // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
             assert.ok(rollback.blockTables.includes('capability_slash_events'));
             assert.ok(rollback.blockTables.includes('capability_slash_debits'));
+            // Light-client per-block SMT roots (SPV spec sec.4), block-scoped so
+            // orphaned-fork roots drop on reorg; state_tree_nodes stays (COW/immutable).
+            assert.ok(rollback.blockTables.includes('state_tree_roots'));
         });
 
         it('has action-scoped data tables', function(){
