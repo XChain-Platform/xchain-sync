@@ -690,6 +690,22 @@ class ClientRollback {
                 // Skip if table doesn't exist
             }
 
+            // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
+            // sync_meta AND merkle_epochs on reorg; the follower only mirrored
+            // sync_meta above. merkle_epochs is sync-owned, reaches followers only
+            // via the full-snapshot ride-along, and is applied INSERT IGNORE
+            // (ClientApplier.ignoreTables), so a reorg that re-roots a closed epoch
+            // would leave the stale root in place forever: the corrected re-dump
+            // collides on UNIQUE epoch and is silently skipped. Deleting the
+            // orphaned-range epochs lets the next catch-up re-insert the corrected
+            // roots (and ids) cleanly. Keyed by end_block (not block_index), like
+            // the server's prune. Falls outside the generic blockTables loop.
+            try {
+                await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
+            } catch(e){
+                // Skip if table doesn't exist
+            }
+
             // attest_validator_stats: running per-validator aggregate counters
             // (fulfilled/missed/slashed). This table is NOT block-streamed to
             // replicas; it only arrives via full-snapshot ride-along, and the thin

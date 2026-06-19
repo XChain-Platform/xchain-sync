@@ -122,6 +122,21 @@ describe('ClientRollback', function(){
             assert.deepStrictEqual(syncMetaDelete.args[1], [100]);
         });
 
+        it('deletes from merkle_epochs by end_block, mirroring the server pruneFrom (item 4770)', async function(){
+            await rollback.rollback(100);
+            // merkle_epochs is sync-owned and snapshot-ride-along only (applied
+            // INSERT IGNORE), so without this delete a reorg that re-roots a closed
+            // epoch leaves the follower serving the stale root forever. It is keyed
+            // by end_block, not block_index.
+            let merkleDelete = db.doQuery.getCalls().find(c =>
+                c.args[0].includes('merkle_epochs') && c.args[0].includes('DELETE')
+            );
+            assert.ok(merkleDelete, 'expected a DELETE FROM merkle_epochs on reorg');
+            assert.ok(/end_block\s*>=\s*\?/.test(merkleDelete.args[0]),
+                'merkle_epochs delete must be scoped by end_block >= ?');
+            assert.deepStrictEqual(merkleDelete.args[1], [100]);
+        });
+
         it('recalculates balances from credits/debits', async function(){
             await rollback.rollback(100);
             let balanceDelete = db.doQuery.getCalls().find(c =>
