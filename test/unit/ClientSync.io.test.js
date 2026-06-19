@@ -21,6 +21,7 @@ const zlib       = require('zlib');
 const proxyquire = require('proxyquire');
 const EventEmitter = require('events');
 const ClientSync = require('../../src/ClientSync');
+const { SCHEMA_VERSION } = require('../../src/schema-version');
 const Utility    = require('../../src/utility');
 const HashVerifier = require('../../src/HashVerifier');
 
@@ -340,11 +341,11 @@ describe('ClientSync _bootstrapFromHeight', function(){
     function stubTransport(opts){
         opts = opts || {};
         let tip  = (opts.tip  === undefined) ? 1000000 : opts.tip;
-        let snap = opts.snapshot || { schema_version: 3, block_height: tip, since_block: (opts.base === undefined ? tip - 50000 : opts.base), tables: {} };
+        let snap = opts.snapshot || { schema_version: SCHEMA_VERSION.indexer, block_height: tip, since_block: (opts.base === undefined ? tip - 50000 : opts.base), tables: {} };
         sinon.stub(axios, 'get').callsFake(async (url) => {
             if(url.indexOf('/status/') !== -1) return { data: { source_height: tip } };
             if(url.indexOf('/snapshot-rows/') !== -1)
-                return { data: Buffer.from(JSON.stringify({ schema_version: 3, table: 'x', max_id: 0, has_more: false, rows: [] })) };
+                return { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, table: 'x', max_id: 0, has_more: false, rows: [] })) };
             if(url.indexOf('/snapshot/') !== -1) return { data: Buffer.from(JSON.stringify(snap)) };
             throw new Error('unexpected url ' + url);
         });
@@ -385,7 +386,7 @@ describe('ClientSync _bootstrapFromHeight', function(){
         ({ sync, db, applier } = makeSync());
         sinon.stub(sync, '_fetchAndApplySchema').resolves();
         // tip 30, depth 50000 -> base must clamp to 0. Server echoes since_block=0.
-        stubTransport({ tip: 30, snapshot: { schema_version: 3, block_height: 30, since_block: 0, tables: {} } });
+        stubTransport({ tip: 30, snapshot: { schema_version: SCHEMA_VERSION.indexer, block_height: 30, since_block: 0, tables: {} } });
 
         await sync._bootstrapFromHeight(50000);
 
@@ -461,7 +462,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
     afterEach(function(){ sinon.restore(); });
 
     function page(rows, has_more, max_id){
-        return { data: Buffer.from(JSON.stringify({ schema_version: 3, table: 'index_transactions', max_id, has_more, rows })) };
+        return { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, table: 'index_transactions', max_id, has_more, rows })) };
     }
 
     it('pages one table by id cursor until has_more=false, applying each non-empty page', async function(){
@@ -520,9 +521,9 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sinon.stub(rt, 'getTopology').returns({ index: ['pubkeys'] });
         db.doQuery.resolves([{ m: 42 }]); // replica MAX(id) = 42
-        // decoder schema_version is 2 (indexer is 3); the page must match it.
+        // decoder uses SCHEMA_VERSION.decoder (distinct from indexer); the page must match it.
         let get = sinon.stub(axios, 'get').resolves(
-            { data: Buffer.from(JSON.stringify({ schema_version: 2, table: 'pubkeys', max_id: 42, has_more: false, rows: [] })) });
+            { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.decoder, table: 'pubkeys', max_id: 42, has_more: false, rows: [] })) });
 
         await sync._syncLookupTablesPaged('http://src:3006');
 
@@ -550,7 +551,7 @@ describe('ClientSync truncated catch-up', function(){
         assert.ok(sync._truncatedDepth >= 1, 'chain is in truncated mode');
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
-        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
         await sync._runIncrementalCatchUp();
 
@@ -566,7 +567,7 @@ describe('ClientSync truncated catch-up', function(){
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
-        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
         await sync._runIncrementalCatchUp();
 
@@ -581,7 +582,7 @@ describe('ClientSync truncated catch-up', function(){
         assert.strictEqual(sync._truncatedDepth, 0);
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
-        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 3, block_height: 105, since_block: 101, tables: {} })) });
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
         await sync._runIncrementalCatchUp();
 
@@ -596,7 +597,7 @@ describe('ClientSync truncated catch-up', function(){
         assert.ok(sync._truncatedDepth >= 1, 'decoder picks up the chain depth (gate removed)');
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
-        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 2, block_height: 105, since_block: 101, tables: {} })) });
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.decoder, block_height: 105, since_block: 101, tables: {} })) });
 
         await sync._runIncrementalCatchUp();
 
@@ -1250,6 +1251,23 @@ describe('ClientSync: _connectWebSocket', function(){
         sync._connectWebSocket('http://src1:3006', 0);
 
         await fakeWsInstance.emit('message', Buffer.from('{not json'));
+
+        // Malformed JSON is caught at parse time (before the serialized event chain).
+        let errCalls = console.error.getCalls().map(c => c.args[0]);
+        assert.ok(errCalls.some(m => m && m.indexOf('Error parsing WebSocket message') !== -1));
+    });
+
+    it('message handler: logs when _handleEvent rejects', async function(){
+        let { sync } = makeSyncWS();
+        sync.running = true;
+        sinon.stub(sync, '_handleEvent').rejects(new Error('handle boom'));
+
+        sync._connectWebSocket('http://src1:3006', 0);
+
+        // A well-formed event passes validation and reaches the serialized event
+        // chain; its rejection is surfaced by the chain's .catch.
+        await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
+        await sync._wsEventChain;   // let the .then(_handleEvent).catch settle
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Error handling WebSocket message') !== -1));
