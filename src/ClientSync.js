@@ -1214,18 +1214,28 @@ class ClientSync {
             console.log('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
         });
 
-        ws.on('message', async (data) => {
+        ws.on('message', (data) => {
+            // Serialize event processing in arrival order. ws does not await an async
+            // listener, so without this a burst of block events runs _handleEvent
+            // concurrently and races on lastAppliedBlock (the gap/continuity check runs
+            // before _withApplyLock), firing spurious gaps that thrash the client into
+            // bulk catch-up (which skips the apply-time state_hash recompute). Chaining
+            // synchronously per message keeps gap-detection and apply atomic and ordered.
+            let event;
             try {
-                let event = JSON.parse(data.toString());
+                event = JSON.parse(data.toString());
                 let check = validation.validateWsEvent(event);
                 if(!check.valid){
                     console.error('Invalid WS event from ' + source + ': ' + check.reason);
                     return;
                 }
-                await this._handleEvent(event, sourceIndex);
             } catch(e){
-                console.error('Error handling WebSocket message:', e);
+                console.error('Error parsing WebSocket message:', e);
+                return;
             }
+            this._wsEventChain = (this._wsEventChain || Promise.resolve())
+                .then(() => this._handleEvent(event, sourceIndex))
+                .catch(e => console.error('Error handling WebSocket message:', e));
         });
 
         ws.on('close', () => {
