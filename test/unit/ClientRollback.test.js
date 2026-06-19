@@ -105,7 +105,9 @@ describe('ClientRollback', function(){
             let blockDeletes = db.doQuery.getCalls().filter(c =>
                 c.args[0].includes('DELETE FROM') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
             );
-            assert.strictEqual(blockDeletes.length, rollback.blockTables.length);
+            // Block-scoped deletes cover both blockTables and the index id tables
+            // (index_addresses / index_tickers), which are also pruned by block_index >=.
+            assert.strictEqual(blockDeletes.length, rollback.blockTables.length + rollback.indexTables.length);
             for(let call of blockDeletes){
                 assert.deepStrictEqual(call.args[1], [100]);
             }

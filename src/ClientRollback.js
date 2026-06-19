@@ -74,6 +74,16 @@ class ClientRollback {
             'state_tree_roots'
         ];
 
+        // Lookup tables rolled back block-scoped (keyed by their own block_index),
+        // mirroring xchain-indexer/src/rollback.js indexTables. Replicated verbatim by id,
+        // so the replica must delete the same orphaned-block ids the source deletes; a wire
+        // ^<id> reference makes their ids consensus-relevant. Other index_* lookups stay
+        // append-only/inert (no ^<id> form).
+        this.indexTables = [
+            'index_addresses',
+            'index_tickers'
+        ];
+
         // Tables that store data using action_index
         this.dataTables = [
             'actions',
@@ -608,6 +618,25 @@ class ClientRollback {
                     await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
                 } catch(e){
                     // Table may not exist on older replica schemas - skip
+                }
+            }
+
+            // Roll back the index id lookups (index_addresses / index_tickers), mirroring
+            // the source indexer's rollback (xchain-indexer/src/rollback.js). These tables
+            // are replicated VERBATIM by id (ClientApplier copies the server's ids), so the
+            // replica must delete the same orphaned-block id rows the source deletes; the
+            // forward stream then re-introduces them under their reproduced ids. Once an
+            // address/ticker can be referenced on the wire as ^<id>, its id is
+            // consensus-relevant (resolved to a canonical string at block-hash time), so a
+            // surviving orphaned id would fork the replica's checkpoint after a reorg. Rows
+            // with block_index NULL (pre-migration) are never matched and left untouched.
+            // MUST run after the action_index and block_index data deletes above so no
+            // surviving row references a deleted id.
+            for(let table of this.indexTables){
+                try {
+                    await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
+                } catch(e){
+                    // Table may not exist / lacks block_index on older replica schemas - skip
                 }
             }
 

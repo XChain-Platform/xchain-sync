@@ -61,6 +61,11 @@ function replicatedTables(dbType){
     return { sp, universe: [...universe].sort() };
 }
 
+// Append-only / id-keyed dedup lookups whose orphan rows are inert (re-sent INSERT
+// IGNORE on forward apply). NOTE: in the INDEXER db, index_addresses / index_tickers are
+// NOT inert (a wire ^<id> makes their ids consensus-relevant) and ARE rolled back; that is
+// asserted positively below ('index id lookups are rolled back ...'). They stay listed as
+// lookups here because in the DECODER db they remain inert append-only mirrors.
 const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 
 // Coverage that lives outside ClientRollback's table arrays.
@@ -224,6 +229,33 @@ describe('Rollback coverage guard @regression', function(){
                   `ROLLBACK_EXEMPT in this test with a reason. Classify by understanding the\n` +
                   `table, not by silencing the guard.\n`
                 : undefined
+        );
+    });
+
+    it('index id lookups are rolled back on the replica and mirror the source indexer (^id consensus)', function(){
+        // index_addresses / index_tickers ids become consensus-relevant once an
+        // address/ticker can be referenced on the wire as ^<id>: a wire ^<id> is stored
+        // verbatim and resolved to a canonical string at block-hash time, so a surviving
+        // orphaned id forks the replica's checkpoint after a reorg. The replica copies the
+        // source's ids verbatim, so it must delete the same orphaned-block id rows.
+        assert.deepStrictEqual(
+            [...rollback.indexTables].sort(),
+            ['index_addresses', 'index_tickers'],
+            'ClientRollback.indexTables must roll back index_addresses and index_tickers'
+        );
+        // Cross-repo drift guard: the source indexer must roll back the same set.
+        let IndexerRollback;
+        try {
+            IndexerRollback = require('../../../xchain-indexer/src/rollback.js');
+        } catch(e){
+            this.skip();
+            return;
+        }
+        const indexer = new IndexerRollback({});
+        assert.deepStrictEqual(
+            [...(indexer.indexTables || [])].sort(),
+            [...rollback.indexTables].sort(),
+            'xchain-indexer rollback.indexTables and xchain-sync ClientRollback.indexTables have drifted'
         );
     });
 
