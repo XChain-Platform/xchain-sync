@@ -135,6 +135,37 @@ function amountLeaf(amount){
     return leafHash(canonicalAmount(amount));
 }
 
+// ---- stakes_root value leaves (validator-set proof, spec §7) -----------------
+// The weighted quorum (stake_weighted_quorum.meetsStakeThreshold) is SOURCE-deduped:
+// 3·Σ(distinct signer-source weight) > 2·S, with S = Σ over distinct sources. So the
+// stakes_root must let a light client (a) recover each signer's SOURCE (to dedupe)
+// and (b) read the committed total S. Two leaf kinds, both keyed by stakeKey():
+//   member: stakeKey(pubkey, capability)      -> stakeMemberLeaf(source, weight)
+//   total:  stakeKey(STAKE_TOTAL_PUBKEY, cap) -> stakeTotalLeaf(S)
+// STAKE_TOTAL_PUBKEY cannot collide with a real signer (pubkeys are 64-hex).
+const STAKE_TOTAL_PUBKEY = '__total__';
+function stakeMemberLeaf(source, weight){
+    return leafHash(joinFields(['STK', source, canonicalAmount(weight)]));
+}
+function stakeTotalLeaf(total){
+    return leafHash(joinFields(['STKTOTAL', canonicalAmount(total)]));
+}
+// Exact sum of canonical 18-dp amounts via integer (BigInt) scaling, so the
+// source-deduped total S is byte-identical across the indexer + xchain-sync twins
+// regardless of each repo's bignumber config. Returns a canonicalAmount string.
+function sumCanonicalAmounts(amounts){
+    let acc = 0n;
+    for(const a of (amounts || [])){
+        const [i, f] = canonicalAmount(String(a)).split('.');
+        acc += BigInt(i) * 1000000000000000000n + BigInt(f);
+    }
+    const s    = acc.toString();
+    const frac = s.length > 18 ? s.slice(-18) : s.padStart(18, '0');
+    let   intp = s.length > 18 ? s.slice(0, -18) : '0';
+    intp = intp.replace(/^0+(?=\d)/, '');
+    return intp + '.' + frac;
+}
+
 // ---- Bit access on a key path (MSB-first) -----------------------------------
 function bitAt(keyBuf, i){
     return (keyBuf[i >> 3] >> (7 - (i & 7))) & 1;
@@ -336,6 +367,44 @@ function contractLeaf(subTable, fields){
 function blockMerkleRoot(orderedLeaves){
     return fixedMerkleRoot(orderedLeaves);
 }
+// Build the ordered block-content leaf vector from the canonical per-block rows
+// (the db.getBlockLeafRows shape: { ledger:{credits,debits,escrows}, actions,
+// contracts:{contracts,state,executions,emissions,deposits,withdrawals} }) in the
+// frozen cross-kind total order (§5.1): all ledger leaves (credit, debit, escrow),
+// then actions, then the six contract sub-tables, each in the deterministic order
+// getBlockHashes gathered them. Null fields coerce to '' (matching actionsLeaf's
+// tx_index). This is the SINGLE source of the cross-kind ordering: the indexer
+// commits block_merkle_root with it and the explorer proof server locates a row's
+// leaf index with it, both reading this twin-guarded module so the order can never
+// drift between commit and proof. The leaf index an inclusion proof returns is
+// position-defined here, so the order is consensus-critical and golden-vectored.
+function blockMerkleLeaves(rows){
+    const _c = (x) => (x == null) ? '' : x;
+    const leaves = [];
+    const L = (rows && rows.ledger) || {};
+    for(const kind of ['credit', 'debit', 'escrow']){
+        const arr = L[kind + 's'] || [];   // credits / debits / escrows
+        for(const r of arr)
+            leaves.push(ledgerLeaf({ kind, action_index: r.action_index,
+                address: _c(r.address), tick: _c(r.tick), amount: r.amount }));
+    }
+    for(const r of ((rows && rows.actions) || []))
+        leaves.push(actionsLeaf({ action_index: r.action_index, tx_index: r.tx_index, action: _c(r.action) }));
+    const C = (rows && rows.contracts) || {};
+    for(const r of (C.contracts || []))
+        leaves.push(contractLeaf('contracts', [r.action_index, _c(r.source_address), _c(r.code_hash), _c(r.status)]));
+    for(const r of (C.state || []))
+        leaves.push(contractLeaf('state', [r.contract_index, _c(r.state_key), _c(r.state_value)]));
+    for(const r of (C.executions || []))
+        leaves.push(contractLeaf('executions', [r.action_index, r.contract_index, _c(r.caller_address), _c(r.gas_used), _c(r.status), _c(r.emitted_count)]));
+    for(const r of (C.emissions || []))
+        leaves.push(contractLeaf('emissions', [r.execution_index, _c(r.emitted_action), r.action_index, r.position]));
+    for(const r of (C.deposits || []))
+        leaves.push(contractLeaf('deposits', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
+    for(const r of (C.withdrawals || []))
+        leaves.push(contractLeaf('withdrawals', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
+    return leaves;
+}
 
 module.exports = {
     // versions / constants
@@ -345,6 +414,7 @@ module.exports = {
     sha256, leafHash, nodeHash, toBuf, toHex,
     // encodings
     canonicalAmount, joinFields, smtKey, balanceKey, escrowKey, stakeKey, amountLeaf, bitAt,
+    STAKE_TOTAL_PUBKEY, stakeMemberLeaf, stakeTotalLeaf, sumCanonicalAmounts,
     // SMT
     SparseMerkleTree, verifySmtProof,
     compressSmtProof, decompressSmtProof, verifyCompressedSmtProof,
@@ -352,5 +422,5 @@ module.exports = {
     fixedMerkleRoot, fixedMerkleProof, verifyFixedMerkleProof,
     stateRoot, stateRootProof,
     // block content
-    ledgerLeaf, actionsLeaf, contractLeaf, blockMerkleRoot
+    ledgerLeaf, actionsLeaf, contractLeaf, blockMerkleRoot, blockMerkleLeaves
 };
