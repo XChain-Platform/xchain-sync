@@ -33,9 +33,10 @@ const validation  = require('./validation');
 const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
 const { SCHEMA_VERSION } = require('./schema-version');
-const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
 const checkpointVerifier = require('./checkpoint');
-const { getPinnedValidators } = require('./pinnedValidators');
+const M = require('./merkle');
+const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
 
 class ClientSync {
 
@@ -1709,33 +1710,148 @@ class ClientSync {
         if(!cp || cp.state_root == null) return;                 // pre-commitment: nothing to anchor
         if(typeof cp.block_index !== 'number' || cp.block_index > this.lastAppliedBlock) return; // not caught up
 
-        // 1. The checkpoint must meet the federation quorum under the PINNED set.
+        // 1. The checkpoint must meet the federation quorum. Try the PINNED launch set
+        //    first (the launch epoch). If it no longer signs (the federation rotated
+        //    its keys), roll the trust root FORWARD from the pinned SEED checkpoint over
+        //    BTC's stakes_root (spec §7.3) IF a seed is configured; otherwise preserve
+        //    the original behavior (a quorum failure is a divergence).
         let q = checkpointVerifier.verifyCheckpoint(cp, validators);
         if(!q.valid){
+            let seed = getPinnedCheckpoint(this.chain, this.network);
+            if(seed){
+                let r = await this._followCheckpointForward(cp, seed);
+                if(r.verdict === 'ok'){
+                    console.log('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
+                        this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
+                    return;
+                }
+                if(r.verdict === 'divergence'){
+                    await this._haltOnDivergence(cp.block_index, r.mismatches,
+                        this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+                    return;
+                }
+                return;                                          // 'wait': cannot anchor across rotation yet
+            }
             await this._haltOnDivergence(cp.block_index,
                 [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
                 this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
             return;
         }
         // 2. Its committed roots must equal the replica's OWN recomputed roots at that height.
-        let rows = await this.db.doQuery(
-            'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [cp.block_index]);
-        if(!rows || !rows.length) return;                        // height not recomputed here (truncated bootstrap)
-        let local = rows[0];
-        let mismatches = [];
-        if(String(local.state_root).toLowerCase() !== String(cp.state_root).toLowerCase())
-            mismatches.push({ field: 'state_root', a: cp.state_root, b: local.state_root });
-        if(cp.block_merkle_root != null && local.block_merkle_root != null
-                && String(local.block_merkle_root).toLowerCase() !== String(cp.block_merkle_root).toLowerCase())
-            mismatches.push({ field: 'block_merkle_root', a: cp.block_merkle_root, b: local.block_merkle_root });
-        if(mismatches.length){
-            await this._haltOnDivergence(cp.block_index, mismatches,
+        let cmp = await this._checkpointRootsMatchLocal(cp);
+        if(cmp.status === 'missing') return;                     // height not recomputed here (truncated bootstrap)
+        if(cmp.status === 'mismatch'){
+            await this._haltOnDivergence(cp.block_index, cmp.mismatches,
                 this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
             return;
         }
         console.log('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
+    }
+
+    // Compare a checkpoint's committed roots to the replica's OWN recomputed
+    // state_tree_roots row. Returns { status: 'match'|'mismatch'|'missing', mismatches }.
+    async _checkpointRootsMatchLocal(c){
+        let rows = await this.db.doQuery(
+            'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [c.block_index]);
+        if(!rows || !rows.length) return { status: 'missing', mismatches: [] };
+        let local = rows[0], mism = [];
+        if(String(local.state_root).toLowerCase() !== String(c.state_root).toLowerCase())
+            mism.push({ field: 'state_root', a: c.state_root, b: local.state_root });
+        if(c.block_merkle_root != null && local.block_merkle_root != null
+                && String(local.block_merkle_root).toLowerCase() !== String(c.block_merkle_root).toLowerCase())
+            mism.push({ field: 'block_merkle_root', a: c.block_merkle_root, b: local.block_merkle_root });
+        return { status: mism.length ? 'mismatch' : 'match', mismatches: mism };
+    }
+
+    // The oracle_publish validator set [{pubkey, weight, source}] at a BTC snapshot
+    // height, computed from the replica's OWN staking tables, the SAME query + zero-
+    // weight filter the follower uses to build the committed stakes_root
+    // (stateCommitment.gatherStakeEntries), so the set cannot drift from what was
+    // committed. checkpoint.verifyCheckpoint source-dedupes it for the quorum.
+    async _oraclePublishSetAt(snapshotBlock){
+        const caps = btcStakeCapabilities();
+        const cap  = 'oracle_publish';
+        const rows = await this.db.getStakeWeightsByCapability(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT);
+        const set  = [], ZERO = M.canonicalAmount('0');
+        for(const r of (rows || [])){
+            if(!r || r.pubkey == null) continue;
+            if(M.canonicalAmount(String(r.weight == null ? '0' : r.weight)) === ZERO) continue;   // zero cannot qualify
+            set.push({ pubkey: String(r.pubkey), weight: String(r.weight), source: String(r.source) });
+        }
+        return set;
+    }
+
+    // Roll the pinned trust root FORWARD to `cp` across validator rotation (spec §7.3),
+    // seeded by the out-of-band pinned checkpoint. BTC-only: the signer set for every
+    // chain is the oracle_publish set in BTC's stakes_root (§4.1). Returns:
+    //   { verdict: 'ok' }                 cp's quorum verified against the forward-
+    //                                     followed authoritative set AND its committed
+    //                                     roots equal the replica's recompute.
+    //   { verdict: 'wait' }               inconclusive (transport / incomplete range /
+    //                                     a step whose signer set is not yet attested /
+    //                                     a height not yet recomputed here). No halt.
+    //   { verdict: 'divergence', mismatches }
+    //                                     a checkpoint failed quorum under an
+    //                                     AUTHORITATIVE set, or its roots disagree with
+    //                                     the recompute. Caller halts.
+    // Each step's signer set is computed from the replica's own staking tables at the
+    // step's snapshot_block, trusted only once that height is attested (covered by an
+    // already-adopted checkpoint whose committed state_root == the recompute). Trust
+    // flows forward from the pinned seed; the set that signs N+1 is the one committed
+    // in the previous trusted checkpoint's (attested) state, never N+1's own.
+    async _followCheckpointForward(cp, seed){
+        if(this.chain !== 'BTC') return { verdict: 'wait' };     // stakes (signer sets) are BTC-only
+        if(!seed || seed.state_root == null || typeof seed.block_index !== 'number') return { verdict: 'wait' };
+        if(cp.block_index <= seed.block_index) return { verdict: 'wait' };
+
+        // Bootstrap: the seed is the out-of-band trust root; the replica's own recompute
+        // at seed.block_index must match it, else the replica is on a different chain.
+        let seedCmp = await this._checkpointRootsMatchLocal(seed);
+        if(seedCmp.status === 'missing') return { verdict: 'wait' };
+        if(seedCmp.status === 'mismatch') return { verdict: 'divergence', mismatches: seedCmp.mismatches };
+
+        let trusted = seed, from = seed.block_index + 1, guard = 0;
+        while(trusted.block_index < cp.block_index){
+            if(++guard > 10000) return { verdict: 'wait' };      // runaway guard
+            let chain;
+            try {
+                let url = this.sources[0] + '/checkpoints/indexer/' + this.chain + '/' + this.network +
+                          '/range?from=' + from + '&to=' + cp.block_index;
+                let resp = await axios.get(url, { timeout: 10000 });
+                chain = resp && resp.data && resp.data.checkpoints;
+            } catch(e){ return { verdict: 'wait' }; }            // transport: not a divergence
+            if(!Array.isArray(chain) || !chain.length) return { verdict: 'wait' };   // cannot reach cp
+
+            let advanced = false;
+            for(let next of chain){
+                if(typeof next.block_index !== 'number' || next.block_index <= trusted.block_index) continue;
+                if(next.block_index > this.lastAppliedBlock) return { verdict: 'wait' };   // not recomputed here yet
+                if(next.state_root == null) return { verdict: 'wait' };                    // pre-commitment in range
+                // The set that signs `next` is the oracle_publish set at next.snapshot_block;
+                // trust it only once that height is attested by the current trust root.
+                if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
+                    return { verdict: 'wait' };
+                let vset = await this._oraclePublishSetAt(next.snapshot_block);
+                if(!checkpointVerifier.verifyCheckpoint(next, vset).valid)
+                    return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum',
+                        a: 'quorum-signed (federation)',
+                        b: 'INVALID at block ' + next.block_index + ' under the authoritative oracle_publish set at snapshot ' + next.snapshot_block }] };
+                // Attest `next` so its rows extend the trusted frontier for the next step.
+                let cmp = await this._checkpointRootsMatchLocal(next);
+                if(cmp.status === 'missing') return { verdict: 'wait' };
+                if(cmp.status === 'mismatch') return { verdict: 'divergence', mismatches: cmp.mismatches };
+                trusted = next; from = next.block_index + 1; advanced = true;
+                if(trusted.block_index >= cp.block_index) break;
+            }
+            if(!advanced) return { verdict: 'wait' };            // range had nothing usable past `trusted`
+        }
+
+        if(trusted.block_index === cp.block_index
+                && String(trusted.state_root).toLowerCase() === String(cp.state_root).toLowerCase())
+            return { verdict: 'ok' };
+        return { verdict: 'wait' };
     }
 
     // Handle a reorg event
