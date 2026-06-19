@@ -34,8 +34,14 @@
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
  *
- * Validator ROTATION past the launch epoch is out of scope here (shared with the
- * wallet's deferred followForward work); the launch set covers the launch epoch.
+ * Validator ROTATION past the launch epoch: the launch `validators` set above
+ * eventually stops signing. `getPinnedCheckpoint` (below) provides the out-of-band
+ * SEED checkpoint (a committed state_root + its block/snapshot height) from which a
+ * client rolls its trust root FORWARD, proving each successor oracle_publish set
+ * against the committed BTC stakes_root and adopting the next checkpoint (spec §7.3,
+ * the sync analogue of the SDK light client's followForward). The seed registry is
+ * also INERT (null per key) until launch values land; the client-side walk consumes
+ * it. Env override: CHECKPOINT_SEED_<CHAIN>_<NETWORK> (JSON, fail-closed).
  *
  * ---- FILL AT LAUNCH --------------------------------------------------------
  * Replace a key's null with the oracle_publish signer set that signs the launch
@@ -106,4 +112,66 @@ function getPinnedValidators(chain, network) {
     return entry || null;
 }
 
-module.exports = { getPinnedValidators, PINNED };
+/**
+ * Out-of-band SEED checkpoints for forward-following (spec §7.3), keyed
+ * "chain:network". The trust anchor a client rolls forward from once the launch
+ * `validators` set stops signing: its committed `state_root` lets the client prove
+ * each successor oracle_publish set against the BTC stakes_root. All real keys ship
+ * null (INERT) until launch values land. Shape mirrors the SDK's pinnedCheckpoints
+ * entry (sans validator_signatures: the seed is trusted out of band, and the launch
+ * set that signed it is `getPinnedValidators`).
+ * @type {Record<string, { block_index:number, snapshot_block:number, checkpoint_seq:number, state_root:string, state_root_version:number, block_merkle_root:string, block_merkle_version:number } | null>}
+ */
+const PINNED_CHECKPOINTS = {
+    'BTC:mainnet':  null,   // FILL AT LAUNCH (the BTC launch checkpoint; stakes are BTC-only, §4.1)
+    'BTC:testnet':  null,
+    'BTC:regtest':  null,
+    'LTC:mainnet':  null,   // FILL AT LAUNCH
+    'LTC:testnet':  null,
+    'LTC:regtest':  null,
+    'DOGE:mainnet': null,   // FILL AT LAUNCH
+    'DOGE:testnet': null,
+    'DOGE:regtest': null,
+};
+
+for (const k of Object.keys(PINNED_CHECKPOINTS)) {
+    if (PINNED_CHECKPOINTS[k]) Object.freeze(PINNED_CHECKPOINTS[k]);
+}
+Object.freeze(PINNED_CHECKPOINTS);
+
+function _seedEnvKey(chain, network) {
+    return 'CHECKPOINT_SEED_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
+}
+
+// Parse + lightly validate an env-supplied seed checkpoint; returns null on any
+// malformation so a bad override never weakens the trust root (fail-closed: no seed
+// means forward-following is skipped, not bypassed). state_root is the field the
+// walk anchors successor-set proofs to, so it is required and must be a string.
+function _seedFromEnv(chain, network) {
+    const raw = process.env[_seedEnvKey(chain, network)];
+    if (!raw) return null;
+    let cp;
+    try { cp = JSON.parse(raw); } catch (e) { return null; }
+    if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return null;
+    if (typeof cp.state_root !== 'string' || !cp.state_root) return null;
+    if (typeof cp.block_index !== 'number' || !Number.isFinite(cp.block_index) || cp.block_index < 0) return null;
+    if (typeof cp.snapshot_block !== 'number' || !Number.isFinite(cp.snapshot_block) || cp.snapshot_block < 0) return null;
+    return cp;
+}
+
+/**
+ * The pinned SEED checkpoint for (chain, network): an env override if present and
+ * well-formed, else the baked-in entry, else null. Lookup is case-insensitive.
+ * @param {string} chain
+ * @param {string} network
+ * @returns {object | null}
+ */
+function getPinnedCheckpoint(chain, network) {
+    if (chain == null || network == null) return null;
+    const env = _seedFromEnv(chain, network);
+    if (env) return env;
+    const entry = PINNED_CHECKPOINTS[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
+    return entry || null;
+}
+
+module.exports = { getPinnedValidators, getPinnedCheckpoint, PINNED, PINNED_CHECKPOINTS };

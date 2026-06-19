@@ -52,3 +52,44 @@ describe('pinnedValidators @regression', function(){
         assert.strictEqual(pinned.getPinnedValidators('BTC', 'regtest'), null);
     });
 });
+
+describe('pinnedValidators: rotation seed checkpoint @regression', function(){
+    const SEEDKEY = 'CHECKPOINT_SEED_BTC_REGTEST';
+    afterEach(function(){ delete process.env[SEEDKEY]; });
+
+    const goodSeed = {
+        block_index: 1000, snapshot_block: 994, checkpoint_seq: 0,
+        state_root: 'ab'.repeat(32), state_root_version: 1,
+        block_merkle_root: 'cd'.repeat(32), block_merkle_version: 1
+    };
+
+    it('is INERT: every real (chain, network) seed pins null', function(){
+        for(const chain of ['BTC', 'LTC', 'DOGE']){
+            for(const net of ['mainnet', 'testnet', 'regtest']){
+                assert.strictEqual(pinned.getPinnedCheckpoint(chain, net), null, chain + ':' + net);
+            }
+        }
+    });
+
+    it('returns null for an unknown chain/network and for null args', function(){
+        assert.strictEqual(pinned.getPinnedCheckpoint('NOPE', 'mainnet'), null);
+        assert.strictEqual(pinned.getPinnedCheckpoint('BTC', 'nope'), null);
+        assert.strictEqual(pinned.getPinnedCheckpoint(null, null), null);
+    });
+
+    it('parses a well-formed env seed override (case-insensitive lookup)', function(){
+        process.env[SEEDKEY] = JSON.stringify(goodSeed);
+        assert.deepStrictEqual(pinned.getPinnedCheckpoint('btc', 'REGTEST'), goodSeed);
+    });
+
+    it('fails closed (null) on a malformed env seed override', function(){
+        process.env[SEEDKEY] = 'not json';
+        assert.strictEqual(pinned.getPinnedCheckpoint('BTC', 'regtest'), null);
+        process.env[SEEDKEY] = JSON.stringify(Object.assign({}, goodSeed, { state_root: undefined })); // no state_root
+        assert.strictEqual(pinned.getPinnedCheckpoint('BTC', 'regtest'), null);
+        process.env[SEEDKEY] = JSON.stringify(Object.assign({}, goodSeed, { block_index: '1000' })); // not a number
+        assert.strictEqual(pinned.getPinnedCheckpoint('BTC', 'regtest'), null);
+        process.env[SEEDKEY] = JSON.stringify([goodSeed]);  // array, not an object
+        assert.strictEqual(pinned.getPinnedCheckpoint('BTC', 'regtest'), null);
+    });
+});

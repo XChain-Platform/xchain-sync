@@ -379,6 +379,43 @@ async function startApi(){
         }
     });
 
+    // GET /checkpoints/:dbType/:chain/:network/range?from=&to=
+    //
+    // The signed-checkpoint chain over a block range, oldest first, one row per
+    // block_index (MAX checkpoint_seq, so a reorged height is represented by its
+    // surviving checkpoint). A CLIENT replica walks this to roll its pinned trust
+    // root FORWARD across validator rotation: the launch (pinned) set eventually
+    // stops signing, so the client proves each successor oracle_publish set against
+    // the committed BTC stakes_root and adopts the next checkpoint (spec §7.3), the
+    // sync analogue of the SDK light client's followForward. Indexer-only; result
+    // is capped at CHECKPOINT_RANGE_LIMIT rows so the client pages by advancing
+    // `from`. Plural path so it never parses as /checkpoint/.../:height.
+    const CHECKPOINT_RANGE_LIMIT = 2000;
+    app.get('/checkpoints/:dbType/:chain/:network/range', incrSnapshotLimiter, async (req, res) => {
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        let from = parseInt(req.query.from, 10);
+        let to = parseInt(req.query.to, 10);
+        if(!Number.isFinite(from) || from < 0) return res.status(400).json({ error: 'Invalid from' });
+        if(!Number.isFinite(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)' });
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        try {
+            let rows = await db.doQuery(
+                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints sc ' +
+                'WHERE block_index >= ? AND block_index <= ? ' +
+                'AND checkpoint_seq = (SELECT MAX(s2.checkpoint_seq) FROM state_checkpoints s2 WHERE s2.block_index = sc.block_index) ' +
+                'ORDER BY block_index ASC LIMIT ?',
+                [from, to, CHECKPOINT_RANGE_LIMIT]);
+            res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
+        } catch(e){
+            console.error('[API error] /checkpoints/.../range:', e);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
     // GET /catalog : the databases this server offers to sync, with sizes + tips.
     // Open/read-only. One server-wide information_schema query (cached ~30s) so
     // page loads don't hammer the DB. Powers the sync.xchain.io "Browse databases" UI.
