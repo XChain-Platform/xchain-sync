@@ -200,6 +200,20 @@ module.exports = {
         // and on throwaway mirrors.
         config['VERIFY_STATE_COMMITMENT'] = (process.env.VERIFY_STATE_COMMITMENT || 'true').toLowerCase() !== 'false';
 
+        // VERIFY_CHECKPOINT_QUORUM (SPV): anchor the replica's INDEPENDENTLY-recomputed
+        // state_root to the federation quorum instead of trusting the source's claimed
+        // value. The client fetches the source's signed checkpoint, verifies its
+        // signatures against an OUT-OF-BAND pinned validator set (pinnedValidators.js),
+        // and HALTs if the quorum fails or the checkpoint's state_root disagrees with the
+        // replica's own state_tree_roots row. Closes the single-source trust gap that the
+        // recompute checks (which only compare against the same source) cannot.
+        // Default OFF: consensus-sensitive and INERT without a pinned set. When on but no
+        // pinned set is configured for the (chain, network), the step is skipped (never
+        // bypassed). CHECKPOINT_VERIFY_INTERVAL bounds how often the /latest checkpoint is
+        // probed (in applied blocks; default 50).
+        config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
+        config['CHECKPOINT_VERIFY_INTERVAL'] = parseIntMin1(process.env.CHECKPOINT_VERIFY_INTERVAL, 50);
+
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
 

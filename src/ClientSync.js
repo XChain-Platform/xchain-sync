@@ -34,6 +34,8 @@ const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
+const checkpointVerifier = require('./checkpoint');
+const { getPinnedValidators } = require('./pinnedValidators');
 
 class ClientSync {
 
@@ -1442,6 +1444,12 @@ class ClientSync {
             console.error('cannot rewind to the new canonical base. HALTING (applying no further');
             console.error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
             console.error('this validator can resume.');
+        } else if(this._halted.reason === 'checkpoint-quorum-divergence'){
+            console.error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
+            console.error('match this replica (quorum failed under the pinned validator set, or its');
+            console.error('committed state_root disagrees with the replica\'s own recompute). The');
+            console.error('source served state the federation did not sign. HALTING (applying no');
+            console.error('further blocks). Operator must investigate and clear before resuming.');
         } else {
             console.error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
             console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
@@ -1647,6 +1655,16 @@ class ClientSync {
                 if(key <= this.lastAppliedBlock)
                     this.pendingHashes.delete(key);
             }
+
+            // SPV checkpoint-quorum anchor (opt-in, throttled): confirm the replica's
+            // OWN recomputed state_root matches a federation-quorum-signed checkpoint,
+            // verified against an out-of-band pinned set. Transport errors never halt;
+            // only a genuine quorum / state_root divergence does.
+            if(this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
+                    && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL']){
+                this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
+                await this._verifyCheckpointQuorum();
+            }
         } catch(e){
             console.error('Error applying block ' + event.block_index + ':', e);
             // Heal a schema gap but don't re-apply the block inline: the
@@ -1654,6 +1672,60 @@ class ClientSync {
             // detection closes via incremental catch-up, post-heal.
             await this._healSchemaIfStale(e);
         }
+    }
+
+    // SPV: fetch the source's latest signed checkpoint, verify its quorum against the
+    // OUT-OF-BAND pinned validator set, and assert its committed state_root equals the
+    // replica's OWN recomputed state_tree_roots row at that height. This anchors the
+    // replica to the federation quorum: a single lying source cannot forge a quorum of
+    // signatures, so it cannot make a fabricated state_root pass. Skips silently (INERT)
+    // when there is no pinned set, no checkpoint yet, or the replica has not reached the
+    // checkpoint height. NEVER halts on a transport error (404 / network), only on a
+    // real quorum failure or state_root divergence.
+    async _verifyCheckpointQuorum(){
+        if(this._halted) return;
+        let validators = getPinnedValidators(this.chain, this.network);
+        if(!validators || !validators.length) return;            // inert: no out-of-band trust root
+        let source = this.sources[0];
+        if(!source) return;
+        let cp;
+        try {
+            let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
+            let resp = await axios.get(url, { timeout: 10000 });
+            cp = resp && resp.data;
+        } catch(e){
+            return;                                              // 404 / transport: not a divergence
+        }
+        if(!cp || cp.state_root == null) return;                 // pre-commitment: nothing to anchor
+        if(typeof cp.block_index !== 'number' || cp.block_index > this.lastAppliedBlock) return; // not caught up
+
+        // 1. The checkpoint must meet the federation quorum under the PINNED set.
+        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        if(!q.valid){
+            await this._haltOnDivergence(cp.block_index,
+                [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
+                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+            return;
+        }
+        // 2. Its committed roots must equal the replica's OWN recomputed roots at that height.
+        let rows = await this.db.doQuery(
+            'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [cp.block_index]);
+        if(!rows || !rows.length) return;                        // height not recomputed here (truncated bootstrap)
+        let local = rows[0];
+        let mismatches = [];
+        if(String(local.state_root).toLowerCase() !== String(cp.state_root).toLowerCase())
+            mismatches.push({ field: 'state_root', a: cp.state_root, b: local.state_root });
+        if(cp.block_merkle_root != null && local.block_merkle_root != null
+                && String(local.block_merkle_root).toLowerCase() !== String(cp.block_merkle_root).toLowerCase())
+            mismatches.push({ field: 'block_merkle_root', a: cp.block_merkle_root, b: local.block_merkle_root });
+        if(mismatches.length){
+            await this._haltOnDivergence(cp.block_index, mismatches,
+                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+            return;
+        }
+        console.log('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
+            ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
+            ' valid sigs, weighted=' + q.weighted + ')');
     }
 
     // Handle a reorg event

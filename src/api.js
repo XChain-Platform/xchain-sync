@@ -310,6 +310,75 @@ async function startApi(){
         }
     });
 
+    // GET /checkpoint/:dbType/:chain/:network/latest  : newest quorum-signed checkpoint
+    // GET /checkpoint/:dbType/:chain/:network/:height  : the checkpoint at a height
+    //
+    // Serves the hub-mirrored, federation-signed checkpoint rows (indexer DB only)
+    // so a CLIENT replica can anchor its independently-recomputed state_root to the
+    // federation quorum (SPV) instead of trusting this server's claimed values. The
+    // signatures are self-authenticating; the client verifies them against its OWN
+    // out-of-band pinned validator set, never a set this endpoint supplies. The table
+    // is append-only (a reorged height is superseded by a higher checkpoint_seq), so
+    // both routes take the MAX checkpoint_seq. The /latest literal is registered
+    // before /:height so it is not parsed as a height.
+    function serializeCheckpoint(r){
+        return {
+            chain: r.chain, network: r.network,
+            block_index: Number(r.block_index),
+            block_hash: r.block_hash, ledger_hash: r.ledger_hash,
+            actions_hash: r.actions_hash, contract_hash: r.contract_hash,
+            checkpoint_seq: Number(r.checkpoint_seq),
+            snapshot_block: Number(r.snapshot_block),
+            state_root: r.state_root,
+            state_root_version: r.state_root_version == null ? null : Number(r.state_root_version),
+            block_merkle_root: r.block_merkle_root,
+            block_merkle_version: r.block_merkle_version == null ? null : Number(r.block_merkle_version),
+            validator_signatures: r.validator_signatures
+        };
+    }
+    const CHECKPOINT_COLS = 'chain, network, block_index, block_hash, ledger_hash, actions_hash, ' +
+        'contract_hash, checkpoint_seq, snapshot_block, state_root, state_root_version, ' +
+        'block_merkle_root, block_merkle_version, validator_signatures';
+
+    app.get('/checkpoint/:dbType/:chain/:network/latest', incrSnapshotLimiter, async (req, res) => {
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        try {
+            let rows = await db.doQuery(
+                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints ORDER BY block_index DESC, checkpoint_seq DESC LIMIT 1');
+            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints' });
+            res.json(serializeCheckpoint(rows[0]));
+        } catch(e){
+            console.error('[API error] /checkpoint/.../latest:', e);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    app.get('/checkpoint/:dbType/:chain/:network/:height', incrSnapshotLimiter, async (req, res) => {
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        let h = parseInt(req.params.height, 10);
+        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height' });
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        try {
+            let rows = await db.doQuery(
+                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
+                [h]);
+            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height' });
+            res.json(serializeCheckpoint(rows[0]));
+        } catch(e){
+            console.error('[API error] /checkpoint/:dbType/:chain/:network/:height:', e);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
     // GET /catalog : the databases this server offers to sync, with sizes + tips.
     // Open/read-only. One server-wide information_schema query (cached ~30s) so
     // page loads don't hammer the DB. Powers the sync.xchain.io "Browse databases" UI.
