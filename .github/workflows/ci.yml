@@ -1,4 +1,4 @@
-# FINAL — the slim per-repo replacement for .github/workflows/ci.yml
+# FINAL: the slim per-repo replacement for .github/workflows/ci.yml
 # Drop this into each npm repo. It does nothing but delegate to the shared definition.
 # Pinned @master: push the reusable workflow once and every caller picks it up on its
 # next run. (Switch to a moving @v1 tag later if you want change-control.)
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # xchain-indexer and xchain-decoder are still PRIVATE pre-launch, so the
-      # default GITHUB_TOKEN cannot read them — each uses a read-only deploy key
+      # default GITHUB_TOKEN cannot read them, so each uses a read-only deploy key
       # scoped to that one repo (a deploy key can only be registered on a single
       # repo, hence two). When the repos flip public at launch, the ssh-key
       # lines can simply be dropped.
@@ -85,6 +85,18 @@ jobs:
 
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      # The cross-repo consensus drift guards (rollback-coverage.test.js) compare
+      # this repo's rollback/SQL/byte-identical twins against the source indexer.
+      # They live in the unit tier but the shared `ci` job never checks out the
+      # sibling, so they silently skip there (#4631). Run them HERE, where the
+      # sibling IS checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing sibling
+      # hard-fails instead of green-by-skip. Pure source comparisons (no DB).
+      - name: Run cross-repo consensus drift guards against the checked-out indexer
+        env:
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
+          XCHAIN_REQUIRE_SIBLINGS: "1"
+        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js
 
       - name: Run the e2e tier
         env:

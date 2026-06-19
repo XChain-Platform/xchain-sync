@@ -112,6 +112,34 @@ const ROLLBACK_EXEMPT = {
         'Deliberately snapshot-refreshed, not block-rolled-back.',
 };
 
+// Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
+// and exports XCHAIN_INDEXER_SQL_PATH (=<root>/src/sql); locally it is the monorepo
+// sibling three levels up. (#4631: the unit tier previously hard-coded only the
+// monorepo path, which CI never populates, so every cross-repo guard below skipped.)
+function indexerFile(rel){
+    const pathMod = require('path');
+    const root = process.env.XCHAIN_INDEXER_SQL_PATH
+        ? pathMod.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
+        : pathMod.resolve(__dirname, '..', '..', '..', 'xchain-indexer');
+    return pathMod.resolve(root, rel);
+}
+// A consensus drift guard must never silently pass by skipping. When the sibling is
+// present we run; when it is absent we HARD-FAIL only where the sibling is REQUIRED,
+// i.e. the job that checks it out and sets XCHAIN_REQUIRE_SIBLINGS=1 (the e2e job in
+// .github/workflows/ci.yml), so the guard can never green-by-skip there. We do NOT key
+// on the generic CI flag: GitHub sets CI=true in the shared unit `ci` job too, which
+// does not check out the sibling, and hard-failing there would just be noise. Returns
+// false (caller should `return`) when it skipped; throws when required-but-missing.
+const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
+function requireSibling(ctx, absPath){
+    if(require('fs').existsSync(absPath)) return true;
+    if(SIBLING_REQUIRED)
+        throw new Error('consensus drift guard cannot run: sibling missing at ' + absPath +
+            ' (check out xchain-indexer or set XCHAIN_INDEXER_SQL_PATH; ci.yml e2e job places it at .xchain-indexer)');
+    ctx.skip();
+    return false;
+}
+
 describe('Rollback coverage guard @regression', function(){
     let rollback;
 
@@ -178,16 +206,9 @@ describe('Rollback coverage guard @regression', function(){
         // This guard reads the source's rollback list (xchain-indexer/src/rollback.js)
         // DIRECTLY, so any table added there fails this suite until it is either
         // mirrored into ClientRollback or given a deliberate, reasoned exemption here.
-        let IndexerRollback;
-        try {
-            IndexerRollback = require('../../../xchain-indexer/src/rollback.js');
-        } catch(e){
-            // Sibling indexer repo not checked out (standalone sync deploy). The
-            // cross-repo source of truth is unavailable, so skip rather than error;
-            // the per-dbType guards above still run.
-            this.skip();
-            return;
-        }
+        const rbPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, rbPath)) return;
+        const IndexerRollback = require(rbPath);
         // Rollback's constructor only assigns config aliases + the static table
         // arrays (no DB/network work), so a bare stub yields the lists we need.
         const indexer = new IndexerRollback({});
@@ -244,13 +265,9 @@ describe('Rollback coverage guard @regression', function(){
             'ClientRollback.indexTables must roll back index_addresses and index_tickers'
         );
         // Cross-repo drift guard: the source indexer must roll back the same set.
-        let IndexerRollback;
-        try {
-            IndexerRollback = require('../../../xchain-indexer/src/rollback.js');
-        } catch(e){
-            this.skip();
-            return;
-        }
+        const rbPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, rbPath)) return;
+        const IndexerRollback = require(rbPath);
         const indexer = new IndexerRollback({});
         assert.deepStrictEqual(
             [...(indexer.indexTables || [])].sort(),
@@ -316,10 +333,9 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
-        let indexerPath, syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
-        try { indexerPath = require('path').resolve(__dirname, '../../../xchain-indexer/src/rollback.js'); }
-        catch(e){ this.skip(); return; }
-        if(!require('fs').existsSync(indexerPath)) this.skip();
+        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
@@ -339,10 +355,8 @@ describe('Rollback coverage guard @regression', function(){
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db.js');
-        let indexerPath;
-        try { indexerPath = require('path').resolve(__dirname, '../../../xchain-indexer/src/db.js'); }
-        catch(e){ this.skip(); return; }
-        if(!fs.existsSync(indexerPath)) this.skip();
+        const indexerPath = indexerFile('src/db.js');
+        if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(stakeSql(syncPath), stakeSql(indexerPath),
             '_stakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (the stakes_root is consensus-critical)');
     });
@@ -357,8 +371,8 @@ describe('Rollback coverage guard @regression', function(){
     it('cooldown-maturity reversal is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
-        let indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/rollback.js');
-        if(!fs.existsSync(indexerPath)) this.skip();
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
         // Whitespace-normalised fragments that uniquely identify each of the four ops.
         const OPS = [
             { name: 'capability refund-credit delete', re: /DELETE c FROM credits c JOIN unstakes u ON u\.action_index = c\.action_index/ },
@@ -436,8 +450,8 @@ describe('Rollback coverage guard @regression', function(){
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
-        const indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/rollback.js');
-        if(!fs.existsSync(indexerPath)) this.skip();
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const ANCHOR_OPS = [
             // NB: norm() strips quote chars and collapses whitespace, so a quoted SQL literal
@@ -462,8 +476,8 @@ describe('Rollback coverage guard @regression', function(){
     it('stateHash.js is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/stateHash.js');
-        const indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/stateHash.js');
-        if(!fs.existsSync(indexerPath)) this.skip();
+        const indexerPath = indexerFile('src/stateHash.js');
+        if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
             'stateHash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
     });
@@ -477,8 +491,8 @@ describe('Rollback coverage guard @regression', function(){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
-            const indexerPath = pathMod.resolve(__dirname, '../../../xchain-indexer/src/' + twin);
-            if(!fs.existsSync(indexerPath)) this.skip();
+            const indexerPath = indexerFile('src/' + twin);
+            if(!requireSibling(this, indexerPath)) return;
             assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
         });
