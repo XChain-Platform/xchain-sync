@@ -42,6 +42,21 @@ class HashVerifier {
         };
     }
 
+    // Advisory: compare the local vs remote index-map parity checksum (NON-consensus).
+    // A mismatch means this replica's id->address map content diverged from the
+    // source's authoritative map (e.g. a local INSERT IGNORE that kept a pre-existing
+    // colliding id and dropped the source's row). It is NOT a consensus fault: the
+    // ledger/actions/contract hashes resolve ids to strings, so they still agree.
+    // Caller logs + counts a mismatch and CONTINUES; it must never halt on this.
+    compareIndexMap(blockHeight, localChecksum, remoteChecksum){
+        return {
+            match:       localChecksum === remoteChecksum,
+            blockHeight: blockHeight,
+            local:       localChecksum,
+            remote:      remoteChecksum
+        };
+    }
+
     // Verify hash chain continuity between a stored previous block and a new payload
     // prevHashes: { ledger_hash, actions_hash, contract_hash } from the client's last applied block
     // payload: incoming block event with hashes

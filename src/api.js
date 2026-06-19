@@ -33,8 +33,15 @@ const WebSocket   = require('ws');
 const rateLimit   = require('express-rate-limit');
 const config      = require('./config');
 const SyncService = require('./SyncService');
+const Utility     = require('./utility');
+const BlockHasher = require('./BlockHasher');
 const { createApiKeyMiddleware } = require('./middleware');
 const { getReplicatedTables }    = require('./replicatedTables');
+
+// Stateless helper for the advisory index-map parity checksum published on
+// /status (server mode). getDataHash holds no per-call state, so one shared
+// instance is safe. See BlockHasher.computeIndexMapChecksum (NON-consensus).
+const statusUtil = new Utility();
 
 // Parse .env
 dotenv.config();
@@ -164,6 +171,23 @@ async function startApi(){
                 row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
                 row.actions_hash  = hashRow ? hashRow.actions_hash : null;
                 row.contract_hash = hashRow ? hashRow.contract_hash : null;
+                // Advisory id->address map parity (NON-consensus, default off). Computed
+                // over the deterministic subset of index_addresses on the SOURCE, bounded
+                // to the SAME polledBlock height this status publishes, so a follower at
+                // that exact height can recompute over its replica and compare. A divergent
+                // id map is invisible to the three resolved-string hashes above and to a
+                // plain row count (equal count, different content), so this is the only
+                // signal that catches it. Off by default (it scans the subset; see
+                // BlockHasher.computeIndexMapChecksum cost note); null => follower skips.
+                row.index_map_checksum = null;
+                if(cfg['INDEX_MAP_PARITY_CHECK'] && polledBlock !== null){
+                    try {
+                        row.index_map_checksum = await new BlockHasher(db, statusUtil).computeIndexMapChecksum(polledBlock);
+                    } catch(e){
+                        console.error('[API] index_map_checksum compute failed for ' + chain + '/' + network +
+                            ' at block ' + polledBlock + ' (advisory, returning null):', e.message);
+                    }
+                }
             }
             // Expose per-subscriber applied-block lag so operators can see a
             // validator falling behind before the backpressure limit force-closes it.

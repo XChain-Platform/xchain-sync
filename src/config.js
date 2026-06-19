@@ -200,6 +200,20 @@ module.exports = {
         // and on throwaway mirrors.
         config['VERIFY_STATE_COMMITMENT'] = (process.env.VERIFY_STATE_COMMITMENT || 'true').toLowerCase() !== 'false';
 
+        // INDEX_MAP_PARITY_CHECK: advisory id->address map parity. Default OFF, and
+        // UNLIKE the VERIFY_* gates above it NEVER halts: a mismatch is logged + counted
+        // only. It catches a replica whose index_addresses id->address map content
+        // diverged from the source's (e.g. a local INSERT IGNORE that kept a colliding
+        // id and dropped the source's row), which the resolved-string consensus hashes
+        // and the row-count check structurally cannot see (equal count, different
+        // content). Read on BOTH sides: a server (SYNC_MODE=server) publishes the
+        // deterministic-subset checksum on /status; a client recomputes + compares in
+        // _verifyAgainstSource. OFF by default because computing it scans the
+        // deterministic subset of index_addresses (an index on block_index is advisable
+        // before enabling on a high-volume chain). See
+        // claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
+        config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
+
         // VERIFY_CHECKPOINT_QUORUM (SPV): anchor the replica's INDEPENDENTLY-recomputed
         // state_root to the federation quorum instead of trusting the source's claimed
         // value. The client fetches the source's signed checkpoint, verifies its

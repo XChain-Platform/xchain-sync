@@ -1067,8 +1067,62 @@ class ClientSync {
             } else if(remoteStatus.table_counts){
                 console.log('Table-count verification passed against ' + source);
             }
+
+            // Advisory id->address map parity (NON-consensus; never halts). The
+            // ledger/actions/contract hashes resolve ids to canonical strings, so a
+            // divergent id map (e.g. a local INSERT IGNORE that kept a pre-existing
+            // colliding id and dropped the source's authoritative row) is invisible
+            // both to them AND to the row-count check above (same count, different
+            // content). Recompute the deterministic-subset checksum over our replica
+            // and compare to the source's, but ONLY when:
+            //   - both sides have the feature on (source published a non-null checksum;
+            //     our INDEX_MAP_PARITY_CHECK is set), and
+            //   - we are AT the source's published height, so both checksums use the
+            //     same block_index<= bound, and
+            //   - index_addresses is not itself short here: a row shortfall is a
+            //     completeness gap already surfaced above, not a content divergence,
+            //     and comparing then would only be incompleteness noise.
+            // A mismatch is logged + durably counted, never halted on (string-based
+            // consensus is unaffected). See claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
+            if(this.config['INDEX_MAP_PARITY_CHECK']
+                    && remoteStatus.index_map_checksum != null
+                    && Number(remoteStatus.block_height) === blockHeight
+                    && !countMismatches.some(m => m.table === 'index_addresses')){
+                try {
+                    let localChecksum = await this.blockHasher.computeIndexMapChecksum(blockHeight);
+                    let res = this.hashVerifier.compareIndexMap(blockHeight, localChecksum, remoteStatus.index_map_checksum);
+                    if(!res.match){
+                        console.warn('INDEX_MAP_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                            ': local=' + localChecksum + ' source=' + remoteStatus.index_map_checksum +
+                            ' (advisory, NOT halting; id->address map content diverged at equal row count)');
+                        await this._recordIndexMapMismatch(blockHeight);
+                    } else {
+                        console.log('Index-map parity passed against ' + source);
+                    }
+                } catch(e){
+                    console.error('Index-map parity check errored at block ' + blockHeight +
+                        ' (advisory, ignoring):', e.message);
+                }
+            }
         } catch(e){
             console.error('Hash verification failed against ' + source + ':', e);
+        }
+    }
+
+    // Durably count advisory index-map parity mismatches (best-effort health signal,
+    // NOT a consensus gate). Never throws. Stores a running count and the last
+    // divergent block under dbType-namespaced sync-state keys, so an operator / the
+    // dashboard can see id-map content divergence accumulating without a halt.
+    async _recordIndexMapMismatch(blockIndex){
+        try {
+            if(!this.db || typeof this.db.setSyncState !== 'function') return;
+            let countKey = 'index_map_mismatch_count:' + this.dbType;
+            let cur = (typeof this.db.getSyncState === 'function') ? await this.db.getSyncState(countKey) : null;
+            let n = (cur != null && Number.isFinite(Number(cur))) ? Number(cur) + 1 : 1;
+            await this.db.setSyncState(countKey, String(n));
+            await this.db.setSyncState('index_map_mismatch_last_block:' + this.dbType, String(blockIndex));
+        } catch(e){
+            // advisory; swallow
         }
     }
 

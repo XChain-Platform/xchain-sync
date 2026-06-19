@@ -251,6 +251,42 @@ class BlockHasher {
         });
         return this.util.getDataHash(stateData);
     }
+
+    // ADVISORY, NON-CONSENSUS. Not part of the conformance pair above, not a block
+    // hash, not in BLOCK_HASH_VERSION: the indexer never computes this, so there is
+    // no indexer twin to stay byte-identical with. Its ONLY conformance requirement
+    // is server-vs-client agreement, and both sides call THIS one method (server over
+    // its source DB, client over the replica), so they match by construction.
+    //
+    // Cumulative checksum over the DETERMINISTIC subset of the id->address map: the
+    // rows whose id was assigned inside a consensus block tx (block_index IS NOT NULL),
+    // up to and including uptoBlock. Rows assigned outside a block tx carry a NULL
+    // block_index (recovery reward-source pre-seed, API read-path createAddress; see
+    // xchain-indexer/src/db.js createAddress) and are EXCLUDED, so the benign id drift
+    // those paths legitimately produce never registers as a mismatch.
+    //
+    // Purpose: the source resolves a wire ^<id> address reference to its canonical
+    // STRING before hashing it into the consensus ledger/actions/contract hash, never
+    // the raw id, so a divergent id map is invisible to those hashes (and to a plain
+    // per-table ROW COUNT, which agrees when the maps have the same size but different
+    // contents). This checksum is the one signal that catches a replica whose id->address
+    // map content diverged from the source's, e.g. a local INSERT IGNORE that kept a
+    // pre-existing colliding id and dropped the source's authoritative row.
+    //
+    // Ordered by the numeric PK so the result is collation-independent (the address is
+    // a hashed value, never a sort key). Empty subset hashes to a stable defined value.
+    // Cost note: this scans the deterministic subset up to uptoBlock; on a large
+    // index_addresses table an index on block_index is advisable before enabling this
+    // on a high-volume chain. Gated off by default (INDEX_MAP_PARITY_CHECK).
+    // See claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
+    async computeIndexMapChecksum(uptoBlock){
+        let rows = await this.db.doQuery(
+            "SELECT id, address FROM index_addresses WHERE block_index IS NOT NULL AND block_index <= ? ORDER BY id ASC",
+            [uptoBlock]
+        );
+        let mapped = rows.map(r => ({ id: String(r.id), address: String(r.address) }));
+        return this.util.getDataHash({ index_map: mapped });
+    }
 }
 
 module.exports = BlockHasher;
