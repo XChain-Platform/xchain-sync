@@ -36,6 +36,13 @@ const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { activationDelayBlocks } = require('./consensus-constants');
 const { isStateCommitmentActive } = require('./state_commitment_activation');
 
+// How many recently broadcast block hashes to retain in memory for the
+// net-forward reorg walk-back (item 4830). Comfortably above the source
+// indexer's MAX_ROLLBACK_DEPTH (100) so a deep same-interval reorg can be
+// walked back one height per poll against the pre-reorg hash we recorded,
+// rather than against a fresh (post-reorg) source read that always matches.
+const RECENT_HASH_CAP = 256;
+
 class ServerPoller {
 
     constructor(chain, network, db, broadcaster, transparencyLog, config, util) {
@@ -61,6 +68,13 @@ class ServerPoller {
         // (rollback + readvance within one poll interval, which keeps the height
         // monotonic) is detectable by a changed hash, not just a lower height (4623).
         this.lastPolledBlockHash = null;
+        // Bounded map of recently broadcast block hashes (block_index -> content
+        // hash WE broadcast for that height). On a net-forward reorg the walk-back
+        // seeds lastPolledBlockHash from the PRE-reorg hash recorded here, so a
+        // reorg deeper than one block keeps walking back over subsequent polls
+        // (item 4830). Works for both dbTypes (the decoder has no sync_meta to read
+        // a recorded hash from). Capped to the last RECENT_HASH_CAP heights.
+        this.recentBroadcastHashes = new Map();
         this.running = false;
 
         // Per-block replicated table topology (single source of truth shared with
@@ -230,8 +244,18 @@ class ServerPoller {
                     block_index: this.lastPolledBlock
                 });
                 this.lastPolledBlock = this.lastPolledBlock - 1;
-                this.lastPolledBlockHash = (this.lastPolledBlock >= 0)
-                    ? await this._sourceBlockHash(this.lastPolledBlock) : null;
+                // Seed the new height from the PRE-reorg hash we recorded when we
+                // first broadcast it, NOT a fresh source read. A fresh read returns
+                // the post-reorg hash, so the next poll would compare post vs post,
+                // match, and stop after a single block: a reorg deeper than one block
+                // in one interval would leave orphaned content below the fork point
+                // (item 4830). Comparing the next poll's source hash against the
+                // recorded pre-reorg hash lets the walk-back continue one height per
+                // poll until it reaches the unchanged true fork point. On a miss
+                // (cold start, or walked past the cap) fall back to null, which
+                // disables the guard for that step rather than falsely confirming.
+                this.lastPolledBlockHash = (this.lastPolledBlock >= 0 && this.recentBroadcastHashes.has(this.lastPolledBlock))
+                    ? this.recentBroadcastHashes.get(this.lastPolledBlock) : null;
                 await this._updateStatus();
                 return;
             }
@@ -285,6 +309,11 @@ class ServerPoller {
                 // Track the hash we just broadcast so the next poll can detect a
                 // net-forward reorg that rewrites this block (item 4623).
                 this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+                // Record it for the net-forward walk-back so a deeper reorg can be
+                // detected against this pre-reorg hash on a later poll (item 4830).
+                this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
+                if(nextBlock > RECENT_HASH_CAP)
+                    this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);
             } else {
                 // No payload (block vanished mid-poll): disable the hash check for this
                 // step rather than compare against a stale hash next poll.
