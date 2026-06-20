@@ -77,7 +77,6 @@ class SnapshotBuilder {
         // sync_meta carries a FK on pubkeys.
         this.trailingTables = ['balances', 'sync_meta', 'pubkeys'];
 
-        // Page size for paginated reads
         this.pageSize = 10000;
     }
 
@@ -95,14 +94,11 @@ class SnapshotBuilder {
         let trailingSet  = new Set(this.trailingTables);
 
         let ordered = [];
-        // Priority tables first (in defined order)
         for(let t of this.priorityTables){
             if(allTables.includes(t)) ordered.push(t);
         }
-        // Middle tables alphabetically
         let middle = allTables.filter(t => !prioritySet.has(t) && !trailingSet.has(t)).sort();
         ordered.push(...middle);
-        // Trailing tables last
         for(let t of this.trailingTables){
             if(allTables.includes(t)) ordered.push(t);
         }
@@ -134,7 +130,6 @@ class SnapshotBuilder {
             let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
-            // Set response headers
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);
@@ -148,7 +143,6 @@ class SnapshotBuilder {
             let gzip = zlib.createGzip();
             gzip.pipe(res);
 
-            // Start JSON structure
             gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db, conn);
@@ -234,7 +228,6 @@ class SnapshotBuilder {
             let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
-            // Set response headers
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Encoding', 'gzip');
             res.setHeader('X-Block-Height', lastBlock);

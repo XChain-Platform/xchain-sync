@@ -48,12 +48,10 @@ class BlockBroadcaster {
         this.validatorHeartbeats = new Map();
     }
 
-    // Get the key for a chain/network/dbType triple
     _key(chain, network, dbType){
         return chain + ':' + network + ':' + (dbType || 'indexer');
     }
 
-    // Get client IP from WebSocket request
     _getIp(req){
         if(this.config['TRUST_PROXY']){
             let forwarded = req.headers['x-forwarded-for'];
@@ -71,7 +69,6 @@ class BlockBroadcaster {
         let type = dbType || 'indexer';
         let key = this._key(chain, network, type);
 
-        // Check per-IP connection limit
         if(!this.ipConnections.has(ip))
             this.ipConnections.set(ip, new Set());
         let ipSet = this.ipConnections.get(ip);
@@ -80,13 +77,11 @@ class BlockBroadcaster {
             return false;
         }
 
-        // Register the subscription
         if(!this.subscribers.has(key))
             this.subscribers.set(key, new Set());
         this.subscribers.get(key).add(ws);
         ipSet.add(ws);
 
-        // Store metadata on the ws object
         ws._syncChain   = chain;
         ws._syncNetwork = network;
         ws._syncDbType  = type;
@@ -103,7 +98,6 @@ class BlockBroadcaster {
         ws._syncLastSentBlock = null;
         ws._syncAppliedBlock  = null;
 
-        // Setup cleanup on close
         ws.on('close', () => this.removeSubscription(ws));
         ws.on('error', () => this.removeSubscription(ws));
 
@@ -112,7 +106,6 @@ class BlockBroadcaster {
         // anything else is ignored silently (the channel is otherwise push-only).
         ws.on('message', (data) => this._handleClientMessage(ws, data));
 
-        // Send initial status if available
         let status = this.statusData.get(key);
         if(status){
             this._send(ws, { type: 'status', chain, network, dbType: type, ...status });
@@ -122,7 +115,6 @@ class BlockBroadcaster {
         return true;
     }
 
-    // Remove a subscriber
     removeSubscription(ws){
         let chain   = ws._syncChain;
         let network = ws._syncNetwork;
@@ -145,7 +137,6 @@ class BlockBroadcaster {
                 this.ipConnections.delete(ip);
         }
 
-        // Clear metadata
         ws._syncChain   = null;
         ws._syncNetwork = null;
         ws._syncDbType  = null;
@@ -292,7 +283,6 @@ class BlockBroadcaster {
         return out;
     }
 
-    // Broadcast status to all subscribers for a chain/network/dbType
     broadcastStatus(chain, network, dbType){
         let type = dbType || 'indexer';
         let key = this._key(chain, network, type);
@@ -469,7 +459,6 @@ class BlockBroadcaster {
         }
     }
 
-    // Get subscriber count for a chain/network/dbType (or all)
     getSubscriberCount(chain, network, dbType){
         if(chain && network){
             let subs = this.subscribers.get(this._key(chain, network, dbType));

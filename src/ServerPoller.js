@@ -104,7 +104,6 @@ class ServerPoller {
         this.pollErrorCount = 0;
     }
 
-    // Start the polling loop
     async start(){
         this.lastPolledBlock = await this._resumeCursor();
         this.lastPolledBlockHash = (this.lastPolledBlock !== null)
@@ -122,7 +121,6 @@ class ServerPoller {
             console.error('Transparency backfill failed for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (continuing with live polling):', e);
         }
 
-        // Update initial status
         await this._updateStatus();
 
         while(this.running){
@@ -206,17 +204,14 @@ class ServerPoller {
         return gaps.length;
     }
 
-    // Stop the polling loop
     stop(){
         this.running = false;
     }
 
-    // Poll for new blocks
     async _poll(){
         let currentBlock = await this.db.getLastBlock();
         if(currentBlock === null) return;
 
-        // Initialize if first poll
         if(this.lastPolledBlock === null){
             this.lastPolledBlock = currentBlock;
             this.lastPolledBlockHash = await this._sourceBlockHash(currentBlock);
@@ -648,7 +643,6 @@ class ServerPoller {
         return payload;
     }
 
-    // Update the broadcaster's status data for this chain/network/dbType
     async _updateStatus(sourceBlockHeight){
         let hashRow = this.lastPolledBlock ? await this.db.getBlockHashRow(this.lastPolledBlock) : null;
         let status = {

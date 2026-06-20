@@ -43,10 +43,8 @@ const { getReplicatedTables }    = require('./replicatedTables');
 // instance is safe. See BlockHasher.computeIndexMapChecksum (NON-consensus).
 const statusUtil = new Utility();
 
-// Parse .env
 dotenv.config();
 
-// Validate required environment variables
 const REQUIRED_ENV = ['HUB_API_HOST'];
 for(const key of REQUIRED_ENV){
     if(!process.env[key]){
@@ -55,7 +53,6 @@ for(const key of REQUIRED_ENV){
     }
 }
 
-// Get configuration
 const cfg = config.getConfig();
 
 // SYNC_API_KEY is optional, matching the other services: unset leaves the
@@ -69,7 +66,6 @@ if(!cfg['SYNC_API_KEY'])
 
 async function startApi(){
 
-    // Create Express app
     const app = express();
     app.use(helmet());
     app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
@@ -118,7 +114,6 @@ async function startApi(){
         message: { error: 'Heartbeat rate limit exceeded.' }
     });
 
-    // Initialize the SyncService
     const syncService = new SyncService(cfg);
 
     // REST Routes (server mode only, but status works in client mode too)
@@ -836,14 +831,10 @@ async function startApi(){
         }
     });
 
-    // HTTP + WebSocket Server
-
     const server = http.createServer(app);
 
-    // WebSocket server attached to the same HTTP server
     const wss = new WebSocket.Server({ noServer: true });
 
-    // Handle WebSocket upgrade requests
     server.on('upgrade', (request, socket, head) => {
         // API key authentication for WebSocket connections (enforced only when
         // a key is configured; see the SYNC_API_KEY note at the top). Managed
@@ -870,7 +861,6 @@ async function startApi(){
         let chain   = match[2];
         let network = match[3];
 
-        // Reject unknown dbTypes
         if(dbType !== 'indexer' && dbType !== 'decoder'){
             socket.destroy();
             return;
@@ -887,14 +877,13 @@ async function startApi(){
             if(mode === 'infra-only' && dbType === 'indexer') syncMode = 'infra-only';
         }
 
-        // Verify this chain/network/dbType is supported
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db){
             socket.destroy();
             return;
         }
 
-        // Only allow WebSocket subscriptions in server mode
+        // WebSocket subscriptions are server-mode only.
         let broadcaster = syncService.getBroadcaster();
         if(!broadcaster){
             socket.destroy();
@@ -912,7 +901,6 @@ async function startApi(){
         });
     });
 
-    // WebSocket ping interval to detect dead connections
     const pingInterval = setInterval(() => {
         wss.clients.forEach((ws) => {
             if(ws.isAlive === false){
@@ -953,7 +941,6 @@ async function startApi(){
         }, 30000);
     }
 
-    // Start the HTTP server
     server.listen(cfg['SYNC_API_PORT'], () => {
         console.log('xchain-sync API listening on port ' + cfg['SYNC_API_PORT']);
     });

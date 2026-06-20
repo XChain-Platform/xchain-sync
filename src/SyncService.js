@@ -38,7 +38,6 @@ class SyncService {
         this.config = config;
         this.util   = new Utility();
 
-        // Hub client for chain discovery
         let hubEndpoints = HubClient.parseEndpoints(config);
         this.hubClient = new HubClient(hubEndpoints);
 
@@ -57,11 +56,9 @@ class SyncService {
         this.hashVerifier   = new HashVerifier();
     }
 
-    // Start the sync service
     async start(){
         console.log('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
 
-        // Wait for hub to be available
         await this._waitForHub();
 
         // Server-mode shared components must exist BEFORE discovery: _discoverChains()
@@ -74,25 +71,21 @@ class SyncService {
             this.snapshotBuilder = new SnapshotBuilder(this.util);
         }
 
-        // Discover chains and create DB pools
         await this._discoverChains();
 
         if(this.databases.size === 0){
             console.log('No indexer/decoder databases found. Waiting for hub config...');
         }
 
-        // Start mode-specific components
         if(this.config['SYNC_MODE'] === 'server'){
             await this._startServerMode();
         } else {
             await this._startClientMode();
         }
 
-        // Schedule periodic hub re-poll to detect new chains
         this._scheduleHubRepoll();
     }
 
-    // Wait for the hub to respond
     async _waitForHub(){
         let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
         if(maxWaitMs === undefined || maxWaitMs === null)
@@ -155,7 +148,6 @@ class SyncService {
                     this.util,
                     cfg.dbType
                 );
-                // Ensure the replica database exists
                 await db.createDatabase();
                 // Schema replication: try direct DB connection first (faster), fall back to
                 // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
@@ -224,7 +216,6 @@ class SyncService {
         return newChains;
     }
 
-    // Start server mode components
     async _startServerMode(){
         // Idempotent: these are normally created in start() before _discoverChains()
         // so pollers can capture a live broadcaster. Guard so a direct call (or future
@@ -262,7 +253,6 @@ class SyncService {
         });
     }
 
-    // Start client mode components
     async _startClientMode(){
         // ClientSync reads dbType from db.dbType and threads it through URLs +
         // skips three-hash verification for decoder DBs.
@@ -272,7 +262,6 @@ class SyncService {
         console.log('Client mode started with ' + this.databases.size + ' sync(s)');
     }
 
-    // Start client sync for a single chain/network
     _startClientSyncForChain(key, db, cfg){
         if(this.clientSyncs.has(key)) return;
 
@@ -290,7 +279,6 @@ class SyncService {
         });
     }
 
-    // Schedule periodic hub re-poll to detect new chains
     _scheduleHubRepoll(){
         setInterval(async () => {
             try {
@@ -303,12 +291,10 @@ class SyncService {
         }, this.config['HUB_REPOLL_INTERVAL']);
     }
 
-    // Get the broadcaster (used by api.js for WebSocket setup)
     getBroadcaster(){
         return this.broadcaster;
     }
 
-    // Get the snapshot builder (used by api.js for REST endpoints)
     getSnapshotBuilder(){
         return this.snapshotBuilder;
     }
@@ -330,7 +316,6 @@ class SyncService {
         return (at != null) ? Math.floor((Date.now() - at) / 1000) : null;
     }
 
-    // Get all discovered chain/network/dbType triples
     getChains(){
         let chains = [];
         for(let [key, { config: cfg }] of this.databases){
@@ -373,10 +358,8 @@ class SyncService {
         let key = chain + ':' + network + ':indexer';
         let entry = this.databases.get(key);
         if(!entry) return null;
-        // Find the poller's transparency log
         let poller = this.pollers.get(key);
         if(poller) return poller.transparencyLog;
-        // If no poller, create a temporary log reader
         return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE']);
     }
 }
