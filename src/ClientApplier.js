@@ -103,7 +103,6 @@ class ClientApplier {
         this._lastComputedRoots = null;
         if(!payload || !payload.data || !payload.block_index) return;
 
-        // Check if this block already exists (duplicate detection)
         let existing = await this.db.getBlockHashRow(payload.block_index);
         if(existing){
             console.log('Block ' + payload.block_index + ' already exists, skipping');
@@ -113,7 +112,6 @@ class ClientApplier {
         await this.db.beginTransaction();
         try {
             let data = payload.data;
-            // Apply tables in the order they appear in the payload
             for(let table in data){
                 let rows = data[table];
                 if(!rows || rows.length === 0) continue;
@@ -288,7 +286,6 @@ class ClientApplier {
                 await this.db.doQuery('DELETE FROM `' + tables[i] + '`');
             }
 
-            // Insert rows in forward order
             for(let table of tables){
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
@@ -390,11 +387,9 @@ class ClientApplier {
         }
     }
 
-    // Insert rows into a table
     async _insertRows(table, rows){
         if(!rows || rows.length === 0) return;
 
-        // Validate table name
         let tableCheck = validation.validateIdentifier(table);
         if(!tableCheck.valid){
             console.error('Rejected table name in _insertRows: ' + table + ' (' + tableCheck.reason + ')');
@@ -405,7 +400,6 @@ class ClientApplier {
         let useUpsert = this.upsertFullDumpTables.has(table);
         let columns   = Object.keys(rows[0]);
 
-        // Validate all column names
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){

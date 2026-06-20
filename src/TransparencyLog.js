@@ -52,13 +52,11 @@ class TransparencyLog {
         let startBlock = (epoch - 1) * this.epochSize + 1;
         let endBlock   = epoch * this.epochSize;
 
-        // Check if already committed
         let existing = await this.db.doQuery(
             "SELECT id FROM merkle_epochs WHERE epoch = ?", [epoch]
         );
         if (existing.length > 0) return;
 
-        // Read blocks for this epoch
         let rows = await this.db.doQuery(
             `SELECT block_index, ledger_hash, actions_hash, contract_hash
              FROM sync_meta
@@ -69,16 +67,13 @@ class TransparencyLog {
 
         if (rows.length === 0) return;
 
-        // Compute leaves
         let leaves = rows.map(r =>
             MerkleTree.computeLeaf(r.ledger_hash, r.actions_hash, r.contract_hash)
         );
 
-        // Build tree
         let tree = MerkleTree.buildTree(leaves);
         if (!tree.root) return;
 
-        // Store the epoch root
         await this.db.doQuery(
             `INSERT INTO merkle_epochs (epoch, start_block, end_block, merkle_root, leaf_count)
              VALUES (?, ?, ?, ?, ?)`,
@@ -156,15 +151,12 @@ class TransparencyLog {
                 invalidated.length + ' committed epoch(s) invalidated (will re-commit from canonical chain)');
     }
 
-    // Generate an inclusion proof for a specific block
     async getProof(blockIndex) {
         blockIndex = parseInt(blockIndex);
         if (isNaN(blockIndex) || blockIndex < 1) return null;
 
-        // Determine which epoch this block belongs to
         let epoch = Math.ceil(blockIndex / this.epochSize);
 
-        // Get the committed epoch
         let epochRows = await this.db.doQuery(
             "SELECT * FROM merkle_epochs WHERE epoch = ?", [epoch]
         );
@@ -172,7 +164,6 @@ class TransparencyLog {
 
         let epochData = epochRows[0];
 
-        // Rebuild the tree for this epoch
         let rows = await this.db.doQuery(
             `SELECT block_index, ledger_hash, actions_hash, contract_hash
              FROM sync_meta
@@ -183,7 +174,6 @@ class TransparencyLog {
 
         if (rows.length === 0) return null;
 
-        // Find the leaf index for this block
         let leafIndex = -1;
         let leaves = [];
         for (let i = 0; i < rows.length; i++) {
@@ -268,7 +258,6 @@ class TransparencyLog {
         await this.commitEpoch(epoch);
     }
 
-    // Get the latest committed Merkle root
     async getLatestRoot() {
         let rows = await this.db.doQuery(
             "SELECT * FROM merkle_epochs ORDER BY epoch DESC LIMIT 1"
@@ -276,7 +265,6 @@ class TransparencyLog {
         return rows.length > 0 ? rows[0] : null;
     }
 
-    // Get a paginated page of transparency log entries
     async getPage(page, limit){
         page  = Math.max(0, parseInt(page) || 0);
         limit = Math.min(1000, Math.max(1, parseInt(limit) || 100));

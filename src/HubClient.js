@@ -101,7 +101,6 @@ class HubClient {
         return null;
     }
 
-    // Ping the hub to check if it's alive
     async ping(){
         let result = await this._call({ jsonrpc: '2.0', method: 'ping', id: 1 });
         return result !== null;

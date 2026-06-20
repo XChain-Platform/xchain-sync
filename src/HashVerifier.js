@@ -23,7 +23,6 @@ class HashVerifier {
 
     constructor(){}
 
-    // Compare block hashes from two sources
     // Returns { match: bool, mismatches: [...] }
     compareBlockHashes(blockHeight, hashesA, hashesB){
         let mismatches = [];

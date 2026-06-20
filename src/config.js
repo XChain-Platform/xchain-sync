@@ -42,10 +42,8 @@ module.exports = {
     getConfig: function(){
         let config = {};
 
-        // Operating mode
         config['SYNC_MODE']     = process.env.SYNC_MODE || 'server';
 
-        // API port
         config['SYNC_API_PORT'] = parseIntMin0(process.env.SYNC_API_PORT, 3006);
 
         // Hub connection (HUB_VALIDATORS takes priority over HUB_API_HOST:HUB_PORT)
@@ -58,10 +56,8 @@ module.exports = {
         // Defaults to 5 minutes.
         config['MAX_HUB_WAIT_MS'] = parseIntMin0(process.env.MAX_HUB_WAIT_MS, 300000);
 
-        // CORS
         config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || false;
 
-        // Server mode settings
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
         // A replica/validator follows EVERY chain a server hosts over its own WS, all
         // from one IP; node-host-b alone serves 12 chain/network/dbType streams. The old
