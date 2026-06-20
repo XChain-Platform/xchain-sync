@@ -34,6 +34,11 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 // legitimately diverges between nodes and must not appear in consensus snapshots.
 const OPERATOR_LOCAL_TABLES = new Set([
     'icons', 'price_snapshots', 'pending_hub_pushes',
+    // recovery_pending_rewards: restore-time scratch staging for archived validator rewards
+    // (xchain-indexer F1a id-determinism fix). Recovery-local, drained into validator_rewards
+    // by the reindex apply hook, and never consensus-hashed. It must not ride snapshots (a
+    // follower has no recovery in progress, so its count legitimately differs).
+    'recovery_pending_rewards',
     // Hub-mirrored tables: pushed/retracted by hub_db_sync out-of-band with block
     // apply, so they vary by WS arrival timing and must not appear in consensus snapshots.
     // These are NEVER replicated by xchain-sync (excluded from the per-block stream, the
