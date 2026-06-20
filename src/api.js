@@ -902,6 +902,12 @@ async function startApi(){
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
+            // Fire the wss 'connection' handler so the keepalive wiring (ws.isAlive +
+            // the pong listener set in wss.on('connection')) actually runs. A manual
+            // handleUpgrade does NOT emit 'connection' on its own, so without this the
+            // pong tracking is never attached and the ping interval terminates every
+            // subscriber on its second tick (~2x WS_PING_INTERVAL) regardless of pongs.
+            wss.emit('connection', ws, request);
             broadcaster.addSubscription(ws, request, chain, network, syncMode, dbType);
         });
     });
