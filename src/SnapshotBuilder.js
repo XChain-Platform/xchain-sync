@@ -48,6 +48,12 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // same server, with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
     'oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches',
     'state_checkpoints',
+    // state_tree_roots: the follower recomputes its OWN row at every snapshot apply
+    // (ClientApplier.seedSnapshotRoots, rebuilt from local balances/stakes; never
+    // compared to the source). The table also carries computed_at (CURRENT_TIMESTAMP),
+    // a per-node wall-clock value, so shipping the source's rows adds pure
+    // nondeterminism to the snapshot and is never consumed by the follower.
+    'state_tree_roots',
 ]);
 
 class SnapshotBuilder {

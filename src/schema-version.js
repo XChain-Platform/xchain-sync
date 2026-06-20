@@ -16,7 +16,8 @@
  *
  * SCHEMA_VERSION carries an independent version per dbType ({ indexer, decoder }).
  * Bump only the key whose replicated DB had a DDL change (column added, dropped,
- * renamed, or type changed) OR a wire-encoding change to its row values. Keeping
+ * renamed, or type changed; index added, dropped, or changed; or a primary-key,
+ * foreign-key, or constraint change) OR a wire-encoding change to its row values. Keeping
  * the two versions separate means a schema change to one DB does not force the
  * other dbType's validators to restart; only validators of the changed dbType
  * see a mismatch. Mismatched versions cause those validators to refuse the

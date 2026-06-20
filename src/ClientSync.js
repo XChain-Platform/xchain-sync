@@ -1692,7 +1692,13 @@ class ClientSync {
             // surfaces as a state_root mismatch. A NULL event.balances_root (block before
             // the flag-day) or a null _lastComputedRoots (block skipped/duplicate this
             // apply, already verified when first applied) is skipped, never a divergence.
+            // Skip on a truncated replica: buildFullBalancesRoot sums the full credits/debits
+            // history, which a truncated base does not retain, so its recomputed root cannot
+            // match the source's full-history root and would false-halt every block. The
+            // truncation state is surfaced on /status (SyncService truncated flag) so operators
+            // can see the replica is not running the apply-time commitment check.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
+                    && !this.isTruncated()
                     && event.balances_root != null && this.applier._lastComputedRoots){
                 let computed   = this.applier._lastComputedRoots;
                 let mismatches = [];
@@ -1949,13 +1955,20 @@ class ClientSync {
             else
                 this.lastHashes = null;
         } catch(e){
-            // This path does NOT halt (unlike the MAX_ROLLBACK_DEPTH branch above): it logs
-            // and returns, leaving lastAppliedBlock at the orphaned tip so _handleBlock then
-            // silently drops the re-streamed canonical blocks. This log is the only signal
-            // the replica is wedged, so carry the full anchor (chain/network/dbType + rewind
-            // target) instead of the bare error.
+            // FAIL CLOSED, consistent with the MAX_ROLLBACK_DEPTH branch above. A failed
+            // rollback (lock timeout, deadlock, connection drop mid-rewind) otherwise leaves
+            // lastAppliedBlock at the now-orphaned tip: _handleBlock's `blockIndex <=
+            // lastAppliedBlock` guard then silently drops every canonical block the source
+            // re-streams from event.block_index upward, so the replica serves the orphaned
+            // fork with halted:false on /status (the decoder track has no recompute net to
+            // self-halt). Record a durable halt via the same contract used for consensus
+            // divergence and let the operator investigate/clear, rather than wedging silently.
             console.error('Reorg rollback failed for ' + this.chain + '/' + this.network +
                 ' (' + this.dbType + ') rewinding to block ' + event.block_index + ':', e);
+            await this._haltOnDivergence(event.block_index,
+                [{ field: 'reorg_rollback_failed', error: String(e && e.message ? e.message : e) }],
+                this.sources.slice(0, 1), 'reorg-rollback-failed');
+            return; // halted: do not leave lastAppliedBlock advanced onto the orphaned fork
         }
     }
 }
