@@ -1949,7 +1949,13 @@ class ClientSync {
             else
                 this.lastHashes = null;
         } catch(e){
-            console.error('Reorg rollback failed:', e);
+            // This path does NOT halt (unlike the MAX_ROLLBACK_DEPTH branch above): it logs
+            // and returns, leaving lastAppliedBlock at the orphaned tip so _handleBlock then
+            // silently drops the re-streamed canonical blocks. This log is the only signal
+            // the replica is wedged, so carry the full anchor (chain/network/dbType + rewind
+            // target) instead of the bare error.
+            console.error('Reorg rollback failed for ' + this.chain + '/' + this.network +
+                ' (' + this.dbType + ') rewinding to block ' + event.block_index + ':', e);
         }
     }
 }
