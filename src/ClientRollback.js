@@ -640,6 +640,33 @@ class ClientRollback {
                 }
             }
 
+            // Mirror the source indexer's orphan sweep of the two derived tables that
+            // reference a rolled-back index id but are neither action_index/block_index
+            // deleted above nor recomputed: markets (tick1_id/tick2_id) and pubkeys
+            // (address_id). The source (xchain-indexer/src/rollback.js) deletes these when
+            // their index id no longer resolves; the replica's replication NEVER propagates
+            // a deletion for them (markets upserts on the full-dump, pubkeys is INSERT
+            // IGNORE), so without mirroring the sweep the source row is gone but the replica
+            // keeps the orphan, and on id reclaim serves the OLD market/pubkey (a
+            // non-consensus source<->replica divergence, not a fork: neither table is in the
+            // block hash, the stateHash preimage, or the index-map parity checksum). After
+            // the local delete the source's reproduced row pages back in cleanly (the
+            // address_id/pair PK is free again). balances needs no mirror here: the replica
+            // recomputes it wholesale (rebuildBalances) so the orphan never re-derives.
+            try {
+                await this.db.doQuery(
+                    "DELETE FROM markets WHERE tick1_id NOT IN (SELECT id FROM index_tickers) " +
+                    "OR tick2_id NOT IN (SELECT id FROM index_tickers)", []);
+            } catch(e){
+                // Table may not exist on older replica schemas - skip
+            }
+            try {
+                await this.db.doQuery(
+                    "DELETE FROM pubkeys WHERE address_id NOT IN (SELECT id FROM index_addresses)", []);
+            } catch(e){
+                // Table may not exist on older replica schemas - skip
+            }
+
             // price_snapshots anchors each round to a block via reference_block
             // (its equivalent of block_index) rather than block_index itself, so
             // it falls outside the generic blockTables loop above and needs its
