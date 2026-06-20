@@ -4,14 +4,14 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.7.1-blue" alt="Version">
   <img src="https://img.shields.io/badge/tests-725%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
-  <img src="https://img.shields.io/badge/license-Dankest%20Community-orange" alt="License">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/coverage-unit%20%7C%20integration%20%7C%20e2e%20%7C%20fuzz%20%7C%20chaos%20%7C%20mutation%20%7C%20boundary%20%7C%20smoke-brightgreen" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-unit%20%7C%20integration%20%7C%20e2e%20%7C%20security%20%7C%20fuzz%20%7C%20chaos%20%7C%20mutation%20%7C%20performance%20%7C%20smoke-brightgreen" alt="Coverage">
 </p>
 
 Database replication service for the XChain Platform. Syncs indexer and decoder databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
@@ -20,21 +20,25 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 
 ## Features
 
-- **Dual mode**: server mode serves data from authoritative indexer databases; client mode replicates data into local MariaDB instances
+- **Dual mode**: server mode serves data from authoritative indexer and decoder databases; client mode replicates both into local MariaDB instances
 - **Multi-chain single instance**: discovers all installed chains/networks via the hub and serves them from one process on one port
 - **Hub auto-discovery**: calls xchain-hub `getallconfigs` at startup; re-polls every 5 minutes to detect newly installed chains
+- **Dual DB type support**: syncs both the indexer DB (full ledger) and decoder DB (8 of 9 tables; `TransparencyLog` and `mempool_transactions` excluded by design) behind a `/:dbType/` path segment
+- **Schema auto-replication**: client fetches DDL from the server before data, creating tables in the replica with DDL whitelisted to `CREATE TABLE` only
 - **Full snapshot export**: compressed, streamed JSON database dumps for bootstrapping new validators
 - **Incremental snapshots**: delta exports since any block height for catch-up after downtime
-- **Real-time WebSocket streaming**: per-chain/network subscriptions for new blocks and reorg events
-- **Hash chain verification**: leverages the indexer's existing per-block chained SHA256 hashes (ledger, actions, contracts) for data integrity
-- **Cross-source comparison**: clients can sync from 2+ independent servers and compare block hashes to detect tampered data
-- **Transparency log**: append-only per-block hash record for public auditability
+- **Real-time WebSocket streaming**: per-chain/network/dbType subscriptions for new blocks and reorg events
+- **Hash chain verification**: per-block chained SHA-256 hashes (ledger, actions, contracts for indexer; block_hash for decoder) validated on apply
+- **Cross-source comparison**: clients can sync from 2+ independent servers and hold blocks until all sources confirm identical hashes
+- **Transparency log**: append-only per-block hash record with SHA-256 Merkle epoch roots and inclusion proofs (indexer only)
+- **SPV state-commitment recompute**: apply-time rebuild of per-block light-client roots (`state_tree_roots`/`state_tree_nodes`) that halts on divergence from the source (indexer only, opt-out via `VERIFY_STATE_COMMITMENT=false`)
+- **Checkpoint-quorum anchor**: optional federation anchor that fetches the server's quorum-signed checkpoint, verifies it against a pinned validator set, and asserts the committed state root matches the replica's own recomputed value (indexer only, opt-in via `VERIFY_CHECKPOINT_QUORUM=true`)
 - **Rate limiting**: configurable per-IP limits on snapshot downloads and WebSocket connections
-- **Reorg propagation**: detects chain reorganizations from the indexer database and broadcasts rollback events to all subscribers
+- **Reorg propagation**: detects chain reorganizations from the source database and broadcasts rollback events to all subscribers, then rolls back the replica
 - **Automatic catch-up**: clients detect block gaps on reconnect and self-heal via incremental REST snapshots
 - **Circuit-breaker DB connections**: automatic failure detection and recovery with configurable thresholds
 - **Input validation**: SQL identifier sanitization, DDL whitelisting, WebSocket event schema validation
-- **725 tests**: unit, integration, e2e, fuzz, chaos, mutation, boundary, security, performance, smoke
+- **725 tests**: unit, integration, e2e, security, fuzz, chaos, mutation, performance, smoke
 
 ## Documentation
 
@@ -156,14 +160,3 @@ with a commercial license available for proprietary use.
 You may use, modify, and distribute this material under the terms of the License.
 See [LICENSE](./LICENSE.md) and [NOTICE](./NOTICE.md) for full terms.
 See the [licensing overview](https://docs.xchain.io/legal/licensing).
-
-## License
-
-XChain Platform is **open source**, dual-licensed under:
-
-- the **[GNU Affero General Public License v3.0](./LICENSE.md)** (`AGPL-3.0-or-later`), free for everyone, and
-- a **[commercial license](https://docs.xchain.io/legal/commercial-license)** for companies that need to keep modifications private.
-
-See the **[licensing overview](https://docs.xchain.io/legal/licensing)** for which one applies to you. "XChain" is a trademark of Dankest, LLC. See the **[Trademark Policy](https://docs.xchain.io/legal/trademark)**.
-
-Copyright © 2025-2026 Dankest, LLC.
