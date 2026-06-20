@@ -516,6 +516,27 @@ describe('Rollback coverage guard @regression', function(){
             'stateHash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
     });
 
+    // ServerPoller must stream a block's FULL index_addresses set, not just the addresses
+    // that appear as a tx source/destination. An address first receives its deterministic
+    // in-block id via many non-tx columns too (credits.address_id, contract_executions.caller_id,
+    // injected cross-chain counterparties, action-data recipients). The explicit join in
+    // _buildBlockPayload only sees tx source/dest, so completeness depends on the generic
+    // *_id reference pass ALSO covering index_addresses. If index_addresses is excluded from
+    // that pass, a non-tx-interned address is never delivered at its intern block: the follower's
+    // index map forks (a reorg crossing such an address fail-closed halts it today, and a
+    // per-block halt once the index-map state_hash class is armed). index_transactions stays
+    // excluded (it is keyed by block-hash/tx-hash ids the generic scan can't see).
+    it('ServerPoller streams index_addresses via the generic *_id pass (non-tx-interned completeness) @regression', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const norm = fs.readFileSync(pathMod.resolve(__dirname, '../../src/ServerPoller.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/table === index_transactions\s*\) continue/.test(norm),
+            'ServerPoller generic *_id pass must still exclude index_transactions (block-hash/tx-hash keyed)');
+        assert.ok(/table !== index_addresses && payload\.data\[table\]\s*\) continue/.test(norm),
+            'ServerPoller generic *_id pass must let index_addresses past the already-populated skip so the ' +
+            'superset re-fetch delivers non-tx-interned addresses; do not re-add it to the exclusion list');
+    });
+
     // Light-client state commitment (SPV spec sec.4-5): merkle.js (the SMT + leaf
     // encoders) and state_commitment_activation.js (the flag-day map) are copied
     // VERBATIM from xchain-indexer. The follower recomputes the per-block roots from

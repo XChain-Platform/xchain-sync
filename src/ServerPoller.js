@@ -584,7 +584,12 @@ class ServerPoller {
         // them INSERT IGNORE on the PK (ClientApplier.ignoreTables), so the replica's
         // index_* set stays a subset of the source's and never overshoots the
         // row-count completeness check.
-        // index_transactions/index_addresses are handled explicitly above.
+        // index_transactions keeps its explicit-only join above (it is referenced by
+        // block-hash/tx-hash IDs the generic _id scan can't see). index_addresses IS
+        // re-fetched here: the explicit join above sees only tx source/dest, but an
+        // address can first receive its in-block id via a non-tx column (credits.address_id,
+        // contract_executions.caller_id, XCALL/XEXEC counterparties, action-data recipients),
+        // which only the generic _id scan reaches.
         if(this.dbType !== 'decoder'){
             let refIds = new Set();
             for(let t in payload.data){
@@ -603,10 +608,17 @@ class ServerPoller {
                 let idList = [...refIds];
                 let placeholders = idList.map(() => '?').join(',');
                 for(let table of this.indexTables){
-                    // Explicitly-handled above (they carry block-hash/tx-hash IDs the
-                    // generic _id scan can't see, so leave their precise joins intact).
-                    if(table === 'index_transactions' || table === 'index_addresses') continue;
-                    if(payload.data[table]) continue;  // defensive: already populated
+                    // index_transactions carries block-hash/tx-hash IDs the generic _id
+                    // scan can't see, so it keeps its explicit join above and is skipped here.
+                    if(table === 'index_transactions') continue;
+                    // index_addresses is pre-populated tx-only by the explicit join above;
+                    // re-fetch it here over the full ref set (a superset of the tx-only set,
+                    // since the scan also sees transactions.source_id/destination_id) so a
+                    // non-tx-interned address is streamed at its intern block. Without this it
+                    // is never delivered, forking the follower's index map (reorg-gated
+                    // divergence today; a per-block halt once the index-map state_hash class
+                    // is armed). For every other table the already-populated skip stands.
+                    if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
                     try {
                         let rows = await this.db.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + placeholders + ")", idList);
                         if(rows && rows.length > 0)
