@@ -401,7 +401,14 @@ class ClientSync {
                             await this.db.addMissingColumns(tableName, createSql);
                         }
                     } catch(e){
-                        // May fail on ordering; retry will catch it
+                        // A genuine FK-ordering miss is recovered by a later pass, but this
+                        // catch equally eats a disk-full, permissions, lock-timeout, or a
+                        // table-specific DDL fault: the table is then silently never created
+                        // and the next snapshot apply fails (errno 1146/1054), routing back
+                        // here forever with no signal about the real cause. Log it so an
+                        // operator debugging "replica stuck on table X" sees the DDL error.
+                        console.error('ClientSync: schema apply failed for table ' + tableName +
+                            ' (may retry if ordering-related):', e);
                     }
                 }
                 console.log('Schema applied from ' + source);
