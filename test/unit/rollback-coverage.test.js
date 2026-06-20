@@ -66,6 +66,10 @@ function replicatedTables(dbType){
 // NOT inert (a wire ^<id> makes their ids consensus-relevant) and ARE rolled back; that is
 // asserted positively below ('index id lookups are rolled back ...'). They stay listed as
 // lookups here because in the DECODER db they remain inert append-only mirrors.
+// pubkeys is likewise inert in the DECODER db, but in the INDEXER db it is now
+// orphan-swept on reorg (a reclaimed address_id re-points the surviving row; see
+// SPECIAL_CASE / the parity-sweep guard). It stays in this predicate for the
+// decoder-universe coverage check, where it remains inert.
 const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 
 // Coverage that lives outside ClientRollback's table arrays.
@@ -91,7 +95,18 @@ const RECOMPUTED = ['balances'];
 // delivers row:deleted events), but that lags the local reorg; the bespoke
 // delete closes the staleness window so the replica never serves finalized rows
 // for orphaned rounds while the hub catches up.
-const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attest_validator_stats', 'price_snapshots', 'icons'];
+//
+// Orphan sweeps (icons, markets, pubkeys): derived tables keyed by a rolled-back
+// index id (tokens / index_tickers / index_addresses) that the replica's
+// replication NEVER deletes (markets upserts from the full-dump, pubkeys is INSERT
+// IGNORE), so once the source sweeps an orphaned-only row, _rollbackIndexer must
+// mirror that sweep or the replica keeps the stale row and serves the OLD
+// market/pubkey on id reclaim (a source<->replica divergence). Non-consensus
+// (none of these are in the block hash / stateHash preimage / parity checksum).
+// markets is ADDITIONALLY snapshot-refreshed for its OHLCV VALUES (the thin
+// replica can't recompute those); the sweep only removes orphaned-tick rows.
+const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attest_validator_stats',
+    'price_snapshots', 'icons', 'markets', 'pubkeys'];
 
 // Tables that are NOT rolled back, each with a reason. All intentional:
 // snapshot-refreshed or append-only aggregates the thin replica can't recompute.
@@ -99,17 +114,10 @@ const ROLLBACK_EXEMPT = {
     events:
         'Append-only operational log; no block_index/action_index cursor to scope ' +
         'a rollback. Never rolled back (matches the source indexer).',
-    markets:
-        'Derived OHLCV aggregate keyed by (tick1_id, tick2_id) with no action_index column. ' +
-        'ServerPoller deliberately omits it from actionScopedTables (it cannot ride the ' +
-        'per-block action_index join): markets is NOT streamed per-block (it only rides ' +
-        'along in a full snapshot). The source indexer ' +
-        'recomputes it via getMarketInfo (last-trade / 24hr price-high-low-change-volume / ' +
-        'bid / ask over orders/order_matches/dispenses), which the thin replica DB has no ' +
-        'machinery to reproduce (replicating that math here would re-introduce exactly the ' +
-        'indexer-mirror drift this guard exists to catch). The replica instead recovers ' +
-        'markets from the next full/incremental snapshot (the existing snapshot ride-along). ' +
-        'Deliberately snapshot-refreshed, not block-rolled-back.',
+    // NOTE: markets moved to SPECIAL_CASE. Its OHLCV VALUES are still snapshot-refreshed
+    // (the thin replica can't recompute getMarketInfo's last-trade/24hr/bid/ask math), but
+    // orphaned-tick rows are now ALSO orphan-swept by _rollbackIndexer for immediate parity
+    // with the source's sweep (the upsert full-dump never deletes them). See SPECIAL_CASE.
 };
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
@@ -391,6 +399,32 @@ describe('Rollback coverage guard @regression', function(){
                 .replace(/\s+/g, ' ');
             for(const op of OPS){
                 assert.ok(op.re.test(norm), `${label} is missing the cooldown-maturity ${op.name}; source and replica must both reverse it on reorg`);
+            }
+        }
+    });
+
+    // Orphan-sweep parity: markets + pubkeys are derived/lookup tables the replica's
+    // replication never deletes (markets upserts from the full-dump, pubkeys is INSERT
+    // IGNORE), so the source's reorg sweep MUST be mirrored in ClientRollback or the
+    // replica keeps the orphan and serves the OLD market/pubkey on index-id reclaim.
+    // balances is excluded here: both sides rebuild it wholesale (rebuildBalances), so the
+    // orphan never re-derives. Assert both source and replica carry both sweeps.
+    it('markets + pubkeys orphan sweeps are mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const SWEEPS = [
+            { name: 'markets orphan sweep',  re: /DELETE FROM markets WHERE tick1_id NOT IN \(SELECT id FROM index_tickers\) OR tick2_id NOT IN \(SELECT id FROM index_tickers\)/ },
+            { name: 'pubkeys orphan sweep',  re: /DELETE FROM pubkeys WHERE address_id NOT IN \(SELECT id FROM index_addresses\)/ },
+        ];
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            const norm = fs.readFileSync(p, 'utf8')
+                .replace(/[`"']/g, ' ')
+                .replace(/\s+\+\s+/g, ' ')
+                .replace(/\s+/g, ' ');
+            for(const sw of SWEEPS){
+                assert.ok(sw.re.test(norm), `${label} is missing the ${sw.name}; source and replica must both sweep it on reorg or the replica diverges on id reclaim`);
             }
         }
     });
