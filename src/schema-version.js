@@ -69,11 +69,31 @@
  *       closed against a v3 snapshot and must run the migration against its replica
  *       (or re-sync to the fresh BIGINT base schema) before it can consume v3.
  *       Indexer is unaffected by this key and stays at 4.
+ *   5 - (indexer only) `block_index BIGINT NULL` column added to the replicated
+ *       lookup tables `index_addresses` and `index_tickers` (migration
+ *       2026-06-19-index-tables-add-block-index, mode=auto). It records the block
+ *       at which each dense index id was first assigned so rollback.js can delete
+ *       index rows created in orphaned blocks on reorg
+ *       (DELETE ... WHERE block_index >= ?), which is what makes a wire ^<id>
+ *       address/ticker reference resolve to the same entity on every node. The
+ *       column is NOT part of any block-hash preimage (getBlockHashes resolves ids
+ *       to canonical strings, never reads block_index), so it changes no checkpoint
+ *       hash; the bump is purely a replication-DDL concern. ClientApplier builds its
+ *       INSERT column list from the SERVER row's keys, so a v5 index_addresses/
+ *       index_tickers row carries `block_index`; a v4 follower whose own indexer
+ *       migration has not yet run lacks the column, the INSERT hits Unknown column
+ *       'block_index' (ER_BAD_FIELD_ERROR), the apply transaction fails, and the
+ *       follower's queue stalls with a cryptic error. The bump fails a v4 follower
+ *       closed against a v5 snapshot/lookup-page with the explicit mismatch message;
+ *       the migration is mode=auto so it self-heals the column fleet-wide on the
+ *       forced restart, and the index_* tables resume via INSERT IGNORE paged from a
+ *       MAX(id) cursor (no full re-snapshot). Decoder is unaffected (these tables do
+ *       not exist there) and stays at 3.
  *
  ********************************************************************/
 
 // Per-dbType schema version. Bump only the key whose DDL or wire encoding changed
 // so the unaffected dbType's validators need not restart.
-const SCHEMA_VERSION = { indexer: 4, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 5, decoder: 3 };
 
 module.exports = { SCHEMA_VERSION };
