@@ -359,6 +359,13 @@ class SyncService {
         return this.clientSyncs.get(chain + ':' + network + ':' + (dbType || 'indexer')) || null;
     }
 
+    // Resolve a live ServerPoller (server mode only; empty in client mode).
+    // Exposed so /health can read pollErrorCount, the earliest outage signal,
+    // before the DB circuit breaker arms.
+    getPoller(chain, network, dbType){
+        return this.pollers.get(chain + ':' + network + ':' + (dbType || 'indexer')) || null;
+    }
+
     // Get the transparency log for a chain/network. Indexer-only: the decoder
     // DB does not maintain a transparency log (see decoder-DB architecture
     // decisions: skip TransparencyLog for decoder).

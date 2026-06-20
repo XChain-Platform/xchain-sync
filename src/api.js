@@ -270,17 +270,26 @@ async function startApi(){
     app.get('/health', (req, res) => {
         let chains = syncService.getChains();
         let databases = [];
-        let anyOpen = false;
+        let degraded = false;
         for(let { coin, network, dbType } of chains){
             let db = syncService.getDatabase(coin, network, dbType);
             if(!db) continue;
             let circuit = db.circuitState || null;
-            if(circuit === 'open') anyOpen = true;
-            databases.push({ chain: coin, network: network, dbType: dbType, circuit: circuit });
+            // The circuit breaker only opens after circuitThreshold (10)
+            // consecutive acquisition failures (db.js), so a dead origin DB would
+            // otherwise read 'healthy' for up to 10 BLOCK_POLL_INTERVAL cycles
+            // while every snapshot request is already 500ing. ServerPoller's
+            // pollErrorCount resets to 0 on the next successful poll, so a
+            // non-zero count means the poller is currently in a failing streak:
+            // the earliest reliable outage signal. Flip to 503 degraded on it.
+            let poller = syncService.getPoller(coin, network, dbType);
+            let pollErrorCount = poller ? poller.pollErrorCount : 0;
+            if(circuit === 'open' || pollErrorCount > 0) degraded = true;
+            databases.push({ chain: coin, network: network, dbType: dbType, circuit: circuit, poll_error_count: pollErrorCount });
         }
-        if(anyOpen) res.status(503);
+        if(degraded) res.status(503);
         res.json({
-            status:       anyOpen ? 'degraded' : 'healthy',
+            status:       degraded ? 'degraded' : 'healthy',
             mode:         cfg['SYNC_MODE'],
             databases:    databases,
             // Age of the last successful hub-config fetch (null until the first success).
