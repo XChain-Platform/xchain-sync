@@ -280,6 +280,38 @@ describe('HubClient', function(){
             assert.deepStrictEqual(r, { btc: { main: {} } });
             assert.strictEqual(hub.lastWatermark, 500);
         });
+
+        it('resets the cursor and re-fetches full when it fails over to a different endpoint', async function(){
+            // A wall-clock cursor from hub A is not valid against hub B (each stamps
+            // updated_at at its own apply time), so on failover the client must discard
+            // the stale-cursor delta and re-fetch the full tree from the new endpoint.
+            let h = new HubClient(['http://a:1', 'http://b:2']);
+            let stub = sinon.stub(axios, 'post');
+            // Poll 1: endpoint A serves a full tree and advances the cursor to 1000.
+            stub.withArgs('http://a:1').onFirstCall().resolves({ data: { result: {
+                configs: { btc: { main: { 'xchain-indexer': { name: 'a' } } } }, seq: 1, watermark: 1000
+            } } });
+            // Poll 2: endpoint A is down; endpoint B serves a different full tree (wm 2000).
+            stub.withArgs('http://a:1').onSecondCall().rejects({ code: 'ECONNREFUSED' });
+            stub.withArgs('http://b:2').resolves({ data: { result: {
+                configs: { ltc: { test: { 'xchain-indexer': { name: 'b' } } } }, seq: 2, watermark: 2000
+            } } });
+
+            await h.getallconfigs();
+            assert.strictEqual(h.lastWatermark, 1000);
+            assert.strictEqual(h._watermarkEndpointIdx, 0);
+
+            let second = await h.getallconfigs();
+            // The client re-requested the full tree from B with a reset cursor.
+            let resetCall = stub.getCalls().find(c =>
+                c.args[0] === 'http://b:2' && c.args[1].params.since_updated_at === 0);
+            assert.ok(resetCall, 'expected a since_updated_at=0 re-fetch against the new endpoint');
+            // Full replace from B: A's cached branch is gone (not cross-hub merged).
+            assert.ok(second.ltc.test['xchain-indexer'], 'has the new endpoint tree');
+            assert.strictEqual(second.btc, undefined, 'dropped the old endpoint tree (no stale merge)');
+            assert.strictEqual(h.lastWatermark, 2000);
+            assert.strictEqual(h._watermarkEndpointIdx, 1);
+        });
     });
 
     describe('_parsePort', function(){

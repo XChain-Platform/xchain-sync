@@ -72,6 +72,11 @@ class HubClient {
         // getIndexerConfigs + getDecoderConfigs within one cycle share the cache.
         this.configs       = null;
         this.lastWatermark = 0;
+        // The endpoint index `lastWatermark` was obtained from. A wall-clock
+        // since_updated_at cursor is only valid against the hub that produced it (each
+        // hub stamps updated_at = NOW() at its own apply time of a PBFT-committed
+        // config), so on failover to a different endpoint the cursor must be reset.
+        this._watermarkEndpointIdx = null;
         // Epoch ms of the last successful getallconfigs() fetch (null until the first
         // success). sync rediscovers chains from this config on a timer; if the hub goes
         // dark this timestamp stops advancing while sync keeps replicating against the last
@@ -116,6 +121,8 @@ class HubClient {
     // is 0 against an old hub. (Sync discovers DBs at startup, so the seq is tracked
     // for completeness rather than used for invalidation here.)
     async getallconfigs(){
+        let cursorEndpoint = this._watermarkEndpointIdx;
+        let sentCursor     = this.lastWatermark;
         let result = await this._call({
             jsonrpc: '2.0',
             method:  'getallconfigs',
@@ -127,7 +134,27 @@ class HubClient {
         // _call returns null when every endpoint failed; preserve that signal so
         // _extractDbConfigs (which treats null as "no configs") stays unchanged.
         if(result === null) return null;
+
+        // If _call failed over to a different endpoint than the one our cursor came
+        // from, the delta we just received was filtered against a stale cross-hub
+        // cursor and may have skipped rows (each hub's updated_at for the same config
+        // differs). Discard it and re-fetch the full tree from the new endpoint with a
+        // reset cursor; the configs table is small and the merge is idempotent.
+        if(sentCursor > 0 && this._lastGoodIdx !== cursorEndpoint){
+            this.lastWatermark = 0;
+            this.configs       = null;
+            result = await this._call({
+                jsonrpc: '2.0',
+                method:  'getallconfigs',
+                params:  { since_updated_at: 0 },
+                id:      1
+            }, 10000);
+            if(result === null) return null;
+        }
+
         this.configs = this._applyConfigResult(result);
+        // Bind the (possibly advanced) cursor to the endpoint that answered.
+        this._watermarkEndpointIdx = this._lastGoodIdx;
         // A non-null result means at least one endpoint answered; record the fetch time
         // even on a delta poll that changed nothing, so the age reflects last hub contact.
         this.lastSuccessfulFetchAt = Date.now();
