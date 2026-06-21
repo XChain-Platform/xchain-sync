@@ -990,11 +990,10 @@ class ClientSync {
             // tables converge via the block stream / full-dumps and are checked on
             // every catch-up. Best-effort; gated to the decoder dbType.
             if(this.dbType === 'decoder'){
-                this._catchUpCount = (this._catchUpCount || 0) + 1;
-                let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
-                if(isNaN(every) || every < 1) every = 20;
-                let didReconcile = (this._catchUpCount % every === 0);
+                let didReconcile = this._shouldReconcileDispensers(Date.now());
                 if(didReconcile) await this._reconcileDispensers(source);
+                // Include dispensers in the completeness check only on the cycles we
+                // actually reconciled, else interim drift spams TABLE_COUNT_MISMATCH.
                 await this._verifyDecoderCompleteness(source, this.lastAppliedBlock,
                     didReconcile ? null : new Set(['dispensers']));
             }
@@ -1209,6 +1208,31 @@ class ClientSync {
     // convergence path; _verifyDecoderCompleteness then verifies row counts without
     // false alarms. Decoder-only, best-effort: any fetch/parse failure aborts WITHOUT
     // touching the local table (the replace runs only once every page is in hand).
+    // Decide whether to reconcile the decoder `dispensers` table on this catch-up cycle
+    // (advances the per-process cycle counter as a side effect). Reconcile when:
+    //   (a) firstResume  - nothing reconciled yet this process (a resume that skipped
+    //       bootstrap), so a resumed replica converges dispensers promptly instead of
+    //       serving up to `every` cycles of stale rows;
+    //   (b) periodic     - every Nth catch-up in steady state (DISPENSERS_RECONCILE_EVERY,
+    //       default 20), since dispensers cannot ride the block stream;
+    //   (c) intervalDue  - the last reconcile is older than DISPENSERS_RECONCILE_MAX_INTERVAL_MS
+    //       (default 30 min; 0 disables), so a slow/stalled catch-up cadence cannot let
+    //       dispensers drift unbounded in wall-clock time.
+    // `_lastDispenserReconcileAt` is stamped by _reconcileDispensers on success (covering
+    // the bootstrap reconcile too), so firstResume is false once any reconcile has run.
+    _shouldReconcileDispensers(nowMs){
+        this._catchUpCount = (this._catchUpCount || 0) + 1;
+        let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
+        if(isNaN(every) || every < 1) every = 20;
+        let maxIntervalMs = parseInt(this.config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'], 10);
+        if(isNaN(maxIntervalMs) || maxIntervalMs < 0) maxIntervalMs = 1800000;
+        let firstResume = (this._lastDispenserReconcileAt == null);
+        let periodic    = (this._catchUpCount % every === 0);
+        let intervalDue = (maxIntervalMs > 0 && this._lastDispenserReconcileAt != null &&
+                           (nowMs - this._lastDispenserReconcileAt) >= maxIntervalMs);
+        return firstResume || periodic || intervalDue;
+    }
+
     async _reconcileDispensers(source){
         if(this.dbType !== 'decoder') return;
         if(!source) return;
@@ -1237,6 +1261,10 @@ class ClientSync {
                 afterTx = page.max_tx; afterAddr = page.max_addr;
             }
             await this._withApplyLock(() => this.applier.applyDispensersReplace(all));
+            // Stamp on success (covers bootstrap + catch-up reconciles) so the resume
+            // and max-interval triggers in _incrementalCatchUp can tell when dispensers
+            // were last converged.
+            this._lastDispenserReconcileAt = Date.now();
             console.log('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
         } catch(e){
