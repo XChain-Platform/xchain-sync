@@ -47,6 +47,7 @@ const BLOCK_HASH_VERSION = 1;
 
 const { buildStateHashData } = require('./stateHash');
 const { gasTickSymbol } = require('./consensus-constants');
+const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 
 class BlockHasher {
 
@@ -119,6 +120,15 @@ class BlockHasher {
                 ORDER BY
                     e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
         ledger.escrows = await this.db.doQuery(query, [block_index]);
+        // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
+        // to their chain-independent role token, byte-for-byte mirror of
+        // xchain-indexer/src/db.js getBlockHashes. A per-chain special address (e.g. an
+        // issuance fee credited to DONATE1) would otherwise leak the chain's address
+        // encoding into the hash, so the replica's recomputed hash must apply the same
+        // substitution to match the source. See protocolAddressRoles.js.
+        for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
+        for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
+        for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
         // actions (hash the resolved action-type string, never the index_actions id)
         query = `SELECT
                     a.action_index,
