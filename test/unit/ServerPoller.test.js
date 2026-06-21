@@ -558,14 +558,18 @@ describe('ServerPoller', function(){
             assert.deepStrictEqual(payload.data['index_tickers'],  [{ id: 42, tick: 'NEWTICK' }]);
             assert.deepStrictEqual(payload.data['index_coins'],    [{ id: 5, coin: 'litecoin' }]);
 
-            // The generic pass must skip the two explicitly-handled tables (no double extraction).
+            // The generic pass must skip index_transactions (it carries block-hash/
+            // tx-hash IDs the generic _id scan can't see, so it keeps its explicit
+            // join). index_addresses, by contrast, IS intentionally re-fetched by the
+            // generic pass over the full ref set, so a non-tx-interned address is
+            // streamed at its intern block (without it the follower index map forks).
             let genericTables = db.doQuery.getCalls()
                 .map(c => c.args[0])
                 .filter(sql => /WHERE id IN/.test(sql));
             assert.ok(!genericTables.some(sql => sql.includes('`index_transactions`')),
                 'generic pass should not re-query index_transactions');
-            assert.ok(!genericTables.some(sql => sql.includes('`index_addresses`')),
-                'generic pass should not re-query index_addresses');
+            assert.ok(genericTables.some(sql => sql.includes('`index_addresses`')),
+                'generic pass should re-fetch index_addresses over the full ref set');
         });
 
         it('does not run the generic index pass for the decoder', async function(){
