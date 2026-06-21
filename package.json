@@ -35,6 +35,7 @@
     "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
+    "test:integration:parity": "mocha --timeout 30000 --exit test/integration/index-map-parity.test.js test/integration/index-map-parity-http.test.js",
     "test:e2e": "mocha --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
     "test:e2e:ci": "mocha --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js' --exit",
     "test:regression": "mocha --timeout 10000 --exit --grep @regression --recursive 'test/unit/**/*.test.js'",

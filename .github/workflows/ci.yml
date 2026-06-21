@@ -103,3 +103,17 @@ jobs:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
         run: npm run test:e2e:ci
+
+      # Advisory index-map parity (Part A of the ^id / index-map consensus work):
+      # the compute/compare/counter logic + the INSERT IGNORE divergence it catches.
+      # These DB-backed suites seed the canonical indexer schema (via
+      # XCHAIN_INDEXER_SQL_PATH) into the source-db service and were previously
+      # un-run in CI (they live in the integration tier the shared job skips).
+      - name: Run index-map parity integration tests
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: "23306"
+          TEST_DB_USER: root
+          TEST_DB_PASS: test
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
+        run: npm run test:integration:parity

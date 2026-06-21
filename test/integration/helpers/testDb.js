@@ -225,7 +225,12 @@ async function createDatabase(dbName) {
 
 // Load indexer schema SQL files into a database
 async function seedSchema(db) {
-    let sqlDir = path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
+    // Prefer the sibling-schema path the CI e2e job exports (XCHAIN_INDEXER_SQL_PATH
+    // points at the checked-out xchain-indexer/src/sql); fall back to the monorepo
+    // sibling layout for local runs. Mirrors the convention in rollback-coverage.test.js
+    // so these DB-backed suites can run in CI without a sibling working copy.
+    let sqlDir = process.env.XCHAIN_INDEXER_SQL_PATH
+        || path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
     let files = fs.readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
 
     let indexFiles = files.filter(f => f.startsWith('index_'));
