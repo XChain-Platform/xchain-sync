@@ -29,6 +29,7 @@ const fs         = require('fs');
 const path       = require('path');
 const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
+const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -878,6 +879,16 @@ class Database {
              WHERE a.block_index=?
              ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
         ledger.escrows = await this.doQuery(q, [block_index], conn);
+        // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
+        // to their chain-independent role token, byte-for-byte mirror of BlockHasher
+        // and the indexer's getBlockHashes. block_merkle_root covers the same ledger
+        // rows the flat ledger_hash does, so without this the follower recomputes a
+        // raw-address merkle root that diverges from the source's canonicalized root on
+        // any special-address block and halts. Ordered AFTER the SQL sort (which keys
+        // on the raw stored address) so the leaf sequence matches the source exactly.
+        for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
+        for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
+        for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
         // actions
         q = `SELECT a.action_index, a.tx_index, ia.action AS action
              FROM actions a
