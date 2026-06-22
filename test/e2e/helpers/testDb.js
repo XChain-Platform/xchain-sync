@@ -221,6 +221,28 @@ class TestDatabase {
         await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
     }
 
+    // End / abort a read snapshot opened by beginReadSnapshot. SnapshotBuilder
+    // calls these (matching src/db.js) on the success and catch paths; without
+    // them every snapshot stream threw "is not a function" after headers were
+    // sent, which rejected the route handler and crashed the e2e server process
+    // (Node unhandled rejection), surfacing on the client as ECONNRESET. The
+    // harness tracks the connection on the instance, so the passed conn (which
+    // beginReadSnapshot does not return here) is ignored.
+    async commitReadSnapshot(conn) {
+        if (this.transactionConnection) {
+            try { await this.transactionConnection.commit(); }
+            finally { await this.releaseConnection(); }
+        }
+    }
+
+    async rollbackReadSnapshot(conn) {
+        if (this.transactionConnection) {
+            try { await this.transactionConnection.rollback(); }
+            catch (e) { /* best-effort; release regardless */ }
+            finally { await this.releaseConnection(); }
+        }
+    }
+
     async commitTransaction() {
         if (this.transactionConnection) {
             await this.transactionConnection.commit();
