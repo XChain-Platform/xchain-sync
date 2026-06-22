@@ -110,6 +110,9 @@ jobs:
       # XCHAIN_INDEXER_SQL_PATH) into the source-db service and were previously
       # un-run in CI (they live in the integration tier the shared job skips).
       - name: Run index-map parity integration tests
+        # Independent of the e2e tier (own DBs, own schema seed); run even if the
+        # e2e tier above failed, so a flake there can't mask the parity result.
+        if: ${{ !cancelled() }}
         env:
           TEST_DB_HOST: 127.0.0.1
           TEST_DB_PORT: "23306"
