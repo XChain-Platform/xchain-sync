@@ -348,6 +348,33 @@ describe('Rollback coverage guard @regression', function(){
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
 
+    // Cross-repo drift guard for the cross-chain mirror reorg delete (#4995). On reorg
+    // both the source (xchain-indexer/src/rollback.js) and the replica
+    // (xchain-sync/src/ClientRollback.js) locally prune the hub-mirrored
+    // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
+    // staleness window before hub-driven convergence (row:deleted). The predicates must
+    // also stay byte-identical to xchain-indexer/src/hub_db_sync.js _applyRetraction so
+    // the local belt-and-suspenders delete and the hub-driven delete remove exactly the
+    // same rows. Both rollback files carry the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE>
+    // markers; this extracts the backtick literals and asserts whitespace-normalised
+    // equality. If you edit one, edit the other.
+    it('cross-chain mirror reorg delete SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function crossChainSql(path){
+            const src = fs.readFileSync(path, 'utf8');
+            const m = src.match(/\/\/<CROSS-CHAIN-MIRROR-REORG-DELETE>([\s\S]*?)\/\/<\/CROSS-CHAIN-MIRROR-REORG-DELETE>/);
+            assert.ok(m, `CROSS-CHAIN-MIRROR-REORG-DELETE markers not found in ${path}`);
+            const lits = m[1].match(/`[^`]*`/g) || [];
+            assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
+            return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        assert.strictEqual(crossChainSql(syncPath), crossChainSql(indexerPath),
+            'cross-chain mirror reorg delete SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+    });
+
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
     // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
     // byte-identical to xchain-indexer/src/db.js _stakeWeightsSql, or the follower's

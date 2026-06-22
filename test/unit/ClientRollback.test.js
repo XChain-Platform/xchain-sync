@@ -90,9 +90,13 @@ describe('ClientRollback', function(){
             await rollback.rollback(100);
             let actionDeletes = db.doQuery.getCalls().filter(c =>
                 c.args[0].includes('DELETE FROM') && c.args[0].includes('action_index >=') &&
-                !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices')
+                !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices') &&
+                !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches')
             );
-            // Should have one delete per dataTable (oracle_prices is a bespoke delete excluded above)
+            // Should have one delete per dataTable. oracle_prices and the two cross_chain
+            // mirrors (cross_chain_calls / cross_chain_matches) are bespoke source_chain-
+            // qualified deletes, excluded above (their source_action_index / a_action_index
+            // predicates also contain the 'action_index >=' substring this filter keys on).
             assert.strictEqual(actionDeletes.length, rollback.dataTables.length);
             // Each should use firstActionIndex = 500
             for(let call of actionDeletes){
