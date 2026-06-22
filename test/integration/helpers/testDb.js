@@ -85,6 +85,16 @@ class TestDatabase {
         return rows.length > 0 ? Number(rows[0].action_index) : null;
     }
 
+    // Mirror of src/db.js getStatusId(): resolves a status string to its
+    // index_statuses id (or null). ClientRollback.js calls this during the
+    // cooldown-maturity re-derive; the integration TestDatabase needs it so the
+    // S-5 client-rollback suite runs against a real DB instead of erroring on a
+    // missing method. SQL is byte-identical to production.
+    async getStatusId(status) {
+        let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status]);
+        return rows.length > 0 ? Number(rows[0].id) : null;
+    }
+
     async getBlockScopedRows(table, block_index) {
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index]);
     }
