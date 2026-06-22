@@ -104,14 +104,17 @@ jobs:
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
         run: npm run test:e2e:ci
 
-      # Advisory index-map parity (Part A of the ^id / index-map consensus work):
-      # the compute/compare/counter logic + the INSERT IGNORE divergence it catches.
-      # These DB-backed suites seed the canonical indexer schema (via
-      # XCHAIN_INDEXER_SQL_PATH) into the source-db service and were previously
-      # un-run in CI (they live in the integration tier the shared job skips).
-      - name: Run index-map parity integration tests
-        # Independent of the e2e tier (own DBs, own schema seed); run even if the
-        # e2e tier above failed, so a flake there can't mask the parity result.
+      # Integration tier (DB-backed; previously un-run in CI because it lives in the
+      # tier the shared job skips). Seeds the canonical indexer schema (via
+      # XCHAIN_INDEXER_SQL_PATH) into the source-db service. test:integration:ci runs
+      # every integration suite EXCEPT five quarantined as red at HEAD (validated on
+      # test-host 2026-06-22): client-bootstrap / client-live-sync / lifecycle fail on
+      # the new fail-closed schema-apply halt (in-flight sync work), client-rollback
+      # on a missing db.getStatusId helper, emissions-parity on its own hardcoded
+      # 30s before-all timeout. Un-quarantine each in package.json as it goes green.
+      - name: Run integration tier (green suites)
+        # Independent of the e2e tier (own DBs, own schema seed); run even if the e2e
+        # tier above failed, so a flake there can't mask the integration result.
         if: ${{ !cancelled() }}
         env:
           TEST_DB_HOST: 127.0.0.1
@@ -119,4 +122,4 @@ jobs:
           TEST_DB_USER: root
           TEST_DB_PASS: test
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
-        run: npm run test:integration:parity
+        run: npm run test:integration:ci
