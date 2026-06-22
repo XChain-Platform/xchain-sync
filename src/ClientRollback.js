@@ -15,8 +15,10 @@
  * XChain Indexer Sync - Client Rollback
  *
  * Handles rolling back the local replica database to a given block.
- * Table lists are copied from xchain-indexer/src/Rollback.js and
+ * Table lists are copied from xchain-indexer/src/rollback.js and
  * MUST be kept in sync when new tables are added to the indexer.
+ * test/unit/rollback-coverage.test.js enforces that the sync set
+ * covers every table ServerPoller replicates.
  *
  ********************************************************************/
 
@@ -155,7 +157,20 @@ class ClientRollback {
             // rolls it back by action_index, so it must be dropped here on reorg too.
             'stake_key_revocations',
             'reward_claims',
+            // full_node_verifications: NODEPROOF verdict rows (verified-validator
+            // tier), keyed by the verdict action_index and rolled back as a dataTable
+            // by the source (xchain-indexer/src/rollback.js). Mirror it here or a reorg
+            // leaves orphaned PASS-verdict rows on every replica. The follower keeps
+            // mirroring a verified-full-node set (which drives the oracle-round reward
+            // split) that the source chain never finalized. Generic action_index delete,
+            // no restore, same shape as the source.
+            'full_node_verifications',
             'contracts',
+            // contract_permissions: the DEPLOY permissions manifest (which action-classes
+            // are guard-gated for a contract), keyed by the DEPLOY action_index and rolled
+            // back as a dataTable by the source; mirror it so a reorg drops orphaned
+            // manifests too, else the replica keeps enforcing policy the source never finalized.
+            'contract_permissions',
             // deploy_chunks: one row per DEPLOY v4 carrier action (rollback-able action_index),
             // delivered to followers via snapshots. The source rolls it back by
             // action_index (xchain-indexer/src/rollback.js dataTables); mirror it here or
@@ -172,14 +187,6 @@ class ClientRollback {
             'withdrawals',
             'anchor_actions',
             'attests',
-            // full_node_verifications: NODEPROOF verdict rows (verified-validator
-            // tier), keyed by the verdict action_index and rolled back as a dataTable
-            // by the source (xchain-indexer/src/rollback.js). Mirror it here or a reorg
-            // leaves orphaned PASS-verdict rows on every replica. The follower keeps
-            // mirroring a verified-full-node set (which drives the oracle-round reward
-            // split) that the source chain never finalized. Generic action_index delete,
-            // no restore, same shape as the source.
-            'full_node_verifications',
             'prices',
             // Programmable-policy controller bind/unbind event logs. Append-only,
             // keyed by action_index, never mutated in-place (cooldown expiry is
@@ -189,12 +196,7 @@ class ClientRollback {
             // orphaned-range rows or the replica keeps serving stale access policy
             // (which action-classes are guard-gated) that the source never finalized.
             'token_controllers',
-            'address_controllers',
-            // contract_permissions: the DEPLOY permissions manifest (which action-classes
-            // are guard-gated for a contract), keyed by the DEPLOY action_index and rolled
-            // back as a dataTable by the source; mirror it so a reorg drops orphaned
-            // manifests too, else the replica keeps enforcing policy the source never finalized.
-            'contract_permissions'
+            'address_controllers'
         ];
 
         // ── Decoder-DB rollback (used by _rollbackDecoder) ──
@@ -743,11 +745,19 @@ class ClientRollback {
             // catch. On reorg we therefore drop the rows whose most-recent touch is
             // in the orphaned range, so the replica never serves overcounted values
             // and let the next full-snapshot ride-along restore correct counts
-            // from the (now reorg-safe) source. Same recovery model as markets.
+            // from the (now reorg-safe) source. Note: markets has NO ClientRollback
+            // drop; it converges via the full-dump UPSERT (ON DUPLICATE KEY UPDATE)
+            // path on the next snapshot, not this delete path.
             // NOTE: between this DELETE and the next full snapshot, the replica
             // serves no attest_validator_stats rows for the affected validators;
             // this window is unbounded if full snapshots are infrequent. Acceptable
             // trade-off: correctness is preferred over availability for this table.
+            // PHASE-4 GATE: this drop is safe only while quality_score/slashed_count
+            // are display aggregates with no consensus reader. Before Phase-4 lets
+            // quality_score drive live responsible-set selection or slashing, replace
+            // this DELETE with a stale-pending-snapshot marking (a source-schema flag
+            // carried by the snapshot ride-along), so a reorg cannot make a replica
+            // serve a dropped row as a real zero score.
             try {
                 await this.db.doQuery("DELETE FROM `attest_validator_stats` WHERE last_updated_block >= ?", [block_index]);
             } catch(e){
