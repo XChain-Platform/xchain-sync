@@ -360,62 +360,119 @@ class ClientSync {
     // Fetch and apply schema from a remote sync server
     async _fetchAndApplySchema(source){
         console.log('Fetching schema from ' + source + '...');
+        let schema;
         try {
             let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { timeout: 30000 });
-            let schema = response.data;
-            if(schema && schema.tables){
-                for(let tableName in schema.tables){
-                    let createSql = schema.tables[tableName];
-                    if(!createSql) continue;
-
-                    // Validate table name and DDL before executing
-                    let idCheck = validation.validateIdentifier(tableName);
-                    if(!idCheck.valid){
-                        console.error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
-                        continue;
-                    }
-                    let ddlCheck = validation.validateDdl(createSql);
-                    if(!ddlCheck.valid){
-                        console.error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
-                        continue;
-                    }
-
-                    try {
-                        // Check if table already exists
-                        let exists = await this.db.doQuery(
-                            "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
-                            [this.db.dbName, tableName]
-                        );
-                        if(exists.length === 0){
-                            await this.db.doQuery(createSql);
-                            console.log('  Created table: ' + tableName);
-                        } else {
-                            // Table already exists: propagate any columns the
-                            // master has added since this replica was bootstrapped.
-                            // Without this the path is CREATE-only and a replica
-                            // that pre-dates a column addition stalls on the first
-                            // snapshot carrying it ("Unknown column ... in field
-                            // list"). Runs before the snapshot apply, so the ALTERs
-                            // are outside any snapshot transaction.
-                            await this.db.addMissingColumns(tableName, createSql);
-                        }
-                    } catch(e){
-                        // A genuine FK-ordering miss is recovered by a later pass, but this
-                        // catch equally eats a disk-full, permissions, lock-timeout, or a
-                        // table-specific DDL fault: the table is then silently never created
-                        // and the next snapshot apply fails (errno 1146/1054), routing back
-                        // here forever with no signal about the real cause. Log it so an
-                        // operator debugging "replica stuck on table X" sees the DDL error.
-                        console.error('ClientSync: schema apply failed for table ' + tableName +
-                            ' (may retry if ordering-related):', e);
-                    }
-                }
-                console.log('Schema applied from ' + source);
-            }
+            schema = response.data;
         } catch(e){
+            // A fetch/transport failure is not a schema fault: the source may be
+            // briefly unreachable. Leave it to the bootstrap retry/rotate loop.
             console.error('Failed to fetch schema from ' + source + ':', e);
+            return;
         }
+        if(!schema || !schema.tables) return;
+
+        // Validate every table name + DDL up front, then collect the apply set.
+        let pending = [];
+        for(let tableName in schema.tables){
+            let createSql = schema.tables[tableName];
+            if(!createSql) continue;
+            let idCheck = validation.validateIdentifier(tableName);
+            if(!idCheck.valid){
+                console.error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
+                continue;
+            }
+            let ddlCheck = validation.validateDdl(createSql);
+            if(!ddlCheck.valid){
+                console.error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
+                continue;
+            }
+            pending.push({ tableName, createSql });
+        }
+
+        // Multi-pass fixpoint. A CREATE can fail because a table it FK-references
+        // has not been created yet; retrying the not-yet-applied tables until a
+        // full pass makes no progress resolves that ordering deterministically
+        // within this one bootstrap, instead of relying on lucky iteration order
+        // across bootstrap re-routes. Crucially it also SEPARATES ordering misses
+        // (which clear once their dependency lands) from genuine faults (disk-full,
+        // permissions, lock-timeout, malformed DDL), which persist to the fixpoint.
+        let lastErr = new Map();
+        while(pending.length){
+            let stillPending = [];
+            let progressed = false;
+            for(let { tableName, createSql } of pending){
+                try {
+                    let exists = await this.db.doQuery(
+                        "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                        [this.db.dbName, tableName]
+                    );
+                    if(exists.length === 0){
+                        await this.db.doQuery(createSql);
+                        console.log('  Created table: ' + tableName);
+                    } else {
+                        // Table already exists: propagate any columns the master has
+                        // added since this replica was bootstrapped. Without this the
+                        // path is CREATE-only and a replica that pre-dates a column
+                        // addition stalls on the first snapshot carrying it. Runs
+                        // before the snapshot apply, so the ALTERs are outside any
+                        // snapshot transaction.
+                        await this.db.addMissingColumns(tableName, createSql);
+                    }
+                    progressed = true;
+                    lastErr.delete(tableName);
+                } catch(e){
+                    lastErr.set(tableName, e);
+                    stillPending.push({ tableName, createSql });
+                }
+            }
+            if(!progressed) break; // fixpoint: nothing advanced this pass
+            pending = stillPending;
+        }
+
+        if(pending.length){
+            // Genuine DDL faults survived the ordering fixpoint. Fail closed: the
+            // old single-pass catch swallowed these, so the table was never created
+            // and the next snapshot apply looped forever on errno 1146/1054 with
+            // halted:false (no signal). Record a durable halt instead.
+            let failed = pending.map(p => {
+                let e = lastErr.get(p.tableName) || {};
+                return { table: p.tableName, errno: e.errno || null, message: e.message || null };
+            });
+            await this._haltOnSchemaFailure(source, failed);
+            return;
+        }
+        console.log('Schema applied from ' + source);
+    }
+
+    // Durable halt for an unrecoverable schema apply (distinct from the
+    // consensus-divergence halt: same persistence + /status surface via
+    // recordHalt/isHalted, but its own reason and messaging so operators are not
+    // misled into chasing a forked chain). Reached only after the ordering
+    // fixpoint, so an FK-ordering miss never triggers it. A persistent-but-transient
+    // fault (e.g. a lock-timeout that outlasts the fixpoint) is an accepted
+    // fail-closed trade-off: an operator clears the halt once resolved.
+    async _haltOnSchemaFailure(source, failedTables){
+        if(this._halted) return;
+        let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
+        this._halted = {
+            blockIndex, reason: 'schema-apply-failed',
+            mismatches: failedTables || [], sources: [source],
+            at: new Date().toISOString()
+        };
+        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, failedTables, [source]); }
+        catch(e){ console.error('CRITICAL: failed to persist schema-apply halt (still halting in-memory):', e); }
+        console.error('================================================================');
+        console.error('SCHEMA APPLY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        console.error('after the multi-pass apply these tables still could not be created');
+        console.error('or altered (a genuine DDL fault, not FK ordering): ' + JSON.stringify(failedTables));
+        console.error('the replica cannot build a complete schema, so a snapshot apply would');
+        console.error('loop forever on errno 1146/1054. HALTING (applying no further blocks).');
+        console.error('Operator must fix the DDL fault (disk, permissions, lock, malformed');
+        console.error('DDL) and clear the halt before this replica can resume.');
+        console.error('================================================================');
+        this.pendingHashes.clear();
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
@@ -460,13 +517,23 @@ class ClientSync {
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
 
+        // config.js always populates these three keys with clamped defaults
+        // (5 / 2000 / 60000 via parseIntMin0/parseIntMin1), so no consumer-side
+        // fallback is needed; trusting them keeps the default in one place.
         let maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
-        maxRetries = Number.isFinite(maxRetries) ? Math.max(0, maxRetries) : 5;
-        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'] || 2000;
-        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS']  || 60000;
+        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'];
+        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
 
         for(let round = 0; ; round++){
             if(await this._bootstrapRotateSources()) return; // success: tip committed
+            if(this._halted){
+                // A schema-apply halt was recorded mid-bootstrap. Retrying cannot
+                // help (the DDL fault persists), so stop burning rounds: throw so
+                // start()/SyncService restarts and start() lands in the durable
+                // idle-halted state until an operator clears it.
+                throw new Error('Bootstrap aborted by schema-apply halt for ' +
+                    this.chain + '/' + this.network + '/' + this.dbType + '; operator must clear the halt');
+            }
             if(round >= maxRetries){
                 // Exhausted all sources across every retry round. Do not return:
                 // signal failure so start() never enters live-follow empty-handed.
@@ -491,6 +558,9 @@ class ClientSync {
 
         // Fetch and apply schema before downloading data
         await this._fetchAndApplySchema(source);
+        // A schema-apply halt means the replica can't build a complete schema;
+        // abort this round (the snapshot apply would only fail 1146/1054).
+        if(this._halted) return false;
 
         console.log('Downloading full snapshot from ' + source + '...');
         try {
@@ -558,10 +628,12 @@ class ClientSync {
             throw new Error('Bootstrap-from-height failed: no sync sources configured for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
+        // config.js always populates these three keys with clamped defaults
+        // (5 / 2000 / 60000 via parseIntMin0/parseIntMin1), so no consumer-side
+        // fallback is needed; trusting them keeps the default in one place.
         let maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
-        maxRetries = Number.isFinite(maxRetries) ? Math.max(0, maxRetries) : 5;
-        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'] || 2000;
-        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS']  || 60000;
+        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'];
+        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
 
         for(let round = 0; ; round++){
             try {
@@ -739,7 +811,10 @@ class ClientSync {
         let expected = SCHEMA_VERSION[this.dbType];
         for(let table of tables){
             // Replica's current high-water cursor for this table (0 if empty/absent).
-            // Cursor column is per-table (id, or address_id for decoder pubkeys).
+            // Cursor column is the monotonic AUTO_INCREMENT `id` for every lookup table,
+            // including decoder pubkeys. pubkeys.address_id is non-monotonic (assigned at
+            // first-SEEN, inserted at first-SPEND) and was retired as a cursor; see
+            // lookupCursorColumn in replicatedTables.js.
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
             try {
@@ -1089,7 +1164,7 @@ class ClientSync {
             //     completeness gap already surfaced above, not a content divergence,
             //     and comparing then would only be incompleteness noise.
             // A mismatch is logged + durably counted, never halted on (string-based
-            // consensus is unaffected). See claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
+            // consensus is unaffected).
             if(this.config['INDEX_MAP_PARITY_CHECK']
                     && remoteStatus.index_map_checksum != null
                     && Number(remoteStatus.block_height) === blockHeight
