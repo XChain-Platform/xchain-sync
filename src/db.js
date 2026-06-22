@@ -369,6 +369,11 @@ class Database {
         // added pick it up on this pass.
         await this.ensureReplicatedColumns();
 
+        // Similarly, addMissingColumns only propagates columns, not secondary
+        // indexes. Ensure known secondary indexes that must exist on replicated
+        // tables are present (idempotent; safe on snapshot-bootstrapped replicas).
+        await this.ensureReplicaSecondaryIndexes();
+
         console.log('Schema replication complete for ' + this.dbName);
     }
 
@@ -500,6 +505,58 @@ class Database {
         }
     }
 
+    // Ensure known secondary indexes exist on replicated tables. addMissingColumns
+    // propagates new columns from the source schema but does not carry secondary indexes
+    // (SHOW CREATE TABLE returns index definitions inline with the CREATE TABLE DDL, but
+    // the /schema fetch path's validateDdl rejects multi-statement DDL, so a separate
+    // ALTER TABLE ADD INDEX is the only safe delivery path). Snapshot-bootstrapped
+    // replicas that pre-date a migration that added a secondary index to the source never
+    // receive it; this idempotent ensure step closes that gap at startup.
+    //
+    // Only additive, never drops existing indexes. Each ALTER TABLE ADD INDEX IF NOT
+    // EXISTS is a no-op once the index exists, so repeated startups are safe. The InnoDB
+    // online DDL builds the index INPLACE and does not block DML, but it does run
+    // synchronously at startup; on a large already-populated table it takes time. On a
+    // freshly snapshot-bootstrapped replica the tables are already correct (the source
+    // shipped them in CREATE TABLE DDL), so this only incurs cost on replicas that were
+    // bootstrapped before the index was added to the source.
+    async ensureReplicaSecondaryIndexes(){
+        if(this.dbType !== 'indexer') return;
+        // index_tickers.block_index: added by xchain-indexer migration
+        // 2026-06-21-index-tables-block-index-secondary-idx.sql. Used by ClientRollback
+        // (DELETE WHERE block_index >= ?) and the index-map parity checksum
+        // (WHERE block_index IS NOT NULL AND block_index <= ?). Without this index,
+        // both paths degrade to a full table scan on multi-million-row replicas.
+        let ensureIndexes = [
+            { table: 'index_tickers',   indexName: 'block_index', columns: '(block_index)' },
+            { table: 'index_addresses', indexName: 'block_index', columns: '(block_index)' }
+        ];
+        for(let { table, indexName, columns } of ensureIndexes){
+            let tableRows = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                [this.dbName, table]
+            );
+            if(tableRows.length === 0) continue;  // table absent; schema apply will create it with indexes
+
+            // Check if the index already exists before issuing the ALTER (avoids a
+            // logged warning from MariaDB when IF NOT EXISTS is used on older versions).
+            let idxRows = await this.doQuery(
+                "SELECT index_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? AND index_name = ?",
+                [this.dbName, table, indexName]
+            );
+            if(idxRows.length > 0) continue;  // already present; no-op
+
+            try {
+                await this.doQuery('ALTER TABLE `' + table + '` ADD INDEX `' + indexName + '` ' + columns);
+                console.log('Added secondary index ' + indexName + ' to ' + table + ' on ' + this.dbName);
+            } catch(e){
+                // errno 1061 = duplicate key name (race with another startup); harmless.
+                if(e.errno !== 1061)
+                    console.error('Failed to add secondary index ' + indexName + ' to ' + table + ':', e);
+            }
+        }
+    }
+
     // Get a database connection (with exponential backoff + circuit breaker).
     // Returns the active shared transaction connection when one is open, so every
     // query on this Db instance funnels through that same transaction.
@@ -583,7 +640,10 @@ class Database {
     // Roll back a SQL transaction
     async rollbackTransaction(){
         if(this.transactionConnection != null){
-            console.log("rolling back");
+            // Log the DB name and type so a rollback entry in the journal is
+            // traceable to the specific replica/source DB that triggered it, rather
+            // than appearing as an anonymous "rolling back" with no context.
+            console.log('Rolling back transaction on ' + this.dbName + ' (' + this.dbType + ')');
             try {
                 await this.transactionConnection.rollback();
             } finally {

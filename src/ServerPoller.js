@@ -231,6 +231,14 @@ class ServerPoller {
                 console.log('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + this.lastPolledBlock + ' (content hash changed)');
                 if(this.transparencyLog)
                     await this.transparencyLog.pruneFrom(this.lastPolledBlock);
+                // Reorg event message shape:
+                //   { type: 'reorg', chain, network, dbType, block_index }
+                //   block_index: the first orphaned block height (clients must roll back
+                //     all blocks >= block_index and re-apply from the source).
+                //   dbType: the database type this poller manages ('indexer' or 'decoder'),
+                //     included so a subscriber receiving events for multiple db types can
+                //     route the rollback to the correct replica without inspecting the
+                //     subscription URL.
                 this.broadcaster.broadcast(this.chain, this.network, {
                     type: 'reorg',
                     chain: this.chain,
@@ -270,6 +278,9 @@ class ServerPoller {
             if(this.transparencyLog)
                 await this.transparencyLog.pruneFrom(currentBlock + 1);
 
+            // Reorg event shape: see the net-forward reorg broadcast above for the
+            // full field documentation. block_index here is the first orphaned block
+            // (currentBlock + 1), consistent with the net-forward path.
             this.broadcaster.broadcast(this.chain, this.network, {
                 type: 'reorg',
                 chain: this.chain,
@@ -285,6 +296,12 @@ class ServerPoller {
 
         // Process new blocks (limit to 100 per poll to avoid large bursts)
         let blocksProcessed = 0;
+        // Catch-up log throttle: on a fast/lagging chain the server can be thousands
+        // of blocks behind and the per-block console line floods the journal. Log only
+        // when catching up a batch (last block of the batch) or for individual blocks
+        // during normal steady-state follow. This avoids burying real errors in noise
+        // while still surfacing progress at batch boundaries.
+        let catchUpStart = this.lastPolledBlock;
         while(this.lastPolledBlock < currentBlock && blocksProcessed < 100){
             let nextBlock = this.lastPolledBlock + 1;
             let payload = await this._buildBlockPayload(nextBlock);
@@ -300,7 +317,6 @@ class ServerPoller {
                 // Broadcast to subscribers (infraTables enables filtering for infra-only subscribers)
                 this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
 
-                console.log('Synced block ' + nextBlock + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
                 // Track the hash we just broadcast so the next poll can detect a
                 // net-forward reorg that rewrites this block (item 4623).
                 this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
@@ -318,8 +334,19 @@ class ServerPoller {
             blocksProcessed++;
         }
 
-        if(blocksProcessed > 0)
+        // Log a single summary line for catch-up batches; log each block individually
+        // only when following the tip one block at a time (steady-state, low noise).
+        if(blocksProcessed > 0){
+            let isBatch = (currentBlock - catchUpStart) > 1 || blocksProcessed >= 100;
+            if(isBatch){
+                console.log('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
+                    ' (' + blocksProcessed + ' block(s)) for ' + this.chain + '/' + this.network + '/' + this.dbType);
+            } else {
+                console.log('Synced block ' + this.lastPolledBlock + ' for ' +
+                    this.chain + '/' + this.network + '/' + this.dbType);
+            }
             await this._updateStatus(currentBlock);
+        }
 
         return blocksProcessed;
     }

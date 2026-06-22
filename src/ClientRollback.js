@@ -587,7 +587,7 @@ class ClientRollback {
                 // GIVE_OWNERSHIP offer whose release was orphaned has reverted to its latest
                 // surviving status. Set the gate to that offer's action_index (or NULL if none
                 // survives). The SQL between the ESCROW-REDERIVE-SQL markers is kept logically
-                // identical with xchain-indexer/src/db.js (cross-repo drift guard in
+                // identical with xchain-indexer/src/rollback.js (cross-repo drift guard in
                 // rollback-coverage.test.js) so source + replica derive byte-identical values.
                 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
                 // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
@@ -844,7 +844,7 @@ class ClientRollback {
 // after orphaned offers/statuses are deleted) and ClientApplier (forward-apply
 // path, after the block's offers/statuses are inserted) so both derive
 // byte-identical gate values. The SQL between the //<ESCROW-REDERIVE-SQL> markers
-// is kept logically identical with xchain-indexer/src/db.js (cross-repo drift
+// is kept logically identical with xchain-indexer/src/rollback.js (cross-repo drift
 // guard in test/unit/rollback-coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a

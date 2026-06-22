@@ -397,33 +397,65 @@ class ClientSync {
         // within this one bootstrap, instead of relying on lucky iteration order
         // across bootstrap re-routes. Crucially it also SEPARATES ordering misses
         // (which clear once their dependency lands) from genuine faults (disk-full,
-        // permissions, lock-timeout, malformed DDL), which persist to the fixpoint.
+        // permissions, malformed DDL), which persist to the fixpoint.
+        //
+        // Transient lock-timeout (errno 1205) handling: an ALTER TABLE that hits a
+        // concurrent lock waits and times out is retriable. Instead of letting a
+        // single transient failure roll straight into the fixpoint (no progress ->
+        // halt), each table gets up to SCHEMA_TRANSIENT_MAX_RETRIES extra attempts
+        // with an exponential backoff before it is treated as a persistent failure.
+        // Real faults (disk-full, permission denied, malformed DDL) typically do not
+        // produce errno 1205 and bypass the backoff entirely.
+        const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
+        const SCHEMA_TRANSIENT_MAX_RETRIES = 3;
+        const SCHEMA_TRANSIENT_BASE_MS     = 2000;
         let lastErr = new Map();
         while(pending.length){
             let stillPending = [];
             let progressed = false;
             for(let { tableName, createSql } of pending){
-                try {
-                    let exists = await this.db.doQuery(
-                        "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
-                        [this.db.dbName, tableName]
-                    );
-                    if(exists.length === 0){
-                        await this.db.doQuery(createSql);
-                        console.log('  Created table: ' + tableName);
-                    } else {
-                        // Table already exists: propagate any columns the master has
-                        // added since this replica was bootstrapped. Without this the
-                        // path is CREATE-only and a replica that pre-dates a column
-                        // addition stalls on the first snapshot carrying it. Runs
-                        // before the snapshot apply, so the ALTERs are outside any
-                        // snapshot transaction.
-                        await this.db.addMissingColumns(tableName, createSql);
+                let attempt = 0;
+                let succeeded = false;
+                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
+                    try {
+                        let exists = await this.db.doQuery(
+                            "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                            [this.db.dbName, tableName]
+                        );
+                        if(exists.length === 0){
+                            await this.db.doQuery(createSql);
+                            console.log('  Created table: ' + tableName);
+                        } else {
+                            // Table already exists: propagate any columns the master has
+                            // added since this replica was bootstrapped. Without this the
+                            // path is CREATE-only and a replica that pre-dates a column
+                            // addition stalls on the first snapshot carrying it. Runs
+                            // before the snapshot apply, so the ALTERs are outside any
+                            // snapshot transaction.
+                            await this.db.addMissingColumns(tableName, createSql);
+                        }
+                        lastErr.delete(tableName);
+                        succeeded = true;
+                        break;
+                    } catch(e){
+                        // Transient lock-timeout: retry with backoff up to the cap,
+                        // then fall through to the fixpoint as a persistent failure.
+                        if(e.errno === SCHEMA_TRANSIENT_ERRNO && attempt < SCHEMA_TRANSIENT_MAX_RETRIES){
+                            let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
+                            console.warn('Schema apply lock-timeout on ' + tableName +
+                                ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
+                                (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
+                            await this.util.sleep(delay);
+                            attempt++;
+                        } else {
+                            lastErr.set(tableName, e);
+                            break;
+                        }
                     }
+                }
+                if(succeeded){
                     progressed = true;
-                    lastErr.delete(tableName);
-                } catch(e){
-                    lastErr.set(tableName, e);
+                } else {
                     stillPending.push({ tableName, createSql });
                 }
             }
@@ -450,9 +482,10 @@ class ClientSync {
     // consensus-divergence halt: same persistence + /status surface via
     // recordHalt/isHalted, but its own reason and messaging so operators are not
     // misled into chasing a forked chain). Reached only after the ordering
-    // fixpoint, so an FK-ordering miss never triggers it. A persistent-but-transient
-    // fault (e.g. a lock-timeout that outlasts the fixpoint) is an accepted
-    // fail-closed trade-off: an operator clears the halt once resolved.
+    // fixpoint AND after transient lock-timeouts have been retried with backoff,
+    // so FK-ordering misses and brief ALTER contention never trigger it. Only
+    // persistent faults (disk-full, permissions, malformed DDL, lock-timeout
+    // that outlasts the retry cap) reach here.
     async _haltOnSchemaFailure(source, failedTables){
         if(this._halted) return;
         let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
@@ -582,7 +615,13 @@ class ClientSync {
                 }
             }
 
-            let snapshotData = JSON.parse(jsonStr.toString());
+            let snapshotData;
+            try {
+                snapshotData = JSON.parse(jsonStr.toString());
+            } catch(parseErr){
+                throw new Error('Snapshot download truncated or corrupt from ' + source +
+                    ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+            }
             await this.applier.applyFullSnapshot(snapshotData);
             this.lastAppliedBlock = snapshotData.block_height;
 
@@ -715,7 +754,13 @@ class ClientSync {
         if(Buffer.isBuffer(jsonStr)){
             try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
         }
-        let snapshotData = JSON.parse(jsonStr.toString());
+        let snapshotData;
+        try {
+            snapshotData = JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+        }
 
         // Record the join block BEFORE apply so a recompute triggered during/after
         // apply already sees the skip. since_block is authoritative (the server
@@ -837,7 +882,14 @@ class ClientSync {
                 if(Buffer.isBuffer(jsonStr)){
                     try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
                 }
-                let page = JSON.parse(jsonStr.toString());
+                let page;
+                try {
+                    page = JSON.parse(jsonStr.toString());
+                } catch(parseErr){
+                    throw new Error('Snapshot download truncated or corrupt from ' + source +
+                        ' (lookup page for ' + table + ' failed JSON.parse; likely a network interruption mid-transfer): ' +
+                        parseErr.message);
+                }
                 if(page.schema_version !== expected){
                     throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
                         page.schema_version + ' client=' + expected);
@@ -983,7 +1035,13 @@ class ClientSync {
                 try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
             }
 
-            let snapshotData = JSON.parse(jsonStr.toString());
+            let snapshotData;
+            try {
+                snapshotData = JSON.parse(jsonStr.toString());
+            } catch(parseErr){
+                throw new Error('Snapshot download truncated or corrupt from ' + source +
+                    ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+            }
             await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;

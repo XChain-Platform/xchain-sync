@@ -46,6 +46,14 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // sync: the explorer serves the consensus-relevant ones (state_checkpoints,
     // capability_snapshots, cross_chain_matches) from the MANDATORY co-located hub DB on the
     // same server, with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
+    //
+    // IMPORTANT: a follower node that lacks a co-located hub DB (hub-less validator) will
+    // have empty tables for oracle_prices, capability_snapshots, cross_chain_calls,
+    // cross_chain_matches, and state_checkpoints. This is by design and not a replication
+    // gap: these rows are hub-driven state that the node must receive from its OWN hub
+    // subscription (hub_db_sync), not from the sync snapshot stream. A hub-less validator
+    // cannot serve hub-dependent API surfaces correctly; provision a hub connection before
+    // running in validator mode.
     'oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches',
     'state_checkpoints',
     // state_tree_roots: the follower recomputes its OWN row at every snapshot apply
