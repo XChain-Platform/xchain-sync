@@ -31,7 +31,16 @@ class ClientProcess {
             // hash-inconsistent data can pass { verifyRecompute: false }.
             VERIFY_RECOMPUTE: opts.verifyRecompute !== undefined ? opts.verifyRecompute : true,
             CLIENT_RECONNECT_DELAY: opts.reconnectDelay || 500,
-            HASH_CONFIRM_TIMEOUT: opts.hashConfirmTimeout || 2000
+            HASH_CONFIRM_TIMEOUT: opts.hashConfirmTimeout || 2000,
+            // Bootstrap retry bounds. Production sources these from config.js
+            // (clamped defaults); the e2e builds config by hand, so without them
+            // ClientSync reads `undefined` -> `round >= undefined` never exits and
+            // the backoff is `baseMs * 2^round` = NaN, so a failed bootstrap spins
+            // an unbounded retry loop that OOM-crashes the whole run. Fast, finite
+            // test defaults make a genuine bootstrap failure fail quickly instead.
+            BOOTSTRAP_MAX_RETRIES: opts.bootstrapMaxRetries !== undefined ? opts.bootstrapMaxRetries : 2,
+            BOOTSTRAP_RETRY_BASE_MS: opts.bootstrapRetryBaseMs !== undefined ? opts.bootstrapRetryBaseMs : 25,
+            BOOTSTRAP_RETRY_MAX_MS: opts.bootstrapRetryMaxMs !== undefined ? opts.bootstrapRetryMaxMs : 100
         };
 
         this.applier    = new ClientApplier(replicaDb, testDb.util);
