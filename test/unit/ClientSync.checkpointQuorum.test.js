@@ -147,6 +147,64 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(db.doQuery.called, false);
     });
+
+    it('records the verified checkpoint_seq high-water mark on success', async function(){
+        const s = makeSigner(); pin(s);
+        const cp = signedCheckpoint(s);                       // checkpoint_seq 4
+        getStub.resolves({ data: cp });
+        db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
+        await sync._verifyCheckpointQuorum();
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 4);
+    });
+
+    it('REJECTS a checkpoint_seq regression (source rewound / withholding) without anchoring', async function(){
+        const s = makeSigner(); pin(s);
+        const warn = sinon.stub(console, 'warn');
+        sync._lastVerifiedCheckpointSeq = 9;                  // already anchored a newer seq
+        const cp = signedCheckpoint(s);                       // older: checkpoint_seq 4
+        getStub.resolves({ data: cp });
+        await sync._verifyCheckpointQuorum();
+        assert.strictEqual(sync.isHalted(), false, 'a regression is suspicious but not proof of forgery');
+        assert.strictEqual(db.doQuery.called, false, 'must not anchor (no local root compare) on a regressed seq');
+        assert.ok(warn.getCalls().some(c => /seq regression/.test(c.args[0])), 'surfaces the rewind');
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 9, 'high-water mark is not lowered');
+    });
+
+    it('fetches the anchor from CHECKPOINT_ANCHOR_URL out-of-band when configured', async function(){
+        const s = makeSigner(); pin(s);
+        sync.config['CHECKPOINT_ANCHOR_URL'] = 'http://hub-anchor:9000';
+        const cp = signedCheckpoint(s);
+        getStub.resolves({ data: cp });
+        db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
+        await sync._verifyCheckpointQuorum();
+        assert.ok(getStub.firstCall.args[0].startsWith('http://hub-anchor:9000/'),
+            'fetched from the out-of-band anchor, not the audited source');
+    });
+
+    it('warns (no halt) when the anchor is staler than CHECKPOINT_FRESHNESS_BLOCKS behind the tip', async function(){
+        const s = makeSigner(); pin(s);
+        const warn = sinon.stub(console, 'warn');
+        sync.config['CHECKPOINT_FRESHNESS_BLOCKS'] = 500;
+        sync.lastAppliedBlock = 1000;                         // checkpoint is at 100 => 900 behind
+        const cp = signedCheckpoint(s);
+        getStub.resolves({ data: cp });
+        db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
+        await sync._verifyCheckpointQuorum();
+        assert.strictEqual(sync.isHalted(), false, 'staleness is advisory, never a halt');
+        assert.ok(warn.getCalls().some(c => /stale anchor/.test(c.args[0])), 'alarms the freshness gap');
+    });
+
+    it('does not warn freshness when the anchor is within CHECKPOINT_FRESHNESS_BLOCKS of the tip', async function(){
+        const s = makeSigner(); pin(s);
+        const warn = sinon.stub(console, 'warn');
+        sync.config['CHECKPOINT_FRESHNESS_BLOCKS'] = 500;
+        sync.lastAppliedBlock = 100;                          // checkpoint at 100 => 0 behind
+        const cp = signedCheckpoint(s);
+        getStub.resolves({ data: cp });
+        db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
+        await sync._verifyCheckpointQuorum();
+        assert.ok(!warn.getCalls().some(c => /stale anchor/.test(c.args[0])));
+    });
 });
 
 // Sign a checkpoint at a given height/snapshot/state_root (the rotation walk needs

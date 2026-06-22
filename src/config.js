@@ -223,6 +223,20 @@ module.exports = {
         config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
         config['CHECKPOINT_VERIFY_INTERVAL'] = parseIntMin1(process.env.CHECKPOINT_VERIFY_INTERVAL, 50);
 
+        // Out-of-band checkpoint anchor endpoint. The quorum verify is sound even when the
+        // checkpoint is fetched from the audited source (a lying source cannot forge a
+        // pinned-set quorum), but a single source can WITHHOLD: serve a stale-but-genuine
+        // older checkpoint, or 404, so a forged tail past the last served checkpoint is
+        // never anchored. Point this at the hub/federation (a different endpoint than the
+        // streaming source) to close that withholding gap. Unset = fall back to sources[0].
+        config['CHECKPOINT_ANCHOR_URL'] = process.env.CHECKPOINT_ANCHOR_URL || null;
+
+        // Freshness bound (in applied blocks) for the checkpoint anchor. When the newest
+        // quorum checkpoint trails the replica tip by more than this, the anchor cannot
+        // catch a forged tail, so the gap is logged (advisory, never a halt: withholding is
+        // not proof of forgery, and halting on absence would hand an attacker a DoS-halt).
+        config['CHECKPOINT_FRESHNESS_BLOCKS'] = parseIntMin1(process.env.CHECKPOINT_FRESHNESS_BLOCKS, 500);
+
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);
 
