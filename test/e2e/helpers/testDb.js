@@ -13,6 +13,7 @@ const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
 const Utility = require('../../../src/utility');
 const { splitSqlStatements } = require('../../../src/sqlUtil');
+const validation = require('../../../src/validation');
 
 const TEST_DB_HOST = process.env.E2E_DB_HOST || '127.0.0.1';
 const TEST_DB_PORT = parseInt(process.env.E2E_DB_PORT) || 23306;
@@ -147,6 +148,33 @@ class TestDatabase {
 
     async truncateTable(table) {
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
+    }
+
+    // Mirror src/db.js: ClientSync's schema-apply calls this on a table that
+    // already exists (the e2e pre-seeds the replica schema), to propagate any
+    // columns the source has added since bootstrap. Without it the bootstrap
+    // hits "this.db.addMissingColumns is not a function", every table lands in
+    // the pending set, and the run halts with schema-apply-failed.
+    async addMissingColumns(tableName, sourceDdl) {
+        let sourceColumns = validation.extractColumnNames(sourceDdl);
+        if (sourceColumns.length === 0) return 0;
+        let destRows = await this.doQuery(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?",
+            [this.dbName, tableName]
+        );
+        let destSet = new Set(destRows.map(r => r.column_name || r.COLUMN_NAME));
+        let added = 0;
+        for (let col of sourceColumns) {
+            if (destSet.has(col)) continue;
+            if (!validation.validateIdentifier(col).valid) continue;
+            let def = validation.extractColumnDefinition(sourceDdl, col);
+            if (!def) continue;
+            try {
+                await this.doQuery("ALTER TABLE `" + tableName + "` ADD COLUMN " + def);
+                added++;
+            } catch (e) { /* mirror src/db.js: per-column failure is logged, not fatal */ }
+        }
+        return added;
     }
 
     // Durable divergence-halt records (mirrors src/db.js so ClientSync's halt
