@@ -79,6 +79,14 @@ class ClientSync {
         this.lastHashes           = null;
         this.lastKnownServerBlock = null;
 
+        // Wall-clock of the last WebSocket event received from ANY source. Drives the
+        // source_height_stale signal on /status: lastKnownServerBlock only advances on
+        // live events, so after a silent WS drop it freezes and lag_blocks reads 0 once
+        // the replica catches up to it. A stale timestamp surfaces that the live signal
+        // has gone quiet even though lag still computes to 0. null = no event seen yet
+        // (staleness reported as unknown, not stale, during initial bootstrap).
+        this._lastWsEventAt = null;
+
         // Truncated-replica join block. Set by _bootstrapFromHeight when this chain
         // is seeded from a recent height (SYNC_BOOTSTRAP_DEPTH_*) rather than full
         // history. The join block has no in-replica predecessor, so its chained
@@ -1456,6 +1464,11 @@ class ClientSync {
                 console.error('Error parsing WebSocket message:', e);
                 return;
             }
+            // Stamp liveness on receipt (before the serialized apply chain) so the
+            // freshness signal reflects when the server last spoke, not when we
+            // finished applying. Any valid event type counts, including the periodic
+            // status heartbeat that arrives even when no new block is produced.
+            this._lastWsEventAt = Date.now();
             this._wsEventChain = (this._wsEventChain || Promise.resolve())
                 .then(() => this._handleEvent(event, sourceIndex))
                 .catch(e => console.error('Error handling WebSocket message:', e));
@@ -1745,6 +1758,16 @@ class ClientSync {
     // True when this replica was seeded from a recent height and therefore
     // cannot answer pre-base history queries.
     isTruncated(){ return typeof this._bootstrapBase === 'number' && this._bootstrapBase > 0; }
+
+    // Whether the live source signal has gone stale: no WS event (block, reorg, or
+    // the periodic status heartbeat) within CLIENT_SOURCE_STALE_MS. When true,
+    // lastKnownServerBlock can no longer be trusted as the current source tip, so a
+    // lag_blocks of 0 may be hiding a silently dropped WebSocket. Returns null (not
+    // false) before the first event is seen, where staleness is genuinely unknown.
+    isSourceHeightStale(){
+        if(this._lastWsEventAt === null) return null;
+        return (Date.now() - this._lastWsEventAt) > this.config['CLIENT_SOURCE_STALE_MS'];
+    }
 
     _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }
 

@@ -115,6 +115,42 @@ describe('ClientSync', function(){
         });
     });
 
+    describe('isSourceHeightStale', function(){
+        // lastKnownServerBlock only advances on live WS events, so after a silent
+        // disconnect it freezes and lag_blocks settles to 0 once the replica catches
+        // up to the stale tip. isSourceHeightStale exposes that the live signal has
+        // gone quiet so /status can flag the lag figure as computed against a stale tip.
+        let clock;
+        beforeEach(function(){
+            clock = sinon.useFakeTimers();
+            sync.config.CLIENT_SOURCE_STALE_MS = 180000;
+        });
+        afterEach(function(){
+            clock.restore();
+        });
+
+        it('returns null before any WS event is seen', function(){
+            assert.strictEqual(sync.isSourceHeightStale(), null);
+        });
+
+        it('returns false immediately after an event', function(){
+            sync._lastWsEventAt = Date.now();
+            assert.strictEqual(sync.isSourceHeightStale(), false);
+        });
+
+        it('stays fresh within the staleness window', function(){
+            sync._lastWsEventAt = Date.now();
+            clock.tick(179000);
+            assert.strictEqual(sync.isSourceHeightStale(), false);
+        });
+
+        it('reports stale once the window elapses with no new event', function(){
+            sync._lastWsEventAt = Date.now();
+            clock.tick(180001);
+            assert.strictEqual(sync.isSourceHeightStale(), true);
+        });
+    });
+
     describe('_logGap throttling', function(){
         // On a fast chain (e.g. Dogecoin testnet) the replica trails the tip and
         // would log a gap line per block (thousands/min). _logGap collapses that

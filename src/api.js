@@ -220,6 +220,12 @@ async function startApi(){
             row.lag_blocks    = (sourceHeight !== null && row.block_height !== null)
                 ? Math.max(0, sourceHeight - row.block_height)
                 : null;
+            // Freshness of source_height/lag_blocks. lastKnownServerBlock only advances
+            // on live WS events, so after a silent disconnect it freezes and lag_blocks
+            // settles to 0 once the replica catches up to the stale tip. This flag tells
+            // an operator the lag figure is computed against a source height we have not
+            // heard confirmed recently (null = no live event seen yet, staleness unknown).
+            row.source_height_stale = clientState.sourceHeightStale;
             // Consensus-divergence halt: a halted client has STOPPED applying and
             // requires operator clearance. Surfaced so the dashboard monitor and
             // peers see a forked/Byzantine validator immediately.

@@ -232,6 +232,14 @@ module.exports = {
         // Client reconnect delay (default 5 seconds; override via CLIENT_RECONNECT_DELAY)
         config['CLIENT_RECONNECT_DELAY'] = parseIntMin0(process.env.CLIENT_RECONNECT_DELAY, 5000);
 
+        // Source-height freshness window (client mode). The server emits a `status`
+        // heartbeat every WS_STATUS_INTERVAL (60s default), so a healthy live WS sees
+        // an event at least that often. If no WS event arrives within this window the
+        // client's lastKnownServerBlock is frozen and /status would otherwise report
+        // lag_blocks 0 forever once the replica catches up to that stale value, hiding
+        // a silently dropped WebSocket. Default 180s = 3 missed heartbeats.
+        config['CLIENT_SOURCE_STALE_MS'] = parseIntMin1(process.env.CLIENT_SOURCE_STALE_MS, 180000);
+
         // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
         // exhausts every configured source must NOT fall through to live-follow on an
         // empty replica; instead it retries the whole source rotation with bounded

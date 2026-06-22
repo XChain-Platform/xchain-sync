@@ -332,6 +332,7 @@ class SyncService {
         let sync = this.clientSyncs.get(key);
         return {
             lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null,
+            sourceHeightStale: sync ? sync.isSourceHeightStale() : null,
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
             truncated:     sync ? sync.isTruncated() : false,

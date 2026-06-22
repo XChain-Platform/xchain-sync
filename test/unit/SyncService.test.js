@@ -417,12 +417,13 @@ describe('SyncService', function(){
     describe('getClientSyncState', function(){
         it('returns nulls/false when no sync exists for the key', function(){
             assert.deepStrictEqual(service.getClientSyncState('bitcoin', 'mainnet'),
-                { lastKnownServerBlock: null, halted: false, haltInfo: null,
-                  truncated: false, bootstrapBase: null });
+                { lastKnownServerBlock: null, sourceHeightStale: null, halted: false,
+                  haltInfo: null, truncated: false, bootstrapBase: null });
         });
         it('reports a live sync, including halt info when halted', function(){
             let fakeSync = {
                 lastKnownServerBlock: 42,
+                isSourceHeightStale: () => false,
                 isHalted: () => true,
                 getHaltInfo: () => ({ blockIndex: 42, reason: 'divergence' }),
                 isTruncated: () => true,
@@ -431,6 +432,7 @@ describe('SyncService', function(){
             service.clientSyncs.set('bitcoin:mainnet:indexer', fakeSync);
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.lastKnownServerBlock, 42);
+            assert.strictEqual(state.sourceHeightStale, false);
             assert.strictEqual(state.halted, true);
             assert.deepStrictEqual(state.haltInfo, { blockIndex: 42, reason: 'divergence' });
             assert.strictEqual(state.truncated, true);
@@ -438,7 +440,8 @@ describe('SyncService', function(){
         });
         it('omits halt info for a healthy sync', function(){
             service.clientSyncs.set('bitcoin:mainnet:indexer',
-                { lastKnownServerBlock: 7, isHalted: () => false, getHaltInfo: () => ({}),
+                { lastKnownServerBlock: 7, isSourceHeightStale: () => null,
+                  isHalted: () => false, getHaltInfo: () => ({}),
                   isTruncated: () => false, getBootstrapBase: () => null });
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.halted, false);
