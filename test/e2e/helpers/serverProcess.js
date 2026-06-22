@@ -237,6 +237,28 @@ class ServerProcess {
         // `server.poller.lastPolledBlock = 0` and then `await server.poll()`
         // before asserting.
         this.poller.lastPolledBlock = await this.sourceDb.getLastBlock();
+        // Also seed lastPolledBlockHash, exactly as production ServerPoller.start()
+        // does. Without it the hash stays null and the net-forward reorg guard
+        // (which is gated on lastPolledBlockHash !== null) never arms, so a reorg
+        // that rolls back then readvances to an equal-or-higher tip is missed
+        // entirely and the replica is left with stale orphaned blocks.
+        this.poller.lastPolledBlockHash = (this.poller.lastPolledBlock !== null)
+            ? await this.poller._sourceBlockHash(this.poller.lastPolledBlock) : null;
+        // Pre-populate recentBroadcastHashes for the blocks already present at start,
+        // mirroring a production poller that has been running and streamed them. The
+        // net-forward reorg walk-back reads these PRE-reorg hashes to descend to the
+        // true fork point; with the map empty (these blocks reached the replica via the
+        // bootstrap snapshot, not the poller) the walk-back can't go below the start
+        // tip, so a reorg into a pre-seeded block is only partially rolled back and the
+        // replica keeps a stale orphan -> recompute halt. Bounded to the same window the
+        // live poller retains (RECENT_HASH_CAP = 256 in ServerPoller).
+        if(this.poller.lastPolledBlock !== null){
+            let floor = Math.max(1, this.poller.lastPolledBlock - 255);
+            for(let bi = floor; bi <= this.poller.lastPolledBlock; bi++){
+                let h = await this.poller._sourceBlockHash(bi);
+                if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);
+            }
+        }
         await this.poller._updateStatus();
 
         // Start polling loop
