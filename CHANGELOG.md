@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `_insertRows` unit coverage pinning the full-dump write modes: `merkle_epochs` -> `INSERT IGNORE` and `markets`/`attest_validator_stats` -> `INSERT ... ON DUPLICATE KEY UPDATE` covering every column, so a future edit can't silently drop either mode.
+
 ## [1.7.1] - 2026-06-20
 
 ### Security

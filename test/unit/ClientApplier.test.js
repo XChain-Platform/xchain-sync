@@ -308,6 +308,32 @@ describe('ClientApplier', function(){
             assert.ok(!query.includes('IGNORE'));
         });
 
+        // #4771: c793db4 added merkle_epochs (INSERT IGNORE, append-only) and the
+        // mutable-aggregate full-dump tables markets / attest_validator_stats
+        // (INSERT ... ON DUPLICATE KEY UPDATE so a re-dump refreshes stale values
+        // instead of skipping them). Pin both so a future edit can't silently drop
+        // either mode (the F-2 divergence class) and pass CI.
+        it('uses INSERT IGNORE for append-only merkle_epochs', async function(){
+            await applier._insertRows('merkle_epochs', [{ epoch: 1, root: 'aa' }]);
+            let query = db.doQuery.firstCall.args[0];
+            assert.ok(query.startsWith('INSERT IGNORE'), 'merkle_epochs must be INSERT IGNORE');
+            assert.ok(!query.includes('ON DUPLICATE KEY UPDATE'));
+        });
+
+        for(const table of ['markets', 'attest_validator_stats']){
+            it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every column', async function(){
+                await applier._insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
+                let query = db.doQuery.firstCall.args[0];
+                assert.ok(query.startsWith('INSERT INTO'), table + ' upsert starts as INSERT (not IGNORE)');
+                assert.ok(!query.startsWith('INSERT IGNORE'), table + ' must not be INSERT IGNORE');
+                assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), table + ' must upsert');
+                for(const col of ['id', 'a', 'b']){
+                    assert.ok(query.includes('`' + col + '` = VALUES(`' + col + '`)'),
+                        table + ' upsert must refresh column ' + col);
+                }
+            });
+        }
+
         it('batches inserts in groups of 100', async function(){
             let rows = [];
             for(let i = 0; i < 250; i++) rows.push({ id: i });
