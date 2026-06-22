@@ -243,6 +243,15 @@ class TestDatabase {
         }
     }
 
+    // Resolve a status name to its index_statuses id (matches src/db.js). The
+    // reorg-rollback path (ClientRollback) and stateHash look up 'completed' /
+    // 'valid' here; without it a reorg rollback threw "getStatusId is not a
+    // function" and halted the client (reorg-rollback-failed).
+    async getStatusId(status) {
+        let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status]);
+        return rows.length > 0 ? Number(rows[0].id) : null;
+    }
+
     async commitTransaction() {
         if (this.transactionConnection) {
             await this.transactionConnection.commit();
