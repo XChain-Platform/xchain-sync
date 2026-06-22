@@ -61,9 +61,13 @@ describe('Boundary: Rollback Scope', function(){
         // invalid_archive reset is an in-place UPDATE (not a DELETE) that also references
         // `action_index >=` but binds [firstActionIndex, firstActionIndex] so exclude it.
         // oracle_prices is a bespoke delete that binds [coin, firstActionIndex] so also exclude it.
+        // cross_chain_calls / cross_chain_matches are likewise per-chain scoped bespoke
+        // deletes (source/a/b `_action_index >=`) that bind [coin, firstActionIndex, ...], so
+        // exclude them too.
         let actionDeletes = db.doQuery.getCalls().filter(c =>
             c.args[0].includes('DELETE') && c.args[0].includes('action_index >=') &&
-            !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices')
+            !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices') &&
+            !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches')
         );
         for(let call of actionDeletes){
             assert.deepStrictEqual(call.args[1], [100]);
