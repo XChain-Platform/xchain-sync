@@ -272,8 +272,10 @@ class SnapshotBuilder {
             // from the full snapshot; it is now in the decoder /status completeness count
             // (replicatedTables `special`), so the soft-expire/hard-purge drift the
             // bootstrap dump cannot replay surfaces as a TABLE_COUNT_MISMATCH rather than
-            // drifting silently. Full UPDATE/DELETE convergence needs an apply-side
-            // replace-table reconcile (followup).
+            // drifting silently. The apply-side reconcile has landed:
+            // ClientApplier.applyDispensersReplace via ClientSync._reconcileDispensers,
+            // gated by DISPENSERS_RECONCILE_EVERY / DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
+            // The count signal is now a backstop for detecting residual drift.
             let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
@@ -329,8 +331,9 @@ class SnapshotBuilder {
             //     committed" for every post-bootstrap epoch.
             //   - markets: derived OHLCV aggregate keyed by tick pair with no
             //     action_index. Without a full-dump here, a follower's markets table
-            //     freezes at bootstrap height. ClientRollback drops affected rows on
-            //     reorg; the next incremental catch-up restores current values.
+            //     freezes at bootstrap height. markets has NO ClientRollback drop;
+            //     it converges post-reorg via the full-dump UPSERT (ON DUPLICATE KEY
+            //     UPDATE) on the next snapshot.
             //   - attest_validator_stats: running per-validator aggregate counters
             //     with no action_index. Without a full-dump here, these counters
             //     freeze at bootstrap height. ClientRollback drops affected rows on

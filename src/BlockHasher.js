@@ -292,7 +292,6 @@ class BlockHasher {
     // Cost note: this scans the deterministic subset up to uptoBlock; on a large
     // index_addresses table an index on block_index is advisable before enabling this
     // on a high-volume chain. Gated off by default (INDEX_MAP_PARITY_CHECK).
-    // See claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
     async computeIndexMapChecksum(uptoBlock){
         let rows = await this.db.doQuery(
             "SELECT id, address FROM index_addresses WHERE block_index IS NOT NULL AND block_index <= ? ORDER BY id ASC",

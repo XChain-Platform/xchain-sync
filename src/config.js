@@ -206,8 +206,7 @@ module.exports = {
         // deterministic-subset checksum on /status; a client recomputes + compares in
         // _verifyAgainstSource. OFF by default because computing it scans the
         // deterministic subset of index_addresses (an index on block_index is advisable
-        // before enabling on a high-volume chain). See
-        // claude/reports/2026-06-19_index-map-soft-parity-proposal.md.
+        // before enabling on a high-volume chain).
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
 
         // VERIFY_CHECKPOINT_QUORUM (SPV): anchor the replica's INDEPENDENTLY-recomputed

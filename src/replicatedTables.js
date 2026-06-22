@@ -46,11 +46,12 @@
  *                                     (soft-expire UPDATEs + hard-purge DELETEs the
  *                                     bootstrap full dump cannot replay) now surfaces as
  *                                     a TABLE_COUNT_MISMATCH a complete replica can act
- *                                     on, instead of drifting silently. Full convergence
- *                                     of the UPDATE/DELETE mutations needs an apply-side
- *                                     replace-table reconcile in ClientApplier (followup,
- *                                     out of this change's file scope); the count signal
- *                                     is the in-scope fix.
+ *                                     on, instead of drifting silently. The apply-side
+ *                                     reconcile has landed: ClientApplier.applyDispensersReplace
+ *                                     via ClientSync._reconcileDispensers, gated by
+ *                                     DISPENSERS_RECONCILE_EVERY / DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
+ *                                     The count signal is now a backstop for detecting
+ *                                     residual drift between reconcile runs.
  *   - cross_chain_calls,              hub-mirrored (hub_db_sync), NOT produced by
  *     cross_chain_matches,            block processing. Pushed/retracted by the hub
  *     oracle_prices,                  (pushpricereorg / pushdexreorg) out-of-band with

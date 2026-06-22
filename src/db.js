@@ -43,6 +43,11 @@ function assertValidIdentifier(table){
         throw new Error('Refusing to query unsafe table identifier: ' + check.reason);
 }
 
+// Delay between attempts in the infinite DB-connection retry loops
+// (verifyDatabase / createDatabase). Named so the cadence lives in one place
+// and is not confused with the unrelated connectTimeout in the pool config.
+const DB_RETRY_DELAY_MS = 5000;
+
 class Database {
 
     constructor(host, port, dbName, user, pass, util, dbType) {
@@ -110,7 +115,7 @@ class Database {
                 return results.length > 0;
             } catch (e){
                 console.error('Error checking if database ' + this.dbName + ' exists:', e)
-                await this.util.sleep(5000);
+                await this.util.sleep(DB_RETRY_DELAY_MS);
             }
         }
     }
@@ -157,7 +162,7 @@ class Database {
                 return true;
             } catch(e){
                 console.error('Error creating database ' + this.dbName + ':', e)
-                await this.util.sleep(5000);
+                await this.util.sleep(DB_RETRY_DELAY_MS);
             }
         }
     }
