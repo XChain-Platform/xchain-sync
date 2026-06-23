@@ -404,6 +404,11 @@ describe('ServerPoller', function(){
             assert.strictEqual(payload.block_time, 1700000000);
             assert.strictEqual(payload.ledger_hash, 'lh');
             assert.ok(payload.data);
+            // 5250: live block payloads must carry schema_version so ClientApplier
+            // can enforce the version-pin gate the snapshot paths enforce.
+            const { SCHEMA_VERSION } = require('../../src/schema-version');
+            assert.strictEqual(payload.schema_version, SCHEMA_VERSION['indexer'],
+                'live block payload must carry schema_version');
         });
 
         it('streams contract_emissions via getEmissionRowsForBlock, not getActionScopedRows', async function(){

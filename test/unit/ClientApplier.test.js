@@ -78,6 +78,35 @@ describe('ClientApplier', function(){
             assert.ok(db.doQuery.called);
         });
 
+        it('rejects a live block payload with a mismatched schema_version', async function(){
+            let payload = {
+                block_index: 5,
+                schema_version: 9999,
+                data: { blocks: [{ block_index: 5 }] }
+            };
+            await assert.rejects(() => applier.applyBlock(payload), /Schema version mismatch/);
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('accepts a live block payload with a matching schema_version', async function(){
+            let payload = {
+                block_index: 5,
+                schema_version: SCHEMA_VERSION[db.dbType || 'indexer'],
+                data: { blocks: [{ block_index: 5 }] }
+            };
+            await applier.applyBlock(payload);
+            assert.strictEqual(db.beginTransaction.calledOnce, true);
+        });
+
+        it('accepts a live block payload without schema_version (pre-5250 server)', async function(){
+            let payload = {
+                block_index: 5,
+                data: { blocks: [{ block_index: 5 }] }
+            };
+            await applier.applyBlock(payload); // must not throw
+            assert.strictEqual(db.beginTransaction.calledOnce, true);
+        });
+
         it('rolls back on error', async function(){
             db.doQuery.rejects(new Error('insert fail'));
             let payload = {

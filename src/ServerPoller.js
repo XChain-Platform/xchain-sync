@@ -36,6 +36,7 @@ const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
 const { activationDelayBlocks } = require('./consensus-constants');
 const { isStateCommitmentActive } = require('./state_commitment_activation');
+const { SCHEMA_VERSION } = require('./schema-version');
 
 // How many recently broadcast block hashes to retain in memory for the
 // net-forward reorg walk-back (item 4830). Comfortably above the source
@@ -391,6 +392,7 @@ class ServerPoller {
             chain: this.chain,
             network: this.network,
             dbType: this.dbType,
+            schema_version: SCHEMA_VERSION[this.dbType],
             block_index: Number(hashRow.block_index),
             block_time: Number(hashRow.block_time),
             data: {}

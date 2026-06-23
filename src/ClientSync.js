@@ -142,6 +142,11 @@ class ClientSync {
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
 
+        // Per-block fallback timers for cross-source confirmation. Keyed by blockIndex;
+        // armed once (regardless of which source arrives first) so a non-primary source
+        // that delivers first still triggers the timeout if the other source never arrives.
+        this._applyTimers = new Map();
+
         // Applied-block heartbeat state. After committing each live block we report
         // our applied height back to the source servers so operators can observe
         // this validator's lag via the server's /status endpoint. Debounced to avoid
@@ -521,6 +526,8 @@ class ClientSync {
         console.error('DDL) and clear the halt before this replica can resume.');
         console.error('================================================================');
         this.pendingHashes.clear();
+        for(let [, timer] of this._applyTimers) clearTimeout(timer);
+        this._applyTimers.clear();
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
@@ -1623,9 +1630,13 @@ class ClientSync {
             let pending = this.pendingHashes.get(blockIndex);
             let sourceIndices = Object.keys(pending);
             if(sourceIndices.length < 2){
-                // Wait for second source (with timeout)
-                if(sourceIndex === 0){
-                    setTimeout(async () => {
+                // Arm the fallback timer once per block, regardless of which source
+                // arrived first. Without this, a non-primary source delivering block N
+                // first leaves no timer running, so if the primary never streams N the
+                // live apply for that block stalls until the NEXT block forces catch-up.
+                if(!this._applyTimers.has(blockIndex)){
+                    let timer = setTimeout(async () => {
+                        this._applyTimers.delete(blockIndex);
                         // If still waiting after timeout, handle based on strict mode
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
                             if(this.config['HASH_CONFIRM_STRICT']){
@@ -1642,6 +1653,7 @@ class ClientSync {
                             }
                         }
                     }, this.config['HASH_CONFIRM_TIMEOUT']);
+                    this._applyTimers.set(blockIndex, timer);
                 }
                 return;
             }
@@ -1713,6 +1725,8 @@ class ClientSync {
         console.error('================================================================');
         // Stop the live apply path; pending cross-source hashes are now moot.
         this.pendingHashes.clear();
+        for(let [, timer] of this._applyTimers) clearTimeout(timer);
+        this._applyTimers.clear();
     }
 
     // Recompute a block's consensus hashes from the replica's raw rows and compare
@@ -1919,10 +1933,17 @@ class ClientSync {
                 };
             }
 
-            // Clean up old pending hashes
+            // Clean up old pending hashes and any armed fallback timers for
+            // blocks we have now applied (or that are older than our applied tip).
             for(let [key] of this.pendingHashes){
                 if(key <= this.lastAppliedBlock)
                     this.pendingHashes.delete(key);
+            }
+            for(let [key, timer] of this._applyTimers){
+                if(key <= this.lastAppliedBlock){
+                    clearTimeout(timer);
+                    this._applyTimers.delete(key);
+                }
             }
 
             // SPV checkpoint-quorum anchor (opt-in, throttled): confirm the replica's

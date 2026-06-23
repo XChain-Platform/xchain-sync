@@ -365,6 +365,41 @@ describe('ClientSync', function(){
 
                 clock.restore();
             });
+
+            it('arms a timeout when only the non-primary source arrives first', async function(){
+                let clock = sinon.useFakeTimers();
+
+                // Source 1 (non-primary) delivers first; before the fix no timer was
+                // armed and the block would stall until the next block forced catch-up.
+                await sync._handleBlock(blockEvent, 1);
+                assert.strictEqual(applier.applyBlock.called, false);
+                assert.strictEqual(sync._applyTimers.has(blockEvent.block_index), true,
+                    '_applyTimers must be armed when the non-primary source arrives first');
+
+                // After the timeout the block is applied from the available source.
+                await clock.tickAsync(config.HASH_CONFIRM_TIMEOUT + 100);
+                assert.strictEqual(applier.applyBlock.calledOnce, true);
+
+                clock.restore();
+            });
+
+            it('does not double-arm the timer when both sources arrive before expiry', async function(){
+                let clock = sinon.useFakeTimers();
+
+                // Source 1 arrives first: timer armed
+                await sync._handleBlock(blockEvent, 1);
+                assert.strictEqual(sync._applyTimers.has(blockEvent.block_index), true);
+
+                // Source 0 arrives before timeout: block applied immediately, timer NOT re-armed
+                await sync._handleBlock(blockEvent, 0);
+                assert.strictEqual(applier.applyBlock.calledOnce, true);
+
+                // Ensure no delayed second apply fires after the original timer would have expired
+                await clock.tickAsync(config.HASH_CONFIRM_TIMEOUT + 100);
+                assert.strictEqual(applier.applyBlock.calledOnce, true); // still only called once
+
+                clock.restore();
+            });
         });
 
         describe('single source mode', function(){

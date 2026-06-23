@@ -111,6 +111,17 @@ class ClientApplier {
         this._lastComputedRoots = null;
         if(!payload || !payload.data || !payload.block_index) return;
 
+        // Schema-version gate: reject live block payloads with a mismatched schema
+        // version the same way snapshot applies do, so a server-side schema bump
+        // fails closed on live blocks rather than silently accepting rows whose
+        // encoding or column set the local replica cannot correctly apply.
+        // Gated on schema_version != null so old payloads (pre-5250) pass through.
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
+            throw new Error('Schema version mismatch: server=' + payload.schema_version +
+                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
+        }
+
         let existing = await this.db.getBlockHashRow(payload.block_index);
         if(existing){
             console.log('Block ' + payload.block_index + ' already exists, skipping');
@@ -446,6 +457,26 @@ class ClientApplier {
 
             let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
             await this.db.doQuery(query, args);
+
+            // 5284: events rows >64KB silently truncate on a still-TEXT (pre-migration)
+            // replica when INSERT IGNORE is used: the id collision guard skips the row
+            // on re-send, so the truncated copy is never healed. Detect this by reading
+            // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
+            // valid on the same connection the INSERT just ran on; we are inside a
+            // beginTransaction so this.db.transactionConnection is the live connection).
+            // Throw (halt the apply transaction) on any 1265 truncation warning so
+            // operators see the exact row rather than a silently corrupt events log.
+            if(table === 'events'){
+                let warnings = await this.db.doQuery('SHOW WARNINGS');
+                for(let w of (warnings || [])){
+                    let code = Number(w.Code || w.code || 0);
+                    if(code === 1265){
+                        throw new Error('events row truncated (errno 1265) during INSERT IGNORE: ' +
+                            'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
+                            'Warning: ' + (w.Message || w.message || ''));
+                    }
+                }
+            }
         }
     }
 
