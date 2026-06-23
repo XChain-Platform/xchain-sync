@@ -244,7 +244,11 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
                 if(sql.includes('state_tree_roots')){ const h = params[0]; return rootsByHeight[h] ? [rootsByHeight[h]] : []; }
                 return [];
             }),
-            getStakeWeightsByCapability: sinon.stub().callsFake(async (cap, height) => stakeByHeight[height] || [])
+            // stakeByHeight is the as-of/committed signer set at each snapshot height;
+            // forward-follow reconstructs the historical set via getStakeWeightsByCapabilityAsOf
+            // (#4927). Both stubs return the same data so the test is robust to either call.
+            getStakeWeightsByCapability:     sinon.stub().callsFake(async (cap, height) => stakeByHeight[height] || []),
+            getStakeWeightsByCapabilityAsOf: sinon.stub().callsFake(async (cap, height) => stakeByHeight[height] || [])
         };
         const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true,
             VERIFY_CHECKPOINT_QUORUM: true, CHECKPOINT_VERIFY_INTERVAL: 1 };

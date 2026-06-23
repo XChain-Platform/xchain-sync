@@ -1158,6 +1158,98 @@ class Database {
         }));
     }
 
+    // HISTORICAL stake weights at snapshotBlock S, reconstructing the amount that
+    // stakes_root[S] committed IN ORDER, for the SPV checkpoint forward-follow
+    // (ClientSync._oraclePublishSetAt / _followCheckpointForward). getStakeWeightsByCapability
+    // reads live SUM(stakes.amount), but a SLASH zeroes stakes.amount IN PLACE, so a
+    // query for a past S run at the current tip understates the weight committed at S
+    // (and via HAVING can false-drop a source below the floor -> false-halt on a
+    // legitimate rotation). This method adds back capability_slash_debits whose slash
+    // block_index > S (target_table='stakes' only; unstakes debits do not feed the
+    // stakes weight), restoring each row's pre-slash amount: 0 + prev_amount = prev_amount.
+    //
+    // SYNC-ONLY / forward-follow-only. MUST NOT be added to or called from xchain-indexer:
+    // the indexer's action handlers (anchor/xcall/xexec/cross_settle) and the in-order
+    // stakes_root build call getStakeWeightsByCapability while S is the tip, BEFORE any
+    // later slash mutates the row, so they already read the correct value; adding the
+    // add-back there would double-count and fork the committed ledger. This is a NO-OP
+    // when no slash with block_index > S exists (addback is NULL -> COALESCE 0), so it
+    // returns a result byte-identical to getStakeWeightsByCapability(cap, S) computed
+    // in order at S. _stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
+    // NOT reused/modified here so the drift guard and the consensus query stay untouched.
+    async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit){
+        let valid_id = await this.getStatusId('valid');
+        if(valid_id === null) return [];
+        // Membership exclusion is identical to _stakeWeightsSql: a key slashed at
+        // block > S has cse.block_index > S, so NOT EXISTS is TRUE and the key is
+        // correctly KEPT in the set at S. Only the q-subquery AMOUNT is reconstructed.
+        const slashExcl = (keyCol) =>
+            `AND NOT EXISTS (SELECT 1 FROM capability_slash_events cse
+                             WHERE cse.signing_pubkey_id = ${keyCol} AND cse.block_index <= ?)`;
+        let sql = `SELECT ip.pubkey AS pubkey,
+                          sa.address AS source,
+                          q.total    AS weight
+                   FROM (
+                       SELECT s.source_id AS source_id,
+                              SUM(CAST(s.amount AS DECIMAL(30,8))
+                                  + COALESCE(CAST(addback.amt AS DECIMAL(30,8)), 0)) AS total
+                       FROM stakes s
+                       LEFT JOIN (
+                           SELECT csd.stake_action_index AS stake_action_index,
+                                  SUM(CAST(csd.amount AS DECIMAL(30,8))) AS amt
+                           FROM capability_slash_debits csd
+                           WHERE csd.target_table = 'stakes' AND csd.block_index > ?
+                           GROUP BY csd.stake_action_index
+                       ) addback ON addback.stake_action_index = s.action_index
+                       WHERE s.status_id = ?
+                         AND s.activation_block <= ?
+                         AND (s.deactivation_block IS NULL OR s.deactivation_block > ?)
+                       GROUP BY s.source_id
+                       HAVING total >= CAST(? AS DECIMAL(30,8))
+                   ) q
+                   JOIN index_addresses sa ON sa.id = q.source_id
+                   JOIN (
+                       SELECT s2.source_id AS source_id, s2.signing_pubkey_id AS pubkey_id
+                       FROM stakes s2
+                       WHERE s2.status_id = ?
+                         AND s2.activation_block <= ?
+                         AND (s2.deactivation_block IS NULL OR s2.deactivation_block > ?)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM stake_key_revocations r
+                             WHERE r.source_id = s2.source_id
+                               AND r.signing_pubkey_id = s2.signing_pubkey_id
+                               AND r.status_id = ?
+                               AND r.deactivation_block <= ?
+                               AND r.action_index > s2.action_index)
+                         ${slashExcl('s2.signing_pubkey_id')}
+                       GROUP BY s2.source_id, s2.signing_pubkey_id
+                       UNION
+                       SELECT d.source_id AS source_id, d.signing_pubkey_id AS pubkey_id
+                       FROM delegations d
+                       WHERE d.status_id = ?
+                         AND d.activation_block <= ?
+                         AND (d.deactivation_block IS NULL OR d.deactivation_block > ?)
+                         ${slashExcl('d.signing_pubkey_id')}
+                   ) ek ON ek.source_id = q.source_id
+                   JOIN index_pubkeys ip ON ip.id = ek.pubkey_id`;
+        // Arg order tracks the placeholders left-to-right: the addback block bound
+        // first, then the same sequence _stakeWeightsSql uses (all historical-block
+        // args bound to snapshotBlock), then the LIMIT.
+        let args = [snapshotBlock,
+                    valid_id, snapshotBlock, snapshotBlock, String(minStake),
+                    valid_id, snapshotBlock, snapshotBlock, valid_id, snapshotBlock, snapshotBlock,
+                    valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
+        let query = `${sql} ORDER BY source, pubkey LIMIT ?`;
+        let rows = await this.doQuery(query, [...args, limit]);
+        if(rows.length >= limit)
+            console.warn('getStakeWeightsByCapabilityAsOf(' + capability + ') hit the result cap of ' + limit + ' rows at snapshotBlock ' + snapshotBlock + ' - reconstructed set may be truncated vs the committed root.');
+        return rows.map(r => ({
+            pubkey: String(r.pubkey),
+            source: String(r.source),
+            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+        }));
+    }
+
     // Get all rows from a table for a given block (block_index-scoped tables).
     // ORDER BY block_index, then by the first column for deterministic ordering
     // across sources with differing insert histories (matches the snapshot path).

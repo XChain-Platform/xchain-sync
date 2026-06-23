@@ -2061,14 +2061,18 @@ class ClientSync {
     }
 
     // The oracle_publish validator set [{pubkey, weight, source}] at a BTC snapshot
-    // height, computed from the replica's OWN staking tables, the SAME query + zero-
-    // weight filter the follower uses to build the committed stakes_root
-    // (stateCommitment.gatherStakeEntries), so the set cannot drift from what was
-    // committed. checkpoint.verifyCheckpoint source-dedupes it for the quorum.
+    // height, computed from the replica's OWN staking tables. Uses the AS-OF variant
+    // (getStakeWeightsByCapabilityAsOf), not the live getStakeWeightsByCapability:
+    // a SLASH zeroes stakes.amount in place, so the live query run at the current tip
+    // would understate the weight that stakes_root[snapshotBlock] committed in order
+    // and could false-drop a source -> false-halt on a legitimate rotation. The as-of
+    // variant adds back post-snapshot slash debits, reproducing the committed set so
+    // it cannot drift from what stateCommitment.gatherStakeEntries committed at S.
+    // checkpoint.verifyCheckpoint source-dedupes it for the quorum.
     async _oraclePublishSetAt(snapshotBlock){
         const caps = btcStakeCapabilities();
         const cap  = 'oracle_publish';
-        const rows = await this.db.getStakeWeightsByCapability(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT);
+        const rows = await this.db.getStakeWeightsByCapabilityAsOf(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT);
         const set  = [], ZERO = M.canonicalAmount('0');
         for(const r of (rows || [])){
             if(!r || r.pubkey == null) continue;
