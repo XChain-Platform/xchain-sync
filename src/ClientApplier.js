@@ -79,7 +79,15 @@ class ClientApplier {
             'sync_meta',
             // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
             // full-dump re-send on an incremental catch-up idempotent (item 4622).
-            'merkle_epochs'
+            'merkle_epochs',
+            // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
+            // reward_type, round_reference). The recovery-redriven collector
+            // (recoveryRewards.js) can re-inject a backdated survivor row via BOTH the
+            // live per-block and incremental-snapshot channels when their windows overlap;
+            // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
+            // (each row streams once in its earn-block; mirrors createValidatorReward's
+            // own INSERT IGNORE on the source).
+            'validator_rewards'
         ]);
 
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT

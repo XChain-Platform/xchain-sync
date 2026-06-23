@@ -25,6 +25,7 @@ const { encodeRow, encodeTables } = require('./wireCodec');
 const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
+const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
 const { activationDelayBlocks } = require('./consensus-constants');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
@@ -416,6 +417,27 @@ class SnapshotBuilder {
                                 for(let c of matured){
                                     let k = c.action_index + ':' + c.address_id + ':' + c.tick_id;
                                     if(!seen.has(k)){ seen.add(k); rows.push(c); }
+                                }
+                            }
+                        } catch(e){
+                            // Tables may not exist on older schemas; skip
+                        }
+                    }
+
+                    // Recovery-redriven validator rewards: a reorg re-drain re-materializes
+                    // a survivor at block_index = earn-block E < B, so the block_index >=
+                    // sinceBlock scope above misses it. Merge by applied_block over the same
+                    // [sinceBlock, lastBlock] window, deduped on the row's UNIQUE identity
+                    // (the forward analogue of ClientRollback's reverse block_index delete).
+                    if(dbType === 'indexer' && table === 'validator_rewards'){
+                        try {
+                            let redriven = await collectRedrivenValidatorRewards(db, sinceBlock, lastBlock, conn);
+                            if(redriven.length > 0){
+                                rows = rows || [];
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                for(let r of redriven){
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    if(!seen.has(k)){ seen.add(k); rows.push(r); }
                                 }
                             }
                         } catch(e){

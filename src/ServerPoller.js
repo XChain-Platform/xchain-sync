@@ -33,6 +33,7 @@
 const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
+const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
 const { activationDelayBlocks } = require('./consensus-constants');
 const { isStateCommitmentActive } = require('./state_commitment_activation');
 
@@ -507,6 +508,28 @@ class ServerPoller {
                         if(!seen.has(k)){ seen.add(k); existing.push(c); }
                     }
                     payload.data['credits'] = existing;
+                }
+            } catch(e){
+                // Tables may not exist on older schemas; skip silently
+            }
+
+            // Recovery-redriven validator rewards: a reorg re-drain re-materializes a
+            // survivor reward at block_index = earn-block E < B, so the block-scoped
+            // getBlockScopedRows path (forward from B) misses it. Select by applied_block
+            // (= this block, the re-drain point), the forward analogue of ClientRollback's
+            // block_index >= B delete, and merge into the validator_rewards payload deduped
+            // on the row's UNIQUE identity. Disjoint from the block-scoped rows (those carry
+            // block_index = this block; a survivor's earn-block is earlier).
+            try {
+                let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index);
+                if(redriven.length > 0){
+                    let existing = payload.data['validator_rewards'] || [];
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    for(let r of redriven){
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        if(!seen.has(k)){ seen.add(k); existing.push(r); }
+                    }
+                    payload.data['validator_rewards'] = existing;
                 }
             } catch(e){
                 // Tables may not exist on older schemas; skip silently

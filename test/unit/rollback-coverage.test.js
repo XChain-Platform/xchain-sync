@@ -501,6 +501,41 @@ describe('Rollback coverage guard @regression', function(){
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
     });
 
+    // Forward parity for recovery-redriven validator rewards (#5087): a reorg re-drain
+    // re-materializes a survivor reward at block_index = earn-block E < B, which escapes
+    // the block-scoped forward channels. recoveryRewards.js must select it by applied_block
+    // (the re-drain point B, the forward analogue of ClientRollback's block_index >= B
+    // delete), guard to genuine survivors (vr.block_index < applied_block), and be invoked
+    // by BOTH forward channels. The rollback re-arm must reset applied_block so a later
+    // reorg restamps it. If you change one side, change the other and this guard.
+    it('forward recovery-reward selection mirrors the rollback key (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/recoveryRewards.js'), 'utf8'));
+        const FWD_OPS = [
+            { name: 'validator_rewards / recovery_pending_rewards join (NULL-safe round_reference)', re: /JOIN recovery_pending_rewards rpr ON rpr\.source_id = vr\.source_id AND rpr\.reward_type = vr\.reward_type AND rpr\.round_reference <=> vr\.round_reference/ },
+            { name: 'pubkey bridge (lowercase-hex match)',         re: /JOIN index_pubkeys ip ON ip\.id = vr\.signing_pubkey_id AND ip\.pubkey = rpr\.validator_pubkey/ },
+            { name: 'applied_block forward-window predicate',      re: /rpr\.applied_block BETWEEN \? AND \?/ },
+            { name: 'survivors-only backdating guard',             re: /vr\.block_index < rpr\.applied_block/ },
+        ];
+        for(const op of FWD_OPS){
+            assert.ok(op.re.test(fwd), `recoveryRewards.js is missing the forward ${op.name}; it must mirror the rollback re-drain keys`);
+        }
+        // Both forward channels (live per-block + incremental snapshot) must invoke it.
+        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+            const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
+            assert.ok(/collectRedrivenValidatorRewards\s*\(/.test(src),
+                `${f} does not call collectRedrivenValidatorRewards; its replication channel drops reorg-redriven recovery rewards`);
+        }
+        // The source rollback re-arm must reset applied_block=NULL alongside applied/source_id,
+        // or a stale applied_block from a prior reorg misses the next re-delivery.
+        const rbPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, rbPath)) return;
+        const rb = norm(fs.readFileSync(rbPath, 'utf8'));
+        assert.ok(/SET applied=0, source_id=NULL, applied_block=NULL/.test(rb),
+            'rollback.js re-arm must reset applied_block=NULL alongside applied=0 and source_id=NULL');
+    });
+
     // Bespoke-logic parity: anchor invalid_archive to unverified reset. When the final v2
     // chunk of a chunked archive batch is orphaned by a reorg, the parent v1 (in a surviving
     // earlier block) was stamped 'invalid_archive' IN PLACE by that chunk's apply; deleting
