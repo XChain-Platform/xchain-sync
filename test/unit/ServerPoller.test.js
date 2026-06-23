@@ -187,17 +187,18 @@ describe('ServerPoller', function(){
             assert.strictEqual(poller.lastPolledBlock, 99); // rolled back one for the next-poll walk-back
         });
 
-        it('walks a net-forward reorg back more than one block across consecutive polls (item 4830)', async function(){
-            // Pre-reorg the poller had broadcast blocks 99 and 100; their hashes
+        it('resolves a multi-block net-forward reorg to the true fork in a single poll (item 4830)', async function(){
+            // Pre-reorg the poller had broadcast blocks 98, 99, 100; their hashes
             // are recorded. A net-forward reorg rewrote BOTH 99 and 100 within one
-            // interval (98 is the unchanged true fork point).
+            // interval; 98 is the unchanged true fork point.
             poller.lastPolledBlock = 100;
             poller.lastPolledBlockHash = 'h100-old';
+            poller.recentBroadcastHashes.set(98, 'h98-old');
             poller.recentBroadcastHashes.set(99, 'h99-old');
             poller.recentBroadcastHashes.set(100, 'h100-old');
             db.getLastBlock.resolves(101); // net-forward: height stays >= lastPolledBlock
 
-            // Source serves the POST-reorg hashes at the rewritten heights.
+            // Source serves the POST-reorg hashes at the rewritten heights; 98 unchanged.
             db.getBlockHashRow.withArgs(100).resolves({
                 block_index: 100, block_time: 100,
                 ledger_hash: 'h100-new', actions_hash: 'a', contract_hash: 'c'
@@ -206,24 +207,22 @@ describe('ServerPoller', function(){
                 block_index: 99, block_time: 99,
                 ledger_hash: 'h99-new', actions_hash: 'a', contract_hash: 'c'
             });
+            db.getBlockHashRow.withArgs(98).resolves({
+                block_index: 98, block_time: 98,
+                ledger_hash: 'h98-old', actions_hash: 'a', contract_hash: 'c'
+            });
 
-            // Poll 1: detects the reorg at the top block 100, rolls back to 99, and
-            // seeds the PRE-reorg hash for 99 (not a fresh post-reorg source read).
+            // A SINGLE poll walks down over the recorded pre-reorg hashes (100 and 99
+            // both changed; 98 is unchanged -> the true fork) and broadcasts ONE deep
+            // reorg at 99, not a shallow reorg@100 that would leave block 99 orphaned on
+            // followers across subsequent polls. lastPolledBlock drops below the fork so
+            // the forward loop re-streams 99..101 fresh.
             await poller._poll();
             assert.strictEqual(broadcaster.broadcast.callCount, 1);
             assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].type, 'reorg');
-            assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].block_index, 100);
-            assert.strictEqual(poller.lastPolledBlock, 99);
-            assert.strictEqual(poller.lastPolledBlockHash, 'h99-old');
-
-            // Poll 2: because block 99 ALSO changed (h99-new != recorded h99-old),
-            // the walk-back continues to 98. Pre-fix it stopped here, because the
-            // height was seeded with a fresh post-reorg read that matched the source.
-            await poller._poll();
-            assert.strictEqual(broadcaster.broadcast.callCount, 2);
-            assert.strictEqual(broadcaster.broadcast.getCall(1).args[2].type, 'reorg');
-            assert.strictEqual(broadcaster.broadcast.getCall(1).args[2].block_index, 99);
+            assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].block_index, 99);
             assert.strictEqual(poller.lastPolledBlock, 98);
+            assert.strictEqual(poller.lastPolledBlockHash, 'h98-old');
         });
 
         it('does not flag a net-forward reorg when the same-height hash is unchanged', async function(){
