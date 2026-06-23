@@ -30,6 +30,7 @@ const ClientSync      = require('./ClientSync');
 const ClientApplier   = require('./ClientApplier');
 const ClientRollback  = require('./ClientRollback');
 const HashVerifier    = require('./HashVerifier');
+const stateCommitment = require('./stateCommitment');
 const Utility         = require('./utility');
 
 class SyncService {
@@ -84,6 +85,7 @@ class SyncService {
         }
 
         this._scheduleHubRepoll();
+        this._startStateTreeMetric();
     }
 
     async _waitForHub(){
@@ -289,6 +291,52 @@ class SyncService {
                 console.error('Hub re-poll error:', e);
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
+    }
+
+    // Periodically emit a read-only orphan-count metric for each replicated indexer DB's
+    // state_tree_nodes store so its unbounded COW growth is observable (twin of the indexer's
+    // metric; the follower strands MORE nodes via buildFull every BTC block). Unref'd interval,
+    // self-overlap guarded, reads on a POOLED connection (db.pool, NOT the apply transaction).
+    // No deletion: see stateCommitment.reportOrphanStats. STATE_TREE_METRIC_INTERVAL_MS (default
+    // 4h; 0 disables). Decoder DBs are skipped (no state_tree_* tables).
+    _startStateTreeMetric(){
+        if(this._stateTreeMetricTimer) return;
+        const raw = parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10);
+        const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
+        if(intervalMs === 0) return;   // explicitly disabled
+        this._stateTreeMetricRunning = false;
+        this._stateTreeMetricTimer = setInterval(async () => {
+            if(this._stateTreeMetricRunning) return;
+            this._stateTreeMetricRunning = true;
+            try {
+                for(const [key, { db, config: cfg, dbType }] of this.databases){
+                    if(dbType !== 'indexer') continue;   // state_tree_* live only in indexer DBs
+                    // Pooled query that bypasses any in-flight apply transaction.
+                    const query = async (sql, args) => {
+                        const c = await db.pool.getConnection();
+                        try { return await c.query(sql, args); }
+                        finally { try { await c.release(); } catch(_){} }
+                    };
+                    try {
+                        const stats = await stateCommitment.reportOrphanStats(query, cfg.coin, cfg.network);
+                        if(stats.totalNodes === 0) continue;
+                        console.log('[METRIC] ' + JSON.stringify({
+                            metric: 'state_tree_orphan_nodes', component: 'sync', key: key,
+                            chain: cfg.coin, network: cfg.network,
+                            total_nodes: stats.totalNodes, reachable_nodes: stats.reachableNodes,
+                            orphan_count: stats.orphanCount, reachability_skipped: stats.reachabilitySkipped,
+                            ts: Date.now()
+                        }));
+                    } catch(err) {
+                        console.warn('SyncService: state_tree orphan-metric failed for ' + key + ':', err.message || err);
+                    }
+                }
+            } finally {
+                this._stateTreeMetricRunning = false;
+            }
+        }, intervalMs);
+        if(this._stateTreeMetricTimer.unref) this._stateTreeMetricTimer.unref();
+        console.log('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
     }
 
     getBroadcaster(){
