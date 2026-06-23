@@ -797,6 +797,10 @@ describe('Database.ensureReplicatedColumns()', function () {
             // self-heal; the real intent of this test is that no ADD COLUMN or MODIFY is
             // issued when all columns are already present.
             if (/SELECT EXTRA FROM information_schema\.columns/.test(sql)) return [{ EXTRA: 'auto_increment' }];
+            // ENUM-widen check (5244): return a COLUMN_TYPE that already includes 'rejected'
+            // so the heal is correctly skipped when the ENUM is already up to date.
+            if (/SELECT COLUMN_TYPE FROM information_schema\.columns/.test(sql))
+                return [{ COLUMN_TYPE: "enum('pending','fulfilled','expired','errored','rejected')" }];
             // Ownership/nullability column-presence checks: column exists on replica
             if (/information_schema\.columns/.test(sql)) return [{ COLUMN_NAME: args[2] }];
             return [];

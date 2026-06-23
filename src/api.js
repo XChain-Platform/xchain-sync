@@ -196,6 +196,10 @@ async function startApi(){
                     // Table absent in this schema; omit rather than fail the whole status.
                 }
             }
+            // Lifetime full-snapshot serve count (incremented by SnapshotBuilder
+            // on each successful streamFullSnapshot completion; 0 until first serve).
+            let builder = syncService.getSnapshotBuilder();
+            row.snapshots_served = builder ? (builder.snapshotsServed || 0) : 0;
             return row;
         }
 
@@ -318,18 +322,18 @@ async function startApi(){
             res.json(result);
         }).catch(e => {
             console.error('[API error] /status:', e.message);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         });
     });
 
     // GET /status/:dbType/:chain/:network
     app.get('/status/:dbType/:chain/:network', async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         try {
             let row = await buildStatusRow(db, dbType, chain, network);
@@ -340,7 +344,7 @@ async function startApi(){
             res.json(row);
         } catch(e){
             console.error('[API error] /status/:dbType/:chain/:network:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -376,44 +380,44 @@ async function startApi(){
 
     app.get('/checkpoint/:dbType/:chain/:network/latest', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
-        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
             let rows = await db.doQuery(
                 'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints ORDER BY block_index DESC, checkpoint_seq DESC LIMIT 1');
-            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints' });
+            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
             console.error('[API error] /checkpoint/.../latest:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     app.get('/checkpoint/:dbType/:chain/:network/:height', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
-        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
         let h = parseInt(req.params.height, 10);
-        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height' });
+        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
             let rows = await db.doQuery(
                 'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
                 [h]);
-            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height' });
+            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
             console.error('[API error] /checkpoint/:dbType/:chain/:network/:height:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
-    // GET /checkpoints/:dbType/:chain/:network/range?from=&to=
+    // GET /checkpoint/:dbType/:chain/:network/range?from=&to=
     //
     // The signed-checkpoint chain over a block range, oldest first, one row per
     // block_index (MAX checkpoint_seq, so a reorged height is represented by its
@@ -423,19 +427,21 @@ async function startApi(){
     // the committed BTC stakes_root and adopts the next checkpoint (spec §7.3), the
     // sync analogue of the SDK light client's followForward. Indexer-only; result
     // is capped at CHECKPOINT_RANGE_LIMIT rows so the client pages by advancing
-    // `from`. Plural path so it never parses as /checkpoint/.../:height.
+    // `from`. Singular path, consistent with /checkpoint/.../:height and
+    // /checkpoint/.../latest; registered before /:height so 'range' is not
+    // parsed as a block height.
     const CHECKPOINT_RANGE_LIMIT = 2000;
-    app.get('/checkpoints/:dbType/:chain/:network/range', incrSnapshotLimiter, async (req, res) => {
+    app.get('/checkpoint/:dbType/:chain/:network/range', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
-        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs' });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
         let from = parseInt(req.query.from, 10);
         let to = parseInt(req.query.to, 10);
-        if(!Number.isFinite(from) || from < 0) return res.status(400).json({ error: 'Invalid from' });
-        if(!Number.isFinite(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)' });
+        if(!Number.isFinite(from) || from < 0) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
+        if(!Number.isFinite(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
             let rows = await db.doQuery(
                 'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints sc ' +
@@ -445,8 +451,8 @@ async function startApi(){
                 [from, to, CHECKPOINT_RANGE_LIMIT]);
             res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
         } catch(e){
-            console.error('[API error] /checkpoints/.../range:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            console.error('[API error] /checkpoint/.../range:', e);
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -491,21 +497,21 @@ async function startApi(){
             res.json(payload);
         } catch(e){
             console.error('[API error] /catalog:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     // GET /schema/:dbType/:chain/:network : table DDLs for schema replication (server mode)
     app.get('/schema/:dbType/:chain/:network', async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Schema only available in server mode' });
+            return res.status(403).json({ error: 'Schema only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         try {
             let tables = await db.doQuery(
@@ -522,52 +528,52 @@ async function startApi(){
             res.json({ chain, network, dbType, tables: schema });
         } catch(e){
             console.error('[API error] /schema/:dbType/:chain/:network:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     // GET /snapshot/:dbType/:chain/:network : full snapshot (server mode)
     app.get('/snapshot/:dbType/:chain/:network', fullSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let builder = syncService.getSnapshotBuilder();
-        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         try {
             await builder.streamFullSnapshot(db, res);
         } catch(e){
             console.error('[API error] /snapshot/:dbType/:chain/:network:', e);
             if(!res.headersSent)
-                res.status(500).json({ error: 'Internal server error' });
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     // GET /snapshot/:dbType/:chain/:network/since/:blockHeight : incremental snapshot (server mode)
     app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, blockHeight } = req.params;
         let sinceBlock = parseInt(blockHeight);
         if(isNaN(sinceBlock) || sinceBlock < 0)
-            return res.status(400).json({ error: 'Invalid blockHeight' });
+            return res.status(400).json({ error: 'Invalid blockHeight', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let builder = syncService.getSnapshotBuilder();
-        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         // skip_lookups=1: omit the append-only `.index` lookup tables (index_*,
         // decoder pubkeys/events). A truncated/fast-chain replica syncs those via the
@@ -582,7 +588,7 @@ async function startApi(){
         } catch(e){
             console.error('[API error] /snapshot/:dbType/:chain/:network/since/:blockHeight:', e);
             if(!res.headersSent)
-                res.status(500).json({ error: 'Internal server error' });
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -594,30 +600,30 @@ async function startApi(){
     // SQL-identifier guard). Rate-limited as an incremental fetch.
     app.get('/snapshot-rows/:dbType/:chain/:network/:table', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, table } = req.params;
         let afterId = parseInt(req.query.after_id);
         if(isNaN(afterId)) afterId = 0;
-        if(afterId < 0) return res.status(400).json({ error: 'Invalid after_id' });
+        if(afterId < 0) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
         let limit = parseInt(req.query.limit);
         if(isNaN(limit)) limit = undefined; // builder applies its default
 
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let builder = syncService.getSnapshotBuilder();
-        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         try {
             await builder.streamTableRowsById(db, table, afterId, limit, res);
         } catch(e){
             console.error('[API error] /snapshot-rows/:dbType/:chain/:network/:table:', e);
             if(!res.headersSent)
-                res.status(500).json({ error: 'Internal server error' });
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -630,33 +636,33 @@ async function startApi(){
     // rate-limited as an incremental fetch.
     app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Snapshots only available in server mode' });
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
-        if(dbType !== 'decoder') return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'decoder') return res.status(400).json({ error: 'dispensers reconcile is decoder-only', code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let afterTx   = (req.query.after_tx   !== undefined) ? parseInt(req.query.after_tx)   : NaN;
         let afterAddr = (req.query.after_addr !== undefined) ? parseInt(req.query.after_addr) : NaN;
         if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
            (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
-            return res.status(400).json({ error: 'Invalid cursor' });
+            return res.status(400).json({ error: 'Invalid cursor', code: 'BAD_REQUEST' });
         let limit = parseInt(req.query.limit);
         if(isNaN(limit)) limit = undefined; // builder applies its default
 
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let builder = syncService.getSnapshotBuilder();
-        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized' });
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         try {
             await builder.streamDispensers(db, afterTx, afterAddr, limit, res);
         } catch(e){
             console.error('[API error] /snapshot-dispensers/:dbType/:chain/:network:', e);
             if(!res.headersSent)
-                res.status(500).json({ error: 'Internal server error' });
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -668,26 +674,26 @@ async function startApi(){
     // observe per-validator lag without requiring an active WebSocket connection.
     app.post('/validator-heartbeat/:dbType/:chain/:network', heartbeatLimiter, (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Validator heartbeat only available in server mode' });
+            return res.status(403).json({ error: 'Validator heartbeat only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let { validator_id, applied_height, applied_block_time } = req.body || {};
 
         if(typeof validator_id !== 'string' || !validator_id.trim() || validator_id.length > 256)
-            return res.status(400).json({ error: 'validator_id must be a non-empty string (max 256 chars)' });
+            return res.status(400).json({ error: 'validator_id must be a non-empty string (max 256 chars)', code: 'BAD_REQUEST' });
         if(typeof applied_height !== 'number' || !Number.isInteger(applied_height) || applied_height < 0)
-            return res.status(400).json({ error: 'applied_height must be a non-negative integer' });
+            return res.status(400).json({ error: 'applied_height must be a non-negative integer', code: 'BAD_REQUEST' });
         if(applied_block_time !== undefined && applied_block_time !== null && typeof applied_block_time !== 'number')
-            return res.status(400).json({ error: 'applied_block_time must be a number' });
+            return res.status(400).json({ error: 'applied_block_time must be a number', code: 'BAD_REQUEST' });
 
         let broadcaster = syncService.getBroadcaster();
-        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized', code: 'SERVICE_UNAVAILABLE' });
 
         broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null);
         res.json({ ok: true });
@@ -696,10 +702,10 @@ async function startApi(){
     // GET /validator-status : all chains, nested by coin/network/dbType/validators
     app.get('/validator-status', (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Validator status only available in server mode' });
+            return res.status(403).json({ error: 'Validator status only available in server mode', code: 'FORBIDDEN' });
 
         let broadcaster = syncService.getBroadcaster();
-        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized', code: 'SERVICE_UNAVAILABLE' });
 
         let chains = syncService.getChains();
         let result = {};
@@ -718,17 +724,17 @@ async function startApi(){
     // GET /validator-status/:dbType/:chain/:network
     app.get('/validator-status/:dbType/:chain/:network', (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Validator status only available in server mode' });
+            return res.status(403).json({ error: 'Validator status only available in server mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found' });
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         let broadcaster = syncService.getBroadcaster();
-        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized' });
+        if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized', code: 'SERVICE_UNAVAILABLE' });
 
         // getValidatorHeartbeats returns { validators, total, expected_total,
         // unknown_count }; spread it so the roster denominator and counts sit
@@ -744,13 +750,13 @@ async function startApi(){
     // GET /transparency/:dbType/:chain/:network/roots : transparency log entries
     app.get('/transparency/:dbType/:chain/:network/roots', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Transparency log only available in server mode' });
+            return res.status(403).json({ error: 'Transparency log only available in server mode', code: 'FORBIDDEN' });
         if(req.params.dbType !== 'indexer')
-            return res.status(400).json({ error: 'Transparency log is indexer-only. Decoder DB has no synthetic chain-of-state hashes.' });
+            return res.status(400).json({ error: 'Transparency log is indexer-only. Decoder DB has no synthetic chain-of-state hashes.', code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
-        if(!log) return res.status(404).json({ error: 'Chain/network not found' });
+        if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
 
         let page  = parseInt(req.query.page) || 0;
         let limit = parseInt(req.query.limit) || 100;
@@ -760,48 +766,48 @@ async function startApi(){
             res.json(result);
         } catch(e){
             console.error('[API error] /transparency/:dbType/:chain/:network/roots:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     // GET /transparency/:dbType/:chain/:network/proof/:block_index : Merkle inclusion proof
     app.get('/transparency/:dbType/:chain/:network/proof/:block_index', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Transparency log only available in server mode' });
+            return res.status(403).json({ error: 'Transparency log only available in server mode', code: 'FORBIDDEN' });
         if(req.params.dbType !== 'indexer')
-            return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            return res.status(400).json({ error: 'Transparency log is indexer-only', code: 'BAD_REQUEST' });
 
         let { chain, network, block_index } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
-        if(!log) return res.status(404).json({ error: 'Chain/network not found' });
+        if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
 
         try {
             let result = await log.getProof(block_index);
-            if(!result) return res.status(404).json({ error: 'Block not found' });
+            if(!result) return res.status(404).json({ error: 'Block not found', code: 'NOT_FOUND' });
             res.json(result);
         } catch(e){
             console.error('[API error] /transparency/.../proof/' + block_index + ':', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
     // GET /transparency/:dbType/:chain/:network/root/latest : latest committed Merkle root
     app.get('/transparency/:dbType/:chain/:network/root/latest', transparencyLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
-            return res.status(403).json({ error: 'Transparency log only available in server mode' });
+            return res.status(403).json({ error: 'Transparency log only available in server mode', code: 'FORBIDDEN' });
         if(req.params.dbType !== 'indexer')
-            return res.status(400).json({ error: 'Transparency log is indexer-only' });
+            return res.status(400).json({ error: 'Transparency log is indexer-only', code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
-        if(!log) return res.status(404).json({ error: 'Chain/network not found' });
+        if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
 
         try {
             let result = await log.getLatestRoot();
             res.json(result || { epoch: null, merkle_root: null });
         } catch(e){
             console.error('[API error] /transparency/.../root/latest:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 
@@ -816,16 +822,16 @@ async function startApi(){
     app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
         let apiKey = cfg['SYNC_API_KEY'];
         if(!apiKey || req.headers['authorization'] !== 'Bearer ' + apiKey)
-            return res.status(401).json({ error: 'Unauthorized' });
+            return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
         if(cfg['SYNC_MODE'] === 'server')
-            return res.status(403).json({ error: 'Halt clearing only applies to client mode' });
+            return res.status(403).json({ error: 'Halt clearing only applies to client mode', code: 'FORBIDDEN' });
 
         let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'" });
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
 
         let client = syncService.getClientSync(chain, network, dbType);
-        if(!client) return res.status(404).json({ error: 'Chain/network/dbType client not found' });
+        if(!client) return res.status(404).json({ error: 'Chain/network/dbType client not found', code: 'NOT_FOUND' });
         if(!client.isHalted()) return res.json({ ok: true, halted: false, message: 'Client was not halted' });
 
         try {
@@ -833,7 +839,7 @@ async function startApi(){
             res.json({ ok: true, cleared: true, was, note: 'Restart the sync service for a clean catch-up.' });
         } catch(e){
             console.error('[API error] /halt/clear:', e);
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });
 

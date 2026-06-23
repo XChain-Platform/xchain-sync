@@ -124,6 +124,7 @@ class SnapshotBuilder {
     // a busy source produces mixed-block payloads that fail validator hash
     // verification on bootstrap.
     async streamFullSnapshot(db, res){
+        let startedAt = Date.now();
         let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
         try {
@@ -156,6 +157,7 @@ class SnapshotBuilder {
 
             let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
+            let totalRows = 0;
             for(let table of tableOrder){
                 try {
                     let count = await db.getTableCount(table, conn);
@@ -173,6 +175,7 @@ class SnapshotBuilder {
                             if(!firstRow) gzip.write(',');
                             firstRow = false;
                             gzip.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+                            totalRows++;
                         }
                         offset += this.pageSize;
                     }
@@ -189,6 +192,19 @@ class SnapshotBuilder {
             gzip.write('}}');
             await db.commitReadSnapshot(conn);
             snapshotOpen = false;
+
+            // Record completion: log dbType/chain/block_height/duration/rows and
+            // increment the lifetime served counter exposed on /status.
+            let duration = Date.now() - startedAt;
+            let chain  = (db && db.chain)  || '?';
+            let network = (db && db.network) || '?';
+            console.log('[SnapshotBuilder] full-snapshot served: dbType=' + (db && db.dbType) +
+                ' chain=' + chain + '/' + network +
+                ' block_height=' + lastBlock +
+                ' rows=' + totalRows +
+                ' duration=' + duration + 'ms');
+            this.snapshotsServed = (this.snapshotsServed || 0) + 1;
+
             gzip.end();
         } catch(e){
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);

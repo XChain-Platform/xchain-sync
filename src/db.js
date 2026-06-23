@@ -70,8 +70,8 @@ class Database {
             database:           this.dbName,
             port:               this.port,
             connectionLimit:    parseInt(process.env.DB_POOL_SIZE) || 5,
-            connectTimeout:     10000,
-            acquireTimeout:     10000,
+            connectTimeout:     parseInt(process.env.DB_CONNECT_TIMEOUT) || 10000,
+            acquireTimeout:     parseInt(process.env.DB_ACQUIRE_TIMEOUT) || 10000,
             idleTimeout:        60000,
             insertIdAsNumber:   true,
             bigIntAsNumber:     true,
@@ -503,6 +503,40 @@ class Database {
                 console.error('Failed to repair AUTO_INCREMENT on ' + table + '.id:', e);
             }
         }
+
+        // 5244: Widen attests.request_status ENUM to include 'rejected' on replicas
+        // that bootstrapped before the v4 schema migration
+        // (2026-06-13-attests-request-status-add-rejected). A v3-schema replica holds
+        // ENUM('pending','fulfilled','expired','errored'); streaming a row with
+        // request_status='rejected' hits errno 1265 (data truncated / rejected in
+        // strict mode) and permanently halts replication for that block. Detect the
+        // narrow ENUM via information_schema and MODIFY to the full canonical set
+        // when 'rejected' is absent. Idempotent: once widened the probe finds the
+        // full set and skips. indexer-only (attests does not exist in the decoder schema).
+        if(this.dbType === 'indexer'){
+            try {
+                let enumRows = await this.doQuery(
+                    "SELECT COLUMN_TYPE FROM information_schema.columns " +
+                    "WHERE table_schema = ? AND table_name = 'attests' AND COLUMN_NAME = 'request_status'",
+                    [this.dbName]
+                );
+                if(enumRows.length > 0){
+                    let columnType = String(enumRows[0].COLUMN_TYPE || enumRows[0].column_type || '');
+                    if(columnType.indexOf("'rejected'") === -1){
+                        console.log('Schema drift on attests.request_status: ENUM missing \'rejected\'. Widening to canonical set.');
+                        await this.doQuery(
+                            "ALTER TABLE `attests` MODIFY COLUMN `request_status` " +
+                            "ENUM('pending','fulfilled','expired','errored','rejected') NOT NULL DEFAULT 'pending'"
+                        );
+                    }
+                }
+            } catch(e){
+                // errno 1146 = table absent on an older replica that has not yet had
+                // attests created; skip silently. Any other error is logged.
+                if(e.errno !== 1146)
+                    console.error('Failed to widen attests.request_status ENUM:', e);
+            }
+        }
     }
 
     // Ensure known secondary indexes exist on replicated tables. addMissingColumns
@@ -553,6 +587,44 @@ class Database {
                 // errno 1061 = duplicate key name (race with another startup); harmless.
                 if(e.errno !== 1061)
                     console.error('Failed to add secondary index ' + indexName + ' to ' + table + ':', e);
+            }
+        }
+
+        // 5245: Relax the attests UNIQUE(request_id, version) index to non-unique
+        // on replicas that bootstrapped before the v4 migration
+        // (2026-06-17-attests-drop-unique-request-id-version). The v3 schema carried
+        // a UNIQUE index; the v4 migration drops+recreates it non-unique so a request
+        // can carry multiple v1 retry rows. A sync-only replica that bootstrapped
+        // with the stale UNIQUE halts on the first second-v1 row (errno 1062
+        // ER_DUP_ENTRY). Detect a UNIQUE index via information_schema.statistics
+        // (NON_UNIQUE=0) and DROP+recreate as a plain index. Idempotent: already
+        // non-unique (NON_UNIQUE=1) is skipped; index absent is skipped (fresh
+        // replicas bootstrap from the already-correct source DDL). indexer-only.
+        if(this.dbType === 'indexer'){
+            try {
+                let tableCheck = await this.doQuery(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'attests'",
+                    [this.dbName]
+                );
+                if(tableCheck.length > 0){
+                    let idxRows = await this.doQuery(
+                        "SELECT NON_UNIQUE FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'attests' AND index_name = 'request_id_version' LIMIT 1",
+                        [this.dbName]
+                    );
+                    if(idxRows.length > 0){
+                        let nonUnique = Number(idxRows[0].NON_UNIQUE || idxRows[0].non_unique || 0);
+                        if(nonUnique === 0){
+                            // Index is UNIQUE on this replica; relax it.
+                            console.log('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
+                            await this.doQuery('ALTER TABLE `attests` DROP INDEX `request_id_version`');
+                            await this.doQuery('CREATE INDEX `request_id_version` ON `attests` (request_id, version)');
+                        }
+                    }
+                }
+            } catch(e){
+                if(e.errno !== 1146)
+                    console.error('Failed to relax attests request_id_version index:', e);
             }
         }
     }
