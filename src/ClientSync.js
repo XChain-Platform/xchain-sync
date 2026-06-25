@@ -1153,6 +1153,20 @@ class ClientSync {
                     didReconcile ? null : new Set(['dispensers']));
             }
         } catch(e){
+            // Content-length overflow: the since/:block payload exceeds the axios
+            // cap (ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED). A deeply-lagged full-history
+            // replica can never shrink this below the wall, so incremental can make
+            // no progress. Fall back to a full bootstrap (the same path start() uses
+            // for an empty replica) so the node self-recovers instead of looping
+            // forever and requiring a manual DB wipe.
+            let isSizeError = e && (e.code === 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED' ||
+                (e.message && e.message.includes('maxContentLength')));
+            if(isSizeError){
+                console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                    '; falling back to full bootstrap.');
+                await this._bootstrapFromSnapshot();
+                return;
+            }
             console.error('Incremental catch-up failed:', e);
             // Schema-gap failures are fixable right now: heal and retry once.
             // The heal's debounce bounds the recursion: a second schema-gap
