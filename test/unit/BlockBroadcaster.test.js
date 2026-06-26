@@ -251,23 +251,25 @@ describe('BlockBroadcaster', function(){
             assert.strictEqual(ws.send.called, false);
         });
 
-        it('closes ws when backpressure limit exceeded', function(){
+        it('closes ws when the send buffer exceeds the byte ceiling (item 5410)', function(){
+            let bp = new BlockBroadcaster({ WS_MAX_PER_IP: 3, WS_BACKPRESSURE_MAX_BYTES: 1000, WS_BACKPRESSURE_STALL_MS: 30000 });
             let ws = mockWs();
             ws._syncIp = 'test';
             ws._syncChain = 'bitcoin';
             ws._syncNetwork = 'mainnet';
-            ws.bufferedAmount = 100;
-            ws._syncBuffered = config.WS_BACKPRESSURE_LIMIT + 1;
-            broadcaster._send(ws, 'test');
+            ws.bufferedAmount = 1001;
+            bp._send(ws, 'test');
             assert.strictEqual(ws.close.calledOnce, true);
         });
 
-        it('resets backpressure counter when buffer is clear', function(){
+        it('clears the backpressure stall window when the buffer drains (item 5410)', function(){
+            let bp = new BlockBroadcaster({ WS_MAX_PER_IP: 3, WS_BACKPRESSURE_MAX_BYTES: 1000, WS_BACKPRESSURE_STALL_MS: 30000 });
             let ws = mockWs();
             ws.bufferedAmount = 0;
-            ws._syncBuffered = 10;
-            broadcaster._send(ws, 'test');
-            assert.strictEqual(ws._syncBuffered, 0);
+            ws._syncBackpressureSince = Date.now() - 999999; // stale window
+            bp._send(ws, 'test');
+            assert.strictEqual(ws._syncBackpressureSince, null);
+            assert.strictEqual(ws.close.called, false);
         });
     });
 

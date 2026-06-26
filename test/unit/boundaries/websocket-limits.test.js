@@ -99,62 +99,85 @@ describe('Boundary: WebSocket Limits', function(){
         });
     });
 
-    describe('backpressure limit (50)', function(){
+    describe('backpressure (item 5410: drop only genuinely stalled peers)', function(){
+        const MAX_BYTES = 1000;
+        const STALL_MS  = 30000;
         beforeEach(function(){
-            broadcaster = new BlockBroadcaster({ WS_MAX_PER_IP: 10, WS_BACKPRESSURE_LIMIT: 50 });
+            broadcaster = new BlockBroadcaster({ WS_MAX_PER_IP: 10, WS_BACKPRESSURE_MAX_BYTES: MAX_BYTES, WS_BACKPRESSURE_STALL_MS: STALL_MS });
             sinon.stub(console, 'log');
         });
 
-        it('49 buffered sends: connection maintained', function(){
+        it('slow-but-draining peer is NEVER dropped, across many buffered sends (the 5410 regression)', function(){
             let ws = mockWs();
-            ws.bufferedAmount = 100;
-            ws._syncBuffered = 49;
-            ws._syncIp = 'test'; ws._syncChain = 'b'; ws._syncNetwork = 'm';
-            broadcaster._send(ws, 'test');
+            ws._syncIp = 'test';
+            // Buffer trends DOWN each send (peer is draining) but stays > 0: must survive.
+            for(let b of [900, 800, 700, 600, 500, 400, 300, 200, 100, 50]){
+                ws.bufferedAmount = b;
+                broadcaster._send(ws, 'msg');
+            }
             assert.strictEqual(ws.close.called, false);
-            assert.strictEqual(ws._syncBuffered, 50);
+            assert.strictEqual(ws._syncBackpressureSince, null); // downward progress kept resetting it
+            assert.strictEqual(ws.send.callCount, 10);
         });
 
-        it('50 buffered sends: connection maintained (> not >=)', function(){
+        it('drops a peer whose buffer exceeds the byte ceiling', function(){
             let ws = mockWs();
-            ws.bufferedAmount = 100;
-            ws._syncBuffered = 50;
-            ws._syncIp = 'test'; ws._syncChain = 'b'; ws._syncNetwork = 'm';
-            broadcaster._send(ws, 'test');
-            // 50 + 1 = 51 > 50 → dropped
+            ws._syncIp = 'test';
+            ws.bufferedAmount = MAX_BYTES + 1;
+            broadcaster._send(ws, 'msg');
             assert.strictEqual(ws.close.calledOnce, true);
+            assert.strictEqual(ws.close.firstCall.args[0], 1008);
+            assert.strictEqual(ws.send.called, false);
         });
 
-        it('51 buffered sends: connection dropped', function(){
+        it('drops a peer whose buffer is non-draining past the stall window', function(){
             let ws = mockWs();
-            ws.bufferedAmount = 100;
-            ws._syncBuffered = 51;
-            ws._syncIp = 'test'; ws._syncChain = 'b'; ws._syncNetwork = 'm';
-            broadcaster._send(ws, 'test');
+            ws._syncIp = 'test';
+            ws.bufferedAmount = 100;                                   // below ceiling, non-empty
+            ws._syncLastBuffered = 100;                               // flat: no downward progress
+            ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);  // window already elapsed
+            broadcaster._send(ws, 'msg');
             assert.strictEqual(ws.close.calledOnce, true);
+            assert.strictEqual(ws.close.firstCall.args[0], 1008);
         });
 
-        it('counter resets when buffer clears', function(){
+        it('does NOT drop a stalled-then-recovered peer (drain resets the window)', function(){
             let ws = mockWs();
+            ws._syncIp = 'test';
+            ws.bufferedAmount = 100;
+            ws._syncLastBuffered = 200;                               // drained 200 -> 100: progress
+            ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);  // stale window, must be cleared
+            broadcaster._send(ws, 'msg');
+            assert.strictEqual(ws.close.called, false);
+            assert.strictEqual(ws._syncBackpressureSince, null);
+            assert.strictEqual(ws.send.calledOnce, true);
+        });
+
+        it('a fully-drained buffer keeps the peer healthy and clears any stall window', function(){
+            let ws = mockWs();
+            ws._syncIp = 'test';
             ws.bufferedAmount = 0;
-            ws._syncBuffered = 45;
-            broadcaster._send(ws, 'test');
-            assert.strictEqual(ws._syncBuffered, 0);
+            ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);
+            broadcaster._send(ws, 'msg');
             assert.strictEqual(ws.close.called, false);
+            assert.strictEqual(ws._syncBackpressureSince, null);
+            assert.strictEqual(ws.send.calledOnce, true);
         });
 
-        it('counter increments when buffer not clear', function(){
+        it('arms but does not trip the stall window on the first non-draining send', function(){
             let ws = mockWs();
+            ws._syncIp = 'test';
             ws.bufferedAmount = 100;
-            ws._syncBuffered = 0;
-            broadcaster._send(ws, 'test');
-            assert.strictEqual(ws._syncBuffered, 1);
+            broadcaster._send(ws, 'msg');
+            assert.strictEqual(ws.close.called, false);
+            assert.notStrictEqual(ws._syncBackpressureSince, null);   // window armed for next time
+            assert.strictEqual(ws.send.calledOnce, true);
         });
 
         it('skips closed WebSocket', function(){
             let ws = mockWs();
             ws.readyState = WebSocket.CLOSED;
-            broadcaster._send(ws, 'test');
+            broadcaster._send(ws, 'msg');
             assert.strictEqual(ws.send.called, false);
         });
     });

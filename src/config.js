@@ -128,10 +128,16 @@ module.exports = {
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure limit (consecutive buffered sends before a slow
-        // subscriber is force-disconnected). Env-configurable so operators can tune
-        // tolerance for validators with heterogeneous replica DB speeds.
-        config['WS_BACKPRESSURE_LIMIT'] = parseIntMin1(process.env.WS_BACKPRESSURE_LIMIT, 50);
+        // WebSocket backpressure (item 5410): a replica is dropped only when its send buffer
+        // is genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory (a peer
+        // accumulating past this is not draining); STALL_MS is how long the buffer may go
+        // without making downward progress before the peer is dropped. This replaces the old
+        // count-based WS_BACKPRESSURE_LIMIT, which dropped slow-but-draining replicas and
+        // thrashed them into re-bootstraps.
+        config['WS_BACKPRESSURE_MAX_BYTES'] = parseIntMin1(process.env.WS_BACKPRESSURE_MAX_BYTES, 16777216); // 16 MiB
+        config['WS_BACKPRESSURE_STALL_MS']  = parseIntMin1(process.env.WS_BACKPRESSURE_STALL_MS, 30000);     // 30 s
+        if(process.env.WS_BACKPRESSURE_LIMIT !== undefined)
+            console.log('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead (item 5410).');
 
         // WebSocket status broadcast interval (default 60 seconds; override via WS_STATUS_INTERVAL)
         config['WS_STATUS_INTERVAL'] = parseIntMin0(process.env.WS_STATUS_INTERVAL, 60000);

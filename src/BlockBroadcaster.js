@@ -305,15 +305,32 @@ class BlockBroadcaster {
 
         let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
 
-        // Backpressure: check buffered amount
-        if(ws.bufferedAmount > 0)
-            ws._syncBuffered = (ws._syncBuffered || 0) + 1;
-        else
-            ws._syncBuffered = 0;
+        // Backpressure (item 5410): drop a peer only when it is genuinely stuck, not merely
+        // slow. Two independent signals on the OS send buffer:
+        //   1) a hard byte ceiling - the peer is accumulating unboundedly (server-memory risk);
+        //   2) a non-draining stall timeout - the buffer has not made any downward progress for
+        //      WS_BACKPRESSURE_STALL_MS. The stall timer resets on ANY drop in bufferedAmount,
+        //      so a slow-but-draining replica keeps resetting and stays connected instead of
+        //      being force-dropped into a re-bootstrap thrash loop (the old count-based check
+        //      dropped it because the buffer rarely returned to exactly zero under load).
+        let buffered = ws.bufferedAmount;
+        let drop     = null;
+        if(buffered > this.config['WS_BACKPRESSURE_MAX_BYTES']){
+            drop = 'buffer ceiling exceeded (' + buffered + ' bytes)';
+        } else if(buffered > 0 && buffered >= (ws._syncLastBuffered || 0)){
+            // Flat or growing since the last send: start or continue the stall window.
+            if(!ws._syncBackpressureSince) ws._syncBackpressureSince = Date.now();
+            else if(Date.now() - ws._syncBackpressureSince > this.config['WS_BACKPRESSURE_STALL_MS'])
+                drop = 'send buffer not draining for ' + this.config['WS_BACKPRESSURE_STALL_MS'] + 'ms';
+        } else {
+            // Drained to zero or made downward progress since the last send: healthy.
+            ws._syncBackpressureSince = null;
+        }
+        ws._syncLastBuffered = buffered;
 
-        if(ws._syncBuffered > this.config['WS_BACKPRESSURE_LIMIT']){
-            console.log('WebSocket backpressure limit exceeded for ' + ws._syncIp + ', dropping connection');
-            ws.close(1008, 'Backpressure limit exceeded');
+        if(drop){
+            console.log('WebSocket backpressure: dropping ' + ws._syncIp + ' (' + drop + ')');
+            ws.close(1008, 'Backpressure: ' + drop);
             this.removeSubscription(ws);
             return;
         }
