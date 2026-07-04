@@ -196,7 +196,17 @@ class ClientRollback {
             // orphaned-range rows or the replica keeps serving stale access policy
             // (which action-classes are guard-gated) that the source never finalized.
             'token_controllers',
-            'address_controllers'
+            'address_controllers',
+            // VOTE governance tables, all keyed by their writing action_index and
+            // rolled back as dataTables by the source (xchain-indexer/src/rollback.js):
+            // polls (v0 create), votes (v1 ballots), poll_results (v2 finalization),
+            // vote_delegations (v3 set/clear event log). The polls SUMMARY finalization
+            // is additionally reset in place below (see the polls re-open block),
+            // mirroring the source.
+            'polls',
+            'votes',
+            'poll_results',
+            'vote_delegations'
         ];
 
         // ── Decoder-DB rollback (used by _rollbackDecoder) ──
@@ -309,6 +319,29 @@ class ClientRollback {
                         "UPDATE xcalls SET request_status = 'pending', result_status = NULL, " +
                         "result_payload = NULL, resolved_block = NULL, callback_action_index = NULL " +
                         "WHERE version = 0 AND request_status IN ('completed', 'expired') AND resolved_block >= ?",
+                        [block_index]
+                    );
+                } catch(e){
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+
+                // polls (VOTE v0): an orphaned VOTE v2 finalization flipped a surviving
+                // poll (created in an earlier block) terminal IN PLACE. The generic
+                // action_index delete below drops the v2's poll_results / escrow-release
+                // rows, but cannot re-open the surviving polls row. Reset it (keyed on
+                // resolved_block, which the finalize sweep stamps) so the replica matches
+                // the source's re-opened poll and a re-streamed finalization upserts
+                // cleanly. Mirrors xchain-indexer/src/rollback.js's polls re-open block.
+                try {
+                    await this.db.doQuery(
+                        "UPDATE polls SET poll_status = 'open', winning_option = NULL, total_weight = NULL, " +
+                        "total_voters = NULL, quorum_met = NULL, min_voters_met = NULL, " +
+                        "fail_reason = NULL, decided_early = NULL, effective_close_block = NULL, " +
+                        "finalized_action_index = NULL, resolved_block = NULL, " +
+                        "deposit_resolved = NULL, callback_execute_action_index = NULL " +
+                        "WHERE poll_status IN ('finalized', 'failed_quorum') AND resolved_block >= ?",
                         [block_index]
                     );
                 } catch(e){

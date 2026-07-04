@@ -113,8 +113,16 @@ describe('config', function(){
         it('includes HUB_REPOLL_INTERVAL', function(){
             assert.strictEqual(config.getConfig().HUB_REPOLL_INTERVAL, 300000);
         });
-        it('includes WS_BACKPRESSURE_LIMIT', function(){
-            assert.strictEqual(config.getConfig().WS_BACKPRESSURE_LIMIT, 50);
+        // WS_BACKPRESSURE_LIMIT (count-based) is retired (item 5410); the byte/stall
+        // pair below replaced it and the env var is ignored with a console notice.
+        it('does not expose the retired WS_BACKPRESSURE_LIMIT', function(){
+            assert.strictEqual(config.getConfig().WS_BACKPRESSURE_LIMIT, undefined);
+        });
+        it('includes WS_BACKPRESSURE_MAX_BYTES default', function(){
+            assert.strictEqual(config.getConfig().WS_BACKPRESSURE_MAX_BYTES, 16777216);
+        });
+        it('includes WS_BACKPRESSURE_STALL_MS default', function(){
+            assert.strictEqual(config.getConfig().WS_BACKPRESSURE_STALL_MS, 30000);
         });
         it('includes WS_STATUS_INTERVAL', function(){
             assert.strictEqual(config.getConfig().WS_STATUS_INTERVAL, 60000);

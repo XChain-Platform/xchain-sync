@@ -564,6 +564,46 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
+    // Bespoke-logic parity: VOTE polls re-open reset. An orphaned VOTE v2 finalization
+    // flipped a surviving polls row terminal IN PLACE; the generic action_index delete
+    // drops the v2's poll_results rows but cannot re-open the poll. Both rollback.js
+    // (source) and ClientRollback.js (replica) must carry the reset UPDATE keyed on
+    // resolved_block, or a reorged replica keeps serving a terminal poll the source
+    // re-opened. If you change one side, change the other and extend this guard.
+    it('VOTE polls re-open reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const POLL_OPS = [
+            { name: 'summary re-open',        re: /UPDATE polls SET poll_status = open , winning_option = NULL/ },
+            { name: 'finalize-stamp clear',   re: /finalized_action_index = NULL, resolved_block = NULL/ },
+            { name: 'terminal-status + resolved_block key', re: /WHERE poll_status IN \( finalized , failed_quorum \) AND resolved_block >= \?/ },
+        ];
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            const src = norm(fs.readFileSync(p, 'utf8'));
+            for(const op of POLL_OPS){
+                assert.ok(op.re.test(src), `${label} is missing the polls ${op.name}; source and replica must both re-open finalized polls on reorg`);
+            }
+        }
+    });
+
+    // Forward parity for the polls finalization flip: the reverse re-open above needs a
+    // forward twin or a follower never learns a poll went terminal (the flip mutates a
+    // surviving row the action-scoped stream cannot reach). Pin the class table list and
+    // its resolved_block window predicate in updatedRows.js.
+    it('updated_rows carries the VOTE poll finalization flip keyed by resolved_block', function(){
+        const { POLL_FINALIZE_TABLES } = require('../../src/updatedRows');
+        assert.deepStrictEqual(POLL_FINALIZE_TABLES, ['polls'],
+            'updated_rows must track the poll finalization flip on polls');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
+            'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
+    });
+
     // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from
     // src/stateHash.js: the indexer stores it at index-time, the follower recomputes it
     // apply-time and halts on mismatch. The two copies are a byte-aligned twin (separate

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- VOTE governance tables (`polls`, `votes`, `poll_results`, `vote_delegations`) now replicate per block and roll back on reorg (previously entirely absent from sync, so replicas never carried VOTE state and orphaned rows would have survived reorgs).
+
 ### Added
+- `POLL_FINALIZE_TABLES` updated_rows class: the in-place poll finalization flip on a surviving `polls` row now reaches followers, with the matching re-open reset in `ClientRollback` (mirrors the source indexer).
 - `_insertRows` unit coverage pinning the full-dump write modes: `merkle_epochs` -> `INSERT IGNORE` and `markets`/`attest_validator_stats` -> `INSERT ... ON DUPLICATE KEY UPDATE` covering every column, so a future edit can't silently drop either mode.
 
 ## [1.7.1] - 2026-06-20

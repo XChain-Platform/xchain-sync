@@ -88,6 +88,13 @@ const SLASH_SPECS = [
 // v0 request rows whose request_status went terminal in this window (resolved_block stamp).
 const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
 
+// VOTE polls whose finalization went terminal in this window. The per-block sweep
+// flips a surviving polls row (created at the v0 block, below the window) from
+// 'open' to 'finalized'/'failed_quorum' IN PLACE, stamping resolved_block; the
+// action-scoped stream carries the v2's poll_results rows but not this summary
+// flip. Forward twin of ClientRollback's polls re-open reset (same key).
+const POLL_FINALIZE_TABLES = ['polls'];
+
 // Surviving unstake rows whose status_id was flipped to 'completed' in place when their
 // cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block (the maturity
 // block), exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
@@ -162,6 +169,21 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         try {
             let rows = await db.doQuery(
                 "SELECT * FROM `" + table + "` WHERE version = 0 AND resolved_block BETWEEN ? AND ?",
+                [from, to], conn);
+            add(table, rows);
+        } catch(e){
+            // Table/column may not exist on older source schemas; skip.
+        }
+    }
+
+    // 3b. VOTE poll finalization flip on surviving polls rows. Keyed on
+    //     resolved_block (stamped by the finalize sweep), which captures both the
+    //     end_block close and the early-decide path. No version predicate: polls
+    //     has one row shape (the v0 create), unlike attests/xcalls.
+    for(let table of POLL_FINALIZE_TABLES){
+        try {
+            let rows = await db.doQuery(
+                "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ?",
                 [from, to], conn);
             add(table, rows);
         } catch(e){
@@ -269,4 +291,4 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     return out;
 }
 
-module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES };
+module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES };

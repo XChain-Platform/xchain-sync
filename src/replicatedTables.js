@@ -172,6 +172,14 @@ const TOPOLOGY = {
             'messages', 'mints',
             'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
             'prices',
+            // VOTE governance tables. All four are action-scoped (polls = VOTE v0,
+            // votes = v1 ballots, poll_results = v2 finalization, vote_delegations =
+            // v3 set/clear), so they ride the per-block action_index join. The polls
+            // SUMMARY finalization is an in-place flip on a surviving row and rides
+            // the updated_rows channel (POLL_FINALIZE_TABLES). votes and
+            // vote_delegations are append-only on the source (re-votes insert a new
+            // action_index set), so plain inserts replicate them exactly.
+            'polls', 'poll_results', 'votes', 'vote_delegations',
             'reward_claims',
             'sends', 'sleeps',
             'stakes',
