@@ -114,12 +114,12 @@ describe('HubClient', function(){
             assert.strictEqual(configs[0].db_port, 3308);
         });
 
-        it('defaults db_host to localhost when neither present', async function(){
+        it('defaults db_host to 127.0.0.1 when neither present', async function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
                 doge: { regtest: { 'xchain-indexer': { name: 'd', user: 'u', pass: 'p' } } }
             }}});
             let configs = await hub.getIndexerConfigs();
-            assert.strictEqual(configs[0].db_host, 'localhost');
+            assert.strictEqual(configs[0].db_host, '127.0.0.1');
             assert.strictEqual(configs[0].db_port, 3306);
         });
 

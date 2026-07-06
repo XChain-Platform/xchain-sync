@@ -233,7 +233,7 @@ class HubClient {
                         coin:    coin,
                         network: network,
                         dbType:  dbType,
-                        db_host: mod.db_host || mod.host || 'localhost',
+                        db_host: mod.db_host || mod.host || '127.0.0.1',
                         db_port: HubClient._parsePort(mod.db_port, mod.port),
                         db_name: mod.name,
                         db_user: mod.user,
