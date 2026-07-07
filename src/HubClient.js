@@ -87,13 +87,19 @@ class HubClient {
 
     // Internal: call a JSON-RPC method, trying each endpoint starting from the
     // last one that succeeded and wrapping around through the rest.
+    // Attaches x-api-key when HUB_API_KEY is configured: getallconfigs is in
+    // the hub's sensitive-read tier (its response carries DB credentials) and
+    // 401s without it once the hub sets a key. Methods that don't need it
+    // ignore it, so sending unconditionally is safe.
     async _call(data, timeout = 5000){
         this.lastFailures = [];
+        let headers = {};
+        if(process.env.HUB_API_KEY) headers['x-api-key'] = process.env.HUB_API_KEY;
         for(let i = 0; i < this.urls.length; i++){
             let idx = (this._lastGoodIdx + i) % this.urls.length;
             let url = this.urls[idx];
             try {
-                let response = await axios.post(url, data, { timeout });
+                let response = await axios.post(url, data, { timeout, headers });
                 if(response.data && response.data.result !== undefined){
                     this._lastGoodIdx = idx;
                     return response.data.result;
