@@ -72,53 +72,12 @@ function replicatedTables(dbType){
 // decoder-universe coverage check, where it remains inert.
 const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 
-// Coverage that lives outside ClientRollback's table arrays.
-
-// Recomputed from surviving ledger rows during rollback (ClientRollback and
-// ClientApplier both rebuild this derived aggregate):
-//   - balances           <- credits/debits (includes contract custody, keyed by
-//                           the contract's derived address C:<CHAIN>:<action_index>)
-// It lacks an action_index column, so the source poller can't stream it
-// per-block (its action_index JOIN errors and is swallowed); the replica derives
-// it from the surviving ledger rows instead.
-const RECOMPUTED = ['balances'];
-
-// Deleted by bespoke logic in _rollbackIndexer rather than the generic loops.
-// attest_validator_stats is a snapshot-only aggregate the thin replica
-// can't recompute (no capability/governance machinery for missed_count); on
-// reorg _rollbackIndexer drops its orphaned-range rows and the next full-snapshot
-// ride-along restores correct counts from the source (same model as markets).
-// price_snapshots anchors each round to a block via reference_block (not
-// block_index/action_index), so it falls outside both generic delete loops and
-// is removed by its own bespoke DELETE in _rollbackIndexer, mirroring the
-// source indexer. Live convergence is also hub-driven (the hub DB sync mirror
-// delivers row:deleted events), but that lags the local reorg; the bespoke
-// delete closes the staleness window so the replica never serves finalized rows
-// for orphaned rounds while the hub catches up.
-//
-// Orphan sweeps (icons, markets, pubkeys): derived tables keyed by a rolled-back
-// index id (tokens / index_tickers / index_addresses) that the replica's
-// replication NEVER deletes (markets upserts from the full-dump, pubkeys is INSERT
-// IGNORE), so once the source sweeps an orphaned-only row, _rollbackIndexer must
-// mirror that sweep or the replica keeps the stale row and serves the OLD
-// market/pubkey on id reclaim (a source<->replica divergence). Non-consensus
-// (none of these are in the block hash / stateHash preimage / parity checksum).
-// markets is ADDITIONALLY snapshot-refreshed for its OHLCV VALUES (the thin
-// replica can't recompute those); the sweep only removes orphaned-tick rows.
-const SPECIAL_CASE = ['contract_emissions', 'sync_meta', 'attest_validator_stats',
-    'price_snapshots', 'icons', 'markets', 'pubkeys'];
-
-// Tables that are NOT rolled back, each with a reason. All intentional:
-// snapshot-refreshed or append-only aggregates the thin replica can't recompute.
-const ROLLBACK_EXEMPT = {
-    events:
-        'Append-only operational log; no block_index/action_index cursor to scope ' +
-        'a rollback. Never rolled back (matches the source indexer).',
-    // NOTE: markets moved to SPECIAL_CASE. Its OHLCV VALUES are still snapshot-refreshed
-    // (the thin replica can't recompute getMarketInfo's last-trade/24hr/bid/ask math), but
-    // orphaned-tick rows are now ALSO orphan-swept by _rollbackIndexer for immediate parity
-    // with the source's sweep (the upsert full-dump never deletes them). See SPECIAL_CASE.
-};
+// Coverage that lives outside ClientRollback's table arrays: the replica-side
+// rollback buckets, derived from the table-lifecycle registry twin
+// (src/tableLifecycle.js, byte-identical to the xchain-indexer copy; asserted
+// below). Per-table rationale lives with each registry entry.
+const lifecycleTwin = require('../../src/tableLifecycle');
+const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
 // and exports XCHAIN_INDEXER_SQL_PATH (=<root>/src/sql); locally it is the monorepo
@@ -222,17 +181,10 @@ describe('Rollback coverage guard @regression', function(){
         const indexer = new IndexerRollback({});
         const indexerRollback = new Set([...indexer.dataTables, ...indexer.blockTables]);
 
-        // Tables the indexer rolls back that sync intentionally does NOT mirror,
-        // each with a reason. Keep this list tight: it is the deliberate-decision
-        // gate that the cross-chain family lacked.
-        const INDEXER_LOCAL = {
-            pending_hub_pushes:
-                'Indexer-local outbound queue of rows awaiting push to the cross-chain hub. ' +
-                'Not replicated to followers (absent from replicatedTables.js) and meaningless ' +
-                'on a replica, so there is nothing to roll back here (same rationale as the ' +
-                'source keeping icons/price_snapshots out of the streamed set).',
-        };
-
+        // INDEXER_LOCAL (tables the indexer rolls back that sync intentionally
+        // does not mirror because they never exist on a replica) is derived from
+        // the registry twin's replicaRollback 'local' entries above; it is the
+        // deliberate-decision gate that the cross-chain family lacked.
         const covered = new Set([
             ...rollback.dataTables,
             ...rollback.blockTables,
@@ -643,8 +595,11 @@ describe('Rollback coverage guard @regression', function(){
     // encoders) and state_commitment_activation.js (the flag-day map) are copied
     // VERBATIM from xchain-indexer. The follower recomputes the per-block roots from
     // these and HALTs on divergence, so any drift turns the divergence detector into
-    // a false-halt generator. Lock both byte-identical (skip if the sibling repo absent).
-    for(const twin of ['merkle.js', 'state_commitment_activation.js']){
+    // a false-halt generator. tableLifecycle.js is the table-lifecycle registry that
+    // GENERATES the replicated topology and both rollback table sets; a drifted copy
+    // would silently re-open the very source<->replica divergence it exists to close.
+    // Lock all three byte-identical (skip if the sibling repo absent).
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
@@ -669,6 +624,9 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'cooldown status by maturity block', re: /WHERE t\.cooldown_end_block BETWEEN \? AND \?/ },
             { name: 'capability GAS refund credit',      re: /JOIN unstakes u ON \(u\.action_index = c\.action_index/ },
             { name: 'contract own-tick refund credit',   re: /JOIN contract_unstakes cu ON \(cu\.action_index = c\.action_index/ },
+            // Poll-finalize flip (flag-day gated): same resolved_block key the
+            // POLL_FINALIZE_TABLES forward channel and the rollback re-open use.
+            { name: 'poll finalization flip',    re: /FROM polls WHERE resolved_block BETWEEN \? AND \? ORDER BY action_index ASC/ },
         ];
         for(const p of PREDICATES){
             assert.ok(p.re.test(src), `stateHash.js is missing the ${p.name} selection; its hash would not cover that replicated mutation class`);

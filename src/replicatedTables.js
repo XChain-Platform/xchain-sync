@@ -74,9 +74,19 @@
  *
  ********************************************************************/
 
+const lifecycle = require('./tableLifecycle');
+
 // Per-block replicated table topology by dbType. ServerPoller consumes the
 // structured form (it needs the per-scope split for its index joins); the
 // verification path consumes the flattened union via getReplicatedTables().
+//
+// The INDEXER topology is generated from the table-lifecycle registry
+// (src/tableLifecycle.js, byte-identical twin of the xchain-indexer copy):
+// each indexer table's registry entry declares its stream scope, so adding a
+// table there simultaneously adds it to the per-block stream, the /status
+// completeness count, and both rollback sets. The DECODER topology stays
+// declared literally below: that schema is owned by xchain-decoder and has
+// its own, much smaller lifecycle (see the scope notes above).
 const TOPOLOGY = {
 
     // Decoder schema: 9 tables, much smaller surface area than indexer.
@@ -110,134 +120,14 @@ const TOPOLOGY = {
         special:      ['dispensers']
     },
 
-    // Indexer schema: full set of 60+ tables
-    indexer: {
-        // Tables scoped by block_index (not action_index).
-        // slash_events keys off block_index (it has execution_index +
-        // block_index but no action_index), so it is block-scoped.
-        // contract_slash_debits keys off block_index (per-row slash debit log, same
-        // shape as slash_events), so it is block-scoped: streamed per block and entering
-        // the /status completeness count. The replica's ClientRollback reads it to restore
-        // slashed stake amounts on reorg, so it MUST replicate. capability_slash_events /
-        // capability_slash_debits (WI-2 bump 2 equivocation slashing) are the block-scoped
-        // capability-stake twins with the same rationale and the same reorg-restore requirement.
-        blockScoped:  ['blocks', 'transactions', 'validator_rewards', 'contract_state', 'slash_events', 'contract_slash_debits', 'capability_slash_events', 'capability_slash_debits'],
-
-        txScoped:     [],  // indexer joins via actions, not directly via tx_index
-
-        // Action-scoped tables to include in block payloads
-        actionScoped: [
-            // NOTE: balances and events are intentionally NOT listed here. Neither
-            // has an action_index column, so the per-block
-            // `INNER JOIN actions a ON (a.action_index = t.action_index)` in
-            // db.getActionScopedRows() throws ER_BAD_FIELD_ERROR on every poll.
-            // balances is a derived aggregate the follower recomputes from
-            // credits/debits (ClientApplier._rebuildBalances), so it must not ride
-            // the per-block payload. events is an unscoped operational
-            // log carried by full snapshots only (same rationale as markets below).
-            // state_checkpoints is also intentionally NOT here: it is hub-mirrored
-            // (hub_db_sync, like price_snapshots), not produced by block processing.
-            'actions', 'addresses', 'airdrops',
-            // anchor_actions holds the parsed DOGE-only ANCHOR rows (one per
-            // action_index), so it rides the per-block action_index join.
-            'anchor_actions',
-            // attests is the consolidated ATTEST table: one row per ATTEST
-            // action_index (v0 request, v1 response, v2 expire), so it rides the
-            // per-block action_index join like any other action-scoped table.
-            'attests',
-            'batches', 'broadcasts', 'callbacks',
-            'coinpays', 'coinpay_obligations', 'coinpay_expires', 'coinpay_statuses',
-            'contracts', 'contract_executions', 'contract_emissions',
-            // deploy_chunks: one row per DEPLOY v4 carrier action_index (rollback-able, never
-            // mutated in-place), so it rides the per-block action_index join. Streaming it
-            // per block keeps a follower's chunk store current between full snapshots and
-            // pairs with ClientRollback dropping orphaned-range chunk rows on reorg.
-            'deploy_chunks',
-            'contract_stakes', 'contract_unstakes', 'contract_delegations',
-            'credits', 'debits', 'escrows',
-            'delegations',
-            'deposits', 'destroys',
-            'dispensers', 'dispenser_cancels', 'dispenser_closes', 'dispenser_edits',
-            'dispenser_expires', 'dispenser_statuses', 'dispenses',
-            'dividends',
-            'fees', 'files', 'gated_files',
-            'issues',
-            'links', 'lists', 'list_edits', 'list_items', 'list_items_invalid',
-            'mappings_actions', 'mappings_files',
-            // markets is intentionally NOT action-scoped: it has no action_index
-            // column (it's a derived OHLCV aggregate keyed by tick pair), so it can't
-            // ride the per-block action_index join. It is refreshed via full/incremental
-            // snapshots only; live per-block accuracy would require rebuilding it on the
-            // follower from order_matches/dispenses.
-            'messages', 'mints',
-            'orders', 'order_cancels', 'order_edits', 'order_expires', 'order_matches', 'order_statuses',
-            'prices',
-            // VOTE governance tables. All four are action-scoped (polls = VOTE v0,
-            // votes = v1 ballots, poll_results = v2 finalization, vote_delegations =
-            // v3 set/clear), so they ride the per-block action_index join. The polls
-            // SUMMARY finalization is an in-place flip on a surviving row and rides
-            // the updated_rows channel (POLL_FINALIZE_TABLES). votes and
-            // vote_delegations are append-only on the source (re-votes insert a new
-            // action_index set), so plain inserts replicate them exactly.
-            'polls', 'poll_results', 'votes', 'vote_delegations',
-            'reward_claims',
-            'sends', 'sleeps',
-            'stakes',
-            'swaps', 'swap_cancels', 'swap_edits', 'swap_expires', 'swap_matches', 'swap_statuses',
-            // Cross-chain action tables. Each carries internally-minted action rows
-            // (one row per rollback-able action_index: settlement legs, XCALL
-            // requests/expiries, injected XEXEC executions, processed callbacks), so
-            // they ride the per-block action_index join like any other action-scoped
-            // table. Streaming them per block keeps a follower's cross-chain settled
-            // state correct between full snapshots, and pairs with ClientRollback
-            // dropping their orphaned-range rows on reorg.
-            'cross_chain_settlements', 'cross_chain_call_executions',
-            'cross_chain_call_callbacks', 'xcalls',
-            // stake_key_revocations: one row per revocation action_index (rollback-able),
-            // so it rides the per-block action_index join. A follower needs it to know
-            // which stake signing keys are still valid signers.
-            'stake_key_revocations',
-            // full_node_verifications: NODEPROOF verdict rows (verified-validator
-            // tier). One verdict action_index writes one row per PASS pubkey, all
-            // sharing that action_index, so they ride the per-block action_index
-            // join together and ClientRollback drops them as a unit on reorg. Lets
-            // a light validator mirror the verified-full-node set that drives the
-            // oracle-round reward split (NODEPROOF.md).
-            'full_node_verifications',
-            'sweeps', 'tokens', 'unstakes',
-            'withdrawals',
-            // Programmable-policy controller bind/unbind event logs. One row per
-            // action_index (rollback-able, never mutated in-place), so they ride the
-            // per-block action_index join. Streaming them per block keeps a follower's
-            // access-policy state (which action-classes are guard-gated) correct
-            // between full snapshots, and pairs with ClientRollback dropping their
-            // orphaned-range rows on reorg.
-            'token_controllers', 'address_controllers', 'contract_permissions'
-        ],
-
-        // Index tables that may have new entries per block
-        index:        [
-            'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
-            'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
-            'index_tickers', 'index_transactions'
-        ],
-
-        // Replicated for completeness-counting but NOT extracted by ServerPoller's
-        // per-scope loops. sync_meta (the transparency log) is streamed inline by
-        // ServerPoller (_buildBlockPayload builds the row from the block hashes)
-        // and carried by snapshots (SnapshotBuilder discovers tables via
-        // information_schema), so it never rides the blockScoped getBlockScopedRows
-        // path. Listing it HERE rather than in blockScoped puts it in the /status
-        // row-count completeness check (getReplicatedTables) without tripping the
-        // record-after-build ordering trap: TransparencyLog.recordBlock writes the
-        // source's sync_meta row AFTER _buildBlockPayload runs (see ServerPoller._poll),
-        // so a blockScoped read would always see the current block's row missing.
-        // The replica replicates the source's actual sync_meta rows (not derived from
-        // blocks), so source and replica counts track each other and the check is
-        // meaningful. A persistent shortfall means the replica genuinely dropped
-        // transparency rows the source streamed.
-        special:      ['sync_meta']
-    }
+    // Indexer schema: generated from the table-lifecycle registry. Notable
+    // structural facts that used to live in comments here now live with the
+    // registry entries; the two that trip people up: balances/events have no
+    // action_index column (the per-block action join would throw), and
+    // sync_meta rides the `special` bucket because TransparencyLog.recordBlock
+    // writes the source row AFTER _buildBlockPayload runs, so a blockScoped
+    // read would always see the current block's row missing.
+    indexer: lifecycle.streamTopology()
 };
 
 // Return the structured topology (per-scope table lists) for a dbType.

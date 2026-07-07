@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `src/tableLifecycle.js` registry twin (byte-identical to xchain-indexer) now generates the indexer stream topology and both ClientRollback table list sets, so table-set drift vs the source indexer is structurally impossible.
+- `stateHash.js` twin gains the flag-day-gated `poll_finalize` class (inert until armed; follower halts on a dropped/divergent poll finalization once armed).
 - `HubClient` sends `x-api-key` on hub calls when `HUB_API_KEY` is set (`getallconfigs` is now in the hub's keyed sensitive-read tier).
 
 ### Fixed

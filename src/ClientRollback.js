@@ -23,6 +23,7 @@
  ********************************************************************/
 
 const balanceHelpers = require('./balance-helpers');
+const lifecycle      = require('./tableLifecycle');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 
 class ClientRollback {
@@ -45,169 +46,20 @@ class ClientRollback {
         }
         this.activationDelay = delay;
 
-        // IMPORTANT: These lists mirror xchain-indexer/src/rollback.js. They MUST be kept
-        // in sync: any table the indexer rolls back AND xchain-sync replicates must also
-        // be rolled back here, or the replica keeps orphaned rows after a reorg and silently
-        // diverges from the source. test/unit/rollback-coverage.test.js guards this against
-        // drift by checking every table ServerPoller replicates is handled below.
-
-        // Tables that store data using block_index
-        this.blockTables = [
-            'blocks',
-            'transactions',
-            'validator_rewards',
-            'contract_state',
-            'slash_events',
-            // Per-row slash debit log (one row per in-place contract_stakes/contract_unstakes
-            // amount reduction). Block-scoped like slash_events. The restore above reads it
-            // BEFORE this generic delete drops the orphaned rows; mirrors the source indexer.
-            'contract_slash_debits',
-            // Capability-stake equivocation slashing (WI-2 bump 2), block-scoped twins of
-            // slash_events / contract_slash_debits. The capability_slash_debits restore below
-            // copies back the pre-slash stakes/unstakes amount on reorg; mirrors the source.
-            'capability_slash_events',
-            'capability_slash_debits',
-            // Light-client per-block SMT roots (SPV spec sec.4). Block-scoped: drop
-            // orphaned-fork roots so the follower's incremental balances_root threading
-            // (which reads state_tree_roots[B-1]) re-seeds from the surviving fork-point
-            // root and rebuilds forward. state_tree_nodes is deliberately NOT listed:
-            // it is content-addressed + immutable (COW), so orphaned nodes are simply
-            // unreferenced and reorg-safe; pruning them is deferred.
-            'state_tree_roots'
-        ];
-
-        // Lookup tables rolled back block-scoped (keyed by their own block_index),
-        // mirroring xchain-indexer/src/rollback.js indexTables. Replicated verbatim by id,
-        // so the replica must delete the same orphaned-block ids the source deletes; a wire
-        // ^<id> reference makes their ids consensus-relevant. Other index_* lookups stay
-        // append-only/inert (no ^<id> form).
-        this.indexTables = [
-            'index_addresses',
-            'index_tickers'
-        ];
-
-        // Tables that store data using action_index
-        this.dataTables = [
-            'actions',
-            'addresses',
-            'airdrops',
-            'batches',
-            'broadcasts',
-            'callbacks',
-            'credits',
-            'debits',
-            'coinpay_expires',
-            'coinpay_obligations',
-            'coinpay_statuses',
-            'coinpays',
-            'destroys',
-            'dispensers',
-            'dispenser_cancels',
-            'dispenser_closes',
-            'dispenser_edits',
-            'dispenser_expires',
-            'dispenser_statuses',
-            'dispenses',
-            'dividends',
-            'escrows',
-            'fees',
-            'files',
-            'gated_files',
-            'issues',
-            'links',
-            'lists',
-            'list_edits',
-            'list_items',
-            'list_items_invalid',
-            'mappings_actions',
-            'mappings_files',
-            'messages',
-            'mints',
-            'orders',
-            'order_cancels',
-            'order_edits',
-            'order_expires',
-            'order_matches',
-            'order_statuses',
-            'sends',
-            'sleeps',
-            'swaps',
-            'swap_cancels',
-            'swap_edits',
-            'swap_expires',
-            'swap_matches',
-            'swap_statuses',
-            // Cross-chain action tables. Each holds internally-minted action rows
-            // (settlement legs, XCALL requests/expiries, injected XEXEC executions,
-            // and processed callbacks) keyed by a rollback-able action_index. The
-            // source rolls them back by action_index, so a reorg here must drop the
-            // orphaned-range rows or the replica keeps serving cross-chain swaps as
-            // settled / calls as executed that the source chain never finalized.
-            'cross_chain_settlements',
-            'cross_chain_call_executions',
-            'cross_chain_call_callbacks',
-            'xcalls',
-            'sweeps',
-            'tokens',
-            'stakes',
-            'unstakes',
-            'delegations',
-            // Revoked stake signing keys (rollback-able action_index). Consensus
-            // state a replica needs to know which keys are valid signers; the source
-            // rolls it back by action_index, so it must be dropped here on reorg too.
-            'stake_key_revocations',
-            'reward_claims',
-            // full_node_verifications: NODEPROOF verdict rows (verified-validator
-            // tier), keyed by the verdict action_index and rolled back as a dataTable
-            // by the source (xchain-indexer/src/rollback.js). Mirror it here or a reorg
-            // leaves orphaned PASS-verdict rows on every replica. The follower keeps
-            // mirroring a verified-full-node set (which drives the oracle-round reward
-            // split) that the source chain never finalized. Generic action_index delete,
-            // no restore, same shape as the source.
-            'full_node_verifications',
-            'contracts',
-            // contract_permissions: the DEPLOY permissions manifest (which action-classes
-            // are guard-gated for a contract), keyed by the DEPLOY action_index and rolled
-            // back as a dataTable by the source; mirror it so a reorg drops orphaned
-            // manifests too, else the replica keeps enforcing policy the source never finalized.
-            'contract_permissions',
-            // deploy_chunks: one row per DEPLOY v4 carrier action (rollback-able action_index),
-            // delivered to followers via snapshots. The source rolls it back by
-            // action_index (xchain-indexer/src/rollback.js dataTables); mirror it here or
-            // orphaned chunk rows for a DEPLOY the source chain never finalized linger on
-            // the replica until the next full snapshot (the explorer's per-chunk status
-            // view then serves them). Unhashed, so no checkpoint fork, but it is genuine
-            // rollback-able per-action state, not an indexer-local artifact.
-            'deploy_chunks',
-            'contract_stakes',
-            'contract_unstakes',
-            'contract_delegations',
-            'contract_executions',
-            'deposits',
-            'withdrawals',
-            'anchor_actions',
-            'attests',
-            'prices',
-            // Programmable-policy controller bind/unbind event logs. Append-only,
-            // keyed by action_index, never mutated in-place (cooldown expiry is
-            // computed at read time), so the generic action_index delete reverts
-            // orphaned binds/unbinds exactly. The source rolls these back, and they
-            // are snapshot-replicated to followers, so a reorg here must drop the
-            // orphaned-range rows or the replica keeps serving stale access policy
-            // (which action-classes are guard-gated) that the source never finalized.
-            'token_controllers',
-            'address_controllers',
-            // VOTE governance tables, all keyed by their writing action_index and
-            // rolled back as dataTables by the source (xchain-indexer/src/rollback.js):
-            // polls (v0 create), votes (v1 ballots), poll_results (v2 finalization),
-            // vote_delegations (v3 set/clear event log). The polls SUMMARY finalization
-            // is additionally reset in place below (see the polls re-open block),
-            // mirroring the source.
-            'polls',
-            'votes',
-            'poll_results',
-            'vote_delegations'
-        ];
+        // Generic rollback table lists, generated from the table-lifecycle
+        // registry (src/tableLifecycle.js, the byte-identical twin of the
+        // xchain-indexer copy). replicaRollbackTables() yields exactly the
+        // source indexer's generic lists minus indexer-local tables that never
+        // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
+        // can no longer drift apart table-by-table: a table added to the
+        // registry joins both sides at once. Per-table rationale lives with
+        // the registry entries; the bespoke in-place resets/restores below
+        // stay hand-written (and remain drift-guarded by the parity tests in
+        // test/unit/rollback-coverage.test.js).
+        let rollbackLists = lifecycle.replicaRollbackTables();
+        this.blockTables  = rollbackLists.blockTables;
+        this.indexTables  = rollbackLists.indexTables;
+        this.dataTables   = rollbackLists.dataTables;
 
         // ── Decoder-DB rollback (used by _rollbackDecoder) ──
         // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
