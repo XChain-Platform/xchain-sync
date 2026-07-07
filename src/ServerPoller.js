@@ -419,7 +419,7 @@ class ServerPoller {
             // before the flag-day (the follower then skips the check). The follower
             // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
             // for the later full-state_root verification (no wire change needed then).
-            if(isStateCommitmentActive(block_index, this.network)){
+            if(isStateCommitmentActive(block_index, this.network, this.chain)){
                 let roots = await this.db.getStateRootsRow(this.chain, this.network, block_index);
                 payload.balances_root    = roots ? roots.balances_root    : null;
                 payload.block_merkle_root = roots ? roots.block_merkle_root : null;

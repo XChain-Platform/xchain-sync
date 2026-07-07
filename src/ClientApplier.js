@@ -164,8 +164,8 @@ class ClientApplier {
                 // event rows (credits/debits/escrows; cooldown refunds already merged by
                 // the source), mirroring the indexer's ledger-choke-point set. ClientSync
                 // reads _lastComputedRoots after commit and HALTs on divergence.
-                if(isStateCommitmentActive(payload.block_index, this.network)){
-                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network);
+                if(isStateCommitmentActive(payload.block_index, this.network, this.chain)){
+                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.chain);
                     let touchedKeys  = isActivation ? [] : await this._collectSmtTouchedKeys(data);
                     this._lastComputedRoots = await computeFollowerRoots(
                         this.db, this.chain, this.network, payload.block_index, touchedKeys, isActivation);
@@ -317,7 +317,7 @@ class ClientApplier {
             // (block_height+1) finds a prior balances_root (SPV spec sec.4.3). Full
             // build over the replicated state; block_merkle_root is NULL (state-at-
             // height, not the tip block's content rows). Indexer + post-flag-day only.
-            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network))
+            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.chain))
                 await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();
@@ -369,7 +369,7 @@ class ClientApplier {
                 // find no prior balances_root. Full build over the now-complete replica
                 // (correct only on a non-truncated replica; truncated / incremental-
                 // bootstrapped replicas must run VERIFY_STATE_COMMITMENT=false).
-                if(isStateCommitmentActive(snapshotData.block_height, this.network))
+                if(isStateCommitmentActive(snapshotData.block_height, this.network, this.chain))
                     await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
             }
             await this.db.commitTransaction();
