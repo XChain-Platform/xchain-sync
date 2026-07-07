@@ -253,10 +253,12 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     //    an already-current row is a no-op. Reorg-safe: on rollback the source
     //    re-materialises supply (rollback.js -> updateTokens) and the next forward window's
     //    ledger changes re-emit the refreshed row; in-order block apply means a later
-    //    window's row never lands before an earlier one. tokens.supply is deliberately NOT
-    //    added to any hash preimage (consensus block hashes or the non-consensus state_hash
-    //    in stateHash.js); this is a pure replication/serving fix, so this class has no twin
-    //    in buildStateHashData and adding it cannot trigger a state-hash divergence HALT.
+    //    window's row never lands before an earlier one. tokens.supply stays out of the
+    //    consensus block hashes, but since 2026-07-07 this class HAS a state_hash twin:
+    //    buildStateHashData's token_supply class hashes (tick, supply) for the same
+    //    ledger-touched tick set (flag-day gated per chain via
+    //    TOKEN_SUPPLY_STATE_HASH_ACTIVATION), so once armed, a follower that drops this
+    //    upsert halts at the block instead of serving a stale supply.
     try {
         // Join each ledger table to `actions` independently and UNION the tick_ids,
         // rather than UNION ALL-ing the three full tables into a derived table and

@@ -25,6 +25,7 @@ const assert  = require('assert');
 const Utility = require('../../src/utility');
 const {
     buildStateHashData, isIndexMapStateHashActive, INDEX_MAP_STATE_HASH_ACTIVATION,
+    POLL_FINALIZE_STATE_HASH_ACTIVATION, TOKEN_SUPPLY_STATE_HASH_ACTIVATION,
 } = require('../../src/stateHash');
 
 const util = new Utility();
@@ -47,6 +48,21 @@ async function withArmed(height, fn){
 }
 
 describe('state_hash index-map class (id-determinism P4) - follower twin @regression', function(){
+
+    // Isolate this suite from the poll_finalize / token_supply classes (armed on
+    // regtest since 2026-07-07): their query slots would shift the canned
+    // call-order mock and their preimage keys would break the shape assertions.
+    let pollPrev, tokenPrev;
+    before(function(){
+        pollPrev  = POLL_FINALIZE_STATE_HASH_ACTIVATION.regtest;
+        tokenPrev = TOKEN_SUPPLY_STATE_HASH_ACTIVATION.regtest;
+        POLL_FINALIZE_STATE_HASH_ACTIVATION.regtest = 999999999;
+        TOKEN_SUPPLY_STATE_HASH_ACTIVATION.regtest  = 999999999;
+    });
+    after(function(){
+        POLL_FINALIZE_STATE_HASH_ACTIVATION.regtest = pollPrev;
+        TOKEN_SUPPLY_STATE_HASH_ACTIVATION.regtest  = tokenPrev;
+    });
 
     it('gate: inert by default, arms at/after the per-chain height', function(){
         assert.strictEqual(isIndexMapStateHashActive(7, 'regtest'), false);

@@ -627,10 +627,24 @@ describe('Rollback coverage guard @regression', function(){
             // Poll-finalize flip (flag-day gated): same resolved_block key the
             // POLL_FINALIZE_TABLES forward channel and the rollback re-open use.
             { name: 'poll finalization flip',    re: /FROM polls WHERE resolved_block BETWEEN \? AND \? ORDER BY action_index ASC/ },
+            // Token-supply refresh (flag-day gated, F-1 closure): same
+            // ledger-touched-tick selection shape as the forward tokens class.
+            { name: 'token supply refresh',      re: /SELECT tk\.tick AS tick, t\.supply AS supply FROM tokens t/ },
         ];
         for(const p of PREDICATES){
             assert.ok(p.re.test(src), `stateHash.js is missing the ${p.name} selection; its hash would not cover that replicated mutation class`);
         }
+        // The mid-chain-armed classes (poll_finalize / token_supply) are gated by
+        // per-chain '<COIN>:<network>' keys, so the follower's recompute MUST
+        // thread coin alongside network or it computes without the armed classes
+        // while the source computes with them (guaranteed halt at the height).
+        const bh = fs.readFileSync(pathMod.resolve(__dirname, '../../src/BlockHasher.js'), 'utf8');
+        assert.ok(/computeStateHash\(block_index, activationDelay, gasTick, network, coin\)/.test(bh),
+            'BlockHasher.computeStateHash must accept and forward the coin gate parameter');
+        const cs = fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientSync.js'), 'utf8')
+            .replace(/\s+/g, ' ');
+        assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.chain\)/.test(cs),
+            'ClientSync must pass this.chain as the coin gate parameter to computeStateHash');
     });
 
     // Value-level fixture assertions (F-1, F-2, F-5).
@@ -640,13 +654,14 @@ describe('Rollback coverage guard @regression', function(){
     // key, off-by-one range) fails here rather than silently shipping a divergent replica.
 
     // F-1: tokens.supply is an in-place mutation on SURVIVING rows (ISSUE/DESTROY
-    // increment/decrement supply on a token created by an earlier action). None of the
-    // updatedRows mutation-class arrays cover 'tokens', so the forward channel carries
-    // no supply update (a known, accepted gap: the token row itself is deleted on reorg
-    // via dataTables, so the supply discrepancy only manifests on a reorg that orphans
-    // an ISSUE whose token SURVIVES in an earlier block). Pin the current design by value:
-    // if a supply-tracking class is added it must update these arrays AND this assertion.
-    it('F-1: tokens is not in any updatedRows mutation-class array (known supply-forward gap)', function(){
+    // increment/decrement supply on a token created by an earlier action). It is
+    // deliberately NOT in the named mutation-class arrays: it rides its own
+    // ledger-driven pass in collectUpdatedRows (ticks touched by credits/debits/
+    // escrows in the window), and since 2026-07-07 that pass has a state_hash twin
+    // (the flag-day-gated token_supply class in stateHash.js), closing the original
+    // F-1 hash gap. Pin the array design by value: a table added to one of these
+    // arrays is a deliberate, visible change, not drift.
+    it('F-1: tokens is not in any updatedRows mutation-class array (supply rides the ledger-driven pass + token_supply hash class)', function(){
         const { DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES } = require('../../src/updatedRows');
         const allMutationTables = new Set([
             ...DEACTIVATION_TABLES,

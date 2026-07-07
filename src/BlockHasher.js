@@ -254,14 +254,17 @@ class BlockHasher {
     // recompute, where the in-place-mutated rows have since moved on (see ClientSync).
     // activationDelay is the frozen per-chain ACTIVATION_DELAY_BLOCKS; gasTick defaults
     // to the consensus GAS constant.
-    async computeStateHash(block_index, activationDelay, gasTick, network){
+    async computeStateHash(block_index, activationDelay, gasTick, network, coin){
         let stateData = await buildStateHashData(this.db, block_index, {
             activationDelay: activationDelay,
             gasTick:         (gasTick !== undefined) ? gasTick : gasTickSymbol(),
-            // network gates the additive index-map class (id-determinism P4); the follower
-            // MUST pass the SAME network the source used so its recompute matches byte-for-byte.
-            // Inert by default (stateHash.js INDEX_MAP_STATE_HASH_ACTIVATION), so a no-op until armed.
-            network:         network
+            // network gates the additive index-map class (id-determinism P4); coin extends
+            // the lookup to the per-chain '<COIN>:<network>' keys the mid-chain-armed
+            // classes (poll_finalize / token_supply) use. The follower MUST pass the SAME
+            // (network, coin) pair the source used so its recompute matches byte-for-byte
+            // across each chain's activation height.
+            network:         network,
+            coin:            coin
         });
         return this.util.getDataHash(stateData);
     }

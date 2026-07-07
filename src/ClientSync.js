@@ -1892,7 +1892,7 @@ class ClientSync {
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
                 let delay = activationDelayBlocks(this.chain);
                 let localState = await this.blockHasher.computeStateHash(
-                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network);
+                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.chain);
                 if(localState !== event.state_hash){
                     await this._haltOnDivergence(event.block_index,
                         [{ field: 'state_hash', a: event.state_hash, b: localState }],
