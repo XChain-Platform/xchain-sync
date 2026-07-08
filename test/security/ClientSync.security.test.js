@@ -465,7 +465,7 @@ describe('ClientSync security', function(){
 
     describe('WebSocket message handler: event validation', function(){
 
-        it('rejects message with unknown event type', function(done){
+        it('rejects message with unknown event type', async function(){
             let messageHandler = null;
             let fakeWs = function(url, opts){
                 return {
@@ -489,14 +489,17 @@ describe('ClientSync security', function(){
             assert.ok(messageHandler, 'message handler should be registered');
 
             let invalidEvent = JSON.stringify({ type: 'DROP TABLE', block_index: 1 });
-            messageHandler(Buffer.from(invalidEvent)).then(() => {
-                assert.strictEqual(sync._handleEvent.called, false);
-                assert.strictEqual(console.error.called, true);
-                done();
-            }).catch(done);
+            // The ws 'message' handler is fire-and-serialize: it validates synchronously
+            // then chains _handleEvent onto the internal _wsEventChain rather than returning
+            // a promise (concurrency fix; see ClientSync._connectWebSocket). An invalid event
+            // is rejected before any chaining, so flush microtasks and assert.
+            messageHandler(Buffer.from(invalidEvent));
+            await (sync._wsEventChain || Promise.resolve());
+            assert.strictEqual(sync._handleEvent.called, false);
+            assert.strictEqual(console.error.called, true);
         });
 
-        it('rejects non-JSON message without crashing', function(done){
+        it('rejects non-JSON message without crashing', async function(){
             let messageHandler = null;
             let fakeWs = function(url, opts){
                 return {
@@ -517,13 +520,14 @@ describe('ClientSync security', function(){
             sinon.stub(sync, '_handleEvent');
             sync._connectWebSocket('http://source1.local', 0);
 
-            messageHandler(Buffer.from('not valid json')).then(() => {
-                assert.strictEqual(sync._handleEvent.called, false);
-                done();
-            }).catch(done);
+            // Fire-and-serialize handler (see the unknown-event-type test): a non-JSON
+            // message is rejected synchronously in the try/catch before any chaining.
+            messageHandler(Buffer.from('not valid json'));
+            await (sync._wsEventChain || Promise.resolve());
+            assert.strictEqual(sync._handleEvent.called, false);
         });
 
-        it('accepts valid block event and calls _handleEvent', function(done){
+        it('accepts valid block event and calls _handleEvent', async function(){
             let messageHandler = null;
             let fakeWs = function(url, opts){
                 return {
@@ -545,10 +549,11 @@ describe('ClientSync security', function(){
             sync._connectWebSocket('http://source1.local', 0);
 
             let validEvent = JSON.stringify({ type: 'block', block_index: 100, data: {} });
-            messageHandler(Buffer.from(validEvent)).then(() => {
-                assert.strictEqual(sync._handleEvent.calledOnce, true);
-                done();
-            }).catch(done);
+            // A valid event is chained onto _wsEventChain; await that internal chain so the
+            // serialized _handleEvent call has run before asserting.
+            messageHandler(Buffer.from(validEvent));
+            await (sync._wsEventChain || Promise.resolve());
+            assert.strictEqual(sync._handleEvent.calledOnce, true);
         });
     });
 });
