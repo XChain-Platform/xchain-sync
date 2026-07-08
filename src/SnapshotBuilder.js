@@ -20,6 +20,7 @@
  ********************************************************************/
 
 const zlib = require('zlib');
+const { once } = require('events');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { encodeRow, encodeTables } = require('./wireCodec');
 const replicatedTables = require('./replicatedTables');
@@ -64,6 +65,81 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // nondeterminism to the snapshot and is never consumed by the follower.
     'state_tree_roots',
 ]);
+
+// Guards a gzip snapshot stream against a slow or vanished reader. The snapshot
+// routes are unauthenticated behind only a per-IP/hr limiter, so a half-open
+// reader that never drains would otherwise (a) buffer the entire snapshot in the
+// server's RAM and (b) pin the REPEATABLE READ connection open the whole time,
+// bloating InnoDB undo history; a few concurrent slow reads exhaust the pool and
+// push the source toward OOM. write() applies real backpressure - it awaits
+// 'drain' when the gzip buffer fills instead of writing unconditionally - and
+// rejects with an aborted-tagged error the moment the client disconnects, so the
+// caller tears the read snapshot down rather than blocking on a drain that will
+// never come.
+class SnapshotStreamWriter {
+    constructor(gzip, res){
+        this.gzip = gzip;
+        this.aborted = false;
+        this._ac = new AbortController();
+        this._res = res;
+        // A disconnect fires 'close' on the response before the stream drains.
+        // Flag it, wake any pending drain wait (via the abort signal), and destroy
+        // the gzip stream so its buffered chunks are freed.
+        this._onClose = () => this._abort();
+        // A gzip error (e.g. a write after the piped socket died) must also release
+        // a pending drain wait rather than hang it, and must not throw unhandled.
+        this._onError = () => this._abort();
+        res.once('close', this._onClose);
+        gzip.once('error', this._onError);
+    }
+
+    _abort(){
+        if(this.aborted) return;
+        this.aborted = true;
+        this._ac.abort();
+        if(!this.gzip.destroyed) this.gzip.destroy();
+    }
+
+    _abortError(){
+        let e = new Error('snapshot stream aborted by client disconnect');
+        e.aborted = true;
+        return e;
+    }
+
+    // Write one chunk, applying backpressure. Resolves once the chunk is accepted
+    // (immediately if the buffer has room, else after 'drain'). Rejects with an
+    // aborted-tagged error if the client has gone away, so the caller stops.
+    async write(chunk){
+        if(this.aborted) throw this._abortError();
+        // write() returns false when the internal buffer crosses the high-water
+        // mark: pause and wait for 'drain' so we never outrun a slow reader.
+        if(this.gzip.write(chunk)) return;
+        try {
+            await once(this.gzip, 'drain', { signal: this._ac.signal });
+        } catch(e){
+            // AbortError (client closed) or a gzip error surfaced by once(): either
+            // way the stream is gone, so report it as an abort.
+            throw this._abortError();
+        }
+    }
+
+    // Normal completion: detach the disconnect handlers and flush-close the stream.
+    finish(){
+        this._detach();
+        if(!this.gzip.destroyed) this.gzip.end();
+    }
+
+    // Error/abort teardown: detach handlers and drop any buffered output.
+    dispose(){
+        this._detach();
+        if(!this.gzip.destroyed) this.gzip.destroy();
+    }
+
+    _detach(){
+        this._res.removeListener('close', this._onClose);
+        this.gzip.removeListener('error', this._onError);
+    }
+}
 
 class SnapshotBuilder {
 
@@ -127,6 +203,7 @@ class SnapshotBuilder {
         let startedAt = Date.now();
         let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
+        let writer = null;
         try {
             let lastBlock = await db.getLastBlock(conn);
             if(lastBlock === null){
@@ -152,8 +229,9 @@ class SnapshotBuilder {
 
             let gzip = zlib.createGzip();
             gzip.pipe(res);
+            writer = new SnapshotStreamWriter(gzip, res);
 
-            gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
+            await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
@@ -163,25 +241,29 @@ class SnapshotBuilder {
                     let count = await db.getTableCount(table, conn);
                     if(count === 0) continue;
 
-                    if(!first) gzip.write(',');
+                    if(!first) await writer.write(',');
                     first = false;
-                    gzip.write('"' + table + '":[');
+                    await writer.write('"' + table + '":[');
 
                     let offset = 0;
                     let firstRow = true;
                     while(offset < count){
                         let rows = await db.getTablePage(table, this.pageSize, offset, conn);
                         for(let row of rows){
-                            if(!firstRow) gzip.write(',');
+                            if(!firstRow) await writer.write(',');
                             firstRow = false;
-                            gzip.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+                            await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
                             totalRows++;
                         }
                         offset += this.pageSize;
                     }
 
-                    gzip.write(']');
+                    await writer.write(']');
                 } catch(e){
+                    // A client-disconnect abort must break out of the whole stream, not
+                    // be swallowed as a per-table read error (which would keep writing to
+                    // a dead stream and pinning the read view).
+                    if(e && e.aborted) throw e;
                     console.error('Error reading table ' + table + ':', e);
                 }
             }
@@ -189,7 +271,7 @@ class SnapshotBuilder {
             // Release the read view only after the final page is read. The data
             // is already buffered into gzip, so committing before gzip.end()
             // does not race the stream flush.
-            gzip.write('}}');
+            await writer.write('}}');
             await db.commitReadSnapshot(conn);
             snapshotOpen = false;
 
@@ -205,9 +287,14 @@ class SnapshotBuilder {
                 ' duration=' + duration + 'ms');
             this.snapshotsServed = (this.snapshotsServed || 0) + 1;
 
-            gzip.end();
+            writer.finish();
         } catch(e){
+            if(writer) writer.dispose();
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);
+            // A client abort mid-stream is not a server error: the read view is
+            // already released, and the response is gone, so return quietly rather
+            // than surfacing a 500-shaped error to the (absent) caller.
+            if(e && e.aborted) return;
             throw e;
         }
     }
@@ -240,6 +327,7 @@ class SnapshotBuilder {
         // the headers advertise only one.
         let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
+        let writer = null;
         try {
             let lastBlock = await db.getLastBlock(conn);
             if(lastBlock === null || sinceBlock > lastBlock){
@@ -270,8 +358,9 @@ class SnapshotBuilder {
 
             let gzip = zlib.createGzip();
             gzip.pipe(res);
+            writer = new SnapshotStreamWriter(gzip, res);
 
-            gzip.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
+            await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
             let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
@@ -378,6 +467,26 @@ class SnapshotBuilder {
 
             for(let table of tableOrder){
                 try {
+                    // Append-only id-PK lookup tables (index_*, and decoder pubkeys/
+                    // events) are full-dumped, but a single unbounded `SELECT *` would
+                    // materialize the whole table - millions of rows on a fast chain
+                    // (e.g. DOGE-testnet index_transactions ~8.5M) - into the driver
+                    // array before a byte is written, a cheap unauthenticated OOM path
+                    // on /since/0. Stream them by id cursor in pageSize batches instead
+                    // (mirrors streamTableRowsById), so no more than one page is resident
+                    // and the gzip backpressure above bounds the buffered output. A
+                    // skipLookups caller syncs these out of band, so omit them here. The
+                    // non-lookup indexer full-dumps (merkle_epochs/markets/
+                    // attest_validator_stats) are small aggregates with no id cursor and
+                    // stay in the bundled path below.
+                    if(lookupSet.has(table) &&
+                       ((dbType === 'decoder' && decoderFullDump.has(table)) ||
+                        (dbType === 'indexer' && indexerFullDump.has(table)))){
+                        if(skipLookups) continue;
+                        first = await this._streamLookupPaged(writer, db, table, conn, first);
+                        continue;
+                    }
+
                     let rows;
                     if(dbType === 'decoder'){
                         if(decoderSkip.has(table)){
@@ -463,17 +572,21 @@ class SnapshotBuilder {
 
                     if(!rows || rows.length === 0) continue;
 
-                    if(!first) gzip.write(',');
+                    if(!first) await writer.write(',');
                     first = false;
-                    gzip.write('"' + table + '":[');
+                    await writer.write('"' + table + '":[');
 
                     for(let i = 0; i < rows.length; i++){
-                        if(i > 0) gzip.write(',');
-                        gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+                        if(i > 0) await writer.write(',');
+                        await writer.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
                     }
 
-                    gzip.write(']');
+                    await writer.write(']');
                 } catch(e){
+                    // A client-disconnect abort must break out of the whole stream, not
+                    // be swallowed as a per-table read error (which would keep writing to
+                    // a dead stream and pinning the read view).
+                    if(e && e.aborted) throw e;
                     console.error('Error reading table ' + table + ' for incremental:', e);
                 }
             }
@@ -488,21 +601,59 @@ class SnapshotBuilder {
             // `block_index >= sinceBlock` data scoping above (over-inclusion is a
             // harmless UPSERT). tokens.escrow_action_index is omitted; the follower
             // re-derives it locally (ClientApplier._maybeRederiveEscrow).
-            gzip.write('}');
+            await writer.write('}');
             if(dbType === 'indexer'){
                 let delay = activationDelayBlocks(coin);
                 if(delay === undefined) delay = null;
                 let updated = await collectUpdatedRows(db, sinceBlock, lastBlock, delay, conn);
-                gzip.write(',"updated_rows":' + JSON.stringify(encodeTables(updated), bigIntReplacer));
+                await writer.write(',"updated_rows":' + JSON.stringify(encodeTables(updated), bigIntReplacer));
             }
-            gzip.write('}');
+            await writer.write('}');
             await db.commitReadSnapshot(conn);
             snapshotOpen = false;
-            gzip.end();
+            writer.finish();
         } catch(e){
+            if(writer) writer.dispose();
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);
+            // A client abort mid-stream is not a server error (see streamFullSnapshot).
+            if(e && e.aborted) return;
             throw e;
         }
+    }
+
+    // Stream one append-only id-PK lookup table into the snapshot body by id cursor
+    // in pageSize batches, so a multi-million-row table never lands in the driver
+    // array (or gzip buffer) all at once. `first` tracks whether any table key has
+    // been written yet (for the inter-table comma); returns the updated value.
+    // Uses the shared REPEATABLE READ conn, so paging is consistent across batches.
+    async _streamLookupPaged(writer, db, table, conn, first){
+        let col = replicatedTables.lookupCursorColumn(table);
+        let after = 0;
+        let wrote = false;
+        let firstRow = true;
+        while(true){
+            let page = await db.doQuery(
+                "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
+                [after, this.pageSize],
+                conn
+            );
+            if(!page.length) break;
+            if(!wrote){
+                if(!first) await writer.write(',');
+                first = false;
+                await writer.write('"' + table + '":[');
+                wrote = true;
+            }
+            for(let r of page){
+                if(!firstRow) await writer.write(',');
+                firstRow = false;
+                await writer.write(JSON.stringify(encodeRow(r), bigIntReplacer));
+            }
+            after = Number(page[page.length - 1][col]);
+            if(page.length < this.pageSize) break;
+        }
+        if(wrote) await writer.write(']');
+        return first;
     }
 
     // Default + ceiling page sizes for streamTableRowsById. The ceiling bounds the
@@ -625,3 +776,4 @@ class SnapshotBuilder {
 }
 
 module.exports = SnapshotBuilder;
+module.exports.SnapshotStreamWriter = SnapshotStreamWriter;

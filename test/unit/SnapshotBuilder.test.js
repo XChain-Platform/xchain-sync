@@ -11,8 +11,10 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const { PassThrough } = require('stream');
+const { EventEmitter } = require('events');
 const zlib = require('zlib');
 const SnapshotBuilder = require('../../src/SnapshotBuilder');
+const { SnapshotStreamWriter } = require('../../src/SnapshotBuilder');
 const Utility = require('../../src/utility');
 
 function createMockDb(dbName){
@@ -263,8 +265,10 @@ describe('SnapshotBuilder', function(){
             db.doQuery.callsFake(async (query) => {
                 if(query.includes('information_schema'))
                     return [{ table_name: 'events' }];
-                // events full-dump query has no WHERE clause (whole table)
-                if(/SELECT \* FROM `events`\s*$/.test(query))
+                // events is full-dumped, now streamed by id cursor in pages (a single
+                // unbounded SELECT * would OOM on a large table). 2 rows < pageSize, so
+                // one page then the loop stops.
+                if(/SELECT \* FROM `events` WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(query))
                     return [{ id: 1, code: 'x', data: 'y' }, { id: 2, code: 'z', data: 'w' }];
                 return [];
             });
@@ -297,11 +301,12 @@ describe('SnapshotBuilder', function(){
             db.doQuery.callsFake(async (query) => {
                 if(query.includes('information_schema'))
                     return [{ table_name: 'index_addresses' }];
-                // Full-dump query has no WHERE clause (whole table). If the code instead
-                // tried the action_index branch the query would carry a WHERE and this
-                // would not match, so the table would come back empty and the assert below
-                // would fail, exactly the bug being guarded against.
-                if(/SELECT \* FROM `index_addresses`\s*$/.test(query))
+                // index_* lookup tables are full-dumped, now streamed by id cursor in
+                // pages. If the code instead tried the action_index branch the query
+                // would carry a `WHERE action_index >=` and this would not match, so the
+                // table would come back empty and the assert below would fail, exactly
+                // the bug being guarded against.
+                if(/SELECT \* FROM `index_addresses` WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(query))
                     return [{ id: 1, address: 'a1' }, { id: 2, address: 'a2' }, { id: 3, address: 'a3' }];
                 return [];
             });
@@ -761,6 +766,127 @@ describe('SnapshotBuilder', function(){
                 await assert.rejects(() => builder.streamIncrementalSnapshot(db, 3, res), { message: 'inc read fail' });
                 assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
+        });
+    });
+
+    // Fix #1 (HIGH): the gzip write loop ignored backpressure and had no client-abort
+    // handler, so a slow/half-open reader pinned the REPEATABLE READ connection and
+    // buffered the whole snapshot in RAM (a pool-exhaustion / OOM path on the
+    // unauthenticated snapshot routes). SnapshotStreamWriter applies backpressure and
+    // tears the stream down the moment the client disconnects.
+    describe('SnapshotStreamWriter (backpressure + client-abort)', function(){
+        // Minimal gzip stand-in: an EventEmitter whose write() returns a preset value
+        // so we can drive the drain/backpressure paths deterministically.
+        function fakeGzip(writeReturns){
+            let ee = new EventEmitter();
+            ee.destroyed = false;
+            ee.write = sinon.stub().returns(writeReturns);
+            ee.end = sinon.stub();
+            ee.destroy = sinon.stub().callsFake(() => { ee.destroyed = true; });
+            return ee;
+        }
+        const tick = () => new Promise(r => setImmediate(r));
+
+        it('resolves immediately when the buffer has room (write() returns true)', async function(){
+            let gzip = fakeGzip(true);
+            let w = new SnapshotStreamWriter(gzip, new EventEmitter());
+            await w.write('x');
+            assert.ok(gzip.write.calledOnceWith('x'));
+        });
+
+        it('blocks until drain when the buffer is full (write() returns false)', async function(){
+            let gzip = fakeGzip(false);
+            let w = new SnapshotStreamWriter(gzip, new EventEmitter());
+            let settled = false;
+            let p = w.write('x').then(() => { settled = true; });
+            await tick();
+            assert.strictEqual(settled, false, 'write awaits drain when backpressured');
+            gzip.emit('drain');
+            await p;
+            assert.strictEqual(settled, true, 'resolves once drain fires');
+        });
+
+        it('rejects (aborted) and destroys gzip when the client disconnects mid-write', async function(){
+            let gzip = fakeGzip(false);
+            let res = new EventEmitter();
+            let w = new SnapshotStreamWriter(gzip, res);
+            let p = w.write('x');            // parks on drain
+            res.emit('close');               // client vanished
+            await assert.rejects(p, e => e.aborted === true);
+            assert.ok(gzip.destroy.called, 'gzip destroyed to free buffered chunks');
+            // Every subsequent write also fails fast rather than writing to a dead stream.
+            await assert.rejects(w.write('y'), e => e.aborted === true);
+        });
+
+        it('finish() detaches the disconnect handler and ends the stream', async function(){
+            let gzip = fakeGzip(true);
+            let res = new EventEmitter();
+            let w = new SnapshotStreamWriter(gzip, res);
+            w.finish();
+            assert.ok(gzip.end.called, 'stream flushed on normal completion');
+            // A late close (normal streams emit close after finish) must NOT re-abort.
+            res.emit('close');
+            assert.ok(gzip.destroy.notCalled, 'close after finish is ignored');
+        });
+    });
+
+    describe('streamFullSnapshot client-abort', function(){
+        it('releases the read view and stops when the client disconnects mid-stream', async function(){
+            let db = createMockDb();
+            db.getLastBlock.resolves(50);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.doQuery.resolves([{ table_name: 'blocks' }]);
+            db.getTableCount.resolves(1);
+            let res = new PassThrough();
+            res.setHeader = sinon.stub();
+            res.on('data', () => {});
+            // Simulate the client vanishing exactly when the first page is read.
+            db.getTablePage.callsFake(async () => { res.emit('close'); return [{ block_index: 50 }]; });
+
+            // Resolves (does not reject): a client abort is swallowed, not a 500.
+            await builder.streamFullSnapshot(db, res);
+            assert.ok(db.rollbackReadSnapshot.calledOnce, 'read view rolled back on abort');
+            assert.ok(db.commitReadSnapshot.notCalled, 'never commits after an abort');
+        });
+    });
+
+    // Fix #2 (MED): the incremental full-dump of append-only lookup tables ran an
+    // unbounded `SELECT *`, materializing a whole multi-million-row table into the
+    // driver array. They are now streamed by id cursor in pageSize batches.
+    describe('streamIncrementalSnapshot lookup paging', function(){
+        it('pages a full-dump lookup table by id cursor instead of one unbounded SELECT *', async function(){
+            let db = createMockDb();
+            db.dbType = 'indexer';
+            builder.pageSize = 2;              // force multiple pages over a small set
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getFirstActionIndex.resolves(null);
+            let pageCalls = [];
+            db.doQuery.callsFake(async (query, args) => {
+                if(query.includes('information_schema')) return [{ table_name: 'index_addresses' }];
+                let m = /SELECT \* FROM `index_addresses` WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.exec(query);
+                if(m){
+                    pageCalls.push(args);      // [after, limit]
+                    let after = args[0];
+                    // 3 rows total (ids 1,2,3), served 2 per page by id cursor.
+                    let all = [{ id: 1, address: 'a1' }, { id: 2, address: 'a2' }, { id: 3, address: 'a3' }];
+                    return all.filter(r => r.id > after).slice(0, args[1]);
+                }
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => { res.on('finish', resolve); builder.streamIncrementalSnapshot(db, 80, res); });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.deepStrictEqual(parsed.tables.index_addresses.map(r => r.id), [1, 2, 3], 'all rows streamed across pages');
+            // Never an unbounded SELECT *: every read of the table carried the id-cursor + LIMIT.
+            assert.ok(pageCalls.length >= 2, 'read in more than one bounded page');
+            assert.ok(pageCalls.every(a => a[1] === 2), 'each page bounded by pageSize');
+            assert.deepStrictEqual(pageCalls[0], [0, 2], 'first page starts at cursor 0');
         });
     });
 });

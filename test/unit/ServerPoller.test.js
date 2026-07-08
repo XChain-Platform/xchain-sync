@@ -45,6 +45,7 @@ function createMockLog(){
         recordBlock:      sinon.stub().resolves(),
         pruneFrom:        sinon.stub().resolves(),
         getHighWaterMark: sinon.stub().resolves(null),
+        getRecordedHash:  sinon.stub().resolves(null),
         findGaps:         sinon.stub().resolves([]),
         recommitEpoch:    sinon.stub().resolves()
     };
@@ -334,6 +335,62 @@ describe('ServerPoller', function(){
             assert.deepStrictEqual(recorded, [101, 102, 103, 104, 105],
                 'every downtime block must be recorded in the transparency log');
             assert.strictEqual(poller.lastPolledBlock, 105);
+        });
+    });
+
+    // Fix #4 (MED): on restart the reorg guard seeded lastPolledBlockHash from a LIVE
+    // source read, so a reorg that completed entirely during downtime was masked
+    // (live == live) and never detected - stale sync_meta/merkle_epochs served
+    // chain-wrong proofs forever. Seed from the DURABLE recorded hash instead so the
+    // first poll compares recorded(pre-reorg) vs live(post-reorg) and fires.
+    describe('_seedReorgGuardHash (durable reorg-guard seed) @regression', function(){
+        it('indexer seeds from the recorded (pre-reorg) hash, NOT a live source read', async function(){
+            log.getRecordedHash.withArgs(100).resolves('recorded-pre-reorg');
+            // The live source at 100 is already post-reorg; seeding from it would mask
+            // the reorg. getBlockHashRow (the live read) must not be consulted.
+            db.getBlockHashRow.withArgs(100).resolves({ ledger_hash: 'live-post-reorg' });
+
+            let seed = await poller._seedReorgGuardHash(100);
+
+            assert.strictEqual(seed, 'recorded-pre-reorg', 'reorg guard seeds from the durable record');
+            assert.ok(log.getRecordedHash.calledWith(100));
+            assert.strictEqual(db.getBlockHashRow.called, false, 'must not seed from the live (post-reorg) source');
+        });
+
+        it('detects a during-downtime reorg on the first poll after restart', async function(){
+            // Recorded up through 100 (pre-reorg ledger hash), no advance in height, but
+            // the chain forked at 100 while the server was down: live hash differs.
+            // Drive the seed + first poll directly (start() would enter its live poll
+            // loop); this mirrors the _resumeCursor regression above.
+            log.getHighWaterMark.resolves(100);
+            log.getRecordedHash.withArgs(100).resolves('l100-pre');
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.withArgs(100).resolves({ ledger_hash: 'l100-post' });
+
+            poller.lastPolledBlock = await poller._resumeCursor();
+            poller.lastPolledBlockHash = await poller._seedReorgGuardHash(poller.lastPolledBlock);
+            assert.strictEqual(poller.lastPolledBlockHash, 'l100-pre', 'seeded from the recorded pre-reorg hash');
+
+            await poller._poll();
+
+            assert.ok(broadcaster.broadcast.calledWith('bitcoin', 'mainnet', sinon.match({ type: 'reorg', block_index: 100 })),
+                'the during-downtime reorg is detected and broadcast');
+            assert.ok(log.pruneFrom.calledWith(100), 'transparency log pruned from the fork point');
+        });
+
+        it('falls back to the live read for a fresh node (no recorded hash) and null cursor', async function(){
+            assert.strictEqual(await poller._seedReorgGuardHash(null), null, 'null cursor -> no seed');
+            log.getRecordedHash.withArgs(42).resolves(null);       // never recorded
+            db.getBlockHashRow.withArgs(42).resolves({ ledger_hash: 'live-42' });
+            assert.strictEqual(await poller._seedReorgGuardHash(42), 'live-42', 'live fallback on a recorded miss');
+        });
+
+        it('decoder (no transparency log) seeds from the live source read', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getBlockHashRow.withArgs(7).resolves({ block_hash: 'bh7' });
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+            assert.strictEqual(await decoderPoller._seedReorgGuardHash(7), 'bh7');
         });
     });
 

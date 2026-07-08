@@ -71,6 +71,24 @@ describe('TransparencyLog', function(){
         });
     });
 
+    describe('getRecordedHash', function(){
+        it('returns the durable recorded ledger_hash for a height', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta WHERE block_index=\?/), [100])
+                .resolves([{ ledger_hash: 'lh-100' }]);
+            assert.strictEqual(await log.getRecordedHash(100), 'lh-100');
+        });
+
+        it('returns null when the block was never recorded', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta/), [999]).resolves([]);
+            assert.strictEqual(await log.getRecordedHash(999), null);
+        });
+
+        it('returns null when the recorded ledger_hash is NULL', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta/), [7]).resolves([{ ledger_hash: null }]);
+            assert.strictEqual(await log.getRecordedHash(7), null);
+        });
+    });
+
     describe('findGaps', function(){
         it('returns ascending interior block indices missing from sync_meta', async function(){
             db.doQuery.withArgs(sinon.match(/MIN\(block_index\) AS lo/)).resolves([{ lo: 1, hi: 300 }]);

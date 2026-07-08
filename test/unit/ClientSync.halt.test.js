@@ -113,6 +113,21 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(sync.getHaltInfo().blockIndex, 55);
         assert.strictEqual(db.getLastBlock.called, false, 'a halted client must not begin catch-up');
     });
+
+    // Fix #3 (MED): a transient error reading sync_halt on start must FAIL CLOSED.
+    // Previously the catch logged "continuing" and fell through to catch-up, so a
+    // durably-halted replica could silently resume onto a contested chain when the
+    // halt check merely hit a lock-wait / timeout.
+    it('stays HALTED (idle, no catch-up) when the start-time halt check throws', async function(){
+        db.getActiveHalt.rejects(new Error('sync_halt read blip'));
+        // Stop the idle halt-wait loop on the first sleep so the test returns.
+        sinon.stub(util, 'sleep').callsFake(() => { sync.running = false; return Promise.resolve(); });
+        sync.running = true;
+        await sync.start();
+        assert.strictEqual(sync.isHalted(), true, 'an unreadable halt state must hold the client idle, not resume');
+        assert.strictEqual(sync.getHaltInfo().reason, 'halt-state-check-failed');
+        assert.strictEqual(db.getLastBlock.called, false, 'must NOT begin catch-up on an uncertain halt check');
+    });
 });
 
 describe('ClientSync: independent recompute halt @regression', function(){

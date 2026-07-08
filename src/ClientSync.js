@@ -261,7 +261,22 @@ class ClientSync {
                 if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
                 return;
             }
-        } catch(e){ console.error('halt-state check failed (continuing):', e); }
+        } catch(e){
+            // Fail CLOSED: an uncertain halt-state check (transient DB error while
+            // reading sync_halt) must NOT be treated as "no halt" and resume catch-up -
+            // a durably-halted replica could then silently resume onto a contested
+            // chain. Hold in an idle halted state until a restart can positively read
+            // the halt table (getActiveHalt now fails closed / throws rather than
+            // returning [] on a query error).
+            console.error('halt-state check failed; staying HALTED (fail-closed) until it can be read:', e);
+            this._halted = {
+                blockIndex: -1, reason: 'halt-state-check-failed',
+                mismatches: [], sources: [], at: null
+            };
+            while(this.running && this._halted){ await this.util.sleep(5000); }
+            if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
+            return;
+        }
 
         // Reload the durable truncation join floor (set by a prior _bootstrapFromHeight).
         // _bootstrapBase is otherwise in-memory only, so after a restart the incremental

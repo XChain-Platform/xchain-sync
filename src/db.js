@@ -848,7 +848,7 @@ class Database {
     // conn (optional): run on this explicit connection instead of acquiring one.
     // Used by read-snapshot reads (beginReadSnapshot). The caller owns that
     // connection's lifecycle (commit/rollback/release), so errors propagate.
-    async doQuery(query, args, conn){
+    async doQuery(query, args, conn, opts){
         let results = [];
         if(!this.util.isNull(query)){
             if(Array.isArray(args)){
@@ -868,9 +868,15 @@ class Database {
                 results = await db.query(query, args);
             } catch (error){
                 this.util.logError('Error running database query:', error);
-                if(tx) throw error;
+                // Inside a transaction the error always propagates (the caller owns the
+                // rollback). Outside a transaction callers historically get [] on failure
+                // (fail-soft), which is wrong for a fail-CLOSED reader that must not treat
+                // a transient DB error as an authoritative empty result: those pass
+                // opts.rethrow so the error surfaces (e.g. the durable halt check).
+                if(tx || (opts && opts.rethrow)) throw error;
+            } finally {
+                if(!tx) await db.release();
             }
-            if(!tx) await db.release();
         }
         return results;
     }
@@ -893,21 +899,29 @@ class Database {
     // client does not silently resume onto a contested chain after a restart.
 
     async recordHalt(dbType, blockIndex, reason, mismatches, sources){
-        // Idempotent: don't stack duplicate active halts for the same block.
-        let existing = await this.getActiveHalt(dbType);
+        // Idempotent: don't stack duplicate active halts for the same block. Tolerate a
+        // transient read failure in this pre-check by falling through to the INSERT -
+        // recording the halt IS the durability guarantee, so it must never be skipped
+        // on a read blip (getActiveHalt now fails closed / throws).
+        let existing = null;
+        try { existing = await this.getActiveHalt(dbType); } catch(e){ existing = null; }
         if(existing && Number(existing.block_index) === Number(blockIndex)) return existing;
         await this.doQuery(
             "INSERT INTO sync_halt (db_type, block_index, reason, mismatches, sources) VALUES (?, ?, ?, ?, ?)",
             [dbType, blockIndex, String(reason || 'divergence').slice(0, 64),
              JSON.stringify(mismatches || []), JSON.stringify(sources || [])]
         );
-        return await this.getActiveHalt(dbType);
+        try { return await this.getActiveHalt(dbType); } catch(e){ return null; }
     }
 
+    // Fail CLOSED: pass rethrow so a transient query error PROPAGATES instead of
+    // returning [] (which the caller would read as "no active halt" and silently
+    // resume a possibly-halted replica onto a contested chain). Callers that must
+    // tolerate a read failure (recordHalt's pre-check) catch it explicitly.
     async getActiveHalt(dbType){
         let rows = await this.doQuery(
             "SELECT * FROM sync_halt WHERE db_type=? AND cleared_at IS NULL ORDER BY id DESC LIMIT 1",
-            [dbType]
+            [dbType], null, { rethrow: true }
         );
         return (rows && rows.length) ? rows[0] : null;
     }

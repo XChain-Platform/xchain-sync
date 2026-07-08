@@ -682,6 +682,19 @@ class ClientRollback {
                 console.error('Error rebuilding balances after rollback:', e);
             }
 
+            // Recompute tokens.supply from the surviving credits/debits/escrows. The
+            // orphaned MINT's credit row is deleted above, but tokens.supply was mutated
+            // IN PLACE (no new row), so it survives the block-scoped deletes with the
+            // inflated value; the source indexer's rollback recomputes it (updateTokens),
+            // so without this the replica serves an over-inflated supply until the next
+            // full snapshot. Mirrors xchain-indexer getTokenSupply (see balance-helpers).
+            try {
+                await balanceHelpers.recomputeTokenSupplies(this.db);
+            } catch(e){
+                if(e.errno !== 1146) throw e;
+                console.error('Error recomputing token supplies after rollback:', e);
+            }
+
             await this.db.commitTransaction();
             console.log('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 

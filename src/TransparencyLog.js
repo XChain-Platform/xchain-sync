@@ -209,6 +209,21 @@ class TransparencyLog {
         return null;
     }
 
+    // Return the DURABLE recorded ledger_hash for a height (the value this node
+    // broadcast when it recorded the block), or null if the block was never
+    // recorded. Used by ServerPoller to seed its net-forward reorg guard from the
+    // pre-reorg recorded hash rather than a fresh (post-reorg) source read, so a
+    // reorg that completed entirely during downtime is still detected on the first
+    // poll after restart. Indexer-only (the decoder has no transparency log).
+    async getRecordedHash(height) {
+        let rows = await this.db.doQuery(
+            "SELECT ledger_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
+        );
+        if (rows.length > 0 && rows[0].ledger_hash !== null && rows[0].ledger_hash !== undefined)
+            return rows[0].ledger_hash;
+        return null;
+    }
+
     // Find interior gaps in the transparency log: source blocks that fall strictly
     // between the log's own lowest and highest recorded block but were never
     // recorded. These are the permanent holes left by the pre-fix restart behaviour

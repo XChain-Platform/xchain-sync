@@ -108,8 +108,7 @@ class ServerPoller {
 
     async start(){
         this.lastPolledBlock = await this._resumeCursor();
-        this.lastPolledBlockHash = (this.lastPolledBlock !== null)
-            ? await this._sourceBlockHash(this.lastPolledBlock) : null;
+        this.lastPolledBlockHash = await this._seedReorgGuardHash(this.lastPolledBlock);
         this.running = true;
         console.log('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
@@ -403,6 +402,31 @@ class ServerPoller {
         let row = await this.db.getBlockHashRow(blockIndex);
         if(!row) return null;
         return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
+    }
+
+    // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This
+    // MUST come from the DURABLE recorded hash (sync_meta.ledger_hash via the
+    // transparency log), NOT a fresh source read. A reorg that completed entirely
+    // during downtime leaves the LIVE source content at lastPolledBlock in its
+    // post-reorg form; seeding from that would match the first poll's re-read and
+    // the guard would never fire, so sync_meta/merkle_epochs keep the pre-reorg
+    // hashes and getProof serves internally-consistent but chain-WRONG proofs
+    // forever (no reorg event is ever broadcast). Seeding from the recorded
+    // (pre-reorg) hash makes the first poll compare recorded(pre) vs live(post) and
+    // fire pruneFrom. Indexer-only: the decoder has no transparency log to record
+    // from, so it falls back to the live read (its content is deterministic from the
+    // coin node and carries no synthetic hash chain to protect). The recorded hash
+    // is present for every block the poller broadcast, so the HWM resume point
+    // always has one; the live fallback covers only the theoretical miss (and the
+    // null-cursor fresh-node case), where disabling the guard for that step is safer
+    // than seeding a wrong value.
+    async _seedReorgGuardHash(blockIndex){
+        if(blockIndex === null) return null;
+        if(this.transparencyLog){
+            let recorded = await this.transparencyLog.getRecordedHash(blockIndex);
+            if(recorded !== null) return recorded;
+        }
+        return await this._sourceBlockHash(blockIndex);
     }
 
     // Build a complete block payload for broadcasting.

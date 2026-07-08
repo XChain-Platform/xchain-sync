@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { rebuildBalances } = require('../../src/balance-helpers');
+const { rebuildBalances, recomputeTokenSupplies } = require('../../src/balance-helpers');
 
 // These helpers are pure SQL emitters (the real arithmetic happens in MariaDB),
 // so a unit test can only guard the SQL *semantics*: call order, target tables,
@@ -98,6 +98,97 @@ describe('balance-helpers @money @regression', function () {
             await rebuildBalances(full);
             assert.ok(/^DELETE FROM balances$/i.test(full.queries[0]));
             assert.ok(!/WHERE/i.test(full.queries[0]));
+        });
+    });
+
+    // Fix #5 (MED): ClientRollback rebuilt balances but not tokens.supply on reorg,
+    // so a surviving token whose supply was mutated in place by an orphaned MINT kept
+    // the inflated value. recomputeTokenSupplies mirrors xchain-indexer getTokenSupply.
+    describe('recomputeTokenSupplies() @money @regression', function () {
+        // fakeDb variant that returns the distinct-precision rows for the first
+        // SELECT, then [] for the per-precision UPDATEs.
+        function precisionDb(decimalsRows) {
+            const queries = [];
+            const argsLog = [];
+            return {
+                queries, argsLog,
+                doQuery: async (sql, args) => {
+                    queries.push(sql.replace(/\s+/g, ' ').trim());
+                    argsLog.push(args || []);
+                    if (/SELECT DISTINCT decimals FROM tokens/i.test(sql)) return decimalsRows;
+                    return [];
+                }
+            };
+        }
+
+        it('runs one UPDATE per distinct token precision, keyed by decimals', async function () {
+            const db = precisionDb([{ decimals: 8 }, { decimals: 0 }]);
+            await recomputeTokenSupplies(db);
+            const updates = db.queries.filter(q => /^UPDATE tokens/i.test(q));
+            assert.strictEqual(updates.length, 2, 'one UPDATE per distinct precision');
+            // Precision is the bind arg (a DECIMAL scale can't be parameterized, but the
+            // WHERE key can), so tokens are fixed precision-by-precision.
+            const updateArgs = db.argsLog.filter((_, i) => /^UPDATE tokens/i.test(db.queries[i]));
+            assert.deepStrictEqual(updateArgs.sort(), [[0], [8]]);
+        });
+
+        it('computes (credits - debits) + escrows at the token\'s OWN DECIMAL(60,decimals)', async function () {
+            const db = precisionDb([{ decimals: 8 }]);
+            await recomputeTokenSupplies(db);
+            const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
+            assert.ok(/FROM credits/i.test(sql) && /FROM debits/i.test(sql) && /FROM escrows/i.test(sql),
+                'unions credits + debits + escrows (escrows folds into supply, unlike balances)');
+            assert.ok(/\+ CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM credits/i.test(sql) ||
+                      /SELECT tick_id, CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM credits/i.test(sql), 'credit is positive');
+            assert.ok(/- ?CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM debits/i.test(sql), 'debit is negative');
+            assert.ok(/CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM escrows/i.test(sql), 'escrow is positive');
+            assert.ok(!/DECIMAL\(65,18\)/i.test(sql), 'must NOT use the fixed 65,18 scale (byte-identity needs the token scale)');
+            assert.ok(/GROUP BY tick_id/i.test(sql));
+        });
+
+        it('LEFT JOINs so a token with no surviving ledger rows resolves to supply 0', async function () {
+            const db = precisionDb([{ decimals: 8 }]);
+            await recomputeTokenSupplies(db);
+            const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
+            assert.ok(/LEFT JOIN/i.test(sql), 'LEFT JOIN keeps tokens with no ledger rows');
+            assert.ok(/SET tok\.supply = COALESCE\(agg\.supply, '0'\)/i.test(sql), 'no-ledger token -> supply 0');
+        });
+
+        it('renders supply in the source minimal-decimal format for divisible tokens', async function () {
+            const db = precisionDb([{ decimals: 8 }]);
+            await recomputeTokenSupplies(db);
+            const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
+            assert.ok(/TRIM\(TRAILING '\.' FROM TRIM\(TRAILING '0' FROM CAST\(SUM\(amt\) AS CHAR\)\)\)/i.test(sql),
+                'divisible: trim trailing zeros then the bare dot');
+        });
+
+        it('renders an integer (no zero-trim) for a non-divisible token (decimals=0)', async function () {
+            const db = precisionDb([{ decimals: 0 }]);
+            await recomputeTokenSupplies(db);
+            const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
+            // decimals=0: CAST AS CHAR has no '.', so the trailing-zero trim would eat
+            // integer zeros ('100' -> '1'); it must emit the integer verbatim.
+            assert.ok(/CAST\(SUM\(amt\) AS CHAR\) AS supply/i.test(sql));
+            assert.ok(!/TRIM\(TRAILING '0'/i.test(sql), 'no zero-trim on an integer supply');
+        });
+
+        it('clamps an out-of-range precision to [0,18] (no DECIMAL-scale injection)', async function () {
+            const db = precisionDb([{ decimals: 99 }]);
+            await recomputeTokenSupplies(db);
+            const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
+            assert.ok(/DECIMAL\(60,18\)/i.test(sql), 'clamped to the max scale');
+            assert.ok(!/DECIMAL\(60,99\)/i.test(sql));
+        });
+
+        it('is a no-op when there are no tokens', async function () {
+            const db = precisionDb([]);
+            await recomputeTokenSupplies(db);
+            assert.ok(!db.queries.some(q => /^UPDATE tokens/i.test(q)), 'no UPDATE without any token precisions');
+        });
+
+        it('rejects if the DB layer fails (caller owns error handling)', async function () {
+            const boom = { doQuery: async () => { throw new Error('1146 no table'); } };
+            await assert.rejects(() => recomputeTokenSupplies(boom), /1146/);
         });
     });
 

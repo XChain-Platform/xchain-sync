@@ -20,6 +20,10 @@ function createMockDb(){
         dbName: 'test_db',
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
+        // start() reads the durable halt table first; a clean (no-halt) read lets the
+        // normal bootstrap/catch-up flow proceed. The halt check now fails CLOSED, so
+        // this must resolve rather than be absent (an absent/erroring read holds idle).
+        getActiveHalt: sinon.stub().resolves(null),
         doQuery: sinon.stub().resolves([])
     };
 }

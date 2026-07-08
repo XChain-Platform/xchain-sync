@@ -51,6 +51,55 @@ function minimalDecimal(sumExpr) {
     return "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(" + sumExpr + ' AS CHAR)))';
 }
 
+// Render a DECIMAL(60,decimals) supply aggregate the way the source indexer writes
+// it (mathjs bignumber String(): minimal decimal, e.g. '600', '10.5'), so a
+// recomputed row is byte-identical to the source row. For decimals=0 the value has
+// no fractional part and CAST(... AS CHAR) emits no '.', so the trailing-zero trim
+// would eat integer zeros ('100' -> '1'); emit it verbatim in that case. For
+// decimals>0 the CAST always carries the '.' + all scale digits, so trimming
+// trailing zeros then the bare '.' is safe.
+function minimalSupply(sumExpr, decimals) {
+    if (decimals === 0) return 'CAST(' + sumExpr + ' AS CHAR)';
+    return "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(" + sumExpr + ' AS CHAR)))';
+}
+
+// Recompute tokens.supply from the surviving credits/debits/escrows for every token
+// after a reorg rollback. Logical twin of xchain-indexer getTokenSupply:
+// supply = (credits - debits) + escrows, summed at the token's OWN
+// DECIMAL(60, decimals) precision (NOT the fixed DECIMAL(65,18) used for balances -
+// a token whose amounts carry more precision than 18 would round differently, so
+// the token's own scale is required for byte-identity to the source's written
+// value). ClientRollback rebuilds `balances` on reorg but historically did NOT
+// recompute tokens.supply, so a surviving token row whose supply was mutated in
+// place by an orphaned MINT kept the inflated value until the next full snapshot;
+// the source indexer's own rollback recomputes it (updateTokens), so the replica
+// served an over-inflated supply in the meantime. A DECIMAL scale cannot be a bind
+// parameter, so we clamp each distinct precision to [0,18] and run one UPDATE per
+// precision (typically 1-2). A surviving token with no ledger rows resolves to '0'
+// via the LEFT JOIN, matching getTokenSupply's all-zero result. Cross-repo logical
+// mirror of getTokenSupply; keep in step with it (drift note in rollback-coverage).
+async function recomputeTokenSupplies(db) {
+    let precisions = await db.doQuery('SELECT DISTINCT decimals FROM tokens');
+    for (let row of (precisions || [])) {
+        let d = Math.max(0, Math.min(18, parseInt(row.decimals) || 0));
+        let castAmt = 'CAST(amount AS DECIMAL(60,' + d + '))';
+        await db.doQuery(
+            'UPDATE tokens tok LEFT JOIN ('
+            +   'SELECT tick_id, ' + minimalSupply('SUM(amt)', d) + ' AS supply FROM ('
+            +     'SELECT tick_id,  ' + castAmt + ' AS amt FROM credits '
+            +     'UNION ALL '
+            +     'SELECT tick_id, -' + castAmt + ' AS amt FROM debits '
+            +     'UNION ALL '
+            +     'SELECT tick_id,  ' + castAmt + ' AS amt FROM escrows'
+            +   ') u GROUP BY tick_id'
+            + ') agg ON agg.tick_id = tok.tick_id '
+            + "SET tok.supply = COALESCE(agg.supply, '0') "
+            + 'WHERE tok.decimals = ?',
+            [d]
+        );
+    }
+}
+
 // Recompute the balances table from the surviving credits/debits rows.
 // scope (optional): { addressIds: [...], tickIds: [...] }; limits the
 // rebuild to those ids; an empty list means nothing was touched (no-op).
@@ -77,4 +126,4 @@ async function rebuildBalances(db, scope) {
         args.concat(args));
 }
 
-module.exports = { rebuildBalances, minimalDecimal };
+module.exports = { rebuildBalances, minimalDecimal, recomputeTokenSupplies };

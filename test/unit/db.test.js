@@ -180,6 +180,19 @@ describe('Database.doQuery()', function () {
         assert.ok(conn.release.notCalled);
     });
 
+    it('on query error in non-tx path with opts.rethrow: logs, releases, AND re-throws (fail-closed)', async function () {
+        // A fail-CLOSED reader (getActiveHalt) passes rethrow so a transient error
+        // is not silently returned as []. The connection must still be released.
+        let conn = fakeConn();
+        conn.query.rejects(new Error('halt read fail'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(
+            () => db.doQuery('SELECT 1', [], null, { rethrow: true }),
+            /halt read fail/
+        );
+        assert.ok(conn.release.calledOnce, 'connection released even on the rethrow path');
+    });
+
     it('explicit conn arg: runs on that connection, never acquires/releases one', async function () {
         let snapConn = fakeConn([{ id: 7 }]);
         let getSpy   = sinon.stub(db, 'getConnection');   // must NOT be called
@@ -1246,6 +1259,16 @@ describe('Database halt methods', function () {
         assert.strictEqual(result, null);
     });
 
+    it('getActiveHalt: PROPAGATES a transient query error (fail-closed, not a silent [])', async function () {
+        // The halt read must fail closed: a lock-wait/timeout/"server gone away" is
+        // NOT the same as "no active halt", so the error surfaces (via rethrow) rather
+        // than resolving to [] and letting a durably-halted replica silently resume.
+        let conn = fakeConn();
+        conn.query.rejects(new Error('sync_halt read blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(() => db.getActiveHalt('indexer'), /sync_halt read blip/);
+    });
+
     it('clearHalt: returns affectedRows', async function () {
         sinon.stub(db, 'doQuery').resolves({ affectedRows: 1 });
         let result = await db.clearHalt('indexer');
@@ -1287,6 +1310,28 @@ describe('Database halt methods', function () {
         let result = await db.recordHalt('indexer', 200, 'divergence', [], []);
         assert.deepStrictEqual(result, newHalt);
         assert.ok(doQ.calledOnce);
+    });
+
+    it('recordHalt: still INSERTs when the idempotency pre-check read throws (durability first)', async function () {
+        // getActiveHalt now fails closed (throws) on a transient error; recordHalt must
+        // fall through to the INSERT rather than skip recording the halt on a read blip.
+        let getHalt = sinon.stub(db, 'getActiveHalt');
+        getHalt.onFirstCall().rejects(new Error('pre-check blip'));
+        getHalt.onSecondCall().resolves({ id: 9, block_index: 400 });
+        let doQ = sinon.stub(db, 'doQuery').resolves([]);
+        let result = await db.recordHalt('indexer', 400, 'divergence', [], []);
+        assert.ok(doQ.calledOnce, 'the halt is recorded despite the pre-check read error');
+        assert.deepStrictEqual(result, { id: 9, block_index: 400 });
+    });
+
+    it('recordHalt: returns null (not a throw) when the post-insert read throws', async function () {
+        let getHalt = sinon.stub(db, 'getActiveHalt');
+        getHalt.onFirstCall().resolves(null);
+        getHalt.onSecondCall().rejects(new Error('post-insert blip'));
+        let doQ = sinon.stub(db, 'doQuery').resolves([]);
+        let result = await db.recordHalt('indexer', 500, 'divergence', [], []);
+        assert.ok(doQ.calledOnce, 'INSERT ran');
+        assert.strictEqual(result, null);
     });
 
     it('recordHalt: uses default "divergence" when reason is null, defaults mismatches/sources to []', async function () {
