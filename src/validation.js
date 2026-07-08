@@ -110,11 +110,37 @@ function extractColumnDefinition(ddl, columnName){
         if(trimmed.substring(1, endTick) !== columnName) continue;
         let def = trimmed.replace(/,\s*$/, '');
         if(def.indexOf(';') !== -1) return null;
+        // Depth scan for a bare top-level comma (a smuggled second ALTER action),
+        // QUOTE-AWARE: a '(' or ',' inside a string literal ('...'), a backtick
+        // identifier (`...`) or COMMENT text must not inflate depth or be read as a
+        // real separator. Without this a hostile schema line like
+        //   `evil` int COMMENT '(' , DROP COLUMN `victim`
+        // pushes depth to 1 on the quoted '(' so the top-level ", DROP COLUMN" comma
+        // is seen at depth 1 and slips past, splicing a second action into the ALTER.
+        // MariaDB escapes a quote by doubling it ('' / ``); skip the pair so the quoted
+        // region does not close early and re-expose attacker text.
         let depth = 0;
+        let inStr = false, inTick = false;
         for(let i = 0; i < def.length; i++){
             let ch = def.charAt(i);
-            if(ch === '(') depth++;
-            else if(ch === ')') depth--;
+            if(inStr){
+                if(ch === "'"){
+                    if(def.charAt(i + 1) === "'"){ i++; continue; } // escaped quote
+                    inStr = false;
+                }
+                continue;
+            }
+            if(inTick){
+                if(ch === '`'){
+                    if(def.charAt(i + 1) === '`'){ i++; continue; } // escaped backtick
+                    inTick = false;
+                }
+                continue;
+            }
+            if(ch === "'") inStr = true;
+            else if(ch === '`') inTick = true;
+            else if(ch === '(') depth++;
+            else if(ch === ')'){ if(depth > 0) depth--; } // clamp: a stray ')' from a quoted value
             else if(ch === ',' && depth <= 0) return null;
         }
         return def;

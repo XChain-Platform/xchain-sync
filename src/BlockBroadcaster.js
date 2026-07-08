@@ -154,7 +154,11 @@ class BlockBroadcaster {
         } catch(e){
             return;
         }
-        if(msg && msg.type === 'heartbeat' && typeof msg.appliedBlock === 'number'){
+        // Require a non-negative integer, matching the REST validator-heartbeat guard
+        // (api.js). A bare `typeof === 'number'` accepts NaN/Infinity/negatives, letting
+        // a subscriber forge its reported lag on /status (negative lag reads as
+        // "always caught up"; NaN serializes to null and hides the peer from lag alerts).
+        if(msg && msg.type === 'heartbeat' && Number.isInteger(msg.appliedBlock) && msg.appliedBlock >= 0){
             ws._syncAppliedBlock = msg.appliedBlock;
         }
     }

@@ -557,7 +557,14 @@ class ClientApplier {
         try {
             await rederiveEscrowGate(this.db);
         } catch(e){
-            // Tables/columns may not exist on older/thin replica schemas; skip.
+            // Only a genuine schema gap (missing table/column on an older/thin replica)
+            // is safe to skip. Any other error (deadlock, lock-wait timeout, connection
+            // drop) must propagate so the surrounding apply transaction rolls back and
+            // the block is retried: tokens.escrow_action_index is replica-derived and is
+            // NOT covered by any hash / SMT / recompute check, so a swallowed error here
+            // commits a stale or half-derived ownership-escrow gate with no divergence
+            // signal. Mirrors _rebuildBalances' narrow catch.
+            if(e.errno !== 1146 && e.errno !== 1054) throw e;
         }
     }
 }

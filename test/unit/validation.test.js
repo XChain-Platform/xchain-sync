@@ -161,6 +161,29 @@ describe('validation', function(){
             const d = '`id int NOT NULL,\n  `name` varchar(10)';
             assert.strictEqual(extractColumnDefinition(d, 'name'), '`name` varchar(10)');
         });
+
+        // Stress-sweep 2026-07-08: the depth scanner must be quote-aware, or a hostile
+        // server hides a smuggled second ALTER action behind a '(' inside a string.
+        it('rejects a smuggled multi-action ALTER hidden by a "(" inside a COMMENT', function(){
+            const hostile = "CREATE TABLE `orders` (\n  `evil` int COMMENT '(' , DROP COLUMN `give_ownership`\n)";
+            assert.strictEqual(extractColumnDefinition(hostile, 'evil'), null);
+        });
+        it('still rejects a bare depth-0 comma with no quotes (regression)', function(){
+            const hostile = 'CREATE TABLE `t` (\n  `evil` int , DROP COLUMN `victim`\n)';
+            assert.strictEqual(extractColumnDefinition(hostile, 'evil'), null);
+        });
+        it('keeps a legit comma inside a COMMENT string', function(){
+            const d = "CREATE TABLE `t` (\n  `c` int COMMENT 'a, b, c',\n  `d` int\n)";
+            assert.strictEqual(extractColumnDefinition(d, 'c'), "`c` int COMMENT 'a, b, c'");
+        });
+        it('keeps a legit enum(...) with internal commas', function(){
+            const d = "CREATE TABLE `t` (\n  `c` enum('a','b','c') DEFAULT 'a',\n  `d` int\n)";
+            assert.strictEqual(extractColumnDefinition(d, 'c'), "`c` enum('a','b','c') DEFAULT 'a'");
+        });
+        it('handles a doubled-quote escape inside a string literal', function(){
+            const d = "CREATE TABLE `t` (\n  `c` varchar(10) DEFAULT 'a''(''b',\n  `d` int\n)";
+            assert.strictEqual(extractColumnDefinition(d, 'c'), "`c` varchar(10) DEFAULT 'a''(''b'");
+        });
     });
 
     describe('validateWsEvent', function(){

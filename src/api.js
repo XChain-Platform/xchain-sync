@@ -396,27 +396,6 @@ async function startApi(){
         }
     });
 
-    app.get('/checkpoint/:dbType/:chain/:network/:height', incrSnapshotLimiter, async (req, res) => {
-        let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
-        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
-        let h = parseInt(req.params.height, 10);
-        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
-        let { chain, network } = req.params;
-        let db = syncService.getDatabase(chain, network, dbType);
-        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
-        try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
-                [h]);
-            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
-            res.json(serializeCheckpoint(rows[0]));
-        } catch(e){
-            console.error('[API error] /checkpoint/:dbType/:chain/:network/:height:', e);
-            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
-        }
-    });
-
     // GET /checkpoint/:dbType/:chain/:network/range?from=&to=
     //
     // The signed-checkpoint chain over a block range, oldest first, one row per
@@ -428,8 +407,8 @@ async function startApi(){
     // sync analogue of the SDK light client's followForward. Indexer-only; result
     // is capped at CHECKPOINT_RANGE_LIMIT rows so the client pages by advancing
     // `from`. Singular path, consistent with /checkpoint/.../:height and
-    // /checkpoint/.../latest; registered before /:height so 'range' is not
-    // parsed as a block height.
+    // /checkpoint/.../latest. MUST be registered before /:height, since :height
+    // matches any single segment and would otherwise swallow 'range' as a height.
     const CHECKPOINT_RANGE_LIMIT = 2000;
     app.get('/checkpoint/:dbType/:chain/:network/range', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
@@ -452,6 +431,27 @@ async function startApi(){
             res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
         } catch(e){
             console.error('[API error] /checkpoint/.../range:', e);
+            res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+        }
+    });
+
+    app.get('/checkpoint/:dbType/:chain/:network/:height', incrSnapshotLimiter, async (req, res) => {
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
+        let h = parseInt(req.params.height, 10);
+        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
+        let { chain, network } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
+        try {
+            let rows = await db.doQuery(
+                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
+                [h]);
+            if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
+            res.json(serializeCheckpoint(rows[0]));
+        } catch(e){
+            console.error('[API error] /checkpoint/:dbType/:chain/:network/:height:', e);
             res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });

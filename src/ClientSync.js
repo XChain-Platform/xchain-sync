@@ -1135,9 +1135,24 @@ class ClientSync {
             // live block's recompute.
             //
             // Both recomputes are gated on VERIFY_RECOMPUTE.
-            if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] &&
-               typeof snapshotData.since_block === 'number'){
-                let joinBlock = snapshotData.since_block;
+            if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
+                // The join block MUST be the client's OWN resume point (sinceBlock =
+                // dbTip+1), NEVER the server-echoed snapshotData.since_block. Recomputing
+                // dbTip+1 folds the pre-existing replica tip's committed hash (dbTip),
+                // which is the only check that catches a range stitched onto an orphaned
+                // tip after a disconnect reorg. Trusting the server's echoed since_block
+                // lets a hostile source (A) OMIT it to skip verification entirely, or
+                // (B) INFLATE it so the audited boundary sits inside the served range and
+                // the real join (dbTip+1, which folds the orphan) is never recomputed.
+                let joinBlock = sinceBlock;
+                // A source echoing a since_block that disagrees with our own resume point
+                // is buggy or trying to shift the audited boundary; refuse the range.
+                if(typeof snapshotData.since_block === 'number' && snapshotData.since_block !== sinceBlock){
+                    await this._haltOnDivergence(joinBlock,
+                        [{ field: 'since_block', a: sinceBlock, b: snapshotData.since_block }],
+                        this.sources.slice(0, 1), 'catchup-since-block-mismatch');
+                    return;
+                }
                 let committed = await this.db.getBlockHashRow(joinBlock);
                 if(committed && committed.ledger_hash){
                     let mismatches = await this._verifyRecompute({ block_index: joinBlock }, {
@@ -2201,7 +2216,7 @@ class ClientSync {
             if(++guard > 10000) return { verdict: 'wait' };      // runaway guard
             let chain;
             try {
-                let url = this.sources[0] + '/checkpoints/indexer/' + this.chain + '/' + this.network +
+                let url = this.sources[0] + '/checkpoint/indexer/' + this.chain + '/' + this.network +
                           '/range?from=' + from + '&to=' + cp.block_index;
                 let resp = await axios.get(url, { timeout: 10000 });
                 chain = resp && resp.data && resp.data.checkpoints;

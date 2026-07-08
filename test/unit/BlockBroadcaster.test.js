@@ -307,6 +307,20 @@ describe('BlockBroadcaster', function(){
             assert.strictEqual(ws._syncAppliedBlock, null);
         });
 
+        // Stress-sweep 2026-07-08: a subscriber must not be able to forge its reported
+        // lag with a non-integer/negative/infinite appliedBlock (mirrors the REST guard).
+        it('ignores a heartbeat with a non-integer/negative/infinite appliedBlock', function(){
+            let ws = mockWs();
+            broadcaster.addSubscription(ws, mockReq('7.7.7.4'), 'bitcoin', 'mainnet');
+            let handler = messageHandler(ws);
+            for(let bad of [1.5, -1, NaN, Infinity, '5', null]){
+                handler(JSON.stringify({ type: 'heartbeat', appliedBlock: bad }));
+            }
+            assert.strictEqual(ws._syncAppliedBlock, null); // none accepted
+            handler(JSON.stringify({ type: 'heartbeat', appliedBlock: 0 }));
+            assert.strictEqual(ws._syncAppliedBlock, 0); // a valid non-negative integer is accepted
+        });
+
         it('updates _syncLastSentBlock to the block height on broadcast', function(){
             let ws1 = mockWs(), ws2 = mockWs();
             broadcaster.addSubscription(ws1, mockReq('7.7.7.4'), 'bitcoin', 'mainnet');
