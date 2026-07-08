@@ -25,6 +25,12 @@ const {
     blocksRow, transactionsRow, actionsRow, creditsRow, debitsRow,
     genericDataRow, rowArray,
 } = require('./rows');
+// ClientApplier.applyFullSnapshot/applyIncrementalSnapshot reject a snapshot whose
+// schema_version does not match the client's (a deliberate consensus-safety guard that
+// forces a validator restart after a server DDL upgrade). The mock db has no dbType, so
+// the applier resolves to 'indexer'. Stamp the matching version so the shape-robustness
+// properties exercise the apply path instead of tripping the version gate.
+const { SCHEMA_VERSION } = require('../../../src/schema-version');
 
 // Action-scoped table names (subset for payload generation)
 const ACTION_TABLES = [
@@ -116,6 +122,7 @@ function snapshotTablesObject() {
 /** Full snapshot as passed to ClientApplier.applyFullSnapshot() */
 function fullSnapshotPayload() {
     return fc.record({
+        schema_version: fc.constant(SCHEMA_VERSION.indexer),
         block_height: blockIndex(),
         tables: snapshotTablesObject(),
     });
@@ -124,6 +131,7 @@ function fullSnapshotPayload() {
 /** Incremental snapshot as passed to ClientApplier.applyIncrementalSnapshot() */
 function incrementalSnapshotPayload() {
     return fc.record({
+        schema_version: fc.constant(SCHEMA_VERSION.indexer),
         since_block: blockIndex(),
         block_height: blockIndex(),
         tables: snapshotTablesObject(),

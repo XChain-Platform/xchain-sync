@@ -27,6 +27,7 @@ const {
     fullSnapshotPayload, partialSnapshotPayload,
 } = require('../generators/payloads');
 const { genericDataRow, rowArray, mixedRows } = require('../generators/rows');
+const { SCHEMA_VERSION } = require('../../../src/schema-version');
 
 let crashLog = [];
 
@@ -135,7 +136,10 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             ), { numRuns: NUM_RUNS });
         });
 
-        it('truncates in reverse table order', function () {
+        it('clears tables in reverse order via DELETE (FK-safe)', function () {
+            // applyFullSnapshot clears via `DELETE FROM` (not TRUNCATE) for FK
+            // compatibility, iterating the table keys in reverse so child tables are
+            // cleared before their parents. Capture the DELETE order from doQuery.
             return fc.assert(fc.asyncProperty(
                 fc.array(
                     fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), minLength: 1, maxLength: 15 }),
@@ -143,20 +147,23 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 ).filter(names => new Set(names).size === names.length),
                 async (tableNames) => {
                     let snapshot = {
+                        schema_version: SCHEMA_VERSION.indexer,
                         block_height: 100,
                         tables: Object.fromEntries(tableNames.map(n => [n, [{ id: 1 }]])),
                     };
 
-                    db.truncateTable.resetHistory();
+                    db.doQuery.resetHistory();
                     await applier.applyFullSnapshot(snapshot);
 
-                    let truncateOrder = [];
-                    for (let i = 0; i < db.truncateTable.callCount; i++) {
-                        truncateOrder.push(db.truncateTable.getCall(i).args[0]);
+                    let deleteOrder = [];
+                    for (let i = 0; i < db.doQuery.callCount; i++) {
+                        let sql = db.doQuery.getCall(i).args[0];
+                        let m = typeof sql === 'string' && sql.match(/^DELETE FROM `(.+)`$/);
+                        if (m) deleteOrder.push(m[1]);
                     }
 
                     let expectedOrder = [...tableNames].reverse();
-                    assert.deepStrictEqual(truncateOrder, expectedOrder);
+                    assert.deepStrictEqual(deleteOrder, expectedOrder);
                 }
             ), { numRuns: Math.min(NUM_RUNS, 500) });
         });

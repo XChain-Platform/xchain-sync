@@ -102,7 +102,12 @@ describe('Tier 2 - ClientRollback @tier2', function () {
             ), { numRuns: NUM_RUNS });
         });
 
-        it('individual table DELETE errors do not abort the operation', function () {
+        it('schema-gap (missing table/column) errors do not abort the operation', function () {
+            // The rollback's per-query guards skip ONLY schema-gap errors (MySQL errno
+            // 1146 unknown table / 1054 unknown column) so an older replica missing a
+            // table/column still completes the reorg-reset; every other error (deadlock,
+            // lock-wait, connection drop) MUST abort so the reset is never half-applied.
+            // Inject a schema-gap error to exercise the skip path and assert commit.
             return fc.assert(fc.asyncProperty(
                 blockIndex(),
                 fc.array(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }),
@@ -114,13 +119,17 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                     let failSet = new Set(failIndices);
                     db.doQuery.callsFake(async (query) => {
                         callCount++;
-                        if (failSet.has(callCount)) throw new Error('fuzz-table-fail');
+                        if (failSet.has(callCount)) {
+                            const e = new Error('fuzz-schema-gap: unknown table/column');
+                            e.errno = 1146;
+                            throw e;
+                        }
                         return [];
                     });
 
                     await rollback.rollback(bi);
                     assert.strictEqual(db.commitTransaction.callCount, 1,
-                        'Expected commit after individual table errors');
+                        'Expected commit after skippable schema-gap errors');
                 }
             ), { numRuns: NUM_RUNS });
         });
