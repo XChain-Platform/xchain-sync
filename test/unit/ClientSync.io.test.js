@@ -222,6 +222,27 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
         assert.strictEqual(sync.lastAppliedBlock, 100);
     });
 
+    it('applies the full snapshot under the shared write lock (M-21)', async function(){
+        // The full-snapshot apply is also the runtime recovery fallback for an
+        // oversized incremental catch-up, where live-follow is active. It must run
+        // under _withApplyLock so a concurrent live-block apply or cross-source
+        // fallback timer cannot open a second write transaction and clobber the
+        // snapshot's DELETE+reload mid-flight.
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        let lockSpy = sinon.spy(sync, '_withApplyLock');
+        let payload = Buffer.from(JSON.stringify({ block_height: 7, tables: {} }));
+        sinon.stub(axios, 'get').resolves({ data: payload });
+
+        await sync._bootstrapFromSnapshot();
+
+        assert.ok(applier.applyFullSnapshot.calledOnce, 'applyFullSnapshot must be called');
+        assert.ok(lockSpy.calledOnce, 'applyFullSnapshot must be wrapped in _withApplyLock');
+        // The lock must wrap the apply, not merely run alongside it.
+        assert.ok(lockSpy.calledBefore(applier.applyFullSnapshot),
+            '_withApplyLock must be entered before applyFullSnapshot runs');
+    });
+
     it('happy path with gzipped buffer', async function(){
         ({ sync, db, applier } = makeSync());
         sinon.stub(sync, '_fetchAndApplySchema').resolves();
@@ -785,6 +806,103 @@ describe('ClientSync: _incrementalCatchUp coalescing', function(){
 
         assert.strictEqual(sync._runIncrementalCatchUp.callCount, 1,
             'must not loop forever when no progress');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4b. HASH_CONFIRM_STRICT carried into the catch-up path (M-22)
+// A block rejected by the strict cross-source hash gate must not be silently
+// re-applied single-source by the incremental catch-up path seconds later.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync: strict cross-source gate survives catch-up (M-22)', function(){
+    let sync, db, applier;
+
+    function makeStrictSync(){
+        return makeSync({
+            SYNC_SOURCES:        'http://src1:3006,http://src2:3006',
+            VERIFY_HASHES:       true,
+            HASH_CONFIRM_STRICT: true,
+            HASH_CONFIRM_TIMEOUT: 1000
+        });
+    }
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('a strict cross-source timeout records the block and retains its pending hash', async function(){
+        let clock = sinon.useFakeTimers();
+        ({ sync, db, applier } = makeStrictSync());
+        // lastAppliedBlock=5 with null lastHashes: verifyChainContinuity returns
+        // valid (no prev hashes), so block 6 reaches the cross-source stage.
+        sync.lastAppliedBlock = 5;
+        sync.lastHashes = null;
+        let event = { type: 'block', block_index: 6,
+            ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
+
+        // Only source 0 delivers; the confirmation timer will fire unmatched.
+        await sync._handleBlock(event, 0);
+        assert.ok(sync._applyTimers.has(6), 'confirmation timer armed for block 6');
+
+        clock.tick(1000); // fire the HASH_CONFIRM_TIMEOUT
+
+        assert.ok(sync._strictConfirmPending.has(6),
+            'strict timeout must record the block as awaiting cross-source confirmation');
+        assert.ok(sync.pendingHashes.has(6),
+            'the first source hash is retained so a later second source can complete the pair');
+        assert.ok(applier.applyBlock.notCalled, 'strict mode must not apply single-source');
+        clock.restore();
+    });
+
+    it('_incrementalCatchUp refuses to run single-source while a strict block is pending', async function(){
+        ({ sync, db, applier } = makeStrictSync());
+        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        sync._strictConfirmPending.add(6);
+
+        await sync._incrementalCatchUp(6);
+
+        assert.strictEqual(runner.callCount, 0,
+            'catch-up must not fetch+apply the strict-rejected block single-source');
+        let errs = console.error.getCalls().map(c => String(c.args[0]));
+        assert.ok(errs.some(m => m.indexOf('HASH_CONFIRM_STRICT') !== -1),
+            'must log why the catch-up was refused');
+    });
+
+    it('catch-up proceeds normally once no strict block is pending', async function(){
+        ({ sync, db, applier } = makeStrictSync());
+        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        // _strictConfirmPending is empty (the default), so the gate is inert.
+        await sync._incrementalCatchUp(6);
+        assert.strictEqual(runner.callCount, 1, 'gate is inert when nothing is strict-pending');
+    });
+
+    it('a second source confirming the block clears the strict block and unblocks catch-up', async function(){
+        let clock = sinon.useFakeTimers();
+        ({ sync, db, applier } = makeStrictSync());
+        sync.lastAppliedBlock = 5;
+        sync.lastHashes = null;
+        sinon.stub(sync, '_applyBlockEvent').resolves(); // isolate from the heavy apply path
+        let event0 = { type: 'block', block_index: 6, ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
+
+        await sync._handleBlock(event0, 0);
+        clock.tick(1000);
+        assert.ok(sync._strictConfirmPending.has(6), 'block 6 is strict-pending after timeout');
+
+        // Second source delivers block 6 with identical hashes: the pair now matches.
+        let event1 = { type: 'block', block_index: 6, ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
+        await sync._handleBlock(event1, 1);
+
+        assert.ok(!sync._strictConfirmPending.has(6),
+            'cross-source confirmation must clear the strict block');
+        assert.ok(sync._applyBlockEvent.calledOnce, 'the confirmed block applies through the normal path');
+
+        // Gate now inert: catch-up runs again.
+        clock.restore();
+        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        await sync._incrementalCatchUp(7);
+        assert.strictEqual(runner.callCount, 1, 'catch-up unblocked after confirmation');
     });
 });
 
@@ -1527,7 +1645,7 @@ describe('ClientSync: small branches', function(){
     });
 
     // Strict-mode cross-source timeout (lines 750-751)
-    it('_handleBlock: STRICT mode logs rejection and deletes pending on timeout', async function(){
+    it('_handleBlock: STRICT mode rejects on timeout and records the strict block (M-22)', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
             VERIFY_HASHES: true,
@@ -1553,9 +1671,14 @@ describe('ClientSync: small branches', function(){
         // Tick past timeout
         await clock.tickAsync(300);
 
-        // With STRICT mode, block should be rejected (not applied)
+        // STRICT mode must not apply single-source on timeout, and must now record the
+        // block as strict-pending so the catch-up path cannot re-apply it single-source
+        // (M-22). The first source's hash is RETAINED (not deleted) so a later delivery
+        // from the second source can still complete the pair and apply via the confirmed
+        // path.
         assert.strictEqual(applier.applyBlock.called, false, 'STRICT mode must not apply on timeout');
-        assert.strictEqual(sync.pendingHashes.has(101), false, 'pending must be deleted after timeout');
+        assert.strictEqual(sync.pendingHashes.has(101), true, 'pending hash retained for later cross-source confirmation');
+        assert.strictEqual(sync._strictConfirmPending.has(101), true, 'block recorded as awaiting strict confirmation');
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('STRICT') !== -1), 'STRICT log must appear');

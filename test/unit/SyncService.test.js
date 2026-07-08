@@ -208,6 +208,7 @@ describe('SyncService', function(){
             sinon.stub(Database.prototype, 'replicateSchema').resolves();
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
             let startSync = sinon.stub(service, '_startClientSyncForChain');
 
@@ -231,6 +232,7 @@ describe('SyncService', function(){
             let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
             let startSync = sinon.stub(service, '_startClientSyncForChain');
 
@@ -251,6 +253,7 @@ describe('SyncService', function(){
             let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
             let vst  = sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
             sinon.stub(service, '_startClientSyncForChain');
 

@@ -147,6 +147,16 @@ class ClientSync {
         // that delivers first still triggers the timeout if the other source never arrives.
         this._applyTimers = new Map();
 
+        // Blocks that timed out cross-source confirmation while HASH_CONFIRM_STRICT
+        // is on. Strict mode refuses to apply a block that only one source confirmed;
+        // rejecting it at the live path alone is not enough, because the very next
+        // status/gap trigger would re-fetch and apply the block single-source via the
+        // incremental catch-up path, silently defeating the strict gate. A height
+        // recorded here blocks single-source catch-up until the block is confirmed by
+        // a second source over the live stream (which clears it) or an operator
+        // intervenes. INERT unless HASH_CONFIRM_STRICT is on with 2+ sources.
+        this._strictConfirmPending = new Set();
+
         // Applied-block heartbeat state. After committing each live block we report
         // our applied height back to the source servers so operators can observe
         // this validator's lag via the server's /status endpoint. Debounced to avoid
@@ -526,6 +536,7 @@ class ClientSync {
         console.error('DDL) and clear the halt before this replica can resume.');
         console.error('================================================================');
         this.pendingHashes.clear();
+        this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
     }
@@ -644,7 +655,13 @@ class ClientSync {
                 throw new Error('Snapshot download truncated or corrupt from ' + source +
                     ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
             }
-            await this.applier.applyFullSnapshot(snapshotData);
+            // Serialize the full-snapshot apply under the shared write mutex. Bootstrap
+            // at start() is single-threaded, but this same path is the runtime recovery
+            // fallback for an oversized incremental catch-up (_runIncrementalCatchUp),
+            // where live-follow is already active: a concurrent live block apply or a
+            // cross-source fallback timer would otherwise open a second write transaction
+            // on the replica and clobber the snapshot's DELETE+reload mid-flight.
+            await this._withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
             this.lastAppliedBlock = snapshotData.block_height;
 
             // Verify against second source if available.
@@ -988,6 +1005,23 @@ class ClientSync {
         if(this._halted){
             console.error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
+            return;
+        }
+        // Strict cross-source gate carried into catch-up (M-22). A block that timed
+        // out cross-source confirmation under HASH_CONFIRM_STRICT was rejected at the
+        // live path precisely so it would NOT be applied single-source. The catch-up
+        // path pulls a range from ONE source, so running it here would re-apply that
+        // rejected block single-source and defeat the gate. Any strict-pending height
+        // is at or above the committed tip (it was never applied), so its resolution
+        // must come from a second source over the live stream, not from a single-source
+        // catch-up. Refuse the catch-up while one is outstanding. Scoped to strict mode
+        // with 2+ sources; the set is otherwise always empty so this is inert.
+        if(this._strictConfirmPending.size > 0){
+            let heights = Array.from(this._strictConfirmPending).sort((a, b) => a - b);
+            console.error('Refusing incremental catch-up since block ' + sinceBlock +
+                '; HASH_CONFIRM_STRICT is on and block(s) ' + JSON.stringify(heights) +
+                ' await cross-source confirmation. Single-source catch-up would bypass the strict gate; ' +
+                'waiting for a second source to confirm over the live stream.');
             return;
         }
         // Serialize catch-ups so two never apply overlapping ranges. A request that
@@ -1654,8 +1688,15 @@ class ClientSync {
                         // If still waiting after timeout, handle based on strict mode
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
                             if(this.config['HASH_CONFIRM_STRICT']){
-                                console.error('STRICT: Cross-source timeout for block ' + blockIndex + ', rejecting (HASH_CONFIRM_STRICT=true)');
-                                this.pendingHashes.delete(blockIndex);
+                                console.error('STRICT: Cross-source timeout for block ' + blockIndex +
+                                    ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
+                                // Do NOT delete the pending hash: retaining the first
+                                // source's entry lets a later live delivery from the
+                                // second source complete the pair and apply the block
+                                // through the confirmed path. Record the height so the
+                                // catch-up path refuses to apply it single-source in the
+                                // meantime (M-22: the strict gate must survive catch-up).
+                                this._strictConfirmPending.add(blockIndex);
                             } else {
                                 console.log('Cross-source timeout for block ' + blockIndex + ', applying from primary');
                                 try {
@@ -1678,6 +1719,11 @@ class ClientSync {
             let result = this.hashVerifier.compareBlockHashes(blockIndex, hashA, hashB);
             if(!result.match){
                 this.pendingHashes.delete(blockIndex);
+                // Two sources actively disagree: the block is contested, not merely
+                // unconfirmed. Drop any strict-pending marker (it is superseded by the
+                // divergence handling below), so a cleared/halt-recovered replica does
+                // not keep a stale single-source block.
+                this._strictConfirmPending.delete(blockIndex);
                 if(this.config['HALT_ON_DIVERGENCE']){
                     // Durable, alerting halt: one source is on a forked/Byzantine chain.
                     await this._haltOnDivergence(blockIndex, result.mismatches,
@@ -1690,6 +1736,9 @@ class ClientSync {
             }
 
             this.pendingHashes.delete(blockIndex);
+            // Confirmed by a second source: the strict gate is satisfied, so the
+            // catch-up block on this height (if any) lifts and it applies below.
+            this._strictConfirmPending.delete(blockIndex);
         }
 
         // Apply the block
@@ -1739,6 +1788,7 @@ class ClientSync {
         console.error('================================================================');
         // Stop the live apply path; pending cross-source hashes are now moot.
         this.pendingHashes.clear();
+        this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
     }

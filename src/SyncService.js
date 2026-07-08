@@ -181,6 +181,14 @@ class SyncService {
                 // definitions rather than the source DB. No-op when the table is
                 // absent or already current.
                 await db.ensureReplicatedColumns();
+                // Same rationale for secondary-index drift (missing indexes AND stale
+                // UNIQUE keys, e.g. the votes append-only migration): the direct
+                // replicateSchema path calls this, but the common client topology has
+                // the source DB unreachable and bootstraps schema from the server
+                // /schema fetch, which never carries index changes. Run it here so
+                // both paths self-heal. Idempotent, so the double-call on the
+                // direct-DB path is a cheap no-op.
+                await db.ensureReplicaSecondaryIndexes();
             } else {
                 // Server mode: connect to the DB this server polls + serves.
                 // Default: the authoritative DB at the hub-provided coordinates.

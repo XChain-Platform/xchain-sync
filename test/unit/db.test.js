@@ -1665,3 +1665,79 @@ describe('Database: table identifier guard', function () {
         assert.ok(spy.firstCall.args[0].includes('`contract_stakes`'));
     });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ensureReplicaSecondaryIndexes(): votes append-only unique-key migration (M-20)
+// A replica that bootstrapped before indexer 219da33 carries the stale
+// UNIQUE(poll_voter_choice) key; append-only re-ballot rows then wedge it on
+// ER_DUP_ENTRY (unhealable, since the applier's last-write-wins pre-delete was
+// removed). The self-heal must drop the stale key and add the widened one.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Database.ensureReplicaSecondaryIndexes(): votes append-only migration', function () {
+    // Fake doQuery that treats only `votes` as present and all other tables
+    // (index_tickers/index_addresses/attests) as absent, so the pre-existing
+    // ensure/relax steps no-op and the test isolates the votes migration. The
+    // votes index checks resolve from votesIndexes: keys are index names.
+    function stubDoQuery(db, votesIndexes) {
+        let calls = [];
+        sinon.stub(db, 'doQuery').callsFake(async (sql, params) => {
+            calls.push({ sql, params });
+            if (/information_schema\.tables/.test(sql)) {
+                // The votes/attests existence checks inline the table name; the
+                // index-ensure checks pass it as a bound param. Only `votes` is present.
+                if (/table_name = 'votes'/.test(sql)) return [{ table_name: 'votes' }];
+                return [];
+            }
+            if (/information_schema\.statistics/.test(sql)) {
+                if (/poll_voter_action_choice'/.test(sql))
+                    return votesIndexes.poll_voter_action_choice ? [{ index_name: 'poll_voter_action_choice' }] : [];
+                if (/poll_voter_choice'/.test(sql))
+                    return votesIndexes.poll_voter_choice ? [{ index_name: 'poll_voter_choice' }] : [];
+                return [];
+            }
+            return [];
+        });
+        return calls;
+    }
+
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb('indexer'); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('drops the stale poll_voter_choice and creates the widened unique key', async function () {
+        // Pre-219da33 replica: stale key present, widened key absent.
+        let calls = stubDoQuery(db, { poll_voter_choice: true, poll_voter_action_choice: false });
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(ddl.some(s => /ALTER TABLE `votes` DROP INDEX `poll_voter_choice`/.test(s)),
+            'must drop the stale poll_voter_choice unique key');
+        assert.ok(ddl.some(s => /CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes`/.test(s)),
+            'must create the append-only widened unique key');
+    });
+
+    it('is a no-op when the widened key already exists (idempotent)', async function () {
+        // Post-migration / fresh replica: stale absent, widened present.
+        let calls = stubDoQuery(db, { poll_voter_choice: false, poll_voter_action_choice: true });
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(!ddl.some(s => /DROP INDEX `poll_voter_choice`/.test(s)), 'no drop when stale key absent');
+        assert.ok(!ddl.some(s => /CREATE UNIQUE INDEX `poll_voter_action_choice`/.test(s)), 'no create when already present');
+    });
+
+    it('creates the widened key on a replica missing both (defensive)', async function () {
+        let calls = stubDoQuery(db, { poll_voter_choice: false, poll_voter_action_choice: false });
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(!ddl.some(s => /DROP INDEX `poll_voter_choice`/.test(s)), 'nothing to drop');
+        assert.ok(ddl.some(s => /CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes`/.test(s)),
+            'still ensures the append-only key exists');
+    });
+
+    it('is a no-op for a decoder replica (indexer-only)', async function () {
+        let dec = makeDb('decoder');
+        let spy = sinon.stub(dec, 'doQuery').resolves([]);
+        await dec.ensureReplicaSecondaryIndexes();
+        assert.ok(spy.notCalled, 'decoder returns before any schema query');
+        await dec.close();
+    });
+});

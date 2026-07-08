@@ -626,6 +626,49 @@ class Database {
                 if(e.errno !== 1146)
                     console.error('Failed to relax attests request_id_version index:', e);
             }
+
+            // votes append-only migration (indexer 219da33 /
+            // 2026-07-03-votes-append-only-unique-idx). The pre-219da33 schema keyed
+            // votes UNIQUE(poll_index, voter_address_id, choice): one live ballot per
+            // voter, last-write-wins. Append-only re-balloting inserts a NEW
+            // action_index set per re-vote, so the unique key gained action_index
+            // (poll_voter_action_choice). A replica that bootstrapped with the stale
+            // poll_voter_choice key wedges on the first re-ballot row (errno 1062
+            // ER_DUP_ENTRY) because the applier's last-write-wins pre-delete was
+            // removed when votes went append-only, so the collision is unhealable at
+            // apply time. Mirror the indexer's auto-migration here: drop the stale
+            // UNIQUE and add the widened one. Idempotent (drop skipped when absent,
+            // create skipped when present) and safe under the old writer, which held
+            // at most one action_index per (poll, voter) so the widened key cannot
+            // fail on existing rows. indexer-only.
+            try {
+                let votesCheck = await this.doQuery(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'votes'",
+                    [this.dbName]
+                );
+                if(votesCheck.length > 0){
+                    let staleIdx = await this.doQuery(
+                        "SELECT index_name FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_choice' LIMIT 1",
+                        [this.dbName]
+                    );
+                    if(staleIdx.length > 0){
+                        console.log('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
+                        await this.doQuery('ALTER TABLE `votes` DROP INDEX `poll_voter_choice`');
+                    }
+                    let newIdx = await this.doQuery(
+                        "SELECT index_name FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_action_choice' LIMIT 1",
+                        [this.dbName]
+                    );
+                    if(newIdx.length === 0){
+                        await this.doQuery('CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes` (poll_index, voter_address_id, action_index, choice)');
+                    }
+                }
+            } catch(e){
+                if(e.errno !== 1146)
+                    console.error('Failed to migrate votes append-only unique index:', e);
+            }
         }
     }
 
