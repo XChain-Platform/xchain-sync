@@ -707,14 +707,25 @@ class SnapshotBuilder {
 
         let gzip = zlib.createGzip();
         gzip.pipe(res);
-        gzip.write('{"schema_version":' + schemaVersion + ',"table":"' + table +
-            '","max_id":' + maxId + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
-        for(let i = 0; i < rows.length; i++){
-            if(i > 0) gzip.write(',');
-            gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+        // Backpressure + client-abort teardown, same as the snapshot streams. No read
+        // view is held here (the doQuery connection is released before streaming), but
+        // the writer still bounds gzip's buffered output on a slow reader and stops
+        // writing to a socket the client already closed.
+        let writer = new SnapshotStreamWriter(gzip, res);
+        try {
+            await writer.write('{"schema_version":' + schemaVersion + ',"table":"' + table +
+                '","max_id":' + maxId + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
+            for(let i = 0; i < rows.length; i++){
+                if(i > 0) await writer.write(',');
+                await writer.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+            }
+            await writer.write(']}');
+            writer.finish();
+        } catch(e){
+            writer.dispose();
+            if(e && e.aborted) return;
+            throw e;
         }
-        gzip.write(']}');
-        gzip.end();
     }
 
     // Stream one keyset-ordered page of the decoder `dispensers` table. dispensers
@@ -763,14 +774,22 @@ class SnapshotBuilder {
 
         let gzip = zlib.createGzip();
         gzip.pipe(res);
-        gzip.write('{"schema_version":' + schemaVersion + ',"max_tx":' + maxTx +
-            ',"max_addr":' + maxAddr + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
-        for(let i = 0; i < rows.length; i++){
-            if(i > 0) gzip.write(',');
-            gzip.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+        // Backpressure + client-abort teardown (see streamTableRowsById).
+        let writer = new SnapshotStreamWriter(gzip, res);
+        try {
+            await writer.write('{"schema_version":' + schemaVersion + ',"max_tx":' + maxTx +
+                ',"max_addr":' + maxAddr + ',"has_more":' + (hasMore ? 'true' : 'false') + ',"rows":[');
+            for(let i = 0; i < rows.length; i++){
+                if(i > 0) await writer.write(',');
+                await writer.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+            }
+            await writer.write(']}');
+            writer.finish();
+        } catch(e){
+            writer.dispose();
+            if(e && e.aborted) return;
+            throw e;
         }
-        gzip.write(']}');
-        gzip.end();
     }
 
 }

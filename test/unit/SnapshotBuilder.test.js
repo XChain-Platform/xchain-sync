@@ -769,6 +769,51 @@ describe('SnapshotBuilder', function(){
         });
     });
 
+    // Backpressure + client-abort now also cover the two bounded paging streams
+    // (streamTableRowsById / streamDispensers), which hold no read view but could still
+    // buffer their output in RAM / write to a dead socket on a slow or vanished reader.
+    describe('paging-stream client-abort', function(){
+        // Force gzip backpressure by stubbing createGzip with a fake whose write() always
+        // returns false, so the first writer.write parks on 'drain'; then disconnect.
+        function fakeBackpressuredGzip(){
+            let ee = new (require('events').EventEmitter)();
+            ee.destroyed = false;
+            ee.write   = sinon.stub().returns(false);
+            ee.end     = sinon.stub();
+            ee.destroy = sinon.stub().callsFake(() => { ee.destroyed = true; });
+            ee.pipe    = sinon.stub();
+            return ee;
+        }
+
+        it('streamTableRowsById: swallows the abort and destroys gzip on client disconnect', async function(){
+            let db = createMockDb();
+            db.doQuery.resolves([{ id: 1 }, { id: 2 }]);
+            let fake = fakeBackpressuredGzip();
+            sinon.stub(zlib, 'createGzip').returns(fake);
+            let res = new PassThrough(); res.setHeader = sinon.stub(); res.on('data', () => {});
+
+            let p = builder.streamTableRowsById(db, 'index_transactions', 0, 50000, res);
+            await new Promise(r => setImmediate(r));   // reach the parked first write
+            res.emit('close');                          // client vanished
+            await p;                                    // resolves (abort swallowed, not a throw)
+            assert.ok(fake.destroy.called, 'gzip destroyed to free buffered output on abort');
+        });
+
+        it('streamDispensers: swallows the abort and destroys gzip on client disconnect', async function(){
+            let db = createMockDb(); db.dbType = 'decoder';
+            db.doQuery.resolves([{ tx_index: 1, address_id: 2 }]);
+            let fake = fakeBackpressuredGzip();
+            sinon.stub(zlib, 'createGzip').returns(fake);
+            let res = new PassThrough(); res.setHeader = sinon.stub(); res.on('data', () => {});
+
+            let p = builder.streamDispensers(db, NaN, NaN, 50000, res);
+            await new Promise(r => setImmediate(r));
+            res.emit('close');
+            await p;
+            assert.ok(fake.destroy.called, 'gzip destroyed on abort');
+        });
+    });
+
     // Fix #1 (HIGH): the gzip write loop ignored backpressure and had no client-abort
     // handler, so a slow/half-open reader pinned the REPEATABLE READ connection and
     // buffered the whole snapshot in RAM (a pool-exhaustion / OOM path on the

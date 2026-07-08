@@ -2272,6 +2272,23 @@ class ClientSync {
     async _handleReorg(event){
         console.log('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
 
+        // Ignore a reorg while the replica has NO committed tip. A reorg presupposes
+        // blocks to invalidate; a null tip means getLastBlock was null at start and the
+        // DB holds no data, so there is nothing to roll back - and setting
+        // lastAppliedBlock = block_index - 1 from purely server-supplied data would
+        // inflate the in-memory tip past an empty DB, wedging the replica exactly like
+        // the above-tip case below (_handleBlock then drops every canonical block
+        // <= the inflated tip, halted:false). This is defense in depth: the live path
+        // cannot reach here with a null tip (start() throws "Refusing to enter
+        // live-follow" before _connectWebSockets if the replica is still empty after
+        // bootstrap, and lastAppliedBlock is never reset to null once set), but guarding
+        // here hardens against a future change that opens the WS earlier.
+        if(this.lastAppliedBlock === null){
+            console.warn('Ignoring reorg for ' + this.chain + '/' + this.network +
+                ': no committed tip yet (replica empty); a reorg has nothing to roll back');
+            return;
+        }
+
         // Ignore a reorg that targets a block ABOVE our current tip. A reorg can only
         // invalidate a block we already hold; a target > lastAppliedBlock is either a
         // bogus/hostile event or one for data we have not reached. The depth guard below

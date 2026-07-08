@@ -462,7 +462,15 @@ class ClientRollback {
                     try {
                         await this.db.doQuery("DELETE FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
                     } catch(e){
-                        // Table may not exist in older schemas - skip
+                        // Discriminate like the bespoke resets above: swallow ONLY genuine
+                        // schema gaps (1146 missing table / 1054 missing column on older or
+                        // decoder-shaped replicas). A transient/operational error (deadlock
+                        // 1213, lock-wait 1205, connection drop) must ABORT the whole
+                        // rollback so the txn rolls back and the reorg retries, rather than
+                        // committing a PARTIAL ledger rollback. These are consensus tables;
+                        // the only prior backstop was the next block's VERIFY_STATE_COMMITMENT
+                        // recompute, which is absent when that flag is off (truncated replicas).
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
                     }
                 }
 
@@ -504,7 +512,10 @@ class ClientRollback {
                 try {
                     await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
                 } catch(e){
-                    // Table may not exist on older replica schemas - skip
+                    // Swallow only schema gaps (see the dataTables loop); a transient error
+                    // must abort the rollback rather than leave block-scoped consensus rows
+                    // (blocks/transactions/slash_events/state_tree_roots) half-deleted.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
             }
 
@@ -523,7 +534,11 @@ class ClientRollback {
                 try {
                     await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
                 } catch(e){
-                    // Table may not exist / lacks block_index on older replica schemas - skip
+                    // Swallow only schema gaps (missing table 1146 / lacks block_index 1054
+                    // on older replicas); a transient error must abort. A surviving orphaned
+                    // ^<id> row is consensus-relevant (forks the checkpoint after a reorg, per
+                    // the note above), so a half-done index rollback must never commit.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
             }
 

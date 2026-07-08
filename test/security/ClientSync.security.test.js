@@ -343,13 +343,21 @@ describe('ClientSync security', function(){
             assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         });
 
-        it('allows rollback when lastAppliedBlock is null', async function(){
+        // Hardened 2026-07-08 re-sweep: a reorg with a null tip (empty replica) is now a
+        // no-op, not a rollback. The old behavior set lastAppliedBlock = block_index - 1
+        // from purely server-supplied data, inflating the in-memory tip past an empty DB
+        // and wedging the replica (the same shape as the above-tip wedge). A hostile
+        // server can no longer drive the cursor via a null-tip reorg. Unreachable on the
+        // live path (the WS opens only after start()'s non-null guard), but guarded.
+        it('ignores a reorg when lastAppliedBlock is null (no cursor inflation from server data)', async function(){
             let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
             let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
             sync.lastAppliedBlock = null;
 
             await sync._handleReorg({ type: 'reorg', block_index: 50 });
-            assert.strictEqual(rollback.rollback.calledOnce, true);
+            assert.strictEqual(rollback.rollback.called, false, 'nothing to roll back with no committed tip');
+            assert.strictEqual(sync.lastAppliedBlock, null, 'the cursor must NOT be inflated from server-supplied block_index');
+            assert.strictEqual(sync.isHalted(), false, 'a null-tip reorg is a benign no-op, not a halt');
         });
     });
 

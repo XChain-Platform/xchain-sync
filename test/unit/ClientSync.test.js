@@ -586,6 +586,11 @@ describe('ClientSync', function(){
     });
 
     describe('_handleReorg', function(){
+        // A live reorg only ever arrives once the replica holds a committed tip (the WS
+        // is opened after start()'s non-null guard), so these exercise the reachable
+        // below-tip rollback path with a real tip.
+        beforeEach(function(){ sync.lastAppliedBlock = 100; });
+
         it('calls rollback with the event block_index', async function(){
             let event = { type: 'reorg', chain: 'bitcoin', network: 'mainnet', block_index: 50 };
             await sync._handleReorg(event);
@@ -615,6 +620,20 @@ describe('ClientSync', function(){
             rollback.rollback.rejects(new Error('rollback fail'));
             await sync._handleReorg({ block_index: 50 });
             assert.strictEqual(console.error.called, true);
+        });
+
+        // Defense-in-depth (2026-07-08 re-sweep): a reorg with NO committed tip must be
+        // a no-op, never a cursor advance. With a null tip the DB is empty, so there is
+        // nothing to roll back, and setting lastAppliedBlock = block_index - 1 from
+        // server-supplied data would inflate the tip past an empty DB and wedge the
+        // replica (the same shape as the above-tip case). Unreachable on the live path
+        // but guarded so a future WS-ordering change cannot re-open it.
+        it('null tip: ignores the reorg entirely (no rollback, no cursor advance)', async function(){
+            sync.lastAppliedBlock = null;
+            await sync._handleReorg({ block_index: 5000 });
+            assert.strictEqual(rollback.rollback.called, false, 'nothing to roll back with no committed tip');
+            assert.strictEqual(sync.lastAppliedBlock, null, 'the cursor must NOT be inflated from server data');
+            assert.strictEqual(sync.isHalted(), false, 'a null-tip reorg is a benign no-op, not a halt');
         });
     });
 

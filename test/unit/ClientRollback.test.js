@@ -303,18 +303,47 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.commitTransaction.calledOnce, true);
         });
 
-        it('swallows missing-table errors on every bespoke optional delete', async function(){
-            // Make each individually-guarded optional delete throw; rollback must
-            // still complete (each has its own try/catch).
+        it('swallows missing-table errors on every optional delete + the generic loops', async function(){
+            // Make each optional delete throw; rollback must still complete. The bespoke
+            // single sweeps use a broad catch (plain error swallowed); the generic
+            // per-table loops now discriminate, so a genuine schema gap there must carry
+            // errno 1146 to be swallowed (a real MariaDB "no such table" always does).
             db.doQuery.callsFake(async (query) => {
                 if(/contract_emissions|price_snapshots|sync_meta|attest_validator_stats/.test(query))
                     throw new Error('Table does not exist');
                 if(/DELETE FROM `blocks`/.test(query))
-                    throw new Error('Table does not exist'); // a blockTables-loop catch
+                    throw Object.assign(new Error('Table does not exist'), { errno: 1146 }); // blockTables loop
                 return [];
             });
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        // Residual hardening (2026-07-08 re-sweep): the generic dataTables/blockTables/
+        // indexTables DELETE loops used to swallow EVERY error, so a transient deadlock/
+        // lock-wait committed a PARTIAL rollback - caught only by the next block's
+        // VERIFY_STATE_COMMITMENT recompute, which is off for truncated replicas. A
+        // non-schema-gap error must now abort the whole rollback (fail closed).
+        it('aborts the rollback (fail-closed) on a transient error in a generic DELETE loop', async function(){
+            db.doQuery.callsFake(async (query) => {
+                // A deadlock (errno 1213) on a consensus data-table delete: not a schema gap.
+                if(/DELETE FROM `credits`/.test(query))
+                    throw Object.assign(new Error('Deadlock found'), { errno: 1213 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1213 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true, 'txn rolled back, not partially committed');
+            assert.strictEqual(db.commitTransaction.called, false, 'a partial rollback must never commit');
+        });
+
+        it('aborts the rollback on a transient error in the blockTables loop', async function(){
+            db.doQuery.callsFake(async (query) => {
+                if(/DELETE FROM `blocks`/.test(query))
+                    throw Object.assign(new Error('Lock wait timeout'), { errno: 1205 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1205 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
     });
 
