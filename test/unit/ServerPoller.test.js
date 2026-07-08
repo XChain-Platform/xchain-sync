@@ -22,7 +22,11 @@ function createMockDb(){
         getEmissionRowsForBlock: sinon.stub().resolves([]),
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
-        doQuery: sinon.stub().resolves([])
+        doQuery: sinon.stub().resolves([]),
+        // The forward batch is pinned to a REPEATABLE READ snapshot (H-P2).
+        beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
+        commitReadSnapshot: sinon.stub().resolves(),
+        rollbackReadSnapshot: sinon.stub().resolves()
     };
 }
 
@@ -624,6 +628,88 @@ describe('ServerPoller', function(){
             poller.running = true;
             poller.stop();
             assert.strictEqual(poller.running, false);
+        });
+    });
+
+    // Regression: deepdive H-P2. The live per-block payload used to read every
+    // table (above all the updated_rows in-place-mutation channel) at the source's
+    // CURRENT tip, so a surviving row mutated again right after block B streamed
+    // its post-B state under B's payload and a strict follower's apply-time
+    // recompute halted. The forward batch must be pinned to one REPEATABLE READ
+    // snapshot and every payload read must observe that snapshot.
+    describe('_poll snapshot pinning (H-P2)', function(){
+        const HASH_ROW = {
+            block_index: 100, block_time: 1700000000,
+            ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
+        };
+
+        it('pins the forward batch to one read snapshot and threads it through every payload read', async function(){
+            poller.lastPolledBlock = 99;
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves(HASH_ROW);
+            const snap = { mockSnapshotConn: true };
+            db.beginReadSnapshot.resolves(snap);
+
+            await poller._poll();
+
+            assert.strictEqual(db.beginReadSnapshot.calledOnce, true);
+            assert.strictEqual(db.commitReadSnapshot.calledOnce, true);
+            assert.strictEqual(db.commitReadSnapshot.firstCall.args[0], snap);
+            // The batch tip is re-read INSIDE the snapshot (its view is the authority).
+            assert.ok(db.getLastBlock.getCalls().some(c => c.args[0] === snap),
+                'getLastBlock must be re-read on the snapshot connection');
+            // Every payload read observes the pinned view. (The FIRST getBlockHashRow
+            // call is the payload build; _updateStatus later re-reads it unpinned.)
+            assert.strictEqual(db.getBlockHashRow.firstCall.args[1], snap);
+            for(const call of db.getBlockScopedRows.getCalls())
+                assert.strictEqual(call.args[2], snap);
+            for(const call of db.getActionScopedRows.getCalls())
+                assert.strictEqual(call.args[2], snap);
+            for(const call of db.getTransactions.getCalls())
+                assert.strictEqual(call.args[1], snap);
+            for(const call of db.getActions.getCalls())
+                assert.strictEqual(call.args[1], snap);
+            // Raw queries too: this covers the updated_rows channel (collectUpdatedRows
+            // passes its conn straight through as doQuery's third argument).
+            assert.ok(db.doQuery.getCalls().length > 0, 'payload build must issue raw queries');
+            for(const call of db.doQuery.getCalls())
+                assert.strictEqual(call.args[2], snap);
+        });
+
+        it('releases the snapshot even when payload building throws', async function(){
+            poller.lastPolledBlock = 99;
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.rejects(new Error('boom'));
+
+            await assert.rejects(() => poller._poll(), /boom/);
+
+            assert.strictEqual(db.beginReadSnapshot.calledOnce, true);
+            assert.strictEqual(db.commitReadSnapshot.calledOnce, true);
+        });
+
+        it('streams to the snapshot tip when a block landed between the outer read and the snapshot open', async function(){
+            poller.lastPolledBlock = 99;
+            db.getLastBlock.onFirstCall().resolves(100);   // pre-snapshot read
+            db.getLastBlock.onSecondCall().resolves(101);  // view inside the snapshot
+            db.getBlockHashRow.resolves(HASH_ROW);
+
+            await poller._poll();
+
+            assert.strictEqual(poller.lastPolledBlock, 101);
+            assert.strictEqual(broadcaster.broadcast.callCount, 2);
+        });
+
+        it('never streams past the snapshot tip when it sits behind the outer read', async function(){
+            poller.lastPolledBlock = 99;
+            db.getLastBlock.onFirstCall().resolves(105);   // pre-snapshot read
+            db.getLastBlock.onSecondCall().resolves(100);  // snapshot raced a reorg
+            db.getBlockHashRow.resolves(HASH_ROW);
+
+            await poller._poll();
+
+            assert.strictEqual(poller.lastPolledBlock, 100,
+                'a block the snapshot cannot see must wait for the next poll');
+            assert.strictEqual(broadcaster.broadcast.callCount, 1);
         });
     });
 });

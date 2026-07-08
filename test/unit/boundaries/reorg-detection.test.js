@@ -21,7 +21,10 @@ function createMockDb(){
         getActionScopedRows: sinon.stub().resolves([]),
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
-        doQuery: sinon.stub().resolves([])
+        doQuery: sinon.stub().resolves([]),
+        beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
+        commitReadSnapshot: sinon.stub().resolves(),
+        rollbackReadSnapshot: sinon.stub().resolves()
     };
 }
 

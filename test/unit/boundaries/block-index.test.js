@@ -24,6 +24,9 @@ function createMockDb(){
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
         doQuery: sinon.stub().resolves([]),
+        beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
+        commitReadSnapshot: sinon.stub().resolves(),
+        rollbackReadSnapshot: sinon.stub().resolves(),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves()

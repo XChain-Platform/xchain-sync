@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `HubClient` sends `x-api-key` on hub calls when `HUB_API_KEY` is set (`getallconfigs` is now in the hub's keyed sensitive-read tier).
 
 ### Fixed
+- `ServerPoller` pins each forward batch to one REPEATABLE READ snapshot threaded through every payload read, so per-block payloads (above all the `updated_rows` in-place-mutation channel) carry state-at-block instead of the source's live tip-state.
 - `src/HubClient.js`: the hub-module DB host fallback now defaults to `127.0.0.1` instead of `localhost`, so a module that omits both `db_host` and `host` connects over IPv4 to MariaDB instead of failing against an unresolvable IPv6 (`::1`) default.
 - VOTE governance tables (`polls`, `votes`, `poll_results`, `vote_delegations`) now replicate per block and roll back on reorg (previously entirely absent from sync, so replicas never carried VOTE state and orphaned rows would have survived reorgs).
 

@@ -1325,9 +1325,9 @@ class Database {
     // Get all rows from a table for a given block (block_index-scoped tables).
     // ORDER BY block_index, then by the first column for deterministic ordering
     // across sources with differing insert histories (matches the snapshot path).
-    async getBlockScopedRows(table, block_index){
+    async getBlockScopedRows(table, block_index, conn){
         let query = "SELECT * FROM `" + table + "` WHERE block_index = ? ORDER BY block_index ASC, 1 ASC";
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get all rows from a table for actions in a given block (action_index-scoped tables).
@@ -1338,12 +1338,12 @@ class Database {
     // the payload while the consensus hash now includes them. A follower would then recompute a
     // divergent hash and halt. a.block_index is set for every action, so this streams them and
     // matches BlockHasher.
-    async getActionScopedRows(table, block_index){
+    async getActionScopedRows(table, block_index, conn){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
             WHERE a.block_index = ?
             ORDER BY t.action_index ASC`;
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get all contract_emissions rows for a block, including INTERNAL emissions whose
@@ -1355,41 +1355,41 @@ class Database {
     // emissions query (same joins, columns, and ORDER BY). Select the four protocol columns
     // explicitly (not em.*, which would carry the AUTO_INCREMENT `id` and break idempotent
     // re-apply after a reorg).
-    async getEmissionRowsForBlock(block_index){
+    async getEmissionRowsForBlock(block_index, conn){
         let query = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
             FROM contract_emissions em
             INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
             INNER JOIN actions a ON (a.action_index = ce.action_index)
             WHERE a.block_index = ?
             ORDER BY em.execution_index ASC, em.position ASC`;
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get all rows from a table for transactions in a given block (tx_index-scoped tables).
     // Used for decoder DB tables like transaction_outputs, which key off tx_index and
     // join to the transactions table to recover the block scope.
-    async getTxScopedRows(table, block_index){
+    async getTxScopedRows(table, block_index, conn){
         let query = `SELECT t.* FROM \`${table}\` t
             INNER JOIN transactions tx ON (tx.tx_index = t.tx_index)
             WHERE tx.block_index = ?
             ORDER BY t.tx_index ASC, 1 ASC`;
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get transactions for a given block
-    async getTransactions(block_index){
+    async getTransactions(block_index, conn){
         let query = "SELECT * FROM transactions WHERE block_index = ? ORDER BY tx_index ASC";
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get actions for a given block. Scope by the action's own block_index (not a transactions
     // join): protocol-generated actions (ORDER_MATCH / SWAP_MATCH / *_EXPIRE) have tx_index = NULL
     // and must still stream to followers (and are now in the consensus hash).
-    async getActions(block_index){
+    async getActions(block_index, conn){
         let query = `SELECT a.* FROM actions a
             WHERE a.block_index = ?
             ORDER BY a.action_index ASC`;
-        return await this.doQuery(query, [block_index]);
+        return await this.doQuery(query, [block_index], conn);
     }
 
     // Get all rows from a table (paginated)

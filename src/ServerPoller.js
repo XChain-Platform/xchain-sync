@@ -323,42 +323,67 @@ class ServerPoller {
         // during normal steady-state follow. This avoids burying real errors in noise
         // while still surfacing progress at batch boundaries.
         let catchUpStart = this.lastPolledBlock;
-        while(this.lastPolledBlock < currentBlock && blocksProcessed < 100){
-            let nextBlock = this.lastPolledBlock + 1;
-            let payload = await this._buildBlockPayload(nextBlock);
-            if(payload){
-                // Record in transparency log (indexer only; decoder has no synthetic hashes)
-                if(this.transparencyLog){
-                    await this.transparencyLog.recordBlock(
-                        payload.block_index, payload.block_time,
-                        payload.ledger_hash, payload.actions_hash, payload.contract_hash
-                    );
+        let streamTo = currentBlock;
+        if(this.lastPolledBlock < currentBlock){
+            // Pin the whole forward batch to ONE consistent REPEATABLE READ view.
+            // Every payload read (hash header, table rows, and above all the
+            // updated_rows in-place-mutation channel) observes the same instant.
+            // In steady state the snapshot tip IS the block being streamed, so
+            // updated_rows carry exact state-at-B; without the pin they read the
+            // source's live tip, and a row re-mutated right after B streamed its
+            // future state under B's payload, halting a strict follower's
+            // apply-time recompute (deepdive H-P2). During a catch-up burst the
+            // pin still bounds every read to one view (the batch tip), which
+            // re-emission at each subsequent window then converges.
+            let snapConn = await this.db.beginReadSnapshot();
+            try {
+                // The snapshot's own tip is the batch authority: it may sit ahead of
+                // the pre-snapshot read (a block landed in between; safe to stream,
+                // and it makes the batch end exact) or behind it (a reorg raced us;
+                // never build a block the snapshot cannot see, the next poll
+                // re-detects it).
+                let snapTip = await this.db.getLastBlock(snapConn);
+                if(snapTip != null) streamTo = snapTip;
+                while(this.lastPolledBlock < streamTo && blocksProcessed < 100){
+                    let nextBlock = this.lastPolledBlock + 1;
+                    let payload = await this._buildBlockPayload(nextBlock, snapConn);
+                    if(payload){
+                        // Record in transparency log (indexer only; decoder has no synthetic hashes)
+                        if(this.transparencyLog){
+                            await this.transparencyLog.recordBlock(
+                                payload.block_index, payload.block_time,
+                                payload.ledger_hash, payload.actions_hash, payload.contract_hash
+                            );
+                        }
+
+                        // Broadcast to subscribers (infraTables enables filtering for infra-only subscribers)
+                        this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
+
+                        // Track the hash we just broadcast so the next poll can detect a
+                        // net-forward reorg that rewrites this block (item 4623).
+                        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+                        // Record it for the net-forward walk-back so a deeper reorg can be
+                        // detected against this pre-reorg hash on a later poll (item 4830).
+                        this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
+                        if(nextBlock > RECENT_HASH_CAP)
+                            this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);
+                    } else {
+                        // No payload (block vanished mid-poll): disable the hash check for this
+                        // step rather than compare against a stale hash next poll.
+                        this.lastPolledBlockHash = null;
+                    }
+                    this.lastPolledBlock = nextBlock;
+                    blocksProcessed++;
                 }
-
-                // Broadcast to subscribers (infraTables enables filtering for infra-only subscribers)
-                this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
-
-                // Track the hash we just broadcast so the next poll can detect a
-                // net-forward reorg that rewrites this block (item 4623).
-                this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
-                // Record it for the net-forward walk-back so a deeper reorg can be
-                // detected against this pre-reorg hash on a later poll (item 4830).
-                this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
-                if(nextBlock > RECENT_HASH_CAP)
-                    this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);
-            } else {
-                // No payload (block vanished mid-poll): disable the hash check for this
-                // step rather than compare against a stale hash next poll.
-                this.lastPolledBlockHash = null;
+            } finally {
+                await this.db.commitReadSnapshot(snapConn);
             }
-            this.lastPolledBlock = nextBlock;
-            blocksProcessed++;
         }
 
         // Log a single summary line for catch-up batches; log each block individually
         // only when following the tip one block at a time (steady-state, low noise).
         if(blocksProcessed > 0){
-            let isBatch = (currentBlock - catchUpStart) > 1 || blocksProcessed >= 100;
+            let isBatch = (streamTo - catchUpStart) > 1 || blocksProcessed >= 100;
             if(isBatch){
                 console.log('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
                     ' (' + blocksProcessed + ' block(s)) for ' + this.chain + '/' + this.network + '/' + this.dbType);
@@ -366,7 +391,7 @@ class ServerPoller {
                 console.log('Synced block ' + this.lastPolledBlock + ' for ' +
                     this.chain + '/' + this.network + '/' + this.dbType);
             }
-            await this._updateStatus(currentBlock);
+            await this._updateStatus(streamTo);
         }
 
         return blocksProcessed;
@@ -383,8 +408,15 @@ class ServerPoller {
     // Build a complete block payload for broadcasting.
     // Indexer payload includes ledger_hash/actions_hash/contract_hash and actions-scoped tables.
     // Decoder payload includes the blockchain block hash and tx-scoped tables; no actions.
-    async _buildBlockPayload(block_index){
-        let hashRow = await this.db.getBlockHashRow(block_index);
+    //
+    // conn: optional REPEATABLE READ snapshot connection (db.beginReadSnapshot). The
+    // poll loop pins each forward batch to one snapshot so every read below (hash
+    // header, table rows, updated_rows) observes a single point in time. Without it
+    // the reads run at the source's live tip, so a surviving row mutated again right
+    // after this block streamed its FUTURE state under this block's payload and a
+    // strict follower's apply-time recompute halted on the mismatch (deepdive H-P2).
+    async _buildBlockPayload(block_index, conn){
+        let hashRow = await this.db.getBlockHashRow(block_index, conn);
         if(!hashRow) return null;
 
         let payload = {
@@ -420,7 +452,7 @@ class ServerPoller {
             // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
             // for the later full-state_root verification (no wire change needed then).
             if(isStateCommitmentActive(block_index, this.network, this.chain)){
-                let roots = await this.db.getStateRootsRow(this.chain, this.network, block_index);
+                let roots = await this.db.getStateRootsRow(this.chain, this.network, block_index, conn);
                 payload.balances_root    = roots ? roots.balances_root    : null;
                 payload.block_merkle_root = roots ? roots.block_merkle_root : null;
                 payload.state_root       = roots ? roots.state_root       : null;
@@ -453,7 +485,7 @@ class ServerPoller {
         for(let table of this.blockScopedTables){
             if(table === 'transactions') continue;  // Handled below
             try {
-                let rows = await this.db.getBlockScopedRows(table, block_index);
+                let rows = await this.db.getBlockScopedRows(table, block_index, conn);
                 if(rows && rows.length > 0)
                     payload.data[table] = rows;
             } catch(e){
@@ -462,7 +494,7 @@ class ServerPoller {
         }
 
         // Transactions (both indexer and decoder)
-        let txRows = await this.db.getTransactions(block_index);
+        let txRows = await this.db.getTransactions(block_index, conn);
         if(txRows && txRows.length > 0)
             payload.data['transactions'] = txRows;
 
@@ -470,7 +502,7 @@ class ServerPoller {
             // Decoder: tx-scoped tables (transaction_outputs)
             for(let table of this.txScopedTables){
                 try {
-                    let rows = await this.db.getTxScopedRows(table, block_index);
+                    let rows = await this.db.getTxScopedRows(table, block_index, conn);
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
@@ -479,7 +511,7 @@ class ServerPoller {
             }
         } else {
             // Indexer: actions and action-scoped tables
-            let actionRows = await this.db.getActions(block_index);
+            let actionRows = await this.db.getActions(block_index, conn);
             if(actionRows && actionRows.length > 0)
                 payload.data['actions'] = actionRows;
 
@@ -492,7 +524,7 @@ class ServerPoller {
                 // through the execution_index chain instead, matching BlockHasher exactly.
                 if(table === 'contract_emissions'){
                     try {
-                        let rows = await this.db.getEmissionRowsForBlock(block_index);
+                        let rows = await this.db.getEmissionRowsForBlock(block_index, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
@@ -501,7 +533,7 @@ class ServerPoller {
                     continue;
                 }
                 try {
-                    let rows = await this.db.getActionScopedRows(table, block_index);
+                    let rows = await this.db.getActionScopedRows(table, block_index, conn);
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
@@ -520,7 +552,7 @@ class ServerPoller {
             // in THIS block; a refund's action is in an earlier block), but dedup the
             // union defensively on the credit's logical identity.
             try {
-                let matured = await collectMaturedCooldownCredits(this.db, block_index, block_index);
+                let matured = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
                 if(matured.length > 0){
                     let existing = payload.data['credits'] || [];
                     let seen = new Set(existing.map(c => c.action_index + ':' + c.address_id + ':' + c.tick_id));
@@ -542,7 +574,7 @@ class ServerPoller {
             // on the row's UNIQUE identity. Disjoint from the block-scoped rows (those carry
             // block_index = this block; a survivor's earn-block is earlier).
             try {
-                let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index);
+                let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index, conn);
                 if(redriven.length > 0){
                     let existing = payload.data['validator_rewards'] || [];
                     let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
@@ -592,7 +624,7 @@ class ServerPoller {
                     }
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];
-                        let rows = await this.db.doQuery("SELECT * FROM index_transactions WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique);
+                        let rows = await this.db.doQuery("SELECT * FROM index_transactions WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -613,7 +645,7 @@ class ServerPoller {
                     }
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];
-                        let rows = await this.db.doQuery("SELECT * FROM index_addresses WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique);
+                        let rows = await this.db.doQuery("SELECT * FROM index_addresses WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -622,7 +654,7 @@ class ServerPoller {
                 else if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses']){
                     let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
                     if(ids.length > 0){
-                        let rows = await this.db.doQuery("SELECT * FROM pubkeys WHERE address_id IN (" + ids.map(() => '?').join(',') + ")", ids);
+                        let rows = await this.db.doQuery("SELECT * FROM pubkeys WHERE address_id IN (" + ids.map(() => '?').join(',') + ")", ids, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -691,7 +723,7 @@ class ServerPoller {
                     // is armed). For every other table the already-populated skip stands.
                     if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
                     try {
-                        let rows = await this.db.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + placeholders + ")", idList);
+                        let rows = await this.db.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + placeholders + ")", idList, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
@@ -714,7 +746,10 @@ class ServerPoller {
         // loop iterates payload.data only) rather than mis-applying a non-row map.
         if(this.dbType !== 'decoder'){
             try {
-                let updated = await collectUpdatedRows(this.db, block_index, block_index, this.activationDelay);
+                // conn matters most HERE: these tables are exactly the ones mutated in
+                // place, so tip-reads (the pre-snapshot behavior) could stream a row's
+                // post-B state under block B's payload (deepdive H-P2).
+                let updated = await collectUpdatedRows(this.db, block_index, block_index, this.activationDelay, conn);
                 if(updated && Object.keys(updated).length > 0)
                     payload.updated_rows = updated;
             } catch(e){
