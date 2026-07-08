@@ -2242,6 +2242,25 @@ class ClientSync {
     async _handleReorg(event){
         console.log('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
 
+        // Ignore a reorg that targets a block ABOVE our current tip. A reorg can only
+        // invalidate a block we already hold; a target > lastAppliedBlock is either a
+        // bogus/hostile event or one for data we have not reached. The depth guard below
+        // computes depth = lastAppliedBlock - block_index + 1, which is <= 0 for an
+        // above-tip target and so never trips MAX_ROLLBACK_DEPTH; rollback() would then
+        // be a no-op and the cursor advance at the end of this method would push
+        // lastAppliedBlock PAST the data actually in the DB. Every canonical block the
+        // source then streams is <= the inflated tip and silently dropped by
+        // _handleBlock, wedging the replica (halted:false) until an operator restarts it.
+        // A reorg to an unapplied block is a no-op, never a cursor advance. (Guarded only
+        // when we have a tip; a null tip is a distinct early-sync state the rollback path
+        // handles on its own.)
+        if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
+            console.warn('Ignoring reorg for ' + this.chain + '/' + this.network +
+                ': target block ' + event.block_index + ' is above the replica tip (' +
+                this.lastAppliedBlock + '); a reorg to an unapplied block is a no-op');
+            return;
+        }
+
         // Enforce max rollback depth
         if(this.lastAppliedBlock !== null){
             let depth = this.lastAppliedBlock - event.block_index + 1;

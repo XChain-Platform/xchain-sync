@@ -201,6 +201,10 @@ describe('validation', function(){
         it('rejects a block event missing block_index', function(){
             assert.match(validateWsEvent({ type: 'block' }).reason, /missing block_index/);
         });
+        it('rejects a non-integer (fractional) block_index', function(){
+            assert.match(validateWsEvent({ type: 'reorg', block_index: 5.5 }).reason, /not an integer/);
+            assert.strictEqual(validateWsEvent({ type: 'block', block_index: 5.5 }).valid, false);
+        });
         it('rejects a block event with null block_index', function(){
             assert.match(validateWsEvent({ type: 'block', block_index: null }).reason, /missing block_index/);
         });

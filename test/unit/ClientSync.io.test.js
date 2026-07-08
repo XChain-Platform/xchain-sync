@@ -1764,4 +1764,33 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
     });
+
+    // Stress-sweep 2026-07-08: a reorg ABOVE the tip must be a no-op, never a cursor
+    // advance. depth = tip - block_index + 1 goes <= 0 above the tip, so it never trips
+    // MAX_ROLLBACK_DEPTH; the old code then ran a no-op rollback and set
+    // lastAppliedBlock = block_index - 1, inflating the tip past real data and wedging
+    // the replica (every later canonical block is then dropped by _handleBlock).
+    it('_handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)', async function(){
+        let rb;
+        ({ sync, db, applier, rb } = makeSync());
+        sync.lastAppliedBlock = 100;
+
+        await sync._handleReorg({ type: 'reorg', block_index: 105 }); // above tip
+
+        assert.strictEqual(rb.rollback.called, false, 'must not roll back an above-tip target');
+        assert.strictEqual(sync.isHalted(), false, 'an above-tip reorg is a no-op, not a halt');
+        assert.strictEqual(sync.lastAppliedBlock, 100, 'the cursor must NOT advance past applied data');
+    });
+
+    it('_handleReorg: a legitimate below-tip reorg still rolls back and moves the cursor', async function(){
+        let rb;
+        ({ sync, db, applier, rb } = makeSync()); // MAX_ROLLBACK_DEPTH default 10
+        sync.lastAppliedBlock = 100;
+
+        await sync._handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6 <= 10
+
+        assert.strictEqual(rb.rollback.calledOnceWith(95), true, 'below-tip reorg must roll back to the target');
+        assert.strictEqual(sync.isHalted(), false);
+        assert.strictEqual(sync.lastAppliedBlock, 94, 'cursor moves to block_index - 1 after a real rollback');
+    });
 });

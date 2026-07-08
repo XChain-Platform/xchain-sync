@@ -141,6 +141,8 @@ function validateWsEvent(event){
             return { valid: false, reason: event.type + ' event missing block_index' };
         if(typeof event.block_index !== 'number' || !Number.isFinite(event.block_index))
             return { valid: false, reason: event.type + ' event block_index is not a finite number' };
+        if(!Number.isInteger(event.block_index))
+            return { valid: false, reason: event.type + ' event block_index is not an integer' };
         if(event.block_index < 0)
             return { valid: false, reason: event.type + ' event block_index is negative' };
     }
