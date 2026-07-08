@@ -1,11 +1,11 @@
-# sync.xchain.io — bootstrap "latest" alias
+# sync.xchain.io - bootstrap "latest" alias
 #
 # Deploy to:  /var/www/virtual/sync.xchain.io/bootstraps/.htaccess
 #
 # A request for any   <service>/<coin>/<network>/latest.tgz
 # is resolved by latest.php to a 302 redirect at the newest published
 # <network>-<service>-<YYYYMMDD_HHMMSS>.tar.gz in that directory.
-# Just drop new archives into the directory — no symlink/cron needed.
+# Just drop new archives into the directory - no symlink/cron needed.
 #
 # Requires: mod_rewrite + PHP enabled for this vhost, and the vhost <Directory>
 # must set "AllowOverride FileInfo" (or All). FollowSymLinks is inherited from

@@ -1,6 +1,6 @@
 <?php
 /**
- * sync.xchain.io — resolve "latest.tgz" to the newest published bootstrap.
+ * sync.xchain.io - resolve "latest.tgz" to the newest published bootstrap.
  *
  * Deploy to: /var/www/virtual/sync.xchain.io/bootstraps/latest.php
  * Driven by the sibling .htaccess, which rewrites
