@@ -35,7 +35,7 @@ const config      = require('./config');
 const SyncService = require('./SyncService');
 const Utility     = require('./utility');
 const BlockHasher = require('./BlockHasher');
-const { createApiKeyMiddleware } = require('./middleware');
+const { createApiKeyMiddleware, safeEqual } = require('./middleware');
 const { getReplicatedTables }    = require('./replicatedTables');
 
 // Stateless helper for the advisory index-map parity checksum published on
@@ -821,7 +821,7 @@ async function startApi(){
     // any blocks missed during the halt.
     app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
         let apiKey = cfg['SYNC_API_KEY'];
-        if(!apiKey || req.headers['authorization'] !== 'Bearer ' + apiKey)
+        if(!apiKey || !safeEqual(req.headers['authorization'], 'Bearer ' + apiKey))
             return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
         if(cfg['SYNC_MODE'] === 'server')
             return res.status(403).json({ error: 'Halt clearing only applies to client mode', code: 'FORBIDDEN' });
@@ -855,7 +855,7 @@ async function startApi(){
         let apiKey = cfg['SYNC_API_KEY'];
         if(apiKey){
             let authHeader = request.headers['authorization'];
-            if(!authHeader || authHeader !== 'Bearer ' + apiKey){
+            if(!authHeader || !safeEqual(authHeader, 'Bearer ' + apiKey)){
                 socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
                 socket.destroy();
                 return;

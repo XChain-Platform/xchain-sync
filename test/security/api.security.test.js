@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const { createApiKeyMiddleware } = require('../../src/middleware');
+const { createApiKeyMiddleware, safeEqual } = require('../../src/middleware');
 
 function createMockReq(authHeader){
     let req = { headers: {} };
@@ -143,6 +143,34 @@ describe('API security', function(){
             middleware(req, res, function(){ nextCalled = true; });
             assert.strictEqual(nextCalled, false);
             assert.strictEqual(res._statusCode, 401);
+        });
+    });
+
+    // Constant-time comparison used by every Bearer-key check (REST middleware,
+    // /halt/clear, and the WS upgrade). Locks in correctness and the null/length
+    // guards so a refactor can't silently reintroduce a `===` timing leak.
+    describe('safeEqual', function(){
+
+        it('true for identical strings', function(){
+            assert.strictEqual(safeEqual('Bearer abc123', 'Bearer abc123'), true);
+        });
+
+        it('false for a one-character difference of equal length', function(){
+            assert.strictEqual(safeEqual('Bearer abc123', 'Bearer abc124'), false);
+        });
+
+        it('false for a length mismatch (prefix of the key)', function(){
+            assert.strictEqual(safeEqual('Bearer abc', 'Bearer abc123'), false);
+        });
+
+        it('false when either side is null or undefined', function(){
+            assert.strictEqual(safeEqual(undefined, 'Bearer k'), false);
+            assert.strictEqual(safeEqual('Bearer k', null), false);
+        });
+
+        it('true for two empty/absent values (both coerce to empty)', function(){
+            assert.strictEqual(safeEqual('', ''), true);
+            assert.strictEqual(safeEqual(undefined, null), true);
         });
     });
 

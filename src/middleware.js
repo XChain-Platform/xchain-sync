@@ -18,6 +18,21 @@
  *
  ********************************************************************/
 
+const crypto = require('crypto');
+
+// Constant-time equality for auth secrets. A plain `===`/`!==` on the key
+// leaks it byte-by-byte through response-time differences (the comparison
+// short-circuits at the first mismatching character). crypto.timingSafeEqual
+// requires equal-length buffers, so the length is guarded first; a length
+// mismatch is not itself the secret. Used by every Bearer-key check (REST
+// middleware here, plus the /halt/clear route and WS upgrade in api.js).
+function safeEqual(a, b){
+    let ab = Buffer.from(String(a == null ? '' : a));
+    let bb = Buffer.from(String(b == null ? '' : b));
+    if(ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+}
+
 // Create an API key authentication middleware.
 // When a key is configured, requests fail closed: they must include
 // "Authorization: Bearer <apiKey>" or they are rejected (401).
@@ -29,12 +44,13 @@ function createApiKeyMiddleware(apiKey){
     return function(req, res, next){
         if(!apiKey) return next();
         let header = req.headers['authorization'];
-        if(!header || header !== 'Bearer ' + apiKey)
+        if(!header || !safeEqual(header, 'Bearer ' + apiKey))
             return res.status(401).json({ error: 'Unauthorized' });
         next();
     };
 }
 
 module.exports = {
-    createApiKeyMiddleware
+    createApiKeyMiddleware,
+    safeEqual
 };
