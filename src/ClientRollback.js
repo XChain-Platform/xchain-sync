@@ -376,55 +376,60 @@ class ClientRollback {
                 }
                 } // end deactivation_block mirror (activationDelay present)
 
-                // Reverse orphaned cooldown-maturity completions, mirror of
-                // xchain-indexer/src/rollback.js (commit 309fec7). When a capability/contract
-                // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit
-                // carrying the unstake's OWN (earlier-block) action_index and flips the surviving
-                // unstake row's status_id to 'completed' IN PLACE. Both effects live on rows whose
-                // action_index < firstActionIndex, so the dataTables delete below can't touch them;
-                // the credit has no block_index and can't be range-deleted at all; and the surviving
-                // in-place mutation never rides the forward per-block stream, so the replica only
-                // acquires the matured state via full snapshot. On a reorg that orphans the maturity
-                // block (cooldown_end_block >= block_index) the source deletes the refund credit and
-                // resets status_id to 'valid'. Without this mirror the replica keeps a phantom refund
-                // (overstated rebuilt balance) and a stuck 'completed' unstake the re-maturity sweep
-                // skips forever, a credits/balances/unstakes divergence (hard balance fork if a later
-                // SLASH cuts the stake). Predicates key only on cooldown_end_block/block_index, so
-                // they port byte-identically; the GAS tick (capability refund) is the frozen
-                // consensus constant, never a hub poll. Runs BEFORE the dataTables delete.
-                try {
-                    let completedStatusId = await this.db.getStatusId('completed');
-                    let validStatusId     = await this.db.getStatusId('valid');
-                    if(completedStatusId !== null && validStatusId !== null){
-                        let gasTick = gasTickSymbol();
-                        if(gasTick){
-                            // Capability maturity refund is paid in GAS, keyed by the unstake's action_index.
-                            await this.db.doQuery(
-                                "DELETE c FROM credits c " +
-                                "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
-                                "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
-                                "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
-                                [gasTick, completedStatusId, block_index, block_index]);
-                        }
-                        // Contract maturity refund is paid in the unstake's own tick.
+                // Cooldown-maturity reversal moved OUT of this firstActionIndex guard (see below,
+                // after the guard closes) - the legacy maturity path mutates a surviving row with
+                // no actions row in the maturity block, so an orphaned range with no other actions
+                // leaves firstActionIndex null and would skip it, diverging the replica from the
+                // (now-fixed) source.
+            }
+
+            // Reverse orphaned cooldown-maturity completions, mirror of
+            // xchain-indexer/src/rollback.js _reverseCooldownMaturities. When a capability/contract
+            // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit carrying
+            // the unstake's OWN (earlier-block) action_index and flips the surviving unstake row's
+            // status_id to 'completed' IN PLACE. Both effects live on rows whose action_index <
+            // firstActionIndex, so the dataTables delete below can't touch them; the credit has no
+            // block_index and can't be range-deleted at all. In the LEGACY attribution era the
+            // maturity block mints NO actions row, so an orphaned range containing only such a
+            // maturity leaves firstActionIndex null - this MUST run unconditionally (outside the
+            // guard) or the replica keeps a phantom refund + stuck 'completed' unstake that the
+            // re-maturity sweep skips forever, diverging from the source (which now reverses it on
+            // every rollback). Predicates key only on cooldown_end_block/block_index; the GAS tick
+            // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
+            // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
+            // Runs BEFORE the dataTables delete.
+            try {
+                let completedStatusId = await this.db.getStatusId('completed');
+                let validStatusId     = await this.db.getStatusId('valid');
+                if(completedStatusId !== null && validStatusId !== null){
+                    let gasTick = gasTickSymbol();
+                    if(gasTick){
+                        // Capability maturity refund is paid in GAS, keyed by the unstake's action_index.
                         await this.db.doQuery(
                             "DELETE c FROM credits c " +
-                            "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
-                            "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
-                            [completedStatusId, block_index, block_index]);
-                        // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
-                        await this.db.doQuery(
-                            "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                            [validStatusId, completedStatusId, block_index, block_index]);
-                        await this.db.doQuery(
-                            "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                            [validStatusId, completedStatusId, block_index, block_index]);
+                            "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
+                            "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
+                            "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+                            [gasTick, completedStatusId, block_index, block_index]);
                     }
-                } catch(e){
-                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
-                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    // Contract maturity refund is paid in the unstake's own tick.
+                    await this.db.doQuery(
+                        "DELETE c FROM credits c " +
+                        "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+                        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+                        [completedStatusId, block_index, block_index]);
+                    // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
+                    await this.db.doQuery(
+                        "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+                        [validStatusId, completedStatusId, block_index, block_index]);
+                    await this.db.doQuery(
+                        "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+                        [validStatusId, completedStatusId, block_index, block_index]);
                 }
+            } catch(e){
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Reset an anchor batch's surviving parent v1 stamped 'invalid_archive' by an
