@@ -592,8 +592,14 @@ class ClientRollback {
             // replacement. The price_snapshots delete exists because a from-genesis
             // replay never regenerates orphaned rounds, so hub re-mirror alone
             // cannot close the divergence window on this table.
+            // PRICE-SNAP-1 (mirror of xchain-indexer rollback.js): reference_block is always a BTC
+            // anchor height regardless of the publishing chain, so only the BTC replica can prune
+            // BTC-published rounds by it. Qualify by reference_chain and run only on the BTC replica so
+            // a BTC reorg never deletes an off-BTC-published round the hub still keeps (price_snapshots
+            // feeds getOracleDataForVM). Behavior-preserving today (price capability is BTC-only).
             try {
-                await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_block >= ?", [block_index]);
+                if(this.coin === 'BTC')
+                    await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_chain = 'BTC' AND reference_block >= ?", [block_index]);
             } catch(e){
                 // Table may not exist on older replica schemas - skip
             }
