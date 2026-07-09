@@ -79,7 +79,9 @@ describe('ServerPoller', function(){
             // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
             assert.ok(poller.blockScopedTables.includes('capability_slash_events'));
             assert.ok(poller.blockScopedTables.includes('capability_slash_debits'));
-            assert.strictEqual(poller.blockScopedTables.length, 8);
+            // RB-ANCHOR: pre-image log of reconcile-deleted validator_rewards losers (stream:block).
+            assert.ok(poller.blockScopedTables.includes('anchor_reward_reconcile_log'));
+            assert.strictEqual(poller.blockScopedTables.length, 9);
         });
 
         it('has action-scoped tables', function(){

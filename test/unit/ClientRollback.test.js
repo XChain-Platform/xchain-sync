@@ -42,12 +42,14 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 9 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 9);
+        it('has 10 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 10);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
             assert.ok(rollback.blockTables.includes('contract_slash_debits'));
+            // RB-ANCHOR: pre-image log of reconcile-deleted validator_rewards losers.
+            assert.ok(rollback.blockTables.includes('anchor_reward_reconcile_log'));
             // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
             assert.ok(rollback.blockTables.includes('capability_slash_events'));
             assert.ok(rollback.blockTables.includes('capability_slash_debits'));
@@ -281,6 +283,23 @@ describe('ClientRollback', function(){
                 assert.ok(!/e\.id\s*<\s*d\.id/.test(sql),
                     'restore must NOT tiebreak on the non-deterministic AUTO_INCREMENT id');
             }
+        });
+
+        it('replays the anchor reconcile-log restore into validator_rewards (block_index-keyed, before deletes) (RB-ANCHOR)', async function(){
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let restore = calls.find(c =>
+                c.args[0].includes('INSERT IGNORE INTO validator_rewards') &&
+                c.args[0].includes('anchor_reward_reconcile_log'));
+            assert.ok(restore, 'expected an anchor_reward_reconcile_log restore into validator_rewards');
+            // Scoped to reconciles being orphaned (block_index >= reorg) that deleted losers whose
+            // ORIGINAL earn-block SURVIVES the reorg (reward_block_index < reorg); byte-mirrors the source.
+            assert.ok(/d\.block_index\s*>=\s*\?/.test(restore.args[0]));
+            assert.ok(/d\.reward_block_index\s*<\s*\?/.test(restore.args[0]));
+            assert.deepStrictEqual(restore.args[1], [100, 100]);
+            let restoreIdx = calls.indexOf(restore);
+            let deleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `validator_rewards`'));
+            assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'reconcile restore must precede the validator_rewards delete');
         });
 
         it('rolls back transaction on error and rethrows', async function(){

@@ -278,6 +278,32 @@ class ClientRollback {
                     }
                 }
 
+                // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
+                // xchain-indexer/src/rollback.js. An orphaned anchor reconcile DELETEd loser
+                // validator_rewards rows from earlier SURVIVING blocks (block_index =
+                // SNAPSHOT_BLOCK) and pre-imaged them in the replicated anchor_reward_reconcile_log
+                // keyed to the reconcile's (ANCHOR) block. The generic block delete below drops the
+                // log rows but never re-creates the losers, so re-INSERT those whose original
+                // earn-block (reward_block_index) survives the reorg (< block_index). amount is the
+                // frozen consensus reward constant per round, so INSERT IGNORE is value-stable and
+                // idempotent whether or not the source's forward DELETE reached this replica. Runs
+                // BEFORE the generic delete so the log rows still exist.
+                try {
+                    await this.db.doQuery(
+                        "INSERT IGNORE INTO validator_rewards " +
+                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index) " +
+                        "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
+                        "       d.amount, d.reward_block_index " +
+                        "  FROM anchor_reward_reconcile_log d " +
+                        " WHERE d.block_index >= ? AND d.reward_block_index < ?",
+                        [block_index, block_index]
+                    );
+                } catch(e){
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+
                 // deactivation_block re-NULL, mirror of xchain-indexer/src/rollback.js.
                 // Orphaned UNSTAKE / DELEGATE-revoke actions stamped deactivation_block =
                 // actionBlock + activationDelay IN PLACE on surviving parent stake/delegation
