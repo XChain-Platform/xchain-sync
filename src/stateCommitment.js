@@ -329,13 +329,15 @@ async function buildFullBalancesRoot(db, chain, network){
 // staking is BTC-only). The capability set + per-capability MIN_STAKE floors and
 // the VALIDATOR_QUERY_LIMIT cap come from consensus-constants.js, mirrored from
 // the indexer BTC config; any drift forks the stakes_root.
-async function gatherStakeEntries(db, chain, blockIndex){
+async function gatherStakeEntries(db, chain, network, blockIndex){
     if(chain !== 'BTC') return [];
     const caps  = CC.btcStakeCapabilities();
     const limit = CC.VALIDATOR_QUERY_LIMIT;
     const entries = [];
     for(const capability of Object.keys(caps)){
-        const rows = await db.getStakeWeightsByCapability(capability, blockIndex, caps[capability], limit);
+        // chain/network gate the SWQ source-cap (byte-mirrored to the indexer) so the
+        // follower's stakes_root set is identical to the source at/after the activation height.
+        const rows = await db.getStakeWeightsByCapability(capability, blockIndex, caps[capability], limit, chain, network);
         const seenSource = new Map();   // source -> weight (first wins; equal per source)
         for(const r of (rows || [])){
             if(!r || r.pubkey == null) continue;
@@ -392,7 +394,7 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     // matching the indexer's gatherStakeEntries.
     let stakesRoot = EMPTY_ROOT_HEX;
     if(chain === 'BTC'){
-        const stakeEntries = await gatherStakeEntries(db, chain, blockIndex);
+        const stakeEntries = await gatherStakeEntries(db, chain, network, blockIndex);
         stakesRoot = await smt.buildFull(stakeEntries);
     }
 
@@ -424,7 +426,7 @@ async function seedSnapshotRoots(db, chain, network, blockHeight){
     let   stakesRoot      = EMPTY_ROOT_HEX;
     if(chain === 'BTC'){
         const smt = new PersistentSMT(new DbNodeStore(db));
-        stakesRoot = await smt.buildFull(await gatherStakeEntries(db, chain, blockHeight));
+        stakesRoot = await smt.buildFull(await gatherStakeEntries(db, chain, network, blockHeight));
     }
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
     const blockMerkleRoot = await computeBlockMerkleRoot(db, blockHeight);

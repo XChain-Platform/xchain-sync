@@ -30,6 +30,7 @@ const path       = require('path');
 const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
 const { canonicalizeHashAddress } = require('./protocolAddressRoles');
+const swqCap = require('./swq_source_cap_activation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -1266,25 +1267,82 @@ class Database {
         return { sql, args };
     }
 
+    // SWQ source-cap wrapper (SWQ-TRUNC-1 liveness half). Wraps an inner source-keyed
+    // stake-weight builder ({sql,args} from _stakeWeightsSql or the sync AsOf variant)
+    // and replaces the raw key-row LIMIT with a windowed cap on the consensus UNIT:
+    // DISTINCT staking SOURCES (DENSE_RANK over source) plus a per-source key bound
+    // (ROW_NUMBER per source). One source can no longer fill the window and evict
+    // honest sources. Over-fetches one extra source (_sr <= maxSources + 1) so the
+    // caller can flag a genuinely >maxSources federation as truncated (the primitive
+    // then fails closed); the per-source key cap only bounds the row/leaf count and
+    // never sets truncated (dropping a source's excess keys does not change its
+    // weight). Row order is consensus-irrelevant (the stakes_root SMT keys on
+    // pubkey+capability); only the returned SET is. CONSENSUS-CRITICAL: feeds the
+    // hashed stakes_root at/after SWQ_SOURCE_CAP_ACTIVATION and MUST stay byte-identical
+    // to the xchain-indexer twin (cross-repo drift guard in rollback-coverage.test.js).
+    _cappedStakeWeightsSql(inner, maxSources, maxKeys){
+        let sql = `SELECT r.pubkey AS pubkey, r.source AS source, r.weight AS weight, r._sr AS _sr
+                   FROM (
+                       SELECT b.pubkey AS pubkey, b.source AS source, b.weight AS weight,
+                              DENSE_RANK() OVER (ORDER BY b.source)                        AS _sr,
+                              ROW_NUMBER() OVER (PARTITION BY b.source ORDER BY b.pubkey)  AS _kr
+                       FROM (${inner.sql}) b
+                   ) r
+                   WHERE r._sr <= ? AND r._kr <= ?
+                   ORDER BY r.source, r.pubkey`;
+        let args = [...inner.args, maxSources + 1, maxKeys];
+        return { sql, args };
+    }
+
+    // Apply the cap regime in force for `coin`/`network` at `blockIndex` to an inner
+    // source-keyed stake-weight builder, returning { rows:[{pubkey,source,weight}],
+    // truncated }. Twin of the indexer's _stakeWeightsWithCap gate: at/after
+    // SWQ_SOURCE_CAP_ACTIVATION the windowed source-cap (_cappedStakeWeightsSql);
+    // below it the legacy uncapped key-row LIMIT. The gate + caps + _cappedStakeWeightsSql
+    // are byte-mirrored to the indexer so the follower's stakes_root set is identical on
+    // both sides of the height. Sync reads coin/network from the caller (it has no
+    // per-chain config); a null coin/network stays inert (legacy uncapped path).
+    async _applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
+        if(swqCap.isSwqSourceCapActive(blockIndex, network, coin)){
+            let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
+            let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
+            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys);
+            let raw = await this.doQuery(capped.sql, capped.args);
+            let truncated = raw.some(r => Number(r._sr) > maxSources);
+            if(truncated)
+                console.warn(label + ' saw more than ' + maxSources + ' distinct staking sources at block ' + blockIndex + ' - stakes_root snapshot truncated; stake-weighted quorum fails closed. Raise STAKE_WEIGHT_MAX_SOURCES (coordinated flag-day upgrade) if the federation has grown.');
+            let rows = (truncated ? raw.filter(r => Number(r._sr) <= maxSources) : raw).map(r => ({
+                pubkey: String(r.pubkey),
+                source: String(r.source),
+                weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+            }));
+            return { rows, truncated };
+        }
+        let query = `${inner.sql} ORDER BY source, pubkey LIMIT ?`;
+        let raw = await this.doQuery(query, [...inner.args, limit]);
+        let truncated = raw.length >= limit;
+        if(truncated)
+            console.warn(label + ' hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
+        let rows = raw.map(r => ({
+            pubkey: String(r.pubkey),
+            source: String(r.source),
+            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+        }));
+        return { rows, truncated };
+    }
+
     // Source-keyed capability stake weights at a block, mirroring the indexer's
     // getStakeWeightsByCapability BTC path (the follower only builds the BTC
     // stakes_root, so the off-BTC hub-mirror branch is not needed here). minStake
     // is the capability's frozen MIN_STAKE floor; limit is the frozen
     // VALIDATOR_QUERY_LIMIT. Same ORDER BY + cap as the source so the selected set
     // is identical even on truncation.
-    async getStakeWeightsByCapability(capability, blockIndex, minStake, limit){
+    async getStakeWeightsByCapability(capability, blockIndex, minStake, limit, coin, network){
         let valid_id = await this.getStatusId('valid');
         if(valid_id === null) return [];
         let sw = this._stakeWeightsSql(valid_id, blockIndex, String(minStake));
-        let query = `${sw.sql} ORDER BY source, pubkey LIMIT ?`;
-        let rows = await this.doQuery(query, [...sw.args, limit]);
-        if(rows.length >= limit)
-            console.warn('getStakeWeightsByCapability(' + capability + ') hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
-        return rows.map(r => ({
-            pubkey: String(r.pubkey),
-            source: String(r.source),
-            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
-        }));
+        let { rows } = await this._applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
+        return rows;
     }
 
     // HISTORICAL stake weights at snapshotBlock S, reconstructing the amount that
@@ -1306,7 +1364,7 @@ class Database {
     // returns a result byte-identical to getStakeWeightsByCapability(cap, S) computed
     // in order at S. _stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
     // NOT reused/modified here so the drift guard and the consensus query stay untouched.
-    async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit){
+    async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit, coin, network){
         let valid_id = await this.getStatusId('valid');
         if(valid_id === null) return [];
         // Membership exclusion is identical to _stakeWeightsSql: a key slashed at
@@ -1368,15 +1426,8 @@ class Database {
                     valid_id, snapshotBlock, snapshotBlock, String(minStake),
                     valid_id, snapshotBlock, snapshotBlock, valid_id, snapshotBlock, snapshotBlock,
                     valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
-        let query = `${sql} ORDER BY source, pubkey LIMIT ?`;
-        let rows = await this.doQuery(query, [...args, limit]);
-        if(rows.length >= limit)
-            console.warn('getStakeWeightsByCapabilityAsOf(' + capability + ') hit the result cap of ' + limit + ' rows at snapshotBlock ' + snapshotBlock + ' - reconstructed set may be truncated vs the committed root.');
-        return rows.map(r => ({
-            pubkey: String(r.pubkey),
-            source: String(r.source),
-            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
-        }));
+        let { rows } = await this._applyStakeWeightCap({ sql, args }, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
+        return rows;
     }
 
     // Get all rows from a table for a given block (block_index-scoped tables).

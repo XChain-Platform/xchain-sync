@@ -2187,7 +2187,7 @@ class ClientSync {
     async _oraclePublishSetAt(snapshotBlock){
         const caps = btcStakeCapabilities();
         const cap  = 'oracle_publish';
-        const rows = await this.db.getStakeWeightsByCapabilityAsOf(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT);
+        const rows = await this.db.getStakeWeightsByCapabilityAsOf(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT, this.chain, this.network);
         const set  = [], ZERO = M.canonicalAmount('0');
         for(const r of (rows || [])){
             if(!r || r.pubkey == null) continue;

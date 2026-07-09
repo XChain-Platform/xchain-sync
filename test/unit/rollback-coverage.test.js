@@ -348,6 +348,29 @@ describe('Rollback coverage guard @regression', function(){
             '_stakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (the stakes_root is consensus-critical)');
     });
 
+    // Cross-repo drift guard for the SWQ source-cap windowed wrapper (SWQ-TRUNC-1
+    // liveness half). At/after SWQ_SOURCE_CAP_ACTIVATION this replaces the raw key-row
+    // LIMIT and feeds the hashed stakes_root, so it MUST stay byte-identical to the
+    // xchain-indexer twin or the follower's stakes_root diverges above the height. The
+    // per-repo JS gate wrappers (_stakeWeightsWithCap / _applyStakeWeightCap) differ by
+    // design - the indexer reads network/coin from this.config, sync from params - but
+    // both call THIS builder + the shared swq_source_cap_activation.js caps, which are
+    // the consensus-relevant surface. If you edit one _cappedStakeWeightsSql, edit both.
+    it('_cappedStakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function cappedSql(p){
+            const src = fs.readFileSync(p, 'utf8');
+            const m = src.match(/_cappedStakeWeightsSql\(inner, maxSources, maxKeys\)\{([\s\S]*?)return \{ sql, args \};/);
+            assert.ok(m, `_cappedStakeWeightsSql not found in ${p}`);
+            return m[1].replace(/\s+/g, ' ').trim();
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/db.js');
+        const indexerPath = indexerFile('src/db.js');
+        if(!requireSibling(this, indexerPath)) return;
+        assert.strictEqual(cappedSql(syncPath), cappedSql(indexerPath),
+            '_cappedStakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
+    });
+
     // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
     // in-place reset on SURVIVING credits/unstakes/contract_unstakes rows. Those tables are
     // already in both rollback lists, so the table-membership guard above structurally cannot
@@ -599,7 +622,7 @@ describe('Rollback coverage guard @regression', function(){
     // GENERATES the replicated topology and both rollback table sets; a drifted copy
     // would silently re-open the very source<->replica divergence it exists to close.
     // Lock all three byte-identical (skip if the sibling repo absent).
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'tableLifecycle.js']){
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
