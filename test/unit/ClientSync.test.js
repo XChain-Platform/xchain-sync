@@ -668,6 +668,34 @@ describe('ClientSync', function(){
             assert.strictEqual(mismatches[0].delta, 3);
         });
 
+        it('heals the schema when a replicated table is missing locally (errno 1146)', async function(){
+            // The live bug: a table the source ADDED but has never written a row to
+            // (polls / poll_results / vote_delegations on the BTC replicas) streams
+            // nothing, so the apply-path heal never fires. The completeness check is
+            // the only place that touches it, and it used to swallow the 1146 -- and
+            // because source count is 0 too, no mismatch was raised either. Result:
+            // ER_NO_SUCH_TABLE logged forever, table never created.
+            let healed = [];
+            sync._healSchemaIfStale = async (e) => { healed.push(e.errno); return true; };
+            let err = new Error("Table 'X.polls' doesn't exist"); err.errno = 1146;
+            db.getTableCount = async () => { throw err; };
+
+            let mismatches = await sync._verifyTableCounts({ polls: 0 });
+            assert.deepStrictEqual(healed, [1146], 'missing table must trigger the schema heal');
+            // Source has 0 rows, so it is correctly NOT a count mismatch.
+            assert.strictEqual(mismatches.length, 0);
+        });
+
+        it('does not fault the completeness check when the schema heal itself throws', async function(){
+            sync._healSchemaIfStale = async () => { throw new Error('DDL rejected'); };
+            let err = new Error('missing'); err.errno = 1146;
+            db.getTableCount = async () => { throw err; };
+            // Advisory path: still returns, still reports the shortfall.
+            let mismatches = await sync._verifyTableCounts({ polls: 4 });
+            assert.strictEqual(mismatches.length, 1);
+            assert.strictEqual(mismatches[0].localCount, 0);
+        });
+
         it('returns no mismatches when the follower is complete (local >= source)', async function(){
             db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, deposits: 12 })[t];
             // A follower legitimately ahead on a table is not flagged.

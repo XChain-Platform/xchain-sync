@@ -1424,6 +1424,17 @@ class ClientSync {
             try {
                 local = Number(await this.db.getTableCount(table));
             } catch(e){
+                // This key came from the SOURCE's /status payload, so the source HAS the
+                // table: a local errno 1146 means the source's schema moved ahead of this
+                // replica after bootstrap. The apply-path heal (_applyBlockEvent) never
+                // fires for a table the source has not yet written a row to, because
+                // nothing ever streams for it, so a zero-row server-side addition would
+                // error here on EVERY completeness check forever and never get created
+                // (observed live: polls / poll_results / vote_delegations on the BTC
+                // replicas). Route it through the same debounced schema heal, which CREATEs
+                // missing tables; the count then reads correctly on the next pass. Advisory
+                // path, so a heal failure must never fault the completeness check itself.
+                try { await this._healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
                 local = 0;
             }
             if(!Number.isFinite(local)) local = 0;
