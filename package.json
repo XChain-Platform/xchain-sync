@@ -55,6 +55,7 @@
     "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental"
   },
   "overrides": {
+    "decimal.js": "10.4.3",
     "serialize-javascript": "^7.0.5",
     "diff": "^8.0.3",
     "tmp": "^0.2.7",

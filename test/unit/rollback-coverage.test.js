@@ -621,8 +621,11 @@ describe('Rollback coverage guard @regression', function(){
     // a false-halt generator. tableLifecycle.js is the table-lifecycle registry that
     // GENERATES the replicated topology and both rollback table sets; a drifted copy
     // would silently re-open the very source<->replica divergence it exists to close.
-    // Lock all three byte-identical (skip if the sibling repo absent).
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'tableLifecycle.js']){
+    // Lock them byte-identical (skip if the sibling repo absent).
+    // state_key_collation_activation.js gates the state_key COLLATE in the
+    // contract_hash/block_merkle_root preimage on BOTH sides; a drifted copy
+    // forks the recomputed hashes at/after an armed height.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);

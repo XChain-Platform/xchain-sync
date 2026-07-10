@@ -26,6 +26,7 @@ const { decodeValue }     = require('./wireCodec');
 const { rederiveEscrowGate } = require('./ClientRollback');
 const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
+const { OPERATOR_LOCAL_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
@@ -109,7 +110,11 @@ class ClientApplier {
         // this apply" and the state-commitment check is skipped, never treated as a
         // divergence (a duplicate block was already verified when first applied).
         this._lastComputedRoots = null;
-        if(!payload || !payload.data || !payload.block_index) return;
+        // block_index is null-checked (not truthiness-checked): the genesis block is
+        // a legitimate block_index 0 (ServerPoller emits Number(0)), and ClientSync
+        // documents block 0 as the one valid from-empty apply target. `!0` would
+        // silently drop it before any transaction opened.
+        if(!payload || !payload.data || payload.block_index == null) return;
 
         // Schema-version gate: reject live block payloads with a mismatched schema
         // version the same way snapshot applies do, so a server-side schema bump
@@ -290,12 +295,45 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            // Clear all snapshot tables first (reverse order: child rows before parents).
+            // Clear the FULL local snapshot-eligible table set, not just the tables
+            // named in the payload: streamFullSnapshot omits any table with zero
+            // source rows, so a table emptied on the source but still populated on
+            // this replica would otherwise survive a re-bootstrap (the oversized-
+            // incremental fallback applies a full snapshot over a NON-empty replica),
+            // and _verifyTableCounts only reports remote>local, so the stale rows
+            // would never surface. schema_version equality with the source was
+            // enforced above, so the local table set mirrors the source's. The
+            // enumeration is best-effort: payload-named tables are always cleared.
+            let localTables = [];
+            try {
+                let schemaRows = await this.db.doQuery(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+                    [this.db.dbName]
+                );
+                localTables = (schemaRows || [])
+                    .map(r => r.table_name || r.TABLE_NAME)
+                    .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+            } catch(e){
+                console.error('Full-snapshot clear: local table enumeration failed; clearing payload tables only:', e.message);
+            }
+
+            // Node-local tables (OPERATOR_LOCAL_TABLES) never ride snapshots; if an
+            // older source still ships one (e.g. mempool_transactions before it was
+            // excluded), drop it here rather than clobbering node-local state with
+            // the source's copy.
+            let payloadTables = Object.keys(snapshotData.tables).filter(t => {
+                if(!OPERATOR_LOCAL_TABLES.has(t)) return true;
+                console.log('Ignoring node-local table shipped in full snapshot: ' + t);
+                return false;
+            });
+
+            // Clear all snapshot tables first (reverse dependency order: child rows
+            // before parents; orderSnapshotTables mirrors the builder's stream order).
             // DELETE rather than TRUNCATE: MariaDB rejects TRUNCATE on any table referenced
             // by a foreign key, even when the referencing table is empty. The decoder DB
             // declares such a FK (pubkeys.address_id → index_addresses.id), so TRUNCATE
             // would crash the bootstrap; DELETE honours FK constraints row-by-row.
-            let tables = Object.keys(snapshotData.tables);
+            let tables = orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
             for(let i = tables.length - 1; i >= 0; i--){
                 let tCheck = validation.validateIdentifier(tables[i]);
                 if(!tCheck.valid){

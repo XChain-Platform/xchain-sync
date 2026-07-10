@@ -58,6 +58,15 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
+        it('applies the genesis block (block_index 0) instead of silently dropping it', async function(){
+            await applier.applyBlock({
+                block_index: 0,
+                data: { blocks: [{ block_index: 0, block_time: 0 }] }
+            });
+            assert.strictEqual(db.beginTransaction.calledOnce, true);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
         it('skips existing block (duplicate detection)', async function(){
             db.getBlockHashRow.resolves({ block_index: 1, ledger_hash: 'abc' });
             await applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } });
@@ -233,6 +242,39 @@ describe('ClientApplier', function(){
                 .filter(q => /^DELETE FROM/.test(q));
             assert.deepStrictEqual(deletes, ['DELETE FROM `tableB`', 'DELETE FROM `tableA`']);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        it('clears a source-empty local table absent from the payload (re-bootstrap staleness)', async function(){
+            // The builder omits zero-row source tables from the payload; a re-bootstrap
+            // over a populated replica must still clear them (union with the local set).
+            db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
+                { table_name: 'blocks' },
+                { table_name: 'transactions' }
+            ]);
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] } // transactions empty on source, omitted
+            };
+            await applier.applyFullSnapshot(snapshot);
+            let deletes = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /^DELETE FROM/.test(q));
+            // Union of payload + local snapshot-eligible tables, reverse dependency order.
+            assert.deepStrictEqual(deletes, ['DELETE FROM `transactions`', 'DELETE FROM `blocks`']);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        it('ignores node-local tables (mempool_transactions) shipped by an older source', async function(){
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: {
+                    blocks: [{ block_index: 1 }],
+                    mempool_transactions: [{ tx_hash: 'aa' }]
+                }
+            };
+            await applier.applyFullSnapshot(snapshot);
+            let touched = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /mempool_transactions/.test(q));
+            assert.deepStrictEqual(touched, []);
         });
 
         it('rolls back on error', async function(){

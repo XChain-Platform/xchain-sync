@@ -64,6 +64,15 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // a per-node wall-clock value, so shipping the source's rows adds pure
     // nondeterminism to the snapshot and is never consumed by the follower.
     'state_tree_roots',
+    // mempool_transactions: node-local, non-deterministic observation state (its own
+    // schema comment forbids sharing raw values across nodes). Every other channel
+    // already excludes it: the per-block stream (replicatedTables.js), the incremental
+    // snapshot (decoderSkip in streamIncrementalSnapshot), and the /status completeness
+    // count (getReplicatedTables). Listing it here closes the one remaining leak: the
+    // FULL snapshot used to ship the source's bootstrap-instant mempool, freezing it
+    // forever on full-bootstrap decoder replicas while incremental-bootstrap replicas
+    // held zero rows for the same table.
+    'mempool_transactions',
 ]);
 
 // Guards a gzip snapshot stream against a slow or vanished reader. The snapshot
@@ -141,26 +150,52 @@ class SnapshotStreamWriter {
     }
 }
 
+// Priority ordering for tables that must come first (index/dedup, then core).
+// Any tables not in this list are included alphabetically after these.
+const PRIORITY_TABLES = [
+    'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
+    'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
+    'index_tickers', 'index_transactions',
+    'blocks', 'transactions', 'actions'
+];
+
+// Tables to put last (derived/computed; they depend on everything else).
+// pubkeys trails index_addresses: pubkeys.sql declares a FK on index_addresses(id),
+// so the reverse-delete path in applyFullSnapshot must drop pubkeys rows before
+// index_addresses rows.  Appended after sync_meta because neither balances nor
+// sync_meta carries a FK on pubkeys.
+const TRAILING_TABLES = ['balances', 'sync_meta', 'pubkeys'];
+
+// Order a set of snapshot table names into the builder's dependency order:
+// priority tables first (in declared order), everything else alphabetically,
+// trailing tables last. Exported (alongside OPERATOR_LOCAL_TABLES) so
+// ClientApplier.applyFullSnapshot can clear the union of payload tables and
+// the local snapshot-eligible set in the same FK-safe order the builder
+// streams them (reverse-delete: children before parents).
+function orderSnapshotTables(allTables){
+    let prioritySet  = new Set(PRIORITY_TABLES);
+    let trailingSet  = new Set(TRAILING_TABLES);
+
+    let ordered = [];
+    for(let t of PRIORITY_TABLES){
+        if(allTables.includes(t)) ordered.push(t);
+    }
+    let middle = allTables.filter(t => !prioritySet.has(t) && !trailingSet.has(t)).sort();
+    ordered.push(...middle);
+    for(let t of TRAILING_TABLES){
+        if(allTables.includes(t)) ordered.push(t);
+    }
+
+    return ordered;
+}
+
 class SnapshotBuilder {
 
     constructor(util) {
         this.util = util;
 
-        // Priority ordering for tables that must come first (index/dedup, then core).
-        // Any tables not in this list are included alphabetically after these.
-        this.priorityTables = [
-            'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
-            'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
-            'index_tickers', 'index_transactions',
-            'blocks', 'transactions', 'actions'
-        ];
-
-        // Tables to put last (derived/computed; they depend on everything else).
-        // pubkeys trails index_addresses: pubkeys.sql declares a FK on index_addresses(id),
-        // so the reverse-delete path in applyFullSnapshot must drop pubkeys rows before
-        // index_addresses rows.  Appended after sync_meta because neither balances nor
-        // sync_meta carries a FK on pubkeys.
-        this.trailingTables = ['balances', 'sync_meta', 'pubkeys'];
+        this.priorityTables = PRIORITY_TABLES;
+        this.trailingTables = TRAILING_TABLES;
 
         this.pageSize = 10000;
     }
@@ -174,21 +209,7 @@ class SnapshotBuilder {
             conn
         );
         let allTables = rows.map(r => r.table_name || r.TABLE_NAME).filter(t => !OPERATOR_LOCAL_TABLES.has(t));
-
-        let prioritySet  = new Set(this.priorityTables);
-        let trailingSet  = new Set(this.trailingTables);
-
-        let ordered = [];
-        for(let t of this.priorityTables){
-            if(allTables.includes(t)) ordered.push(t);
-        }
-        let middle = allTables.filter(t => !prioritySet.has(t) && !trailingSet.has(t)).sort();
-        ordered.push(...middle);
-        for(let t of this.trailingTables){
-            if(allTables.includes(t)) ordered.push(t);
-        }
-
-        return ordered;
+        return orderSnapshotTables(allTables);
     }
 
     // Stream a full snapshot to an HTTP response.
@@ -245,17 +266,26 @@ class SnapshotBuilder {
                     first = false;
                     await writer.write('"' + table + '":[');
 
-                    let offset = 0;
+                    // One ordered streaming pass per table (no LIMIT/OFFSET repaging):
+                    // most replicated tables are keyless with a non-unique first
+                    // column, so offset paging by `ORDER BY 1` had no total order and
+                    // could duplicate or skip a page-boundary tie (see
+                    // db.streamTableRows). A single query execution reads each row
+                    // exactly once; for-await gives row-at-a-time backpressure so a
+                    // multi-million-row table never lands in the driver array.
                     let firstRow = true;
-                    while(offset < count){
-                        let rows = await db.getTablePage(table, this.pageSize, offset, conn);
-                        for(let row of rows){
+                    let rowStream = db.streamTableRows(table, conn);
+                    try {
+                        for await (let row of rowStream){
                             if(!firstRow) await writer.write(',');
                             firstRow = false;
                             await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
                             totalRows++;
                         }
-                        offset += this.pageSize;
+                    } finally {
+                        // On a writer abort mid-table, stop the driver from buffering
+                        // the rest of the result set (no-op once the stream has ended).
+                        rowStream.destroy();
                     }
 
                     await writer.write(']');
@@ -796,3 +826,5 @@ class SnapshotBuilder {
 
 module.exports = SnapshotBuilder;
 module.exports.SnapshotStreamWriter = SnapshotStreamWriter;
+module.exports.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
+module.exports.orderSnapshotTables = orderSnapshotTables;

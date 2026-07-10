@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const { PassThrough } = require('stream');
+const { PassThrough, Readable } = require('stream');
 const { EventEmitter } = require('events');
 const zlib = require('zlib');
 const SnapshotBuilder = require('../../src/SnapshotBuilder');
@@ -24,7 +24,10 @@ function createMockDb(dbName){
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
         getFirstActionIndex: sinon.stub().resolves(null),
-        getTablePage: sinon.stub().resolves([]),
+        // Single-pass row stream per table (replaced ORDER BY 1 LIMIT/OFFSET
+        // paging, which had no total order on keyless tables). Tests override
+        // with Readable.from(rows) for populated tables.
+        streamTableRows: sinon.stub().callsFake(() => Readable.from([])),
         getTableCount: sinon.stub().resolves(0),
         // beginReadSnapshot returns a dedicated connection handle the builder
         // threads into every read and ends via commit/rollbackReadSnapshot.
@@ -116,6 +119,20 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(ordered[0], 'blocks');
             assert.strictEqual(ordered[1], 'custom_table');
         });
+
+        it('excludes mempool_transactions (node-local, non-deterministic) like every other channel', async function(){
+            // The per-block stream, the incremental decoderSkip, and the /status
+            // completeness count all exclude mempool_transactions; the FULL snapshot
+            // must too, or full-bootstrap replicas freeze the source's mempool forever.
+            let db = createMockDb();
+            db.doQuery.resolves([
+                { table_name: 'blocks' },
+                { table_name: 'mempool_transactions' },
+                { table_name: 'oracle_prices' } // existing operator-local exclusion, sanity check
+            ]);
+            let ordered = await builder._getOrderedTables(db);
+            assert.deepStrictEqual(ordered, ['blocks']);
+        });
     });
 
     describe('streamFullSnapshot', function(){
@@ -157,7 +174,7 @@ describe('SnapshotBuilder', function(){
             db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             db.doQuery.resolves([{ table_name: 'blocks' }]);
             db.getTableCount.resolves(1);
-            db.getTablePage.resolves([{ block_index: 50, block_time: 100 }]);
+            db.streamTableRows.callsFake(() => Readable.from([{ block_index: 50, block_time: 100 }]));
 
             // Collect the gzipped output
             let res = new PassThrough();
@@ -188,7 +205,7 @@ describe('SnapshotBuilder', function(){
             db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'empty_table' }]);
             db.getTableCount.withArgs('blocks').resolves(1);
             db.getTableCount.withArgs('empty_table').resolves(0);
-            db.getTablePage.resolves([{ block_index: 10 }]);
+            db.streamTableRows.callsFake(() => Readable.from([{ block_index: 10 }]));
 
             let res = new PassThrough();
             let chunks = [];
@@ -204,6 +221,39 @@ describe('SnapshotBuilder', function(){
             let parsed = JSON.parse(json);
             assert.ok(parsed.tables.blocks);
             assert.strictEqual(parsed.tables.empty_table, undefined);
+        });
+
+        it('emits every row of a keyless table exactly once in a single ordered pass (no offset re-paging)', async function(){
+            // Regression for the `ORDER BY 1 LIMIT ? OFFSET ?` pagination: keyless
+            // ledger tables (credits/debits/...) have a non-unique first column, so
+            // offset re-paging had no total order and a page-boundary tie could be
+            // emitted twice or skipped. The table here far exceeds pageSize; the
+            // builder must read it in ONE streaming pass.
+            let db = createMockDb();
+            builder.pageSize = 2; // the old scheme would have re-queried 3 offset pages
+            db.getLastBlock.resolves(50);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.doQuery.resolves([{ table_name: 'credits' }]);
+            // Five rows sharing one action_index (a match credits buyer+seller+fee...).
+            let rows = [0, 1, 2, 3, 4].map(i => ({ action_index: 7, address_id: i, amount: String(i) }));
+            db.getTableCount.resolves(rows.length);
+            db.streamTableRows.callsFake(() => Readable.from(rows));
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamFullSnapshot(db, res);
+            });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.deepStrictEqual(parsed.tables.credits.map(r => r.address_id), [0, 1, 2, 3, 4],
+                'every row exactly once, in stream order (no duplicate, no skip)');
+            assert.strictEqual(db.streamTableRows.callCount, 1,
+                'a table is read in one single-pass stream, not per-offset pages');
         });
     });
 
@@ -633,7 +683,7 @@ describe('SnapshotBuilder', function(){
                 db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'actions' }]);
                 db.getTableCount.resolves(2);
                 // Two rows (exercise the inter-row comma) incl. a BigInt (exercise bigIntReplacer).
-                db.getTablePage.resolves([{ id: 1n, n: 'a' }, { id: 2n, n: 'b' }]);
+                db.streamTableRows.callsFake(() => Readable.from([{ id: 1n, n: 'a' }, { id: 2n, n: 'b' }]));
                 let res = streamRes();
                 await run(() => builder.streamFullSnapshot(db, res), res);
                 assert.strictEqual(res._headers['X-Ledger-Hash'], '');
@@ -885,8 +935,8 @@ describe('SnapshotBuilder', function(){
             let res = new PassThrough();
             res.setHeader = sinon.stub();
             res.on('data', () => {});
-            // Simulate the client vanishing exactly when the first page is read.
-            db.getTablePage.callsFake(async () => { res.emit('close'); return [{ block_index: 50 }]; });
+            // Simulate the client vanishing exactly when the table read starts.
+            db.streamTableRows.callsFake(() => { res.emit('close'); return Readable.from([{ block_index: 50 }]); });
 
             // Resolves (does not reject): a client abort is swallowed, not a 500.
             await builder.streamFullSnapshot(db, res);

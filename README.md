@@ -91,7 +91,7 @@ VERIFY_HASHES=true
 # Allowed CORS origin (defaults to disabled when unset)
 # CORS_ORIGIN=https://your-dashboard.example.com
 
-REPLICA_DB_HOST=localhost
+REPLICA_DB_HOST=127.0.0.1
 REPLICA_DB_PORT=3306
 REPLICA_DB_USER=xchain_sync
 REPLICA_DB_PASS=your_password

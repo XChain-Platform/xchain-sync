@@ -89,7 +89,10 @@ function _fromEnv(chain, network) {
     const raw = process.env[_envKey(chain, network)];
     if (!raw) return null;
     let arr;
-    try { arr = JSON.parse(raw); } catch (e) { return null; }
+    try { arr = JSON.parse(raw); } catch (e) {
+        console.warn('[pinnedValidators] malformed ' + _envKey(chain, network) + ' override, falling back (fail-closed):', e.message);
+        return null;
+    }
     if (!Array.isArray(arr) || arr.length === 0) return null;
     for (const v of arr) {
         if (!v || typeof v.pubkey !== 'string' || typeof v.weight !== 'string' || typeof v.source !== 'string') return null;

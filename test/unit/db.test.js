@@ -1176,18 +1176,24 @@ describe('Database.getActions()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 22. getTablePage() / getTableCount()
+// 22. streamTableRows() / getTableCount()
 // ═══════════════════════════════════════════════════════════════════════════
-describe('Database.getTablePage()', function () {
+describe('Database.streamTableRows()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
     afterEach(async function () { sinon.restore(); await db.close(); });
 
-    it('passes limit and offset to doQuery', async function () {
-        sinon.stub(db, 'doQuery').resolves([]);
-        await db.getTablePage('blocks', 100, 200);
-        let args = db.doQuery.firstCall.args[1];
-        assert.deepStrictEqual(args, [100, 200]);
+    it('runs ONE un-paged ordered query on the given snapshot connection', function () {
+        // Regression: the snapshot path must never re-page with LIMIT/OFFSET.
+        // Keyless tables have no total order, so separate offset executions could
+        // duplicate or skip a page-boundary tie. A single execution is the fix.
+        let conn = { queryStream: sinon.stub().returns('ROW_STREAM') };
+        let stream = db.streamTableRows('blocks', conn);
+        assert.strictEqual(stream, 'ROW_STREAM');
+        assert.ok(conn.queryStream.calledOnce);
+        let sql = conn.queryStream.firstCall.args[0];
+        assert.ok(/ORDER BY 1/.test(sql), 'keeps the historical snapshot row order');
+        assert.ok(!/LIMIT|OFFSET/i.test(sql), 'must not re-page (no total order on keyless tables)');
     });
 });
 
@@ -1675,7 +1681,7 @@ describe('Database.replicateSchema()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Table-identifier guard (getTableCount / getTablePage / truncateTable)
+// Table-identifier guard (getTableCount / streamTableRows / truncateTable)
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database: table identifier guard', function () {
     let db;
@@ -1690,10 +1696,10 @@ describe('Database: table identifier guard', function () {
         assert.ok(spy.notCalled, 'doQuery must not run for an unsafe identifier');
     });
 
-    it('getTablePage rejects an unsafe identifier before querying', async function () {
-        let spy = sinon.stub(db, 'doQuery').resolves([]);
-        await assert.rejects(() => db.getTablePage(EVIL, 10, 0), /unsafe table identifier/);
-        assert.ok(spy.notCalled);
+    it('streamTableRows rejects an unsafe identifier before querying', function () {
+        let conn = { queryStream: sinon.stub() };
+        assert.throws(() => db.streamTableRows(EVIL, conn), /unsafe table identifier/);
+        assert.ok(conn.queryStream.notCalled, 'queryStream must not run for an unsafe identifier');
     });
 
     it('truncateTable rejects an unsafe identifier before querying', async function () {

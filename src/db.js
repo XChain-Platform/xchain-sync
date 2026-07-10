@@ -31,6 +31,7 @@ const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
 const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 const swqCap = require('./swq_source_cap_activation');
+const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -804,7 +805,7 @@ class Database {
     //
     // Returns a DEDICATED connection (not the shared this.transactionConnection)
     // that the caller threads into its reads (getLastBlock/getBlockHashRow/
-    // getTablePage/... all accept an optional conn) and ends via
+    // streamTableRows/... all accept an optional conn) and ends via
     // commitReadSnapshot/rollbackReadSnapshot. Using a dedicated connection lets
     // multiple snapshots run concurrently and keeps the live writer (ServerPoller,
     // TransparencyLog) off the snapshot's read view entirely.
@@ -1044,7 +1045,11 @@ class Database {
     // getBlockHashes), since block_merkle_root covers the same rows the consensus
     // ledger/actions/contract hashes do. The xchain-e2e consensusHashConformance
     // test is the drift guard. !!!
-    async getBlockLeafRows(block_index, conn){
+    //
+    // `network`/`coin` drive the state_key collation flag-day
+    // (state_key_collation_activation.js), mirroring BlockHasher; omitted ->
+    // legacy folding collation (pre-activation behavior).
+    async getBlockLeafRows(block_index, conn, network, coin){
         let q;
         let ledger = { credits: [], debits: [], escrows: [] };
         // credits
@@ -1101,14 +1106,19 @@ class Database {
              WHERE a.block_index=?
              ORDER BY c.action_index ASC`;
         contracts.contracts = await this.doQuery(q, [block_index], conn);
-        // contract state (latest value per key written in this block)
+        // contract state (latest value per key written in this block).
+        // state_key collation is flag-day gated, mirroring BlockHasher and the
+        // indexer's getBlockHashes: legacy folding (utf8_general_ci) below the
+        // activation height, COLLATE utf8_bin pinned at/after it
+        // (see state_key_collation_activation.js).
+        let stateKeyCollate = isStateKeyBinCollationActive(block_index, network, coin) ? ' COLLATE utf8_bin' : '';
         q = `SELECT cs.contract_index, cs.state_key, cs.state_value
              FROM contract_state cs
                 INNER JOIN (
                     SELECT MAX(id) as max_id FROM contract_state
-                    WHERE block_index=? GROUP BY contract_index, state_key
+                    WHERE block_index=? GROUP BY contract_index, state_key` + stateKeyCollate + `
                 ) latest ON cs.id = latest.max_id
-             ORDER BY cs.contract_index ASC, cs.state_key ASC`;
+             ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
         contracts.state = await this.doQuery(q, [block_index], conn);
         // executions
         q = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
@@ -1500,11 +1510,25 @@ class Database {
         return await this.doQuery(query, [block_index], conn);
     }
 
-    // Get all rows from a table (paginated)
-    async getTablePage(table, limit, offset, conn){
+    // Stream every row of a table in ONE ordered pass on the given (dedicated
+    // snapshot) connection. Returns the driver's row Readable (async-iterable);
+    // the caller must consume it fully or destroy() it.
+    //
+    // This deliberately replaces LIMIT/OFFSET paging (`ORDER BY 1 LIMIT ? OFFSET ?`):
+    // most replicated ledger tables have NO primary key and a non-unique first
+    // column (e.g. credits/debits share one action_index across a match's rows), so
+    // `ORDER BY 1` is not a total order and SQL does not guarantee a stable tie
+    // order across separate OFFSET executions. A boundary tie could then be emitted
+    // in two adjacent pages (duplicate -> plain-INSERT apply aborts, or silently
+    // doubles a keyless row) or in neither (skip -> replica short, caught only by
+    // the advisory count check). A single query execution reads each row exactly
+    // once, so no cross-execution tie order exists to disagree. Keyset paging is
+    // not an option here: the keyless tables have nothing unique to key on.
+    // ORDER BY 1 is kept so the emitted row order matches the historical snapshot
+    // shape (and getBlockScopedRows' "matches the snapshot path" comment).
+    streamTableRows(table, conn){
         assertValidIdentifier(table);
-        let query = "SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?";
-        return await this.doQuery(query, [limit, offset], conn);
+        return conn.queryStream("SELECT * FROM `" + table + "` ORDER BY 1");
     }
 
     // Get total row count for a table

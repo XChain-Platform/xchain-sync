@@ -43,7 +43,7 @@ function createMockDb() {
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves(),
-        getTablePage: sinon.stub().resolves([]),
+        streamTableRows: sinon.stub().callsFake(() => require('stream').Readable.from([])),
         getTableCount: sinon.stub().resolves(0),
     };
 }

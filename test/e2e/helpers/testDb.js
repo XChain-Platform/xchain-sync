@@ -137,8 +137,13 @@ class TestDatabase {
             WHERE t.block_index = ?`, [block_index]);
     }
 
-    async getTablePage(table, limit, offset) {
-        return await this.doQuery("SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?", [limit, offset]);
+    // Mirrors src/db.js: one un-paged ordered streaming pass per table (LIMIT/OFFSET
+    // re-paging had no total order on keyless tables and could dup/skip a boundary tie).
+    // This harness's beginReadSnapshot tracks the connection on the instance and
+    // returns undefined, so fall back to the tracked transactionConnection.
+    streamTableRows(table, conn) {
+        let c = conn || this.transactionConnection;
+        return c.queryStream("SELECT * FROM `" + table + "` ORDER BY 1");
     }
 
     async getTableCount(table) {

@@ -282,6 +282,19 @@ describe('ClientSync', function(){
             assert.strictEqual(connect.called, false);
         });
 
+        it('_bootstrapFromSnapshot rejects with BootstrapExhaustedError once all retry rounds exhaust', async function(){
+            // The typed error is what lets the live WS event chain distinguish
+            // permanent exhaustion (escalate to process.exit) from transient
+            // handler errors (log and continue); pin the type at the throw site.
+            config.BOOTSTRAP_MAX_RETRIES   = 0;
+            config.BOOTSTRAP_RETRY_BASE_MS = 1;
+            config.BOOTSTRAP_RETRY_MAX_MS  = 1;
+            sinon.stub(sync, '_bootstrapRotateSources').resolves(false);
+
+            await assert.rejects(() => sync._bootstrapFromSnapshot(),
+                e => e instanceof ClientSync.BootstrapExhaustedError && /sources exhausted/.test(e.message));
+        });
+
         it('_handleBlock refuses to apply a non-genesis block onto an empty replica', async function(){
             sync.lastAppliedBlock = null;
             sinon.stub(sync, '_incrementalCatchUp').resolves();

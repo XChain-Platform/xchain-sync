@@ -1391,6 +1391,43 @@ describe('ClientSync: _connectWebSocket', function(){
         assert.ok(errCalls.some(m => m && m.indexOf('Error handling WebSocket message') !== -1));
     });
 
+    it('message handler: escalates mid-stream bootstrap exhaustion to process.exit(1)', async function(){
+        // Permanent bootstrap exhaustion reached from live WS handling (the size-cap
+        // fallback in _runIncrementalCatchUp) must honor the supervised-restart
+        // contract, not be swallowed by the chain's log-and-continue catch: a
+        // swallowed exhaustion leaves the process alive but permanently stalled.
+        let { sync } = makeSyncWS();
+        sync.running = true;
+        let exit = sinon.stub(process, 'exit');
+        sinon.stub(sync, '_handleEvent')
+            .rejects(new ClientSyncWS.BootstrapExhaustedError('all sync sources exhausted'));
+
+        sync._connectWebSocket('http://src1:3006', 0);
+
+        await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
+        await sync._wsEventChain;   // let the .then(_handleEvent).catch settle
+
+        assert.ok(exit.calledOnceWithExactly(1), 'must exit(1) for a supervised restart');
+        let errCalls = console.error.getCalls().map(c => c.args[0]);
+        assert.ok(errCalls.some(m => m && m.indexOf('Bootstrap exhausted mid-stream') !== -1));
+    });
+
+    it('message handler: an ordinary handler error does NOT exit the process', async function(){
+        let { sync } = makeSyncWS();
+        sync.running = true;
+        let exit = sinon.stub(process, 'exit');
+        sinon.stub(sync, '_handleEvent').rejects(new Error('transient boom'));
+
+        sync._connectWebSocket('http://src1:3006', 0);
+
+        await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
+        await sync._wsEventChain;
+
+        assert.strictEqual(exit.called, false, 'log-and-continue must be preserved for transient errors');
+        let errCalls = console.error.getCalls().map(c => c.args[0]);
+        assert.ok(errCalls.some(m => m && m.indexOf('Error handling WebSocket message') !== -1));
+    });
+
     it('close handler: calls _scheduleReconnect', function(){
         let { sync } = makeSyncWS();
         sync.running = false; // prevent actual reconnect timer

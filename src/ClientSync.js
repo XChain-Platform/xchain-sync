@@ -38,6 +38,16 @@ const checkpointVerifier = require('./checkpoint');
 const M = require('./merkle');
 const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
 
+// Permanent bootstrap exhaustion. start()-time throws already unwind to
+// SyncService's sync.start().catch(... process.exit(1)) restart contract on their
+// own, but the same exhaustion is also reachable MID-STREAM (the size-cap fallback
+// in _runIncrementalCatchUp re-runs _bootstrapFromSnapshot from live WS handling),
+// where the serialized WS event chain's catch would otherwise swallow it and leave
+// the process alive but permanently stalled (running=true, tip never advances, no
+// supervisor restart). A dedicated error type lets that catch distinguish the
+// unrecoverable case (_handleWsChainError) and escalate it to the same exit.
+class BootstrapExhaustedError extends Error {}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -605,7 +615,7 @@ class ClientSync {
     async _bootstrapFromSnapshot(){
         if(!this.sources[0]){
             console.error('No sync sources configured');
-            throw new Error('Bootstrap failed: no sync sources configured for ' +
+            throw new BootstrapExhaustedError('Bootstrap failed: no sync sources configured for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
 
@@ -629,7 +639,9 @@ class ClientSync {
             if(round >= maxRetries){
                 // Exhausted all sources across every retry round. Do not return:
                 // signal failure so start() never enters live-follow empty-handed.
-                throw new Error('Bootstrap failed: all sync sources exhausted after ' +
+                // Typed so a mid-stream caller (the WS event chain) can recognize
+                // permanent exhaustion and escalate instead of swallowing it.
+                throw new BootstrapExhaustedError('Bootstrap failed: all sync sources exhausted after ' +
                     (round + 1) + ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
             }
             let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
@@ -1585,7 +1597,7 @@ class ClientSync {
             this._lastWsEventAt = Date.now();
             this._wsEventChain = (this._wsEventChain || Promise.resolve())
                 .then(() => this._handleEvent(event, sourceIndex))
-                .catch(e => console.error('Error handling WebSocket message:', e));
+                .catch(e => this._handleWsChainError(e));
         });
 
         ws.on('close', () => {
@@ -1598,6 +1610,23 @@ class ClientSync {
         });
 
         this.wsConns[sourceIndex] = ws;
+    }
+
+    // Terminal-error gate for the serialized WS event chain. Ordinary handler
+    // errors are logged and the chain stays alive (the next event repairs state),
+    // but permanent bootstrap exhaustion reached mid-stream (the size-cap fallback
+    // in _runIncrementalCatchUp) is unrecoverable: log-and-drop would keep the
+    // process alive with running=true while the replica never advances, so the
+    // supervisor never restarts it. Honor the documented restart contract
+    // (SyncService sync.start().catch -> process.exit(1)) from this path too.
+    _handleWsChainError(e){
+        if(e instanceof BootstrapExhaustedError){
+            console.error('Bootstrap exhausted mid-stream for ' + this.chain + '/' +
+                this.network + '/' + this.dbType + '; exiting for supervised restart:', e);
+            process.exit(1);
+            return; // reached only when process.exit is stubbed (tests)
+        }
+        console.error('Error handling WebSocket message:', e);
     }
 
     // Schedule a WebSocket reconnection
@@ -1866,7 +1895,9 @@ class ClientSync {
         }
         let computed;
         try {
-            computed = await this.blockHasher.computeBlockHashes(event.block_index);
+            // chain/network drive the state_key collation flag-day so the replica
+            // gates identically to the source indexer (state_key_collation_activation.js).
+            computed = await this.blockHasher.computeBlockHashes(event.block_index, this.network, this.chain);
         } catch(e){
             console.error('Recompute verification errored at block ' +
                 (event && event.block_index) + ' (NOT halting on a recompute error):', e);
@@ -2379,3 +2410,6 @@ class ClientSync {
 }
 
 module.exports = ClientSync;
+// Exposed for the WS-chain escalation tests and any caller that needs to
+// distinguish permanent bootstrap exhaustion from transient sync errors.
+module.exports.BootstrapExhaustedError = BootstrapExhaustedError;

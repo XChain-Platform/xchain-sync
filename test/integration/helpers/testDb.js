@@ -130,8 +130,10 @@ class TestDatabase {
             WHERE t.block_index = ?`, [block_index]);
     }
 
-    async getTablePage(table, limit, offset, conn) {
-        return await this.doQuery("SELECT * FROM `" + table + "` ORDER BY 1 LIMIT ? OFFSET ?", [limit, offset], conn);
+    // Mirrors src/db.js: one un-paged ordered streaming pass per table (LIMIT/OFFSET
+    // re-paging had no total order on keyless tables and could dup/skip a boundary tie).
+    streamTableRows(table, conn) {
+        return conn.queryStream("SELECT * FROM `" + table + "` ORDER BY 1");
     }
 
     async getTableCount(table, conn) {
