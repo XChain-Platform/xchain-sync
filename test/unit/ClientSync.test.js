@@ -192,6 +192,7 @@ describe('ClientSync', function(){
     describe('start', function(){
         it('passes lastAppliedBlock + 1 to incremental catch-up when resuming a populated replica', async function(){
             db.getLastBlock.resolves(100);
+            sinon.stub(sync, '_fetchAndApplySchema').resolves();
             sinon.stub(sync, '_incrementalCatchUp').resolves();
             sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
 
@@ -203,6 +204,41 @@ describe('ClientSync', function(){
             // 100's already-applied rows and the non-ignore INSERT throws on the
             // UNIQUE action_index, rolling back the whole catch-up (silent freeze).
             assert.strictEqual(sync._incrementalCatchUp.firstCall.args[0], 101);
+        });
+
+        it('reconciles the source schema on resume, BEFORE catch-up (creates zero-row tables added post-bootstrap)', async function(){
+            // Regression: a replica bootstrapped before the source added a zero-row
+            // table (polls / poll_results / vote_delegations / votes /
+            // anchor_reward_reconcile_log on BTC) never received it, because nothing
+            // streams for a zero-row table so no apply/heal ever fires. Resume must
+            // re-apply the (idempotent, CREATE-only) source schema so a restart
+            // converges the schema without any row flow, and it must run BEFORE
+            // catch-up so the first applied/verified block sees a complete schema.
+            db.getLastBlock.resolves(100);
+            let order = [];
+            sinon.stub(sync, '_fetchAndApplySchema').callsFake(async () => { order.push('schema'); });
+            sinon.stub(sync, '_incrementalCatchUp').callsFake(async () => { order.push('catchup'); });
+            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+
+            await sync.start();
+
+            assert.strictEqual(sync._fetchAndApplySchema.calledOnce, true);
+            assert.strictEqual(sync._fetchAndApplySchema.firstCall.args[0], sync.sources[0]);
+            assert.deepStrictEqual(order, ['schema', 'catchup'], 'schema reconcile must precede catch-up');
+        });
+
+        it('does NOT reconcile schema on the empty-replica bootstrap path (bootstrap fetches it itself)', async function(){
+            db.getLastBlock.resolves(null);
+            sinon.stub(sync, '_bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
+            sinon.stub(sync, '_fetchAndApplySchema').resolves();
+            sinon.stub(sync, '_incrementalCatchUp').resolves();
+            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+
+            await sync.start();
+
+            // The resume-path reconcile must not double-fetch on the bootstrap path
+            // (_bootstrapFromSnapshot already applies the schema).
+            assert.strictEqual(sync._fetchAndApplySchema.called, false);
         });
 
         it('bootstraps from a full snapshot when the replica is empty', async function(){

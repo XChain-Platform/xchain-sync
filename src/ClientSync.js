@@ -303,6 +303,17 @@ class ClientSync {
             }
         } else {
             // Partial data: incremental catch-up.
+            // Reconcile the schema first. _fetchAndApplySchema otherwise runs only at
+            // bootstrap, so a replica bootstrapped BEFORE the source added a table never
+            // receives it on resume; and a zero-row source table (no VOTE / anchor-reconcile
+            // activity on this chain) streams nothing, so neither the apply-path heal nor
+            // the completeness-check heal ever fires to create it. The result is a permanent
+            // ER_NO_SUCH_TABLE on every /status table-count sweep (observed live: polls /
+            // poll_results / vote_delegations / votes / anchor_reward_reconcile_log on the BTC
+            // replicas). Re-applying here is idempotent (replicateSchema only CREATEs missing
+            // tables, never ALTERs or drops) and non-fatal (a fetch failure just logs and
+            // returns), so a restart converges the schema even with no row flow to trigger a heal.
+            await this._fetchAndApplySchema(this.sources[0]);
             // Pass the next needed block (lastAppliedBlock + 1): the server uses
             // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
             // applied rows and the non-ignore INSERT throws a duplicate-key error.
