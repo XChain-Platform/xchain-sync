@@ -48,6 +48,7 @@ const BLOCK_HASH_VERSION = 1;
 const { buildStateHashData } = require('./stateHash');
 const { gasTickSymbol } = require('./consensus-constants');
 const { canonicalizeHashAddress } = require('./protocolAddressRoles');
+const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
 
 class BlockHasher {
 
@@ -63,7 +64,12 @@ class BlockHasher {
 
     // Recompute { ledger_hash, actions_hash, contract_hash } for a block from the
     // replicated raw rows. Mirrors xchain-indexer/src/db.js getBlockHashes().
-    async computeBlockHashes(block_index){
+    // `network`/`coin` drive the state_key collation flag-day
+    // (state_key_collation_activation.js, byte-identical twin of the indexer's);
+    // omitted -> legacy folding collation, matching pre-activation blocks. Live
+    // recompute callers MUST pass them or the replica gates differently than the
+    // source at/after an armed height and false-halts on divergence.
+    async computeBlockHashes(block_index, network, coin){
         let query   = null;
         let actions = [];
         let ledger  = {
@@ -158,16 +164,22 @@ class BlockHasher {
                  WHERE a.block_index=?
                  ORDER BY c.action_index ASC`;
         contracts_data.contracts = await this.db.doQuery(query, [block_index]);
-        // contract state (latest value per key written in this block)
+        // contract state (latest value per key written in this block).
+        // state_key collation is flag-day gated, byte-for-byte mirror of
+        // xchain-indexer/src/db.js getBlockHashes(): legacy folding
+        // (utf8_general_ci) below the activation height, COLLATE utf8_bin
+        // pinned at/after it (see state_key_collation_activation.js).
+        let stateKeyBin = isStateKeyBinCollationActive(block_index, network, coin);
+        let stateKeyCollate = stateKeyBin ? ' COLLATE utf8_bin' : '';
         query = `SELECT cs.contract_index, cs.state_key, cs.state_value
                  FROM contract_state cs
                  INNER JOIN (
                      SELECT MAX(id) as max_id
                      FROM contract_state
                      WHERE block_index=?
-                     GROUP BY contract_index, state_key
+                     GROUP BY contract_index, state_key` + stateKeyCollate + `
                  ) latest ON cs.id = latest.max_id
-                 ORDER BY cs.contract_index ASC, cs.state_key ASC`;
+                 ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
         contracts_data.state = await this.db.doQuery(query, [block_index]);
         // executions (resolve caller_id -> address, status_id -> status string)
         query = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count

@@ -73,4 +73,19 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
         const s = makeSigner();
         assert.strictEqual(checkpoint.verifyCheckpoint(signedCheckpoint(s), []).valid, false);
     });
+
+    it('a garbage-then-valid duplicate for one signer still PASSES (seen marked after verify)', function(){
+        const s1 = makeSigner(), s2 = makeSigner();
+        const validators = [{ pubkey: s1.pubkeyHex, source: s1.pubkeyHex, weight: '10' },
+                            { pubkey: s2.pubkeyHex, source: s2.pubkeyHex, weight: '30' }];
+        const cp = signedCheckpoint(s1);                         // 10 of 40 alone: 3·10 < 2·40
+        cp.validator_signatures.push({ pubkey: s2.pubkeyHex, sig: sign(s2.privateKey, checkpoint.canonicalCheckpoint(cp)) });
+        // The signature list is server-supplied (attacker-influenceable): prepend an
+        // INVALID entry for s2 ordered before its genuine one. Marking "seen" on first
+        // encounter would suppress the real signature and false-reject a quorate
+        // checkpoint (order-dependent quorum under-count); the hardened order
+        // (matching the SDK/explorer copies) must still count it.
+        cp.validator_signatures = [{ pubkey: s2.pubkeyHex, sig: '00'.repeat(64) }].concat(cp.validator_signatures);
+        assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, true);
+    });
 });

@@ -66,4 +66,42 @@ describe('BlockHasher: independent recompute conformance @regression', function(
         assert.ok(got.ledger_hash && got.actions_hash && got.contract_hash,
             'empty block still yields the three chained hashes');
     });
+
+    // state_key collation flag-day (state_key_collation_activation.js twin):
+    // the contract-state gather must pin COLLATE utf8_bin exactly when the gate
+    // is active, byte-for-byte with the indexer's getBlockHashes, or the
+    // recompute halts diverge from the source at/after an armed height.
+    describe('state_key collation gate (contract-state gather SQL)', function(){
+
+        // Capture emitted SQL while feeding empty result-sets.
+        function capturingHasher(calls){
+            const db = { doQuery: async (sql) => { calls.push(sql); return []; } };
+            return new BlockHasher(db, new Utility());
+        }
+        const stateQueryOf = (calls) => {
+            const hit = calls.find(q => /FROM contract_state cs/.test(q));
+            assert.ok(hit, 'contract-state gather query not emitted');
+            return hit.replace(/\s+/g, ' ');
+        };
+
+        it('legacy folding collation when network/coin are omitted (pre-activation callers)', async function(){
+            const calls = [];
+            await capturingHasher(calls).computeBlockHashes(1);
+            assert.doesNotMatch(stateQueryOf(calls), /COLLATE utf8_bin/);
+        });
+
+        it('legacy folding collation on an unarmed chain (mainnet placeholder)', async function(){
+            const calls = [];
+            await capturingHasher(calls).computeBlockHashes(900000, 'mainnet', 'BTC');
+            assert.doesNotMatch(stateQueryOf(calls), /COLLATE utf8_bin/);
+        });
+
+        it('pins COLLATE utf8_bin in GROUP BY and ORDER BY on regtest (armed from genesis)', async function(){
+            const calls = [];
+            await capturingHasher(calls).computeBlockHashes(1, 'regtest', 'BTC');
+            const q = stateQueryOf(calls);
+            assert.match(q, /GROUP BY contract_index, state_key COLLATE utf8_bin/);
+            assert.match(q, /ORDER BY cs\.contract_index ASC, cs\.state_key COLLATE utf8_bin ASC/);
+        });
+    });
 });

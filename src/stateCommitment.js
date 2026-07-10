@@ -266,8 +266,11 @@ async function getNetBalance(db, address, tick){
 // contract sub-tables. Null fields coerce to '' (matching actionsLeaf's tx_index).
 function _c(x){ return (x == null) ? '' : x; }
 
-async function computeBlockMerkleRoot(db, blockIndex){
-    const rows = await db.getBlockLeafRows(blockIndex);
+// `network`/`coin` drive the state_key collation flag-day
+// (state_key_collation_activation.js) inside getBlockLeafRows, mirroring
+// BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
+async function computeBlockMerkleRoot(db, blockIndex, network, coin){
+    const rows = await db.getBlockLeafRows(blockIndex, undefined, network, coin);
     const leaves = [];
     for(const kind of ['credit', 'debit', 'escrow']){
         const arr = rows.ledger[kind + 's'] || [];   // credits / debits / escrows
@@ -399,7 +402,7 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     }
 
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
-    const blockMerkleRoot = await computeBlockMerkleRoot(db, blockIndex);
+    const blockMerkleRoot = await computeBlockMerkleRoot(db, blockIndex, network, chain);
 
     await db.doQuery(
         `INSERT INTO state_tree_roots
@@ -429,7 +432,7 @@ async function seedSnapshotRoots(db, chain, network, blockHeight){
         stakesRoot = await smt.buildFull(await gatherStakeEntries(db, chain, network, blockHeight));
     }
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
-    const blockMerkleRoot = await computeBlockMerkleRoot(db, blockHeight);
+    const blockMerkleRoot = await computeBlockMerkleRoot(db, blockHeight, network, chain);
     await db.doQuery(
         `INSERT INTO state_tree_roots
             (chain, network, block_index, balances_root, stakes_root, state_root, block_merkle_root)

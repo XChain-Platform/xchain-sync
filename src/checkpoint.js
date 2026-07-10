@@ -35,8 +35,11 @@ const ckpt   = require('./checkpoint_commitment_activation.js');
 const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 // Build the canonical signing string for a checkpoint object. MUST stay
-// byte-identical to the hub's StateCheckpointEngine.canonicalCheckpoint and
-// the indexer's ANCHOR verifier:
+// byte-identical to the hub's StateCheckpointEngine.canonicalCheckpoint, the
+// indexer's ANCHOR verifier, xchain-sdk/src/checkpoint.js canonicalCheckpoint,
+// xchain-explorer/src/XChainExplorer.js canonicalCheckpointString,
+// xchain-indexer/src/recovery.js's _wrapperCanonical, and
+// xchain-hub/src/StateAnchorPublisher.js's _archiveCanonical:
 //   XCHECKPOINT|CHAIN|NETWORK|BLOCK_INDEX|BLOCK_HASH|LEDGER_HASH|ACTIONS_HASH|CONTRACT_HASH|CHECKPOINT_SEQ|SNAPSHOT_BLOCK
 function canonicalCheckpoint(cp){
     if (!cp) throw new Error('CheckpointVerifier: checkpoint object required');
@@ -107,7 +110,11 @@ function verifyCheckpoint(checkpoint, validators){
 
     let sigs = checkpoint.validator_signatures;
     if (typeof sigs === 'string'){
-        try { sigs = JSON.parse(sigs); } catch (e) { sigs = []; }
+        try { sigs = JSON.parse(sigs); } catch (e) {
+            console.warn('[checkpoint] malformed validator_signatures at checkpoint_seq ' +
+                          (checkpoint && checkpoint.checkpoint_seq) + '; treating as zero signatures (fail-closed):', e.message);
+            sigs = [];
+        }
     }
     if (!Array.isArray(sigs)) sigs = [];
 
@@ -116,8 +123,11 @@ function verifyCheckpoint(checkpoint, validators){
         let pk  = String(s && s.pubkey || '').toLowerCase();
         let sig = String(s && s.sig || '');
         if (!pk || seen.has(pk) || !qualified.has(pk)) continue;
-        seen.add(pk);
-        if (verifySignature(canonical, sig, pk)){ validSigs++; validSigners.push(pk); }
+        // Only mark a pubkey "seen" once its signature actually verifies. Marking on
+        // first encounter would let a garbage-then-valid pair of entries for the same
+        // qualified validator suppress the real signature (order-dependent quorum
+        // under-count), which fails a legitimately-quorate checkpoint closed.
+        if (verifySignature(canonical, sig, pk)){ seen.add(pk); validSigs++; validSigners.push(pk); }
     }
 
     let valid;
