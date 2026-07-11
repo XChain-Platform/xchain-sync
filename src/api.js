@@ -72,6 +72,23 @@ async function startApi(){
     app.use(express.json({ limit: '16kb' }));
     app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
+    // App-wide per-IP backstop limiter, mirroring the peer services (explorer,
+    // hub, indexer, decoder, encoder, utxo-tracker all front-load one). Without
+    // it the non-snapshot routes (/schema, /status, /catalog, /health,
+    // /validator-status) are unbounded and, when SYNC_API_KEY is unset (the
+    // documented default), unauthenticated - so anonymous traffic can drive
+    // information_schema / COUNT(*) scans on the source MariaDB the replication
+    // poller depends on. The tighter per-route snapshot buckets below still
+    // apply on top of this. Generous default so legitimate replica polling is
+    // unaffected; override with SYNC_RATE_LIMIT_RPM.
+    app.use(rateLimit({
+        windowMs:        60 * 1000,
+        limit:           parseInt(process.env.SYNC_RATE_LIMIT_RPM, 10) || 500,
+        standardHeaders: true,
+        legacyHeaders:   false,
+        message:         { error: 'Too many requests', code: 'RATE_LIMITED' },
+    }));
+
     // Rate limiters for snapshot endpoints
     // Key snapshot limits per (client IP + chain/network/dbType), NOT per IP alone.
     // A single replica bootstraps every chain it follows from one IP, so a global

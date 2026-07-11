@@ -760,8 +760,9 @@ describe('SnapshotBuilder', function(){
                     if(/`index_actions`/.test(sql)) return [{ id: 1 }];            // full dump
                     if(/`sends`/.test(sql) && /action_index/.test(sql)) return [{ action_index: 501 }]; // action-scoped
                     // A table reached via the action_index branch that has no such column:
-                    // the inner try/catch swallows it and skips the table.
-                    if(/`no_action_col`/.test(sql)) throw new Error('Unknown column action_index');
+                    // the inner try/catch swallows the genuine schema gap (errno 1054) and
+                    // skips the table (a transient error would instead re-throw / fail closed).
+                    if(/`no_action_col`/.test(sql)){ let e = new Error('Unknown column action_index'); e.errno = 1054; throw e; }
                     return [];
                 });
                 let res = streamRes();
@@ -793,7 +794,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(!('sends' in out.tables), 'action-scoped table skipped when firstActionIndex is null');
             });
 
-            it('swallows a per-table read error during incremental', async function(){
+            it('swallows a per-table SCHEMA-GAP read error (errno 1146) during incremental', async function(){
                 let db = createMockDb();
                 db.dbType = 'indexer';
                 db.getLastBlock.resolves(100);
@@ -801,12 +802,77 @@ describe('SnapshotBuilder', function(){
                 db.getFirstActionIndex.resolves(500);
                 db.doQuery.callsFake(async (sql) => {
                     if(/information_schema/.test(sql)) return [{ table_name: 'blocks' }];
-                    throw new Error('table boom');
+                    let e = new Error('table missing'); e.errno = 1146; throw e;
                 });
                 let res = streamRes();
                 await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
                 assert.ok(console.error.getCalls().some(c => /Error reading table blocks for incremental/.test(c.args[0])));
                 assert.ok(db.commitReadSnapshot.calledOnce);
+            });
+
+            // Finding 1323: a transient/operational error (deadlock 1213, lock-wait 1205,
+            // connection drop) must NOT be swallowed. Rows are fully fetched before any byte
+            // is written, so swallowing it would ship a structurally-valid but silently
+            // INCOMPLETE catch-up (the table's window vanishes yet the payload still parses).
+            // Only genuine schema gaps (1146/1054) are tolerated; everything else fails closed.
+            it('fails closed (rejects + rolls back) on a transient per-table read error during incremental @regression', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(500);
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'blocks' }];
+                    let e = new Error('Deadlock found'); e.errno = 1213; throw e;
+                });
+                let res = streamRes();
+                await assert.rejects(() => builder.streamIncrementalSnapshot(db, 3, res), /Deadlock found/);
+                assert.ok(db.rollbackReadSnapshot.calledOnce, 'read snapshot rolled back on fail-closed abort');
+            });
+
+            it('fails closed on a connection-drop (no errno) per-table read error during incremental @regression', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(500);
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'blocks' }];
+                    throw new Error('Connection lost: The server closed the connection');
+                });
+                let res = streamRes();
+                await assert.rejects(() => builder.streamIncrementalSnapshot(db, 3, res), /Connection lost/);
+                assert.ok(db.rollbackReadSnapshot.calledOnce);
+            });
+
+            // Finding 1322: a catch-up window with zero actions (getFirstActionIndex null)
+            // that contains only a legacy-era cooldown maturity mints NO actions row, so the
+            // credits action-scoped base query is empty. The matured-cooldown merge keys off
+            // the maturity block, not action_index, and must still run so the backdated refund
+            // credit ships; otherwise the follower gets the updated_rows status flip but not
+            // the credit and its balances silently diverge.
+            it('ships matured cooldown refund credits when firstActionIndex is null (quiet window) @regression', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(null); // quiet window: zero actions since cursor
+                db.getStatusId = sinon.stub().resolves(3); // 'completed'
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'credits' }];
+                    // Capability maturity refund join → one backdated credit maturing in-window.
+                    if(/JOIN unstakes u/.test(sql))
+                        return [{ action_index: 42, address_id: 7, tick_id: 1, amount: '100' }];
+                    // Contract maturity refund join → none.
+                    if(/JOIN contract_unstakes cu/.test(sql)) return [];
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.ok('credits' in out.tables, 'credits table present even with null firstActionIndex');
+                assert.strictEqual(out.tables.credits.length, 1, 'the backdated refund credit is shipped');
+                assert.strictEqual(out.tables.credits[0].action_index, 42);
             });
 
             it('rolls back and rethrows when the incremental read throws before streaming', async function(){

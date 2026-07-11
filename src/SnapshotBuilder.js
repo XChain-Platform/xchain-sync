@@ -547,9 +547,27 @@ class SnapshotBuilder {
                             try {
                                 rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
                             } catch(e){
-                                // Table doesn't have action_index; skip it for incremental
+                                // Swallow ONLY a genuine schema gap (1146 missing table /
+                                // 1054 missing action_index column on an older source);
+                                // skip the table for incremental. A transient/operational
+                                // error (deadlock 1213, lock-wait 1205, connection drop)
+                                // must propagate so the stream aborts rather than silently
+                                // omitting the table's window (matches ClientRollback).
+                                if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                                 continue;
                             }
+                        } else if(table === 'credits'){
+                            // firstActionIndex is null: a catch-up window with zero actions.
+                            // The action-scoped base query would be empty, but the matured-
+                            // cooldown merge below keys off the maturity block, not
+                            // action_index, and a legacy-era cooldown maturity mints NO
+                            // actions row (ClientRollback moves its reverse cooldown delete
+                            // OUTSIDE this same firstActionIndex guard for exactly this
+                            // reason). Fall through with an empty base so the merge still
+                            // ships the backdated refund credit; without this the follower
+                            // receives the updated_rows status flip but not the credit and
+                            // its balances silently diverge over quiet windows.
+                            rows = [];
                         } else {
                             continue;
                         }
@@ -575,7 +593,11 @@ class SnapshotBuilder {
                                 }
                             }
                         } catch(e){
-                            // Tables may not exist on older schemas; skip
+                            // Swallow ONLY a genuine schema gap (1146 missing table / 1054
+                            // missing column on an older source). A transient/operational
+                            // error must abort the stream, not silently drop the matured
+                            // credits from the catch-up payload (mirrors ClientRollback).
+                            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                         }
                     }
 
@@ -596,7 +618,11 @@ class SnapshotBuilder {
                                 }
                             }
                         } catch(e){
-                            // Tables may not exist on older schemas; skip
+                            // Swallow ONLY a genuine schema gap (1146 missing table / 1054
+                            // missing column on an older source). A transient/operational
+                            // error must abort the stream, not silently drop the redriven
+                            // rewards from the catch-up payload (mirrors ClientRollback).
+                            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                         }
                     }
 
@@ -617,6 +643,16 @@ class SnapshotBuilder {
                     // be swallowed as a per-table read error (which would keep writing to
                     // a dead stream and pinning the read view).
                     if(e && e.aborted) throw e;
+                    // The catch tolerates only a genuine schema gap (1146 missing table /
+                    // 1054 missing column) on an older source: log-and-continue leaves that
+                    // table out of the payload harmlessly. Any other error is a transient/
+                    // operational fault (deadlock 1213, lock-wait 1205, connection drop)
+                    // that would otherwise ship a structurally-valid but silently INCOMPLETE
+                    // catch-up (rows are fully fetched before any byte is written, so the
+                    // table's window vanishes while the payload still parses). Re-throw so
+                    // the stream aborts and the follower fails closed on truncated JSON,
+                    // matching ClientRollback's errno discrimination.
+                    if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                     console.error('Error reading table ' + table + ' for incremental:', e);
                 }
             }
