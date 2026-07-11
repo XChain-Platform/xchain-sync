@@ -979,6 +979,19 @@ class Database {
         }
     }
 
+    // Delete a durable client marker. Fail-soft: a persistence failure is logged,
+    // never thrown, so it cannot abort a bootstrap/catch-up.
+    async deleteSyncState(key){
+        try {
+            await this._ensureSyncStateTable();
+            await this.doQuery("DELETE FROM sync_state WHERE state_key=?", [key]);
+            return true;
+        } catch(e){
+            console.error('deleteSyncState(' + key + ') failed (continuing):', e);
+            return false;
+        }
+    }
+
     async clearHalt(dbType){
         let res = await this.doQuery(
             "UPDATE sync_halt SET cleared_at=NOW() WHERE db_type=? AND cleared_at IS NULL",

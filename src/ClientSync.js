@@ -702,6 +702,15 @@ class ClientSync {
             await this._withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
             this.lastAppliedBlock = snapshotData.block_height;
 
+            // A full-history snapshot reseeds complete state and correct SMT roots,
+            // so any prior truncation join floor (set by an earlier _bootstrapFromHeight,
+            // e.g. when the oversized-incremental fallback lands here on a chain whose
+            // full snapshot does fit) no longer applies. Clear the in-memory floor and
+            // its durable marker explicitly so isTruncated() reports false and the
+            // apply-time VERIFY_STATE_COMMITMENT net re-arms on live blocks in THIS
+            // session, without waiting for a restart to self-heal.
+            await this._clearBootstrapBase();
+
             // Verify against second source if available.
             if(this.sources.length > 1){
                 if(this.dbType === 'indexer'){
@@ -1953,6 +1962,16 @@ class ClientSync {
         if(base === null || base === undefined) return;
         if(!this.db || typeof this.db.setSyncState !== 'function') return;
         await this.db.setSyncState(this._bootstrapBaseKey(), String(base));
+    }
+
+    // Clear the truncation join floor, in-memory and durable. Called after a
+    // successful full-history snapshot apply, which restores complete state and
+    // makes any prior floor stale. Fail-soft on db instances without the durable
+    // store (mirrors _persistBootstrapBase): the in-memory reset always happens.
+    async _clearBootstrapBase(){
+        this._bootstrapBase = null;
+        if(!this.db || typeof this.db.deleteSyncState !== 'function') return;
+        await this.db.deleteSyncState(this._bootstrapBaseKey());
     }
 
     // Reload the persisted truncation join floor at startup. Only overwrites the
