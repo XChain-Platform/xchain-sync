@@ -323,19 +323,47 @@ describe('ClientRollback', function(){
         });
 
         it('swallows missing-table errors on every optional delete + the generic loops', async function(){
-            // Make each optional delete throw; rollback must still complete. The bespoke
-            // single sweeps use a broad catch (plain error swallowed); the generic
-            // per-table loops now discriminate, so a genuine schema gap there must carry
-            // errno 1146 to be swallowed (a real MariaDB "no such table" always does).
+            // Make each optional delete throw; rollback must still complete. The remaining
+            // bespoke single sweeps use a broad catch (plain error swallowed); the
+            // contract_emissions and icons sweeps now discriminate on errno 1146 (a real
+            // MariaDB "no such table" always carries it), as do the generic per-table loops.
             db.doQuery.callsFake(async (query) => {
-                if(/contract_emissions|price_snapshots|sync_meta|attest_validator_stats/.test(query))
+                if(/price_snapshots|sync_meta|attest_validator_stats/.test(query))
                     throw new Error('Table does not exist');
+                if(/contract_emissions|icons WHERE token_id NOT IN/.test(query))
+                    throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
                 if(/DELETE FROM `blocks`/.test(query))
                     throw Object.assign(new Error('Table does not exist'), { errno: 1146 }); // blockTables loop
                 return [];
             });
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        // Operator-approved fail-closed errno-1146 gate (run-4): the contract_emissions
+        // delete (consensus table) and the icons orphan-sweep previously swallowed EVERY
+        // error, so a transient fault committed a partial rollback. They now swallow ONLY
+        // errno 1146 and abort on anything else.
+        it('aborts (fail-closed) on a transient error in the contract_emissions delete', async function(){
+            db.doQuery.callsFake(async (query) => {
+                if(/contract_emissions/.test(query))
+                    throw Object.assign(new Error('Lock wait timeout'), { errno: 1205 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1205 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true, 'txn rolled back, not partially committed');
+            assert.strictEqual(db.commitTransaction.called, false, 'a partial rollback must never commit');
+        });
+
+        it('aborts (fail-closed) on a transient error in the icons orphan-sweep', async function(){
+            db.doQuery.callsFake(async (query) => {
+                if(/icons WHERE token_id NOT IN/.test(query))
+                    throw Object.assign(new Error('Deadlock found'), { errno: 1213 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1213 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+            assert.strictEqual(db.commitTransaction.called, false);
         });
 
         // Residual hardening (2026-07-08 re-sweep): the generic dataTables/blockTables/

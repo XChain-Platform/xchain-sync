@@ -290,17 +290,15 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
-        it('skips clearing an invalid table name but still proceeds', async function(){
+        it('fails closed on an invalid table name (rejects rather than silently dropping its rows)', async function(){
             let snapshot = {
                 schema_version: SCHEMA_VERSION.indexer,
                 block_height: 10,
                 tables: { 'bad-name;drop': [{ id: 1 }], good: [{ id: 2 }] }
             };
-            await applier.applyFullSnapshot(snapshot);
-            let deletes = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /^DELETE FROM/.test(q));
-            // Only the valid table is cleared; the invalid one is skipped.
-            assert.deepStrictEqual(deletes, ['DELETE FROM `good`']);
-            assert.ok(console.error.getCalls().some(c => /invalid table/.test(c.args[0])));
+            // Fail closed: an invalid identifier must abort the apply (transaction rolls
+            // back) rather than silently drop the table's rows and commit a short replica.
+            await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name/);
         });
     });
 
@@ -430,16 +428,14 @@ describe('ClientApplier', function(){
             assert.ok(query.includes('`block_index`'));
         });
 
-        it('rejects an invalid table name without querying', async function(){
-            await applier._insertRows('bad;name', [{ id: 1 }]);
+        it('throws on an invalid table name without querying (fail closed)', async function(){
+            await assert.rejects(() => applier._insertRows('bad;name', [{ id: 1 }]), /Rejected table name/);
             assert.strictEqual(db.doQuery.called, false);
-            assert.ok(console.error.getCalls().some(c => /Rejected table name/.test(c.args[0])));
         });
 
-        it('rejects an invalid column name without querying', async function(){
-            await applier._insertRows('blocks', [{ 'bad-col': 1 }]);
+        it('throws on an invalid column name without querying (fail closed)', async function(){
+            await assert.rejects(() => applier._insertRows('blocks', [{ 'bad-col': 1 }]), /Rejected column name/);
             assert.strictEqual(db.doQuery.called, false);
-            assert.ok(console.error.getCalls().some(c => /Rejected column name/.test(c.args[0])));
         });
     });
 

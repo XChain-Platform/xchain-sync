@@ -150,8 +150,8 @@ describe('ClientApplier in-place updated-rows apply', function(){
         assert.ok(q.sql.indexOf('`action_index` = VALUES(`action_index`)') !== -1);
     });
 
-    it('_upsertRows rejects an invalid table identifier without querying', async function(){
-        await applier._upsertRows('stakes; DROP TABLE x', [{ action_index: 1 }]);
+    it('_upsertRows throws on an invalid table identifier without querying (fail closed)', async function(){
+        await assert.rejects(() => applier._upsertRows('stakes; DROP TABLE x', [{ action_index: 1 }]), /Rejected table name/);
         assert.strictEqual(db.calls.length, 0);
     });
 

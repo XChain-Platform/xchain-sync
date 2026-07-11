@@ -449,8 +449,12 @@ class ClientApplier {
 
         let tableCheck = validation.validateIdentifier(table);
         if(!tableCheck.valid){
-            console.error('Rejected table name in _insertRows: ' + table + ' (' + tableCheck.reason + ')');
-            return;
+            // Fail closed, not open: a `return` here silently drops every row for this
+            // table while the enclosing apply transaction still commits and the block's
+            // duplicate guard prevents any retry, leaving the replica permanently short
+            // those rows with no divergence signal. Throw so the apply transaction rolls
+            // back and the block is retried or the client halts.
+            throw new Error('Rejected table name in _insertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
 
         let useIgnore = this.ignoreTables.has(table);
@@ -460,8 +464,9 @@ class ClientApplier {
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
-                console.error('Rejected column name in _insertRows: ' + col + ' (' + colCheck.reason + ')');
-                return;
+                // Fail closed, not open: a `return` here drops the entire table's rows
+                // while the apply transaction still commits (see the table check above).
+                throw new Error('Rejected column name in _insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
         let colList   = columns.map(c => '`' + c + '`').join(', ');
@@ -543,16 +548,18 @@ class ClientApplier {
 
         let tableCheck = validation.validateIdentifier(table);
         if(!tableCheck.valid){
-            console.error('Rejected table name in _upsertRows: ' + table + ' (' + tableCheck.reason + ')');
-            return;
+            // Fail closed, not open: a `return` here silently drops every row for this
+            // table while the apply transaction commits, permanently diverging the replica
+            // with no signal. Throw so the transaction rolls back and the block is retried.
+            throw new Error('Rejected table name in _upsertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
 
         let columns = Object.keys(rows[0]);
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
-                console.error('Rejected column name in _upsertRows: ' + col + ' (' + colCheck.reason + ')');
-                return;
+                // Fail closed, not open: a `return` here drops the entire table's rows.
+                throw new Error('Rejected column name in _upsertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
         let colList      = columns.map(c => '`' + c + '`').join(', ');

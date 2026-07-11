@@ -93,6 +93,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
                 [gasTick, completedStatusId, from, to], conn);
             add(rows);
         } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -107,6 +108,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
             [completedStatusId, from, to], conn);
         add(rows);
     } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
         // Table may not exist on older source schemas; skip.
     }
 

@@ -119,7 +119,13 @@ class ClientRollback {
                         [firstActionIndex]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas - skip
+                    // Only errno 1146 (table missing on older replica schemas) is a
+                    // benign skip. Transient/operational faults (deadlock 1213,
+                    // lock-wait 1205, connection drop) must abort the reorg-reset so
+                    // the outer catch rolls back and retries cleanly, matching every
+                    // sibling statement below. Swallowing them here would commit a
+                    // partial rollback (orphaned contract_emissions on a consensus table).
+                    if(e.errno !== 1146) throw e;
                 }
             }
 
@@ -535,7 +541,10 @@ class ClientRollback {
             try {
                 await this.db.doQuery('DELETE FROM icons WHERE token_id NOT IN (SELECT id FROM tokens)', []);
             } catch(e){
-                // Table may not exist on older schemas - skip
+                // Only errno 1146 (table missing on older schemas) is a benign skip;
+                // a transient/operational fault must abort so the outer catch rolls
+                // back and retries rather than committing a partial rollback.
+                if(e.errno !== 1146) throw e;
             }
 
             // Delete from block-scoped tables

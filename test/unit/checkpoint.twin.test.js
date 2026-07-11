@@ -45,6 +45,26 @@ function signedCheckpoint(signer, overrides){
 }
 
 describe('vendored checkpoint verifier (twin conformance) @regression', function(){
+    // Byte-parity guard for the canonical signing string. Every other case in this
+    // suite signs and verifies through sync's OWN builder, so a symmetric one-sided
+    // edit (drop/reorder a field, change a delimiter) keeps sign==verify green while
+    // real hub-signed federation checkpoints silently fail to verify. Pin the exact
+    // output to the same golden literal xchain-sdk/test/unit/checkpoint.test.js pins,
+    // so drift of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies
+    // fails here rather than in production. (mainnet CHECKPOINT_COMMITMENT is inert, so
+    // the canonical carries no SPV root suffix, matching the SDK's golden vector.)
+    it('canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)', function(){
+        const cp = { chain: 'BTC', network: 'mainnet', block_index: 900123,
+            block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32),
+            actions_hash: 'ef'.repeat(32), contract_hash: '01'.repeat(32),
+            checkpoint_seq: 417, snapshot_block: 900120 };
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(cp),
+            'XCHECKPOINT|BTC|mainnet|900123|' + 'ab'.repeat(32) + '|' + 'cd'.repeat(32) +
+            '|' + 'ef'.repeat(32) + '|' + '01'.repeat(32) + '|417|900120',
+            'sync canonicalCheckpoint drifted from the canonical XCHECKPOINT signing string; re-align the vendored twin to the SDK copy');
+    });
+
     it('verifies a real Ed25519 quorum-signed checkpoint against its pinned set', function(){
         const s = makeSigner();
         const cp = signedCheckpoint(s);

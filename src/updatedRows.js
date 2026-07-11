@@ -141,6 +141,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                     [from + activationDelay, to + activationDelay], conn);
                 add(table, rows);
             } catch(e){
+                if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
                 // Table/column may not exist on older source schemas; skip.
             }
         }
@@ -158,6 +159,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [spec.target, from, to], conn);
             add(spec.table, rows);
         } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table may not exist on older source schemas; skip.
         }
     }
@@ -172,6 +174,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [from, to], conn);
             add(table, rows);
         } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -187,6 +190,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [from, to], conn);
             add(table, rows);
         } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -206,6 +210,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 [from, to], conn);
             add(table, rows);
         } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -231,6 +236,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             [from, to], conn);
         add('anchor_actions', anchorRows);
     } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
         // Table/columns may not exist on older source schemas; skip.
     }
 
@@ -282,6 +288,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             [from, to, from, to, from, to], conn);
         add('tokens', tokenRows);
     } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
         // Table/columns may not exist on older source schemas; skip.
     }
 
