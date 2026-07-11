@@ -45,6 +45,21 @@ const { SCHEMA_VERSION } = require('./schema-version');
 // rather than against a fresh (post-reorg) source read that always matches.
 const RECENT_HASH_CAP = 256;
 
+// A per-table read in _buildBlockPayload may legitimately fail because the source
+// runs an older schema that lacks the table/column (errno 1146 missing table, 1054
+// unknown column): that table is simply absent from this block's payload, harmless.
+// EVERY OTHER error (deadlock 1213, lock-wait timeout 1205, connection drop, etc.)
+// is a transient/operational fault, and swallowing it would broadcast a structurally
+// valid but silently INCOMPLETE block that followers durably record (false
+// VERIFY_RECOMPUTE halts on hashed tables; silent stake-state divergence on the
+// unhashed slash-debit/reconcile tables ClientRollback restores from on reorg). Only
+// schema gaps may be skipped; anything else must re-throw so _poll's loop freezes the
+// cursor and retries the block. Mirrors SnapshotBuilder.streamIncrementalSnapshot's
+// errno discrimination.
+function isSchemaGapError(e){
+    return !!(e && (e.errno === 1146 || e.errno === 1054));
+}
+
 class ServerPoller {
 
     constructor(chain, network, db, broadcaster, transparencyLog, config, util) {
@@ -513,7 +528,9 @@ class ServerPoller {
                 if(rows && rows.length > 0)
                     payload.data[table] = rows;
             } catch(e){
-                // Table may not exist in older schemas; skip silently
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
             }
         }
 
@@ -530,7 +547,9 @@ class ServerPoller {
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
-                    // Skip silently
+                    // Skip a genuine schema gap; re-throw any transient fault so the
+                    // block is retried rather than broadcast incomplete.
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
         } else {
@@ -552,7 +571,9 @@ class ServerPoller {
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
-                        // Table may not exist; skip silently
+                        // Skip a genuine schema gap; re-throw any transient fault so the
+                        // block is retried rather than broadcast incomplete.
+                        if(!isSchemaGapError(e)) throw e;
                     }
                     continue;
                 }
@@ -561,7 +582,9 @@ class ServerPoller {
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
-                    // Table may not exist; skip silently
+                    // Skip a genuine schema gap; re-throw any transient fault so the
+                    // block is retried rather than broadcast incomplete.
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -587,7 +610,9 @@ class ServerPoller {
                     payload.data['credits'] = existing;
                 }
             } catch(e){
-                // Tables may not exist on older schemas; skip silently
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Recovery-redriven validator rewards: a reorg re-drain re-materializes a
@@ -609,7 +634,9 @@ class ServerPoller {
                     payload.data['validator_rewards'] = existing;
                 }
             } catch(e){
-                // Tables may not exist on older schemas; skip silently
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
             }
         }
 
@@ -692,7 +719,9 @@ class ServerPoller {
                 // For other index tables, the generic _id-reference pass below
                 // (indexer only) extracts them; see the comment there.
             } catch(e){
-                // Skip silently
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
             }
         }
 
@@ -751,7 +780,9 @@ class ServerPoller {
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){
-                        // Table may not exist in older schemas; skip silently
+                        // Skip a genuine schema gap; re-throw any transient fault so the
+                        // block is retried rather than broadcast incomplete.
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
             }

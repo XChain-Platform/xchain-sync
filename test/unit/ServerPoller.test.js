@@ -18,10 +18,13 @@ function createMockDb(){
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
         getBlockScopedRows: sinon.stub().resolves([]),
+        getTxScopedRows: sinon.stub().resolves([]),
         getActionScopedRows: sinon.stub().resolves([]),
         getEmissionRowsForBlock: sinon.stub().resolves([]),
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
+        // Used by collectMaturedCooldownCredits; null short-circuits it to no credits.
+        getStatusId: sinon.stub().resolves(null),
         doQuery: sinon.stub().resolves([]),
         // The forward batch is pinned to a REPEATABLE READ snapshot (H-P2).
         beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
@@ -537,18 +540,39 @@ describe('ServerPoller', function(){
             assert.ok(payload.data['blocks']);
         });
 
-        it('skips tables that throw errors', async function(){
+        it('skips a per-table SCHEMA-GAP read error (errno 1146) and still builds the block @regression', async function(){
             db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
-            db.getBlockScopedRows.rejects(new Error('table missing'));
+            let gap = new Error('table missing'); gap.errno = 1146;
+            db.getBlockScopedRows.rejects(gap);
             db.getTransactions.resolves([]);
             db.getActions.resolves([]);
 
             let payload = await poller._buildBlockPayload(1);
             assert.ok(payload); // Should not be null
             assert.strictEqual(payload.type, 'block');
+        });
+
+        it('fails closed on a TRANSIENT per-table read error (deadlock 1213) so the block is retried, not broadcast incomplete @regression', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 1, block_time: 100,
+                ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
+            });
+            let transient = new Error('Deadlock found when trying to get lock'); transient.errno = 1213;
+            db.getBlockScopedRows.rejects(transient);
+            db.getTransactions.resolves([]);
+            db.getActions.resolves([]);
+
+            let threw = false;
+            try {
+                await poller._buildBlockPayload(1);
+            } catch(e){
+                threw = true;
+                assert.strictEqual(e.errno, 1213);
+            }
+            assert.ok(threw, 'a transient DB fault must propagate out of _buildBlockPayload');
         });
 
         it('fetches index_transactions by referenced IDs', async function(){

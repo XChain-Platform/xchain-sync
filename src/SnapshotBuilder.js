@@ -73,6 +73,17 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // forever on full-bootstrap decoder replicas while incremental-bootstrap replicas
     // held zero rows for the same table.
     'mempool_transactions',
+    // sync_halt, sync_state: replica-local durable CONTROL tables the source never
+    // ships (created by db.verifySyncTables for both dbTypes). sync_halt holds the
+    // durable divergence-halt audit record; sync_state holds the bootstrap_base:<dbType>
+    // truncation-floor marker and the index_map_mismatch_count counters. They are not
+    // in any snapshot payload, so without listing them here the full-snapshot clear loop
+    // (ClientApplier: enumerate all BASE tables, DELETE every one not in this set) would
+    // wipe both on every full-snapshot apply, including the runtime oversized-incremental
+    // recovery fallback on a live replica: erasing halt/forensic history and the persisted
+    // bootstrap/verification posture _persistBootstrapBase wrote. They are exactly the
+    // node-local control state this exclusion set exists to protect.
+    'sync_halt', 'sync_state',
 ]);
 
 // Guards a gzip snapshot stream against a slow or vanished reader. The snapshot

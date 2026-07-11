@@ -263,6 +263,27 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.commitTransaction.calledOnce, true);
         });
 
+        it('does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression', async function(){
+            // These durable control tables are never shipped in a snapshot; the clear
+            // loop must leave them untouched (they hold the halt audit record and the
+            // bootstrap-base + index-map mismatch state). Regression for the crash-loop-
+            // adjacent state-loss defect (source-parity monitor).
+            db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
+                { table_name: 'blocks' },
+                { table_name: 'sync_halt' },
+                { table_name: 'sync_state' }
+            ]);
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            };
+            await applier.applyFullSnapshot(snapshot);
+            let touched = db.doQuery.getCalls().map(c => c.args[0])
+                .filter(q => /sync_halt|sync_state/.test(q));
+            assert.deepStrictEqual(touched, [], 'sync_halt / sync_state must never be cleared by the snapshot apply');
+        });
+
         it('ignores node-local tables (mempool_transactions) shipped by an older source', async function(){
             let snapshot = {
                 schema_version: SCHEMA_VERSION.indexer,

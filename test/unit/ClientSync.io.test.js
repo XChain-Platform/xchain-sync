@@ -629,6 +629,149 @@ describe('ClientSync truncated catch-up', function(){
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 2b. _runIncrementalCatchUp oversized-payload fallback (source parity)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync: oversized catch-up fallback routes by truncation', function(){
+    let sync, db, applier;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('truncated replica: size error routes to _bootstrapFromHeightRetry, NOT the full snapshot @regression', async function(){
+        // The full snapshot of a SYNC_BOOTSTRAP_DEPTH chain is oversized by definition,
+        // so falling back to it would crash-loop. Route to the bounded height bootstrap.
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        assert.ok(sync._truncatedDepth >= 1, 'chain is truncated');
+        sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        let heightRetry = sinon.stub(sync, '_bootstrapFromHeightRetry').resolves();
+        let fullSnap    = sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+        db.getLastBlock.resolves(100);
+        let sizeErr = new Error('maxContentLength size of X exceeded');
+        sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
+        sinon.stub(axios, 'get').rejects(sizeErr);
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(heightRetry.calledOnceWithExactly(sync._truncatedDepth),
+            '_bootstrapFromHeightRetry must be called with the truncation depth');
+        assert.strictEqual(fullSnap.called, false,
+            'the full snapshot must NOT be fetched on a truncated replica');
+    });
+
+    it('full-history replica: size error still routes to _bootstrapFromSnapshot (unchanged) @regression', async function(){
+        ({ sync, db, applier } = makeSync()); // _truncatedDepth 0
+        assert.strictEqual(sync._truncatedDepth, 0);
+        let heightRetry = sinon.stub(sync, '_bootstrapFromHeightRetry').resolves();
+        let fullSnap    = sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+        db.getLastBlock.resolves(100);
+        let sizeErr = new Error('maxContentLength size of X exceeded');
+        sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
+        sinon.stub(axios, 'get').rejects(sizeErr);
+
+        await sync._runIncrementalCatchUp();
+
+        assert.ok(fullSnap.calledOnce, 'full-history replica keeps the full-snapshot fallback');
+        assert.strictEqual(heightRetry.called, false, 'height retry must not run for a full-history replica');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b2. _verifyDecoderCompleteness excludes block-windowed tables when truncated
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync: decoder completeness check on a truncated replica', function(){
+    let sync, db;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('truncated decoder: block-windowed tables are excluded from the count check, lookups stay strict @regression', async function(){
+        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
+        sync._bootstrapBase = 950000; // isTruncated() -> true
+        assert.ok(sync.isTruncated(), 'replica is truncated');
+        let vtc = sinon.stub(sync, '_verifyTableCounts').resolves([]);
+        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1, index_transactions: 1 } } });
+
+        await sync._verifyDecoderCompleteness('http://src1:3006', 100);
+
+        assert.ok(vtc.calledOnce);
+        let excludes = vtc.firstCall.args[1];
+        assert.ok(excludes instanceof Set, 'an exclusion Set is passed when truncated');
+        for(let t of ['blocks', 'transactions', 'transaction_outputs'])
+            assert.ok(excludes.has(t), t + ' (block-windowed) must be excluded on a truncated replica');
+        assert.strictEqual(excludes.has('index_transactions'), false,
+            'append-only lookups stay under the strict count check');
+    });
+
+    it('full-history decoder: no windowed exclusion, caller excludes pass through unchanged @regression', async function(){
+        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
+        sync._bootstrapBase = null; // isTruncated() -> false
+        assert.strictEqual(sync.isTruncated(), false);
+        let vtc = sinon.stub(sync, '_verifyTableCounts').resolves([]);
+        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1 } } });
+
+        await sync._verifyDecoderCompleteness('http://src1:3006', 100, new Set(['dispensers']));
+
+        let excludes = vtc.firstCall.args[1];
+        assert.ok(excludes.has('dispensers'), 'caller-supplied excludes pass through');
+        assert.strictEqual(excludes.has('blocks'), false, 'block-windowed tables NOT excluded when full-history');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b3. _handleBlock indexer head-fork re-delivery (source parity)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync: indexer head-fork re-delivery', function(){
+    let sync, db, applier;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('indexer: at-tip re-delivery with a DIFFERENT hash triggers catch-up (lost 1-block reorg) @regression', async function(){
+        ({ sync, db, applier } = makeSync()); // indexer
+        sync.lastAppliedBlock = 100;
+        sync.lastHashes = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
+        sinon.stub(sync, '_incrementalCatchUp').resolves();
+
+        await sync._handleBlock({ type: 'block', block_index: 100,
+            ledger_hash: 'lh100-FORKED', actions_hash: 'ah100', contract_hash: 'ch100' }, 0);
+
+        assert.ok(sync._incrementalCatchUp.calledOnce, 'a forked tip re-delivery must trigger catch-up');
+        assert.strictEqual(applier.applyBlock.called, false, 'the orphaned tip is not applied');
+    });
+
+    it('indexer: at-tip re-delivery with IDENTICAL hashes is a silent skip (true duplicate) @regression', async function(){
+        ({ sync, db, applier } = makeSync());
+        sync.lastAppliedBlock = 100;
+        sync.lastHashes = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
+        sinon.stub(sync, '_incrementalCatchUp').resolves();
+
+        await sync._handleBlock({ type: 'block', block_index: 100,
+            ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' }, 0);
+
+        assert.strictEqual(sync._incrementalCatchUp.called, false, 'a true duplicate must not trigger catch-up');
+        assert.strictEqual(applier.applyBlock.called, false);
+    });
+
+    it('decoder head-fork behaviour is unchanged (block_hash mismatch still triggers catch-up) @regression', async function(){
+        ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
+        sync.lastAppliedBlock = 100;
+        sync.lastHashes = { block_hash: 'bh100' };
+        sinon.stub(sync, '_incrementalCatchUp').resolves();
+
+        await sync._handleBlock({ type: 'block', block_index: 100, block_hash: 'bh100-FORKED' }, 0);
+
+        assert.ok(sync._incrementalCatchUp.calledOnce, 'decoder fork detection unchanged');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 2c. _verifyRecompute join-block skip (truncated replica)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('ClientSync _verifyRecompute join-block skip', function(){

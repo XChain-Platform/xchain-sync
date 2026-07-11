@@ -811,5 +811,12 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(excluded.has(t),
                 `${t} dropped out of OPERATOR_LOCAL_TABLES unexpectedly`);
         }
+        // Replica-local durable control tables must stay excluded so the full-snapshot
+        // clear loop never wipes the halt audit record / bootstrap-base + mismatch state.
+        for(const t of ['sync_halt', 'sync_state']){
+            assert.ok(excluded.has(t),
+                `${t} is missing from OPERATOR_LOCAL_TABLES in SnapshotBuilder.js; ` +
+                `the full-snapshot clear loop would DELETE this replica-local control table`);
+        }
     });
 });

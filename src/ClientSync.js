@@ -1258,6 +1258,20 @@ class ClientSync {
             let isSizeError = e && (e.code === 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED' ||
                 (e.message && e.message.includes('maxContentLength')));
             if(isSizeError){
+                // A truncated replica (SYNC_BOOTSTRAP_DEPTH) exists precisely because
+                // its full-history snapshot exceeds SNAPSHOT_MAX_CONTENT and cannot be
+                // buffered+applied in one pass, so _bootstrapFromSnapshot would hit the
+                // identical size wall, exhaust retries, throw BootstrapExhaustedError,
+                // and process.exit(1) into a permanent crash loop. Route truncated chains
+                // to the bounded height bootstrap instead (mirroring start()'s empty-DB
+                // branch); reserve the full snapshot for full-history replicas.
+                if(this._truncatedDepth >= 1){
+                    console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                        '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
+                        this._truncatedDepth + ', truncated replica).');
+                    await this._bootstrapFromHeightRetry(this._truncatedDepth);
+                    return;
+                }
                 console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                     '; falling back to full bootstrap.');
                 await this._bootstrapFromSnapshot();
@@ -1405,6 +1419,18 @@ class ClientSync {
     // Best-effort and additive: a shortfall is logged loudly so operators see an
     // incomplete bootstrap; a transient /status fetch failure is swallowed so it
     // doesn't abort an otherwise-good snapshot.
+    // Block-windowed decoder tables: the block-scoped and tx-scoped tables a
+    // truncated (SYNC_BOOTSTRAP_DEPTH) replica retains only for [base..tip]. These
+    // are the tables whose local count legitimately falls short of the source's
+    // full-history count on a truncated replica. The append-only lookup (`index`)
+    // tables are fully paged in out of band via the id-cursor route, so they stay
+    // under the strict count check. Derived from the topology, not a hardcoded copy,
+    // so it tracks any change to the decoder block-scoped/tx-scoped sets.
+    _truncatedWindowedTables(){
+        let t = replicatedTables.getTopology('decoder');
+        return new Set([].concat(t.blockScoped || [], t.txScoped || [], t.actionScoped || []));
+    }
+
     async _verifyDecoderCompleteness(source, blockHeight, excludeTables){
         if(this.dbType !== 'decoder') return;
         try {
@@ -1412,7 +1438,26 @@ class ClientSync {
             let response = await axios.get(url, { timeout: 10000 });
             let remoteStatus = response.data;
 
-            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts, excludeTables);
+            // On a truncated replica the block-windowed tables (blocks, transactions,
+            // transaction_outputs) hold only [base..tip], so comparing their local
+            // count against the source's full-history /status count is a guaranteed,
+            // permanent TABLE_COUNT_MISMATCH by design of the truncation, burying the
+            // real signal this check exists for (residual dispensers drift, failed
+            // bootstrap dumps). Exclude them from the strict count check when truncated,
+            // mirroring the dispensers exclusion, and note it once at info level so the
+            // scoping is visible. Append-only lookups stay strict. (Follow-up: have the
+            // source's /status expose window-scoped counts (block_index >= base) so a
+            // truncated replica can strictly verify its retained window.)
+            let effectiveExcludes = excludeTables;
+            if(this.isTruncated()){
+                effectiveExcludes = new Set(excludeTables || []);
+                let windowed = this._truncatedWindowedTables();
+                for(let tbl of windowed) effectiveExcludes.add(tbl);
+                console.log('Truncated replica: skipping block-windowed tables from the decoder ' +
+                    'completeness count check (' + [...windowed].join(', ') + '); append-only lookups stay strict.');
+            }
+
+            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts, effectiveExcludes);
             if(countMismatches.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
                     '; decoder snapshot may be truncated or incomplete:');
@@ -1726,6 +1771,31 @@ class ClientSync {
                     '; stored block_hash ' + this.lastHashes.block_hash +
                     ' != incoming ' + event.block_hash + '; triggering catch-up');
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+            } else if(this.dbType === 'indexer' &&
+               blockIndex === this.lastAppliedBlock &&
+               this.lastHashes){
+                // Indexer head-fork mirror of the decoder branch. The indexer event
+                // carries no block_hash, but it does carry the three chain-of-state
+                // hashes, and this.lastHashes holds the committed ones for the tip. A
+                // tip re-delivery whose ledger/actions/contract hash differs is a
+                // 1-block reorg whose `reorg` event was lost across a WS drop; without
+                // this check it falls through to the silent skip, verifyChainContinuity
+                // (index-ordering only, no hash linkage) then accepts block N+1 onto the
+                // orphaned tip, and VERIFY_RECOMPUTE folds the orphaned predecessor into
+                // a durable local-recompute-divergence halt (or, with VERIFY_RECOMPUTE
+                // off, silently retains the orphaned block). Route the mismatch through
+                // the same rollback/catch-up path the decoder uses. A true duplicate
+                // (all three hashes equal) still skips silently.
+                let lh = this.lastHashes;
+                let mismatch =
+                    (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
+                    (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
+                    (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
+                if(mismatch){
+                    console.error('Chain continuity error (indexer): fork at head block ' + blockIndex +
+                        '; stored ledger/actions/contract hash != incoming; triggering catch-up');
+                    await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+                }
             }
             return;
         }
