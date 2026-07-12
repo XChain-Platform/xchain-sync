@@ -214,6 +214,83 @@ describe('ClientSync: independent recompute halt @regression', function(){
     });
 });
 
+describe('ClientSync: bulk-range boundary recompute fails CLOSED  @regression', function(){
+    // The live path above fails OPEN on a recompute error (an infra fault must
+    // not fork the validator). At a bulk-range boundary (catch-up join/terminal,
+    // bootstrap terminal) that posture is a hole: the join recompute is the ONLY
+    // check that catches a disconnect-spanning reorg stitched onto an orphaned
+    // tip, so an error there previously let the range through unverified.
+    // _verifyRangeBoundary must retry the recompute and then HALT durably.
+    let sync, db, config;
+
+    beforeEach(function(){
+        db = createMockDb();
+        db.getBlockHashRow = sinon.stub().resolves({
+            ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C'
+        });
+        config = { SYNC_SOURCES: 'http://a:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true, VERIFY_RECOMPUTE: true };
+        const util = new Utility();
+        sinon.stub(util, 'sleep').resolves(); // no real backoff waits in tests
+        sync = new ClientSync('bitcoin', 'mainnet', db,
+            { applyBlock: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() },
+            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('HALTS (recompute-error) when the recompute errors on every retry', async function(){
+        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('schema gap'));
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, true, 'caller must be told to stop');
+        assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 3, 'bounded retries before halting');
+        assert.strictEqual(sync.isHalted(), true, 'an unverifiable range must not be served');
+        assert.strictEqual(sync.getHaltInfo().reason, 'recompute-error');
+        assert.strictEqual(sync.getHaltInfo().blockIndex, 500);
+        assert.ok(db.recordHalt.calledOnce, 'halt persisted durably');
+        assert.strictEqual(db.recordHalt.firstCall.args[2], 'recompute-error');
+    });
+
+    it('does NOT halt when a transient error clears within the retries', async function(){
+        sync.blockHasher.computeBlockHashes = sinon.stub()
+            .onFirstCall().rejects(new Error('transient'))
+            .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, false);
+        assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');
+    });
+
+    it('HALTS (local-recompute-divergence) on a boundary hash mismatch', async function(){
+        sync.blockHasher.computeBlockHashes = sinon.stub()
+            .resolves({ ledger_hash: 'WRONG', actions_hash: 'A', contract_hash: 'C' });
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, true);
+        assert.strictEqual(sync.getHaltInfo().reason, 'local-recompute-divergence');
+    });
+
+    it('skips (no halt) when the committed boundary hash is not yet resolvable', async function(){
+        db.getBlockHashRow.resolves(null);
+        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, false);
+        assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false, 'no recompute without a committed hash');
+        assert.strictEqual(sync.isHalted(), false);
+    });
+
+    it('the LIVE path still fails open: a persistent error does not throw without failClosed', async function(){
+        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('infra fault'));
+        const mismatches = await sync._verifyRecompute({ block_index: 500, ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
+
+        assert.strictEqual(mismatches, null, 'live path returns null (fail-open) on a recompute error');
+        assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 1, 'no retries on the live path');
+        assert.strictEqual(sync.isHalted(), false);
+    });
+});
+
 describe('ClientSync: state_hash apply-time integrity halt @regression', function(){
     let sync, db, applier, config, util;
 

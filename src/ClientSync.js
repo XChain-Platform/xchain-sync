@@ -885,20 +885,10 @@ class ClientSync {
         //    recomputed here (no base-1 predecessor); _verifyRecompute skips it.
         if(this.config['VERIFY_RECOMPUTE'] && typeof this.lastAppliedBlock === 'number' &&
            this.lastAppliedBlock > this._bootstrapBase){
-            let termCommitted = await this.db.getBlockHashRow(this.lastAppliedBlock);
-            if(termCommitted && termCommitted.ledger_hash){
-                let termMismatches = await this._verifyRecompute({ block_index: this.lastAppliedBlock }, {
-                    ledger_hash:   termCommitted.ledger_hash,
-                    actions_hash:  termCommitted.actions_hash,
-                    contract_hash: termCommitted.contract_hash
-                });
-                if(termMismatches){
-                    await this._haltOnDivergence(this.lastAppliedBlock, termMismatches,
-                        this.sources.slice(0, 1), 'local-recompute-divergence');
-                    // Halted: leave lastAppliedBlock as-is so start()'s empty-replica
-                    // guard does not fire; the durable halt blocks all further applies.
-                    return true;
-                }
+            if(await this._verifyRangeBoundary(this.lastAppliedBlock)){
+                // Halted: leave lastAppliedBlock as-is so start()'s empty-replica
+                // guard does not fire; the durable halt blocks all further applies.
+                return true;
             }
         }
 
@@ -1200,35 +1190,11 @@ class ClientSync {
                         this.sources.slice(0, 1), 'catchup-since-block-mismatch');
                     return;
                 }
-                let committed = await this.db.getBlockHashRow(joinBlock);
-                if(committed && committed.ledger_hash){
-                    let mismatches = await this._verifyRecompute({ block_index: joinBlock }, {
-                        ledger_hash:   committed.ledger_hash,
-                        actions_hash:  committed.actions_hash,
-                        contract_hash: committed.contract_hash
-                    });
-                    if(mismatches){
-                        await this._haltOnDivergence(joinBlock, mismatches,
-                            this.sources.slice(0, 1), 'local-recompute-divergence');
-                        return;
-                    }
-                }
+                if(await this._verifyRangeBoundary(joinBlock)) return;
                 // Also recompute the terminal block if the range spans more than one block.
                 let terminalBlock = snapshotData.block_height;
                 if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
-                    let termCommitted = await this.db.getBlockHashRow(terminalBlock);
-                    if(termCommitted && termCommitted.ledger_hash){
-                        let termMismatches = await this._verifyRecompute({ block_index: terminalBlock }, {
-                            ledger_hash:   termCommitted.ledger_hash,
-                            actions_hash:  termCommitted.actions_hash,
-                            contract_hash: termCommitted.contract_hash
-                        });
-                        if(termMismatches){
-                            await this._haltOnDivergence(terminalBlock, termMismatches,
-                                this.sources.slice(0, 1), 'local-recompute-divergence');
-                            return;
-                        }
-                    }
+                    if(await this._verifyRangeBoundary(terminalBlock)) return;
                 }
             }
 
@@ -1926,6 +1892,13 @@ class ClientSync {
             console.error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
             console.error('integrity failure. HALTING (applying no further blocks). Operator must');
             console.error('investigate replica state and clear before this validator can resume.');
+        } else if(this._halted.reason === 'recompute-error'){
+            console.error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
+            console.error('retries. This recompute is the only verification of the applied range');
+            console.error('(at the catch-up join it is what catches a reorg that crossed a');
+            console.error('disconnect), so the replica cannot prove its state. HALTING (applying');
+            console.error('no further blocks). Operator must fix the local fault (DB, schema) and');
+            console.error('clear before this validator can resume.');
         } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
             console.error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
             console.error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
@@ -1959,9 +1932,16 @@ class ClientSync {
     // clean match. Indexer-only (decoder has no synthetic chain hashes).
     //
     // A recompute ERROR (transient DB hiccup, schema gap) is logged loudly and
-    // treated as a non-halt: a local infrastructure fault must not fork this
-    // validator off the chain (halts are reserved for genuine DATA divergence).
-    async _verifyRecompute(event, committedOverride){
+    // treated as a non-halt on the LIVE path: a local infrastructure fault must
+    // not fork this validator off the chain (halts are reserved for genuine DATA
+    // divergence). The live block was individually delivered and will be folded
+    // by the next block's recompute, so failing open there loses one check, not
+    // the range. Bulk-range callers (bootstrap terminal, catch-up join/terminal)
+    // pass opts.failClosed instead: there the recompute is the ONLY verification
+    // of the whole applied range (the join recompute is what catches a
+    // disconnect-spanning reorg stitched onto an orphaned tip), so an error is
+    // retried briefly and then THROWN for the caller to halt on .
+    async _verifyRecompute(event, committedOverride, opts = {}){
         if(this.dbType !== 'indexer') return null;
         // Truncated-replica join block: `base` has no in-replica `base-1`
         // predecessor, so its chained previous_hash cannot be reproduced and a
@@ -1973,14 +1953,26 @@ class ClientSync {
             return null;
         }
         let computed;
-        try {
-            // chain/network drive the state_key collation flag-day so the replica
-            // gates identically to the source indexer (state_key_collation_activation.js).
-            computed = await this.blockHasher.computeBlockHashes(event.block_index, this.network, this.chain);
-        } catch(e){
-            console.error('Recompute verification errored at block ' +
-                (event && event.block_index) + ' (NOT halting on a recompute error):', e);
-            return null;
+        let attempts = opts.failClosed ? 3 : 1;
+        for(let attempt = 1; attempt <= attempts; attempt++){
+            try {
+                // chain/network drive the state_key collation flag-day so the replica
+                // gates identically to the source indexer (state_key_collation_activation.js).
+                computed = await this.blockHasher.computeBlockHashes(event.block_index, this.network, this.chain);
+                break;
+            } catch(e){
+                if(attempt < attempts){
+                    console.error('Recompute verification errored at block ' +
+                        (event && event.block_index) + ' (attempt ' + attempt + '/' + attempts +
+                        ', retrying):', e);
+                    await this.util.sleep(1000 * attempt);
+                    continue;
+                }
+                if(opts.failClosed) throw e;
+                console.error('Recompute verification errored at block ' +
+                    (event && event.block_index) + ' (NOT halting on a recompute error):', e);
+                return null;
+            }
         }
         let committed = committedOverride || {
             ledger_hash:   event.ledger_hash,
@@ -1993,6 +1985,38 @@ class ClientSync {
                 mismatches.push({ field: f, computed: computed[f], committed: committed[f] });
         });
         return mismatches.length ? mismatches : null;
+    }
+
+    // Fail-CLOSED recompute of one boundary block of a bulk-applied range
+    // (bootstrap terminal, catch-up join, catch-up terminal). Halts durably on a
+    // hash mismatch AND on a recompute error that survives the retries: unlike
+    // the live path, this recompute is the only verification of the applied
+    // range, so an unverifiable range must not be served . Returns true
+    // when it halted (caller must stop), false when the block verified or the
+    // committed hash is not yet resolvable (NULL ledger_hash / missing row, the
+    // pre-existing skip the lookup re-page minimizes).
+    async _verifyRangeBoundary(blockIndex){
+        let committed = await this.db.getBlockHashRow(blockIndex);
+        if(!(committed && committed.ledger_hash)) return false;
+        let mismatches;
+        try {
+            mismatches = await this._verifyRecompute({ block_index: blockIndex }, {
+                ledger_hash:   committed.ledger_hash,
+                actions_hash:  committed.actions_hash,
+                contract_hash: committed.contract_hash
+            }, { failClosed: true });
+        } catch(e){
+            await this._haltOnDivergence(blockIndex,
+                [{ field: 'recompute_error', computed: null, committed: String((e && e.message) || e) }],
+                this.sources.slice(0, 1), 'recompute-error');
+            return true;
+        }
+        if(mismatches){
+            await this._haltOnDivergence(blockIndex, mismatches,
+                this.sources.slice(0, 1), 'local-recompute-divergence');
+            return true;
+        }
+        return false;
     }
 
     isHalted(){ return this._halted !== null; }
