@@ -325,6 +325,19 @@ class ServerProcess {
         await this._pollInFlight;
     }
 
+    // Drain poll cycles until the poller has processed (hashed + recorded)
+    // through `height`. Seeding the source DB does not make blocks servable:
+    // /snapshot serves only what the poller has recorded into sync_meta, and
+    // each _poll() cycle is capped at 100 blocks, so a test that seeds and
+    // immediately snapshots/catches-up races the 200ms background loop.
+    async pollUntil(height, maxCycles = 50) {
+        for (let i = 0; i < maxCycles; i++) {
+            if (this.poller.lastPolledBlock !== null && this.poller.lastPolledBlock >= height) return;
+            await this.poll();
+        }
+        throw new Error('pollUntil: poller stuck at ' + this.poller.lastPolledBlock + ', wanted ' + height);
+    }
+
     getUrl() {
         return 'http://127.0.0.1:' + this.port;
     }

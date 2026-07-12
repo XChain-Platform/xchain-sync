@@ -29,8 +29,7 @@ describe('E2E: Delta Synchronization', function() {
         sourceDb  = setup.getSourceDb();
         replicaDb = setup.getReplicaDb();
 
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
+        if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
     });
 
     after(async function() {
@@ -65,6 +64,8 @@ describe('E2E: Delta Synchronization', function() {
 
             // Add blocks 21-40 to source while client is "down"
             await fixtures.seedBlocks(sourceDb, 21, 40);
+            // Seeded rows are servable only once the poller records them (100/cycle cap).
+            await server.pollUntil(40);
 
             // Client catches up via incremental snapshot
             await client.incrementalCatchUp(21);
@@ -99,6 +100,7 @@ describe('E2E: Delta Synchronization', function() {
 
             // Add 200 blocks while client is down
             await fixtures.seedBlocks(sourceDb, 11, 210);
+            await server.pollUntil(210);
 
             // Incremental catch-up
             await client.incrementalCatchUp(11);
@@ -123,6 +125,7 @@ describe('E2E: Delta Synchronization', function() {
 
             // Add blocks 6-15 with different amounts
             await fixtures.seedBlocks(sourceDb, 6, 15, { creditAmount: '9999' });
+            await server.pollUntil(15);
 
             await client.incrementalCatchUp(6);
 

@@ -92,6 +92,8 @@ describe('E2E: Large Data Volume', function() {
 
             // Add 200 blocks
             await fixtures.seedBlocks(sourceDb, 101, 300);
+            // Seeded rows are servable only once the poller records them (100/cycle cap).
+            await server.pollUntil(300);
 
             let startTime = Date.now();
             await client.incrementalCatchUp(101);

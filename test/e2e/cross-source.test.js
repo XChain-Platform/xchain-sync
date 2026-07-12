@@ -30,8 +30,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
         sourceDb  = setup.getSourceDb();
         replicaDb = setup.getReplicaDb();
 
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
+        if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
     });
 
     after(async function() {

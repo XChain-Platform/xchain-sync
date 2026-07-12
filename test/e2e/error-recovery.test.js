@@ -102,6 +102,8 @@ describe('E2E: Error Handling & Recovery', function() {
 
             // Add blocks while client is down
             await fixtures.seedBlocks(sourceDb, 21, 40);
+            // Seeded rows are servable only once the poller records them (100/cycle cap).
+            await server.pollUntil(40);
 
             // New client session: incremental catch-up
             client = new ClientProcess(replicaDb, server.getUrl());

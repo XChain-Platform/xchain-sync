@@ -172,14 +172,24 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
         for (let act of block.index_actions)
             await ensureIndexAction(db, act.action);
 
-        let addrRows = await db.doQuery("SELECT id FROM index_addresses WHERE address = ?", [meta.sourceAddr]);
-        let addrId = addrRows[0].id;
+        // Atomic upsert-and-return-id (LAST_INSERT_ID(id) on duplicate): a separate
+        // SELECT can land on a pooled connection holding an older REPEATABLE READ
+        // snapshot and miss the row just inserted on another connection, which
+        // surfaced on CI as `addrRows[0]` being undefined.
+        let addrRes = await db.doQuery(
+            "INSERT INTO index_addresses (address) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+            [meta.sourceAddr]);
+        let addrId = Number(addrRes.insertId);
 
-        let txHashRows = await db.doQuery("SELECT id FROM index_transactions WHERE hash = ?", [meta.txHash]);
-        let txHashId = txHashRows[0].id;
+        let txHashRes = await db.doQuery(
+            "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+            [meta.txHash]);
+        let txHashId = Number(txHashRes.insertId);
 
-        let tickRows = await db.doQuery("SELECT id FROM index_tickers WHERE tick = ?", [meta.tickName]);
-        let tickId = tickRows[0].id;
+        let tickRes = await db.doQuery(
+            "INSERT INTO index_tickers (tick) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+            [meta.tickName]);
+        let tickId = Number(tickRes.insertId);
 
         // Raw rows first; the blocks row goes in LAST, fully formed (see
         // computeAndInsertBlockHashes' ordering contract).
