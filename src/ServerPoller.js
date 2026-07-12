@@ -838,8 +838,11 @@ class ServerPoller {
                 if(updated && Object.keys(updated).length > 0)
                     payload.updated_rows = updated;
             } catch(e){
-                // Never let updated-rows collection break live block broadcasting.
+                // Only a genuine schema gap may be skipped; any transient fault must
+                // re-throw so the block is retried rather than broadcast without
+                // updated_rows (a dropped in-place mutation forks every follower).
                 console.error('updated_rows collection failed for block ' + block_index + ':', e);
+                if(!isSchemaGapError(e)) throw e;
             }
         }
 

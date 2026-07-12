@@ -600,13 +600,17 @@ class ClientRollback {
                     "DELETE FROM markets WHERE tick1_id NOT IN (SELECT id FROM index_tickers) " +
                     "OR tick2_id NOT IN (SELECT id FROM index_tickers)", []);
             } catch(e){
-                // Table may not exist on older replica schemas - skip
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
             try {
                 await this.db.doQuery(
                     "DELETE FROM pubkeys WHERE address_id NOT IN (SELECT id FROM index_addresses)", []);
             } catch(e){
-                // Table may not exist on older replica schemas - skip
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // price_snapshots anchors each round to a block via reference_block
@@ -636,7 +640,9 @@ class ClientRollback {
                 if(this.coin === 'BTC')
                     await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_chain = 'BTC' AND reference_block >= ?", [block_index]);
             } catch(e){
-                // Table may not exist on older replica schemas - skip
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // oracle_prices is the per-action local mirror of PRICE v1 rows
@@ -654,7 +660,9 @@ class ClientRollback {
                         [this.coin, firstActionIndex]
                     );
                 } catch(e){
-                    // Table may not exist on older replica schemas - skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
             }
 
@@ -677,7 +685,9 @@ class ClientRollback {
                         `DELETE FROM cross_chain_matches WHERE (a_chain = ? AND a_action_index >= ?) OR (b_chain = ? AND b_action_index >= ?)`,
                         [this.coin, crossChainFrom, this.coin, crossChainFrom]);
                 } catch(e){
-                    // Tables may not exist on older replica schemas - skip
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
                 //</CROSS-CHAIN-MIRROR-REORG-DELETE>
             }
@@ -686,7 +696,9 @@ class ClientRollback {
             try {
                 await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
             } catch(e){
-                // Skip if table doesn't exist
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
@@ -702,7 +714,9 @@ class ClientRollback {
             try {
                 await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
             } catch(e){
-                // Skip if table doesn't exist
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // attest_validator_stats: running per-validator aggregate counters
@@ -731,7 +745,9 @@ class ClientRollback {
             try {
                 await this.db.doQuery("DELETE FROM `attest_validator_stats` WHERE last_updated_block >= ?", [block_index]);
             } catch(e){
-                // Table may not exist on older replica schemas - skip
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Recalculate balances from the surviving credits/debits.
@@ -792,7 +808,9 @@ class ClientRollback {
                     try {
                         await this.db.doQuery("DELETE FROM `" + t + "` WHERE tx_index IN (" + placeholders + ")", txIndexes);
                     } catch(e){
-                        // Table may not exist in the target schema - skip
+                        // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                        // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
                     }
                 }
             }

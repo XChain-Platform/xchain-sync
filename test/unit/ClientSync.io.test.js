@@ -1200,6 +1200,56 @@ describe('ClientSync: _verifyAgainstSource', function(){
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Hash verification failed') !== -1));
     });
+
+    it('skips the cross-source hash check on tip skew (no spurious HASH MISMATCH, no halt)', async function(){
+        ({ sync, db } = makeSync({ VERIFY_HASHES: true, HALT_ON_DIVERGENCE: true }));
+        db.getBlockHashRow.resolves({
+            ledger_hash:   'lh-local',
+            actions_hash:  'ah-local',
+            contract_hash: 'ch-local'
+        });
+        // Source tip (height 105) is AHEAD of the bootstrap height (100); its hashes
+        // describe height 105, so a comparison at 100 would be spurious.
+        sinon.stub(axios, 'get').resolves({ data: {
+            block_height:  105,
+            ledger_hash:   'lh-remote',
+            actions_hash:  'ah-remote',
+            contract_hash: 'ch-remote',
+            table_counts:  null
+        }});
+        sinon.stub(sync, '_haltOnDivergence').resolves();
+
+        await sync._verifyAgainstSource('http://src1:3006', 100);
+
+        let errCalls = console.error.getCalls().map(c => c.args[0]);
+        assert.ok(!errCalls.some(m => m && m.indexOf('HASH MISMATCH') !== -1),
+            'tip skew must not raise a HASH MISMATCH');
+        assert.strictEqual(sync._haltOnDivergence.called, false,
+            'tip skew must not halt');
+    });
+
+    it('halts on a confirmed same-height cross-source hash mismatch when HALT_ON_DIVERGENCE is on', async function(){
+        ({ sync, db } = makeSync({ VERIFY_HASHES: true, HALT_ON_DIVERGENCE: true }));
+        db.getBlockHashRow.resolves({
+            ledger_hash:   'lh-local',
+            actions_hash:  'ah-local',
+            contract_hash: 'ch-local'
+        });
+        sinon.stub(axios, 'get').resolves({ data: {
+            block_height:  100,
+            ledger_hash:   'lh-remote',
+            actions_hash:  'ah-remote',
+            contract_hash: 'ch-remote',
+            table_counts:  null
+        }});
+        sinon.stub(sync, '_haltOnDivergence').resolves();
+
+        await sync._verifyAgainstSource('http://src1:3006', 100);
+
+        assert.ok(sync._haltOnDivergence.calledOnce,
+            'same-height mismatch must halt like the live dual-source path');
+        assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'cross-source-divergence');
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

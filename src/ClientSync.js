@@ -1264,21 +1264,43 @@ class ClientSync {
             let localHashes = await this.db.getBlockHashRow(blockHeight);
             if(!localHashes) return;
 
-            let result = this.hashVerifier.compareBlockHashes(blockHeight, {
-                ledger_hash: localHashes.ledger_hash,
-                actions_hash: localHashes.actions_hash,
-                contract_hash: localHashes.contract_hash
-            }, {
-                ledger_hash: remoteStatus.ledger_hash,
-                actions_hash: remoteStatus.actions_hash,
-                contract_hash: remoteStatus.contract_hash
-            });
-
-            if(!result.match){
-                console.error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
-                console.error('Mismatches:', JSON.stringify(result.mismatches));
+            // Height gate: remoteStatus reports the source's CURRENT tip, whose
+            // hashes describe that tip, not necessarily our bootstrap blockHeight.
+            // Comparing across skewed heights would raise a spurious HASH MISMATCH
+            // (alarm fatigue) and make genuine divergence indistinguishable from
+            // skew. Only run the cross-source hash comparison when both sides are at
+            // the same height (the same gate the advisory index-map check applies
+            // below). A confirmed same-height mismatch is a real cross-source
+            // divergence and must halt like the live dual-source path, not log-and-
+            // continue: a replica bootstrapped from a forked/Byzantine source would
+            // otherwise proceed to serve and extend forked state.
+            if(remoteStatus.block_height != null && Number(remoteStatus.block_height) !== blockHeight){
+                console.warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
+                    ', source ' + source + ' height ' + remoteStatus.block_height + ')');
             } else {
-                console.log('Hash verification passed against ' + source);
+                let result = this.hashVerifier.compareBlockHashes(blockHeight, {
+                    ledger_hash: localHashes.ledger_hash,
+                    actions_hash: localHashes.actions_hash,
+                    contract_hash: localHashes.contract_hash
+                }, {
+                    ledger_hash: remoteStatus.ledger_hash,
+                    actions_hash: remoteStatus.actions_hash,
+                    contract_hash: remoteStatus.contract_hash
+                });
+
+                if(!result.match){
+                    console.error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
+                    console.error('Mismatches:', JSON.stringify(result.mismatches));
+                    if(this.config['HALT_ON_DIVERGENCE']){
+                        // Durable, alerting halt mirroring the live dual-source path:
+                        // this source bulk-applied an entire replica and now disagrees
+                        // at the same height, so it is on a forked/Byzantine chain.
+                        await this._haltOnDivergence(blockHeight, result.mismatches, [source], 'cross-source-divergence');
+                        return;
+                    }
+                } else {
+                    console.log('Hash verification passed against ' + source);
+                }
             }
 
             // Independent recomputation (validator track): the comparison above is a

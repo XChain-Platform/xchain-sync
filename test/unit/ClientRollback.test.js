@@ -323,13 +323,14 @@ describe('ClientRollback', function(){
         });
 
         it('swallows missing-table errors on every optional delete + the generic loops', async function(){
-            // Make each optional delete throw; rollback must still complete. The remaining
-            // bespoke single sweeps use a broad catch (plain error swallowed); the
-            // contract_emissions and icons sweeps now discriminate on errno 1146 (a real
-            // MariaDB "no such table" always carries it), as do the generic per-table loops.
+            // Make each optional delete throw a genuine schema gap (errno 1146); rollback
+            // must still complete. Every optional-delete sweep (price_snapshots, sync_meta,
+            // merkle_epochs, attest_validator_stats, markets/pubkeys, oracle_prices, the
+            // cross-chain-mirror pair) now discriminates on errno 1146/1054 (a real MariaDB
+            // "no such table" always carries it), as do the generic per-table loops.
             db.doQuery.callsFake(async (query) => {
-                if(/price_snapshots|sync_meta|attest_validator_stats/.test(query))
-                    throw new Error('Table does not exist');
+                if(/price_snapshots|sync_meta|merkle_epochs|attest_validator_stats/.test(query))
+                    throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
                 if(/contract_emissions|icons WHERE token_id NOT IN/.test(query))
                     throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
                 if(/DELETE FROM `blocks`/.test(query))
@@ -338,6 +339,32 @@ describe('ClientRollback', function(){
             });
             await rollback.rollback(100);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
+        });
+
+        // Item 1848: the sync_meta / merkle_epochs / mirror-table reorg deletes used to
+        // swallow EVERY error, committing a PARTIAL rollback on a transient fault. For
+        // merkle_epochs this silently reinstates the stale UNIQUE root the delete exists
+        // to purge (the corrected re-dump is INSERT IGNORE and collides). They now abort.
+        it('aborts (fail-closed) on a transient error in the merkle_epochs reorg delete', async function(){
+            db.doQuery.callsFake(async (query) => {
+                if(/merkle_epochs/.test(query))
+                    throw Object.assign(new Error('Lock wait timeout'), { errno: 1205 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1205 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true, 'txn rolled back, not partially committed');
+            assert.strictEqual(db.commitTransaction.called, false, 'a partial rollback must never commit');
+        });
+
+        it('aborts (fail-closed) on a transient error in the sync_meta reorg delete', async function(){
+            db.doQuery.callsFake(async (query) => {
+                if(/sync_meta/.test(query))
+                    throw Object.assign(new Error('Deadlock found'), { errno: 1213 });
+                return [];
+            });
+            await assert.rejects(() => rollback.rollback(100), { errno: 1213 });
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+            assert.strictEqual(db.commitTransaction.called, false);
         });
 
         // Operator-approved fail-closed errno-1146 gate (run-4): the contract_emissions
@@ -476,11 +503,21 @@ describe('ClientRollback', function(){
             assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
         });
 
-        it('swallows a missing tx-scoped table error and still completes', async function(){
+        it('swallows a missing tx-scoped table error (schema gap) and still completes', async function(){
             decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/)).resolves([{ tx_index: 1 }]);
-            decoderDb.doQuery.withArgs(sinon.match(/transaction_outputs/)).rejects(new Error('no table'));
+            decoderDb.doQuery.withArgs(sinon.match(/transaction_outputs/))
+                .rejects(Object.assign(new Error('no table'), { errno: 1146 }));
             await decoderRollback.rollback(50);
             assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
+        });
+
+        it('aborts (fail-closed) on a transient error in a tx-scoped delete (item 1848)', async function(){
+            decoderDb.doQuery.withArgs(sinon.match(/SELECT tx_index/)).resolves([{ tx_index: 1 }]);
+            decoderDb.doQuery.withArgs(sinon.match(/transaction_outputs/))
+                .rejects(Object.assign(new Error('Deadlock found'), { errno: 1213 }));
+            await assert.rejects(() => decoderRollback.rollback(50), { errno: 1213 });
+            assert.strictEqual(decoderDb.rollbackTransaction.calledOnce, true);
+            assert.strictEqual(decoderDb.commitTransaction.called, false);
         });
 
         it('rolls back and rethrows when a block-scoped delete fails', async function(){

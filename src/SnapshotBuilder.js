@@ -493,11 +493,22 @@ class SnapshotBuilder {
             //     with no action_index. Without a full-dump here, these counters
             //     freeze at bootstrap height. ClientRollback drops affected rows on
             //     reorg; the next incremental catch-up restores current values.
+            //   - events: append-only operational audit log (records REORG events)
+            //     with no block_index or action_index cursor, so it never enters the
+            //     scoping branches and, without a full-dump here, freezes at bootstrap
+            //     height on an incrementally-caught-up follower (source count grows,
+            //     replica frozen, and it is replication:'snapshot' so it never shows in
+            //     the /status TABLE_COUNT_MISMATCH signal). Mirrors the decoder events
+            //     full-dump. It is in ClientApplier.ignoreTables, so the re-dump is
+            //     idempotent (INSERT IGNORE on the AUTO_INCREMENT id PK). rollback:
+            //     'exempt', so nothing rolls it back; the full re-dump is its only
+            //     convergence path.
             let indexerFullDump    = new Set([
                 ...replicatedTables.getTopology('indexer').index,
                 'merkle_epochs',
                 'markets',
                 'attest_validator_stats',
+                'events',
             ]);
             // The append-only, id-PK lookup tables a skipLookups caller syncs out of
             // band via streamTableRowsById. Only these are omitted; the mutated

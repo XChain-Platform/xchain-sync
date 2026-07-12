@@ -575,6 +575,29 @@ describe('ServerPoller', function(){
             assert.ok(threw, 'a transient DB fault must propagate out of _buildBlockPayload');
         });
 
+        it('fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 1, block_time: 100,
+                ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
+            });
+            db.getBlockScopedRows.resolves([]);
+            db.getTransactions.resolves([]);
+            db.getActions.resolves([]);
+            // collectUpdatedRows runs its reads via db.doQuery and re-throws transients;
+            // ServerPoller must NOT swallow that (a dropped in-place mutation forks followers).
+            let transient = new Error('Deadlock found when trying to get lock'); transient.errno = 1213;
+            db.doQuery.rejects(transient);
+
+            let threw = false;
+            try {
+                await poller._buildBlockPayload(1);
+            } catch(e){
+                threw = true;
+                assert.strictEqual(e.errno, 1213);
+            }
+            assert.ok(threw, 'a transient updated_rows fault must propagate out of _buildBlockPayload');
+        });
+
         it('fetches index_transactions by referenced IDs', async function(){
             db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,

@@ -376,6 +376,46 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(parsed.tables.index_addresses.length, 3, 'all index_addresses rows re-dumped');
         });
 
+        // Regression: the indexer `events` audit log has no block_index/action_index
+        // cursor, so it previously fell through to the action_index branch, threw errno
+        // 1054 on the missing column, and was swallowed; an incrementally-caught-up
+        // follower froze its events table at bootstrap height (silent, since events is
+        // replication:'snapshot' and outside the /status count). It must be re-dumped in
+        // full via the bundled path (the client applies it with INSERT IGNORE). Mirrors
+        // the decoder events fix above.
+        it('indexer: re-dumps the events audit log in full on incremental', async function(){
+            let db = createMockDb();   // dbType defaults to indexer
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getFirstActionIndex.resolves(500);
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema'))
+                    return [{ table_name: 'events' }];
+                // events is a small aggregate (no id cursor), so it takes the bundled
+                // full-dump path. If the code instead tried the action_index branch the
+                // query would carry `WHERE action_index >=` and this would not match, so
+                // the table would come back empty and the assert would fail, exactly the
+                // frozen-at-bootstrap bug being guarded against.
+                if(/SELECT \* FROM `events`$/.test(query))
+                    return [{ id: 1, event: 'REORG', data: 'x' }, { id: 2, event: 'REORG', data: 'y' }];
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await new Promise((resolve) => {
+                res.on('finish', resolve);
+                builder.streamIncrementalSnapshot(db, 80, res);
+            });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.ok(parsed.tables.events, 'events audit log present in incremental snapshot');
+            assert.strictEqual(parsed.tables.events.length, 2, 'all events rows re-dumped');
+        });
+
         // skipLookups: a truncated/fast-chain replica syncs the append-only `.index`
         // lookup tables out of band (paged), so this response must OMIT them while
         // still streaming the block-scoped data the window needs.
