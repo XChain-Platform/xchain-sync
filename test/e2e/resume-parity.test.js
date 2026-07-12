@@ -162,7 +162,14 @@ describe('E2E: Disconnect/Resume Parity', function() {
             await fixtures.seedBlocks(sourceDb, 29, 29, { indexOffset: 5000 });
 
             // Give the client ample time to react (gap catch-up + applies).
+            // The verdict is only SETTLED once no catch-up is in flight: the
+            // catch-up commits the applied range FIRST and runs the join-block
+            // recompute (and persists any halt to sync_halt) AFTER, so sampling
+            // mid-catch-up sees either b>=29 with the halt still pending (byte-
+            // identity assert on a half-judged replica) or isHalted() true with
+            // the durable sync_halt row not yet committed.
             await waitFor(async () => {
+                if (client.sync._catchUpInFlight) return false;
                 if (client.sync.isHalted()) return true;
                 let b = await replicaDb.getLastBlock();
                 return b !== null && b >= 29;

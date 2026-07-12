@@ -237,6 +237,11 @@ describe('E2E: Interleaved disconnect/reorg/restart parity (property)', function
         tip += 1;
 
         await waitFor(async () => {
+            // Same settle guard as resume-parity 10.2: the catch-up applies the
+            // range BEFORE it recomputes the join block and persists any halt,
+            // so a mid-catch-up sample sees a tip-complete-but-unjudged replica
+            // or an in-memory halt whose sync_halt row hasn't committed yet.
+            if (client.sync._catchUpInFlight) return false;
             if (client.sync.isHalted()) return true;
             let b = await replicaDb.getLastBlock();
             return b !== null && b >= tip;

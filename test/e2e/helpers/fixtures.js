@@ -36,15 +36,20 @@ function blockHash(blockIndex, label) {
 // block whose hash links are still NULL (that broadcast would carry null
 // committed hashes and trip every client's recompute halt). Seeding must run
 // in ascending block order (the chain folds in the previous block's hashes).
-async function computeAndInsertBlockHashes(db, blockIndex) {
-    let computed = await new BlockHasher(db, _util).computeBlockHashes(blockIndex);
+async function computeAndInsertBlockHashes(db, blockIndex, conn) {
+    // When called inside a fixture block transaction, every read/write must ride
+    // that transaction's connection or the hasher can't see the block's own
+    // uncommitted rows. BlockHasher only needs doQuery, so a thin facade pins it.
+    let hasherDb = conn ? { doQuery: (q, a) => db.doQuery(q, a, conn) } : db;
+    let computed = await new BlockHasher(hasherDb, _util).computeBlockHashes(blockIndex);
     let ids = {};
     for (let [field, hash] of [['ledger_hash_id', computed.ledger_hash],
                                ['actions_hash_id', computed.actions_hash],
                                ['contract_hash_id', computed.contract_hash]]) {
-        await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [hash]);
-        let rows = await db.doQuery("SELECT id FROM index_transactions WHERE hash = ?", [hash]);
-        ids[field] = rows[0].id;
+        let res = await db.doQuery(
+            "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+            [hash], conn);
+        ids[field] = Number(res.insertId);
     }
     return { computed, ids };
 }
@@ -57,10 +62,10 @@ async function computeAndInsertBlockHashes(db, blockIndex) {
 // unreferenced duplicate index_actions row per block (nothing points at their id);
 // those rows can only sync via snapshot, so a live-synced replica legitimately ends
 // up with fewer index_actions than the source and the integrity check fails.
-async function ensureIndexAction(db, action) {
-    let rows = await db.doQuery("SELECT id FROM index_actions WHERE action = ? LIMIT 1", [action]);
+async function ensureIndexAction(db, action, conn) {
+    let rows = await db.doQuery("SELECT id FROM index_actions WHERE action = ? LIMIT 1", [action], conn);
     if (rows.length === 0)
-        await db.doQuery("INSERT INTO index_actions (action) VALUES (?)", [action]);
+        await db.doQuery("INSERT INTO index_actions (action) VALUES (?)", [action], conn);
 }
 
 function buildBlock(blockIndex, opts = {}) {
@@ -163,70 +168,80 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
         let existing = await db.doQuery("SELECT 1 FROM blocks WHERE block_index = ? LIMIT 1", [meta.blockIndex]);
         if (existing.length > 0) continue;
 
-        for (let addr of block.index_addresses)
-            await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [addr.address]);
-        for (let tx of block.index_transactions)
-            await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [tx.hash]);
-        for (let tick of block.index_tickers)
-            await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tick.tick]);
-        for (let act of block.index_actions)
-            await ensureIndexAction(db, act.action);
+        // One transaction per block, like the production indexer: a REPEATABLE
+        // READ snapshot (poller batch, /snapshot stream) pinned at any instant
+        // must see either the whole block or none of it. The prior autocommit-
+        // per-statement seed left a window where a snapshot captured a block's
+        // transactions/actions/credits WITHOUT its blocks row; the incremental
+        // snapshot's unbounded `block_index >= since` scans then shipped those
+        // stray rows above block_height, and the later live apply of the same
+        // block hit duplicate-key errors and wedged the replica .
+        await db.withTransaction(async (conn) => {
+            for (let addr of block.index_addresses)
+                await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [addr.address], conn);
+            for (let tx of block.index_transactions)
+                await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [tx.hash], conn);
+            for (let tick of block.index_tickers)
+                await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tick.tick], conn);
+            for (let act of block.index_actions)
+                await ensureIndexAction(db, act.action, conn);
 
-        // Atomic upsert-and-return-id (LAST_INSERT_ID(id) on duplicate): a separate
-        // SELECT can land on a pooled connection holding an older REPEATABLE READ
-        // snapshot and miss the row just inserted on another connection, which
-        // surfaced on CI as `addrRows[0]` being undefined.
-        let addrRes = await db.doQuery(
-            "INSERT INTO index_addresses (address) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
-            [meta.sourceAddr]);
-        let addrId = Number(addrRes.insertId);
+            // Atomic upsert-and-return-id (LAST_INSERT_ID(id) on duplicate): a separate
+            // SELECT can land on a pooled connection holding an older REPEATABLE READ
+            // snapshot and miss the row just inserted on another connection, which
+            // surfaced on CI as `addrRows[0]` being undefined.
+            let addrRes = await db.doQuery(
+                "INSERT INTO index_addresses (address) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+                [meta.sourceAddr], conn);
+            let addrId = Number(addrRes.insertId);
 
-        let txHashRes = await db.doQuery(
-            "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
-            [meta.txHash]);
-        let txHashId = Number(txHashRes.insertId);
+            let txHashRes = await db.doQuery(
+                "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+                [meta.txHash], conn);
+            let txHashId = Number(txHashRes.insertId);
 
-        let tickRes = await db.doQuery(
-            "INSERT INTO index_tickers (tick) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
-            [meta.tickName]);
-        let tickId = Number(tickRes.insertId);
+            let tickRes = await db.doQuery(
+                "INSERT INTO index_tickers (tick) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+                [meta.tickName], conn);
+            let tickId = Number(tickRes.insertId);
 
-        // Raw rows first; the blocks row goes in LAST, fully formed (see
-        // computeAndInsertBlockHashes' ordering contract).
-        await db.doQuery(
-            "INSERT INTO transactions (tx_index, block_index, tx_hash_id, source_id) VALUES (?, ?, ?, ?)",
-            [meta.txIndex, meta.blockIndex, txHashId, addrId]
-        );
-
-        await db.doQuery(
-            "INSERT INTO actions (action_index, block_index, tx_index, tx_vout, action_id, action_format) VALUES (?, ?, ?, ?, ?, ?)",
-            [meta.actionIndex, meta.blockIndex, meta.txIndex, 0, 1, 0]
-        );
-
-        if (block.credits.length > 0) {
+            // Raw rows first; the blocks row goes in LAST, fully formed (see
+            // computeAndInsertBlockHashes' ordering contract).
             await db.doQuery(
-                "INSERT INTO credits (action_index, address_id, tick_id, amount) VALUES (?, ?, ?, ?)",
-                [meta.actionIndex, addrId, tickId, block.credits[0].amount]
+                "INSERT INTO transactions (tx_index, block_index, tx_hash_id, source_id) VALUES (?, ?, ?, ?)",
+                [meta.txIndex, meta.blockIndex, txHashId, addrId], conn
             );
-        }
 
-        if (block.debits.length > 0) {
             await db.doQuery(
-                "INSERT INTO debits (action_index, address_id, tick_id, amount) VALUES (?, ?, ?, ?)",
-                [meta.actionIndex, addrId, tickId, block.debits[0].amount]
+                "INSERT INTO actions (action_index, block_index, tx_index, tx_vout, action_id, action_format) VALUES (?, ?, ?, ?, ?, ?)",
+                [meta.actionIndex, meta.blockIndex, meta.txIndex, 0, 1, 0], conn
             );
-        }
 
-        let { computed, ids } = await computeAndInsertBlockHashes(db, meta.blockIndex);
-        meta.ledgerHash   = computed.ledger_hash;
-        meta.actionsHash  = computed.actions_hash;
-        meta.contractHash = computed.contract_hash;
+            if (block.credits.length > 0) {
+                await db.doQuery(
+                    "INSERT INTO credits (action_index, address_id, tick_id, amount) VALUES (?, ?, ?, ?)",
+                    [meta.actionIndex, addrId, tickId, block.credits[0].amount], conn
+                );
+            }
 
-        // Blocks row last: atomic visibility to the poller.
-        await db.doQuery(
-            "INSERT INTO blocks (block_index, block_time, ledger_hash_id, actions_hash_id, contract_hash_id) VALUES (?, ?, ?, ?, ?)",
-            [meta.blockIndex, meta.blockTime, ids.ledger_hash_id, ids.actions_hash_id, ids.contract_hash_id]
-        );
+            if (block.debits.length > 0) {
+                await db.doQuery(
+                    "INSERT INTO debits (action_index, address_id, tick_id, amount) VALUES (?, ?, ?, ?)",
+                    [meta.actionIndex, addrId, tickId, block.debits[0].amount], conn
+                );
+            }
+
+            let { computed, ids } = await computeAndInsertBlockHashes(db, meta.blockIndex, conn);
+            meta.ledgerHash   = computed.ledger_hash;
+            meta.actionsHash  = computed.actions_hash;
+            meta.contractHash = computed.contract_hash;
+
+            // Blocks row last: atomic visibility to the poller.
+            await db.doQuery(
+                "INSERT INTO blocks (block_index, block_time, ledger_hash_id, actions_hash_id, contract_hash_id) VALUES (?, ?, ?, ?, ?)",
+                [meta.blockIndex, meta.blockTime, ids.ledger_hash_id, ids.actions_hash_id, ids.contract_hash_id], conn
+            );
+        });
     }
 
     // Rebuild balances with the SAME shared SQL the applier and rollback use
@@ -238,26 +253,32 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
 }
 
 async function deleteBlocksFrom(db, blockIndex) {
-    let actionRows = await db.doQuery(
-        "SELECT action_index FROM actions WHERE block_index >= ? ORDER BY action_index ASC LIMIT 1",
-        [blockIndex]
-    );
-    let firstActionIndex = actionRows.length > 0 ? actionRows[0].action_index : null;
+    // One transaction for the whole rollback, like the production indexer's
+    // reorg rewind: a snapshot pinned mid-delete must never see a blocks row
+    // whose actions/credits are already gone (that partial state recomputes to
+    // divergent hashes on the replica and forces an illegitimate halt).
+    await db.withTransaction(async (conn) => {
+        let actionRows = await db.doQuery(
+            "SELECT action_index FROM actions WHERE block_index >= ? ORDER BY action_index ASC LIMIT 1",
+            [blockIndex], conn
+        );
+        let firstActionIndex = actionRows.length > 0 ? actionRows[0].action_index : null;
 
-    if (firstActionIndex !== null) {
-        let actionTables = ['credits', 'debits', 'sends', 'issues', 'tokens', 'destroys', 'actions'];
-        for (let table of actionTables) {
-            try {
-                await db.doQuery("DELETE FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex]);
-            } catch (e) {}
+        if (firstActionIndex !== null) {
+            let actionTables = ['credits', 'debits', 'sends', 'issues', 'tokens', 'destroys', 'actions'];
+            for (let table of actionTables) {
+                try {
+                    await db.doQuery("DELETE FROM `" + table + "` WHERE action_index >= ?", [firstActionIndex], conn);
+                } catch (e) {}
+            }
         }
-    }
 
-    await db.doQuery("DELETE FROM transactions WHERE block_index >= ?", [blockIndex]);
-    await db.doQuery("DELETE FROM blocks WHERE block_index >= ?", [blockIndex]);
-    try {
-        await db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [blockIndex]);
-    } catch (e) {}
+        await db.doQuery("DELETE FROM transactions WHERE block_index >= ?", [blockIndex], conn);
+        await db.doQuery("DELETE FROM blocks WHERE block_index >= ?", [blockIndex], conn);
+        try {
+            await db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [blockIndex], conn);
+        } catch (e) {}
+    });
 
     try {
         await rebuildBalances(db);
@@ -272,57 +293,60 @@ async function seedLargeBlock(db, blockIndex, actionCount) {
 
     let txHash = blockHash(blockIndex, 'tx');
 
-    await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [sourceAddr]);
-    await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [txHash]);
-    await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tickName]);
-    await ensureIndexAction(db, 'SEND');
+    // Same per-block atomicity contract as seedBlocks (see comment there).
+    await db.withTransaction(async (conn) => {
+        await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [sourceAddr], conn);
+        await db.doQuery("INSERT IGNORE INTO index_transactions (hash) VALUES (?)", [txHash], conn);
+        await db.doQuery("INSERT IGNORE INTO index_tickers (tick) VALUES (?)", [tickName], conn);
+        await ensureIndexAction(db, 'SEND', conn);
 
-    let addrRows = await db.doQuery("SELECT id FROM index_addresses WHERE address = ?", [sourceAddr]);
-    let addrId = addrRows[0].id;
-    let txHashRows = await db.doQuery("SELECT id FROM index_transactions WHERE hash = ?", [txHash]);
-    let tickRows = await db.doQuery("SELECT id FROM index_tickers WHERE tick = ?", [tickName]);
-    let tickId = tickRows[0].id;
+        let addrRows = await db.doQuery("SELECT id FROM index_addresses WHERE address = ?", [sourceAddr], conn);
+        let addrId = addrRows[0].id;
+        let txHashRows = await db.doQuery("SELECT id FROM index_transactions WHERE hash = ?", [txHash], conn);
+        let tickRows = await db.doQuery("SELECT id FROM index_tickers WHERE tick = ?", [tickName], conn);
+        let tickId = tickRows[0].id;
 
-    // The blocks row is inserted LAST, fully formed (see
-    // computeAndInsertBlockHashes' ordering contract).
-    let txIndex = blockIndex * 10;
-    await db.doQuery(
-        "INSERT INTO transactions (tx_index, block_index, tx_hash_id, source_id) VALUES (?, ?, ?, ?)",
-        [txIndex, blockIndex, txHashRows[0].id, addrId]
-    );
+        // The blocks row is inserted LAST, fully formed (see
+        // computeAndInsertBlockHashes' ordering contract).
+        let txIndex = blockIndex * 10;
+        await db.doQuery(
+            "INSERT INTO transactions (tx_index, block_index, tx_hash_id, source_id) VALUES (?, ?, ?, ?)",
+            [txIndex, blockIndex, txHashRows[0].id, addrId], conn
+        );
 
-    // Batch insert actions and credits
-    let batchSize = 100;
-    for (let i = 0; i < actionCount; i += batchSize) {
-        let batch = Math.min(batchSize, actionCount - i);
-        let actionValues = [];
-        let actionArgs = [];
-        let creditValues = [];
-        let creditArgs = [];
+        // Batch insert actions and credits
+        let batchSize = 100;
+        for (let i = 0; i < actionCount; i += batchSize) {
+            let batch = Math.min(batchSize, actionCount - i);
+            let actionValues = [];
+            let actionArgs = [];
+            let creditValues = [];
+            let creditArgs = [];
 
-        for (let j = 0; j < batch; j++) {
-            let actionIndex = blockIndex * 100000 + i + j;
-            actionValues.push('(?, ?, ?, ?, ?, ?)');
-            actionArgs.push(actionIndex, blockIndex, txIndex, 0, 1, 0);
-            creditValues.push('(?, ?, ?, ?)');
-            creditArgs.push(actionIndex, addrId, tickId, '10');
+            for (let j = 0; j < batch; j++) {
+                let actionIndex = blockIndex * 100000 + i + j;
+                actionValues.push('(?, ?, ?, ?, ?, ?)');
+                actionArgs.push(actionIndex, blockIndex, txIndex, 0, 1, 0);
+                creditValues.push('(?, ?, ?, ?)');
+                creditArgs.push(actionIndex, addrId, tickId, '10');
+            }
+
+            await db.doQuery(
+                "INSERT INTO actions (action_index, block_index, tx_index, tx_vout, action_id, action_format) VALUES " + actionValues.join(','),
+                actionArgs, conn
+            );
+            await db.doQuery(
+                "INSERT INTO credits (action_index, address_id, tick_id, amount) VALUES " + creditValues.join(','),
+                creditArgs, conn
+            );
         }
 
+        let { ids } = await computeAndInsertBlockHashes(db, blockIndex, conn);
         await db.doQuery(
-            "INSERT INTO actions (action_index, block_index, tx_index, tx_vout, action_id, action_format) VALUES " + actionValues.join(','),
-            actionArgs
+            "INSERT INTO blocks (block_index, block_time, ledger_hash_id, actions_hash_id, contract_hash_id) VALUES (?, ?, ?, ?, ?)",
+            [blockIndex, blockTime, ids.ledger_hash_id, ids.actions_hash_id, ids.contract_hash_id], conn
         );
-        await db.doQuery(
-            "INSERT INTO credits (action_index, address_id, tick_id, amount) VALUES " + creditValues.join(','),
-            creditArgs
-        );
-    }
-
-    let { ids } = await computeAndInsertBlockHashes(db, blockIndex);
-    await db.doQuery(
-        "INSERT INTO blocks (block_index, block_time, ledger_hash_id, actions_hash_id, contract_hash_id) VALUES (?, ?, ?, ?, ?)",
-        [blockIndex, blockTime, ids.ledger_hash_id, ids.actions_hash_id, ids.contract_hash_id]
-    );
+    });
 
     // Rebuild balances with the shared applier/rollback SQL (byte-parity).
     await rebuildBalances(db);

@@ -46,7 +46,7 @@ class TestDatabase {
         this.connCfg = connCfg || null;
     }
 
-    async doQuery(query, args) {
+    async doQuery(query, args, conn) {
         if (Array.isArray(args)) {
             for (let i = 0; i < args.length; i++) {
                 // Mirror src/db.js: Buffers (binary columns) must reach the driver
@@ -55,6 +55,10 @@ class TestDatabase {
                     args[i] = args[i].toString();
             }
         }
+        // Explicit connection (read snapshots, fixture block transactions): the
+        // caller owns its lifecycle, errors propagate, no retry. Mirrors
+        // src/db.js doQuery(query, args, conn).
+        if (conn) return await conn.query(query, args);
         // Non-transaction queries retry once on a fatal connection error. The chaos
         // suite disables/re-enables the DB proxy (toxiproxy) to simulate outages,
         // which leaves dead connections in the pool; a stale one handed out here
@@ -101,14 +105,15 @@ class TestDatabase {
         finally { try { conn.release(); } catch (_) {} }
     }
 
-    async getLastBlock() {
-        let rows = await this.doQueryCommitted("SELECT MAX(block_index) AS block_index FROM blocks");
+    async getLastBlock(conn) {
+        let q = "SELECT MAX(block_index) AS block_index FROM blocks";
+        let rows = conn ? await this.doQuery(q, [], conn) : await this.doQueryCommitted(q);
         if (rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
     }
 
-    async getBlockHashRow(block_index) {
+    async getBlockHashRow(block_index, conn) {
         let rows = await this.doQuery(`SELECT
             b.block_index, b.block_time,
             t1.hash as ledger_hash, t2.hash as actions_hash, t3.hash as contract_hash
@@ -116,49 +121,49 @@ class TestDatabase {
             LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
             LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
             LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
-            WHERE b.block_index=?`, [block_index]);
+            WHERE b.block_index=?`, [block_index], conn);
         return rows.length > 0 ? rows[0] : null;
     }
 
-    async getFirstActionIndex(block_index) {
+    async getFirstActionIndex(block_index, conn) {
         let rows = await this.doQuery(
             "SELECT action_index FROM actions WHERE block_index >= ? ORDER BY action_index ASC LIMIT 1",
-            [block_index]
+            [block_index], conn
         );
         return rows.length > 0 ? Number(rows[0].action_index) : null;
     }
 
-    async getBlockScopedRows(table, block_index) {
-        return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index]);
+    async getBlockScopedRows(table, block_index, conn) {
+        return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index], conn);
     }
 
     // Mirror src/db.js getEmissionRowsForBlock (568c800): ServerPoller streams
     // contract_emissions via the execution_index -> contract_executions chain
     // (byte-aligned with BlockHasher), not the generic action-scoped join.
-    async getEmissionRowsForBlock(block_index) {
+    async getEmissionRowsForBlock(block_index, conn) {
         return await this.doQuery(`SELECT em.execution_index, em.emitted_action, em.action_index, em.position
             FROM contract_emissions em
             INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
             INNER JOIN actions a ON (a.action_index = ce.action_index)
             WHERE a.block_index = ?
-            ORDER BY em.execution_index ASC, em.position ASC`, [block_index]);
+            ORDER BY em.execution_index ASC, em.position ASC`, [block_index], conn);
     }
 
-    async getActionScopedRows(table, block_index) {
+    async getActionScopedRows(table, block_index, conn) {
         return await this.doQuery(`SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
             INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
-            WHERE tx.block_index = ?`, [block_index]);
+            WHERE tx.block_index = ?`, [block_index], conn);
     }
 
-    async getTransactions(block_index) {
-        return await this.doQuery("SELECT * FROM transactions WHERE block_index = ?", [block_index]);
+    async getTransactions(block_index, conn) {
+        return await this.doQuery("SELECT * FROM transactions WHERE block_index = ?", [block_index], conn);
     }
 
-    async getActions(block_index) {
+    async getActions(block_index, conn) {
         return await this.doQuery(`SELECT a.* FROM actions a
             INNER JOIN transactions t ON (t.tx_index = a.tx_index)
-            WHERE t.block_index = ?`, [block_index]);
+            WHERE t.block_index = ?`, [block_index], conn);
     }
 
     // Mirrors src/db.js: one un-paged ordered streaming pass per table (LIMIT/OFFSET
@@ -243,32 +248,59 @@ class TestDatabase {
         await this.transactionConnection.beginTransaction();
     }
 
+    // DEDICATED-connection read snapshot, mirroring src/db.js exactly. This used
+    // to park the snapshot on the shared instance-level transactionConnection,
+    // which src/db.js explicitly forbids: the source TestDatabase is shared by
+    // the fixtures (writes), the ServerPoller's per-batch snapshot, concurrent
+    // /snapshot requests, and (in cross-source tests) a SECOND server's poller.
+    // A second beginReadSnapshot released the first's connection with its
+    // transaction still open, implicitly ROLLING BACK whatever had ridden it
+    // (fixture block seeds, TransparencyLog sync_meta records), which surfaced
+    // as the  flakes: a seeded tip that never appeared (waitFor timeout)
+    // and replica sync_meta rows the source no longer had (parity divergence).
     async beginReadSnapshot() {
-        if (this.transactionConnection) await this.releaseConnection();
-        this.transactionConnection = await this.pool.getConnection();
-        await this.transactionConnection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-        await this.transactionConnection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        let conn = await this.pool.getConnection();
+        try {
+            await conn.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        } catch (e) {
+            try { conn.release(); } catch (_) {}
+            throw e;
+        }
+        return conn;
     }
 
     // End / abort a read snapshot opened by beginReadSnapshot. SnapshotBuilder
-    // calls these (matching src/db.js) on the success and catch paths; without
-    // them every snapshot stream threw "is not a function" after headers were
-    // sent, which rejected the route handler and crashed the e2e server process
-    // (Node unhandled rejection), surfacing on the client as ECONNRESET. The
-    // harness tracks the connection on the instance, so the passed conn (which
-    // beginReadSnapshot does not return here) is ignored.
+    // and ServerPoller pass back the dedicated connection they were returned.
     async commitReadSnapshot(conn) {
-        if (this.transactionConnection) {
-            try { await this.transactionConnection.commit(); }
-            finally { await this.releaseConnection(); }
-        }
+        if (!conn) return;
+        try { await conn.commit(); }
+        finally { try { conn.release(); } catch (_) {} }
     }
 
     async rollbackReadSnapshot(conn) {
-        if (this.transactionConnection) {
-            try { await this.transactionConnection.rollback(); }
-            catch (e) { /* best-effort; release regardless */ }
-            finally { await this.releaseConnection(); }
+        if (!conn) return;
+        try { await conn.rollback(); }
+        catch (e) { /* best-effort; release regardless */ }
+        finally { try { conn.release(); } catch (_) {} }
+    }
+
+    // Run fn(conn) inside a single transaction on a DEDICATED connection.
+    // Used by the fixtures to commit each seeded block atomically, modelling
+    // the production indexer's per-block transaction: no reader (poller
+    // snapshot, /snapshot stream) may ever observe a half-written block.
+    async withTransaction(fn) {
+        let conn = await this.pool.getConnection();
+        try {
+            await conn.beginTransaction();
+            let result = await fn(conn);
+            await conn.commit();
+            return result;
+        } catch (e) {
+            try { await conn.rollback(); } catch (_) {}
+            throw e;
+        } finally {
+            try { conn.release(); } catch (_) {}
         }
     }
 

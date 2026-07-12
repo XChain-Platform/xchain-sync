@@ -259,14 +259,7 @@ class ServerPoller {
                 // fresh. Bounded by the recorded-hash window (RECENT_HASH_CAP); a fork
                 // below it stops at the deepest recorded height (cold-start fallback,
                 // same as before), where the follower's recompute/remediation is the net.
-                let forkBlock = this.lastPolledBlock;
-                while(forkBlock - 1 >= 1 && this.recentBroadcastHashes.has(forkBlock - 1)){
-                    let belowSrc = await this._sourceBlockHash(forkBlock - 1);
-                    if(belowSrc !== null && belowSrc !== this.recentBroadcastHashes.get(forkBlock - 1))
-                        forkBlock = forkBlock - 1;   // this height also changed; fork is deeper
-                    else
-                        break;                       // forkBlock-1 unchanged: true fork point
-                }
+                let forkBlock = await this._resolveForkPoint(this.lastPolledBlock);
                 console.log('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
                 if(this.transparencyLog)
                     await this.transparencyLog.pruneFrom(forkBlock);
@@ -301,7 +294,19 @@ class ServerPoller {
 
         // Detect reorgs: if current block is less than last polled, a rollback occurred
         if(currentBlock < this.lastPolledBlock){
-            console.log('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock);
+            // Resolve the TRUE fork point before broadcasting (same walk-back as the
+            // net-forward path). A poll can observe the source MID-REWRITE: tip
+            // dropped, but replacement blocks already committed at or below
+            // currentBlock. Broadcasting reorg@currentBlock+1 in that state is too
+            // shallow: the follower rolls back only above currentBlock, keeps stale
+            // pre-reorg blocks at/below it, and a catch-up racing the next poll (which
+            // would detect the deeper rewrite via the seeded pre-reorg hash) stitches
+            // post-reorg blocks onto the stale range: the join recompute then halts on
+            // a divergence no delivery interruption caused . Walking the
+            // recorded pre-reorg hashes down from currentBlock resolves the full depth
+            // in THIS poll, so the one reorg event carries the true fork point.
+            let forkBlock = await this._resolveForkPoint(currentBlock + 1);
+            console.log('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
 
             // Prune the source's own transparency log first (indexer only; decoder
             // has no transparencyLog). The indexer rolls back its data tables on a
@@ -311,31 +316,27 @@ class ServerPoller {
             // Throwing here leaves lastPolledBlock un-rewound so the next poll
             // re-detects the reorg and retries (prune + broadcast stay together).
             if(this.transparencyLog)
-                await this.transparencyLog.pruneFrom(currentBlock + 1);
+                await this.transparencyLog.pruneFrom(forkBlock);
 
             // Reorg event shape: see the net-forward reorg broadcast above for the
-            // full field documentation. block_index here is the first orphaned block
-            // (currentBlock + 1), consistent with the net-forward path.
+            // full field documentation. block_index is the first orphaned block.
             this.broadcaster.broadcast(this.chain, this.network, {
                 type: 'reorg',
                 chain: this.chain,
                 network: this.network,
                 dbType: this.dbType,
-                block_index: currentBlock + 1
+                block_index: forkBlock
             });
-            this.lastPolledBlock = currentBlock;
+            this.lastPolledBlock = forkBlock - 1;
             // Seed from the RECORDED pre-reorg hash (mirror of the net-forward path
-            // above): a poll can observe the source mid-rewrite, after its tip dropped
-            // but with replacement blocks already written at or below currentBlock. A
-            // fresh source read here returns the post-reorg hash, so the next poll's
-            // content-change guard compares post vs post and never fires, leaving stale
-            // sync_meta rows at/below currentBlock and a diverging follower recompute.
-            // Seeding the recorded hash lets that guard detect the deeper rewrite and
-            // walk down to the true fork point. On a miss (cold start / below the cap)
-            // fall back to the source read, disabling the guard for that step as before.
-            this.lastPolledBlockHash = this.recentBroadcastHashes.has(currentBlock)
-                ? this.recentBroadcastHashes.get(currentBlock)
-                : await this._sourceBlockHash(currentBlock);
+            // above): a fresh source read here returns the post-reorg hash, so the
+            // next poll's content-change guard would compare post vs post and never
+            // fire on a rewrite still deeper than the recorded-hash window resolved.
+            // On a miss (cold start / below the cap) fall back to the source read,
+            // disabling the guard for that step as before.
+            this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
+                ? this.recentBroadcastHashes.get(this.lastPolledBlock)
+                : await this._sourceBlockHash(this.lastPolledBlock);
             await this._updateStatus();
             return;
         }
@@ -420,6 +421,24 @@ class ServerPoller {
         }
 
         return blocksProcessed;
+    }
+
+    // Walk the recorded pre-reorg broadcast hashes down from a candidate fork
+    // height to the TRUE fork point: descend while the height below still exists
+    // on the source with a content hash different from the one WE broadcast for
+    // it. Shared by the net-forward and height-drop reorg paths; bounded by the
+    // recorded-hash window (RECENT_HASH_CAP). A fork below the window stops at
+    // the deepest recorded height (cold-start fallback), where the follower's
+    // recompute/remediation is the net.
+    async _resolveForkPoint(forkBlock){
+        while(forkBlock - 1 >= 1 && this.recentBroadcastHashes.has(forkBlock - 1)){
+            let belowSrc = await this._sourceBlockHash(forkBlock - 1);
+            if(belowSrc !== null && belowSrc !== this.recentBroadcastHashes.get(forkBlock - 1))
+                forkBlock = forkBlock - 1;   // this height also changed; fork is deeper
+            else
+                break;                       // forkBlock-1 unchanged: true fork point
+        }
+        return forkBlock;
     }
 
     // Source content hash at a block, for net-forward reorg detection. Indexer uses

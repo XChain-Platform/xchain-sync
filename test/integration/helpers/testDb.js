@@ -176,6 +176,24 @@ class TestDatabase {
         try { await conn.rollback(); } catch (e) { /* best-effort */ } finally { conn.release(); }
     }
 
+    // Run fn(conn) inside a single transaction on a DEDICATED connection (see
+    // the e2e TestDatabase twin): the shared fixtures commit each seeded block
+    // atomically so no snapshot ever observes a half-written block.
+    async withTransaction(fn) {
+        let conn = await this.pool.getConnection();
+        try {
+            await conn.beginTransaction();
+            let result = await fn(conn);
+            await conn.commit();
+            return result;
+        } catch (e) {
+            try { await conn.rollback(); } catch (_) {}
+            throw e;
+        } finally {
+            try { conn.release(); } catch (_) {}
+        }
+    }
+
     async commitTransaction() {
         if (this.transactionConnection) {
             await this.transactionConnection.commit();
