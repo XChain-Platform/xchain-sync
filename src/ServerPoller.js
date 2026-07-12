@@ -324,7 +324,18 @@ class ServerPoller {
                 block_index: currentBlock + 1
             });
             this.lastPolledBlock = currentBlock;
-            this.lastPolledBlockHash = await this._sourceBlockHash(currentBlock);
+            // Seed from the RECORDED pre-reorg hash (mirror of the net-forward path
+            // above): a poll can observe the source mid-rewrite, after its tip dropped
+            // but with replacement blocks already written at or below currentBlock. A
+            // fresh source read here returns the post-reorg hash, so the next poll's
+            // content-change guard compares post vs post and never fires, leaving stale
+            // sync_meta rows at/below currentBlock and a diverging follower recompute.
+            // Seeding the recorded hash lets that guard detect the deeper rewrite and
+            // walk down to the true fork point. On a miss (cold start / below the cap)
+            // fall back to the source read, disabling the guard for that step as before.
+            this.lastPolledBlockHash = this.recentBroadcastHashes.has(currentBlock)
+                ? this.recentBroadcastHashes.get(currentBlock)
+                : await this._sourceBlockHash(currentBlock);
             await this._updateStatus();
             return;
         }

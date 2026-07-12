@@ -70,8 +70,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
             testDb.REPLICA_DB_USER, testDb.REPLICA_DB_PASS);
         await testDb.seedSchema(replicaBDb);
 
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
+        if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
     });
 
     after(async function() {

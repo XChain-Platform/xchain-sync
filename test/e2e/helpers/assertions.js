@@ -81,7 +81,12 @@ function canonicalRow(row, excludedColumns) {
 
 // Order-insensitive content digest of a whole table (sorted canonical rows).
 async function tableContent(db, table, excludedColumns) {
-    let rows = await db.doQuery('SELECT * FROM `' + table + '`');
+    // Committed-state read where the harness DB offers it: the client under test
+    // applies blocks in a transaction on the same TestDatabase object, and a
+    // doQuery here can interleave inside that open transaction, digesting
+    // half-applied state as a false divergence.
+    let q = db.doQueryCommitted ? db.doQueryCommitted.bind(db) : db.doQuery.bind(db);
+    let rows = await q('SELECT * FROM `' + table + '`');
     let canon = rows.map(r => canonicalRow(r, excludedColumns)).sort();
     let h = crypto.createHash('sha256');
     for (let s of canon) h.update(s + '\n');
@@ -147,8 +152,15 @@ async function assertReplicaByteIdentical(sourceDb, replicaDb, opts = {}) {
     // Behavioral VERIFY_RECOMPUTE: recompute every block's consensus hashes
     // from the replica's raw rows; they must equal what the source committed.
     if (dbType === 'indexer' && opts.verifyRecompute !== false) {
-        let hasher = new BlockHasher(replicaDb, testDbModule.util);
-        let blocks = await replicaDb.doQuery('SELECT block_index FROM blocks ORDER BY block_index ASC');
+        // Committed-view facade (see tableContent): the recompute must not read
+        // through a concurrently-open apply transaction on the shared harness DB.
+        let committedDb = replicaDb;
+        if (replicaDb.doQueryCommitted) {
+            committedDb = Object.create(replicaDb);
+            committedDb.doQuery = replicaDb.doQueryCommitted.bind(replicaDb);
+        }
+        let hasher = new BlockHasher(committedDb, testDbModule.util);
+        let blocks = await committedDb.doQuery('SELECT block_index FROM blocks ORDER BY block_index ASC');
         for (let row of blocks) {
             let blockIndex = Number(row.block_index);
             let committed = await sourceDb.getBlockHashRow(blockIndex);
@@ -190,8 +202,10 @@ async function assertBlockNotExists(db, block_index) {
 
 // Assert that balances table is consistent with credits/debits
 async function assertBalancesConsistent(db) {
+    // Committed-state reads (see tableContent): must not observe a half-applied block.
+    let q = db.doQueryCommitted ? db.doQueryCommitted.bind(db) : db.doQuery.bind(db);
     // Compute expected balances from credits/debits
-    let computed = await db.doQuery(`
+    let computed = await q(`
         SELECT address_id, tick_id,
             CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END), 0) AS CHAR) as expected_amount
         FROM (
@@ -203,8 +217,14 @@ async function assertBalancesConsistent(db) {
         HAVING SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END) != 0
     `);
 
-    let actual = await db.doQuery("SELECT address_id, tick_id, amount FROM balances ORDER BY address_id, tick_id");
+    let actual = await q("SELECT address_id, tick_id, amount FROM balances ORDER BY address_id, tick_id");
 
+    if (actual.length !== computed.length) {
+        // Print the divergent keys on failure; a bare count mismatch is undiagnosable.
+        let actualKeys = new Set(actual.map(r => r.address_id + ':' + r.tick_id));
+        let missing = computed.filter(r => !actualKeys.has(r.address_id + ':' + r.tick_id));
+        process.stderr.write('Missing balance rows: ' + JSON.stringify(missing) + '\n');
+    }
     assert.strictEqual(actual.length, computed.length,
         'Balances count mismatch: actual=' + actual.length + ' expected=' + computed.length);
 

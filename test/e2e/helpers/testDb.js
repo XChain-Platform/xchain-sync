@@ -89,8 +89,20 @@ class TestDatabase {
         throw lastErr;
     }
 
+    // Committed-state read, bypassing transactionConnection. The client under
+    // test applies blocks inside a transaction ON THIS OBJECT; a wait/assert
+    // poll issued through doQuery rides that same connection and interleaves
+    // INSIDE the open apply transaction, observing the uncommitted blocks row
+    // before the rest of the apply (e.g. the balances rebuild) has run. Tests
+    // that then assert on "the replica reached block N" race half-applied state.
+    async doQueryCommitted(query, args) {
+        let conn = await this.pool.getConnection();
+        try { return await conn.query(query, args); }
+        finally { try { conn.release(); } catch (_) {} }
+    }
+
     async getLastBlock() {
-        let rows = await this.doQuery("SELECT MAX(block_index) AS block_index FROM blocks");
+        let rows = await this.doQueryCommitted("SELECT MAX(block_index) AS block_index FROM blocks");
         if (rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
