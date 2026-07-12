@@ -37,6 +37,10 @@ function createMockUtil(){
     };
 }
 
+// Malformed identifiers FAIL CLOSED: _insertRows/_upsertRows throw so the apply
+// transaction rolls back and the block/snapshot is retried or the client halts.
+// (A silent skip would drop the table's rows while the transaction still commits,
+// leaving the replica permanently short with no divergence signal.)
 describe('ClientApplier security', function(){
 
     let db, util, applier;
@@ -62,41 +66,40 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.doQuery.called, true);
         });
 
-        it('rejects table name with semicolon', async function(){
-            await applier._insertRows('blocks;DROP TABLE blocks', [{ id: 1 }]);
+        async function assertInsertRejectsTable(table){
+            await assert.rejects(
+                () => applier._insertRows(table, [{ id: 1 }]),
+                /Rejected table name/
+            );
             assert.strictEqual(db.doQuery.called, false);
-            assert.strictEqual(console.error.calledOnce, true);
-            assert.ok(console.error.firstCall.args[0].includes('Rejected table name'));
+        }
+
+        it('rejects table name with semicolon', async function(){
+            await assertInsertRejectsTable('blocks;DROP TABLE blocks');
         });
 
         it('rejects table name with backtick', async function(){
-            await applier._insertRows('blo`cks', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('blo`cks');
         });
 
         it('rejects empty table name', async function(){
-            await applier._insertRows('', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('');
         });
 
         it('rejects table name with SQL comment', async function(){
-            await applier._insertRows('blocks--', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('blocks--');
         });
 
         it('rejects table name with space', async function(){
-            await applier._insertRows('blo cks', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('blo cks');
         });
 
         it('rejects table name with dot notation', async function(){
-            await applier._insertRows('mysql.user', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('mysql.user');
         });
 
         it('rejects table name with path traversal', async function(){
-            await applier._insertRows('../etc', [{ id: 1 }]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsTable('../etc');
         });
     });
 
@@ -109,34 +112,30 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.doQuery.called, true);
         });
 
-        it('rejects column name with backtick', async function(){
+        async function assertInsertRejectsColumn(col){
             let row = {};
-            row['col`'] = 1;
-            await applier._insertRows('blocks', [row]);
+            row[col] = 1;
+            await assert.rejects(
+                () => applier._insertRows('blocks', [row]),
+                /Rejected column name/
+            );
             assert.strictEqual(db.doQuery.called, false);
-            assert.strictEqual(console.error.calledOnce, true);
-            assert.ok(console.error.firstCall.args[0].includes('Rejected column name'));
+        }
+
+        it('rejects column name with backtick', async function(){
+            await assertInsertRejectsColumn('col`');
         });
 
         it('rejects column name with semicolon', async function(){
-            let row = {};
-            row['col;drop'] = 1;
-            await applier._insertRows('blocks', [row]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsColumn('col;drop');
         });
 
         it('rejects empty column name', async function(){
-            let row = {};
-            row[''] = 1;
-            await applier._insertRows('blocks', [row]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsColumn('');
         });
 
         it('rejects column name with space', async function(){
-            let row = {};
-            row['col name'] = 1;
-            await applier._insertRows('blocks', [row]);
-            assert.strictEqual(db.doQuery.called, false);
+            await assertInsertRejectsColumn('col name');
         });
     });
 
@@ -158,7 +157,7 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.doQuery.calledWith('DELETE FROM `transactions`'), true);
         });
 
-        it('skips truncate for invalid table name', async function(){
+        it('rejects a snapshot carrying an invalid table name (fail closed, transaction rolled back)', async function(){
             let snapshotData = {
                 schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
@@ -167,15 +166,16 @@ describe('ClientApplier security', function(){
                     blocks: [{ block_index: 1 }]
                 }
             };
-            await applier.applyFullSnapshot(snapshotData);
-            // evil table should NOT be cleared: no DELETE issued referencing it
+            await assert.rejects(() => applier.applyFullSnapshot(snapshotData), /Rejected table name/);
+            // the malicious name must never reach a query
             for(let call of db.doQuery.getCalls()){
                 assert.strictEqual(call.args[0].includes('evil'), false);
             }
-            assert.strictEqual(console.error.called, true);
+            assert.strictEqual(db.rollbackTransaction.called, true);
+            assert.strictEqual(db.commitTransaction.called, false);
         });
 
-        it('skips truncate for path traversal table name', async function(){
+        it('rejects a snapshot carrying a path traversal table name (fail closed)', async function(){
             let snapshotData = {
                 schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
@@ -183,14 +183,15 @@ describe('ClientApplier security', function(){
                     '../etc': [{ id: 1 }]
                 }
             };
-            await applier.applyFullSnapshot(snapshotData);
-            // path-traversal name must never reach a DELETE
+            await assert.rejects(() => applier.applyFullSnapshot(snapshotData), /Rejected table name/);
+            // path-traversal name must never reach a query
             for(let call of db.doQuery.getCalls()){
                 assert.strictEqual(call.args[0].includes('../etc'), false);
             }
+            assert.strictEqual(db.rollbackTransaction.called, true);
         });
 
-        it('valid tables not affected by one invalid table in same snapshot', async function(){
+        it('one invalid table poisons the whole snapshot: nothing commits', async function(){
             let snapshotData = {
                 schema_version: SCHEMA_VERSION.indexer,
                 block_height: 100,
@@ -200,9 +201,9 @@ describe('ClientApplier security', function(){
                     transactions: [{ tx_index: 1 }]
                 }
             };
-            await applier.applyFullSnapshot(snapshotData);
-            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `blocks`'), true);
-            assert.strictEqual(db.doQuery.calledWith('DELETE FROM `transactions`'), true);
+            await assert.rejects(() => applier.applyFullSnapshot(snapshotData), /Rejected table name/);
+            assert.strictEqual(db.rollbackTransaction.called, true);
+            assert.strictEqual(db.commitTransaction.called, false);
         });
     });
 
@@ -222,7 +223,7 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.doQuery.called, true);
         });
 
-        it('skips data with invalid table name key', async function(){
+        it('rejects a block carrying an invalid table name key (fail closed, transaction rolled back)', async function(){
             db.getBlockHashRow.resolves(null);
             let payload = {
                 block_index: 100,
@@ -230,14 +231,15 @@ describe('ClientApplier security', function(){
                     'evil;DROP TABLE blocks': [{ id: 1 }]
                 }
             };
-            await applier.applyBlock(payload);
-            // doQuery should only be called for beginTransaction/commitTransaction, not for insert
-            // The invalid table _insertRows should return early without calling doQuery
+            await assert.rejects(() => applier.applyBlock(payload), /Rejected table name/);
+            // no INSERT may be issued for the malicious key
             let insertCalls = db.doQuery.getCalls().filter(c => {
                 let q = c.args[0];
                 return typeof q === 'string' && q.includes('INSERT');
             });
             assert.strictEqual(insertCalls.length, 0);
+            assert.strictEqual(db.rollbackTransaction.called, true);
+            assert.strictEqual(db.commitTransaction.called, false);
         });
     });
 });
