@@ -120,6 +120,18 @@ class TestDatabase {
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index]);
     }
 
+    // Mirror src/db.js getEmissionRowsForBlock (568c800): ServerPoller streams
+    // contract_emissions via the execution_index -> contract_executions chain
+    // (byte-aligned with BlockHasher), not the generic action-scoped join.
+    async getEmissionRowsForBlock(block_index) {
+        return await this.doQuery(`SELECT em.execution_index, em.emitted_action, em.action_index, em.position
+            FROM contract_emissions em
+            INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)
+            INNER JOIN actions a ON (a.action_index = ce.action_index)
+            WHERE a.block_index = ?
+            ORDER BY em.execution_index ASC, em.position ASC`, [block_index]);
+    }
+
     async getActionScopedRows(table, block_index) {
         return await this.doQuery(`SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
