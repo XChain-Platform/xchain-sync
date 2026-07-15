@@ -32,6 +32,7 @@ const http        = require('http');
 const WebSocket   = require('ws');
 const rateLimit   = require('express-rate-limit');
 const config      = require('./config');
+const { computeArmedMapFingerprint } = require('./armedMapFingerprint');
 const SyncService = require('./SyncService');
 const Utility     = require('./utility');
 const BlockHasher = require('./BlockHasher');
@@ -318,6 +319,11 @@ async function startApi(){
             // Sync rediscovers chains from hub config on a timer; a climbing age here while
             // status stays healthy means the hub is unreachable and the chain set is stale.
             hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
+            // Consensus-gate build fingerprint : one string per process so a
+            // fleet sweep can confirm every deployed sync runs the same armed map
+            // before a flag-day height (twin module in xchain-indexer exposes the
+            // same field on the indexer health method).
+            armed_map_fingerprint: computeArmedMapFingerprint().fingerprint,
             last_updated: new Date().toISOString()
         });
     });
