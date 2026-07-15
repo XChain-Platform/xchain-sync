@@ -65,6 +65,37 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             'sync canonicalCheckpoint drifted from the canonical XCHECKPOINT signing string; re-align the vendored twin to the SDK copy');
     });
 
+    // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical: the
+    // launch-epoch shape real hub-signed federation checkpoints use. Every quorum
+    // case below signs and verifies through sync's OWN builder, so a one-sided drift
+    // of the appended state_root|state_root_version|block_merkle_root|block_merkle_version
+    // suffix (or the EQUIV header wrap) keeps sign==verify green AND keeps the rootless
+    // mainnet golden green, while sync silently fails to verify real hub checkpoints.
+    // regtest activates both CHECKPOINT_COMMITMENT and the EQUIV header at height 0, so
+    // the canonical commits the four SPV-root fields and is EQUIV-wrapped. The expected
+    // string is reconstructed here from the documented spec parts (NOT from the builder),
+    // so a drift of canonicalCheckpoint fails here rather than in production. Mirrors the
+    // explorer's 'regtest row with SPV roots' cross-check, but for the sync verifier.
+    it('canonicalCheckpoint matches the ACTIVE SPV-root spec byte-for-byte (EQUIV-wrapped, roots committed)', function(){
+        const cp = { chain: 'BTC', network: 'regtest', block_index: 100,
+            block_hash: 'c0'.repeat(32), ledger_hash: 'a1'.repeat(32),
+            actions_hash: 'b2'.repeat(32), contract_hash: 'c3'.repeat(32),
+            checkpoint_seq: 0, snapshot_block: 100,
+            state_root: 'd4'.repeat(32), state_root_version: 1,
+            block_merkle_root: 'e5'.repeat(32), block_merkle_version: 1 };
+        // RAW base + additive SPV-root suffix (spec §6.1):
+        const raw = 'XCHECKPOINT|BTC|regtest|100|' + 'c0'.repeat(32) + '|' + 'a1'.repeat(32) +
+            '|' + 'b2'.repeat(32) + '|' + 'c3'.repeat(32) + '|0|100' +
+            '|' + 'd4'.repeat(32) + '|1|' + 'e5'.repeat(32) + '|1';
+        // EQUIV wrap: 'EQUIV|' + engineTag|roundId|view + '||' + raw, where
+        // roundId = chain|network|block_index|checkpoint_seq and view = 0.
+        const expected = 'EQUIV|XCHECKPOINT|BTC|regtest|100|0|0||' + raw;
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(cp),
+            expected,
+            'sync canonicalCheckpoint drifted from the ACTIVE SPV-root XCHECKPOINT signing string; re-align the vendored twin to the SDK/hub/indexer/explorer copies');
+    });
+
     it('verifies a real Ed25519 quorum-signed checkpoint against its pinned set', function(){
         const s = makeSigner();
         const cp = signedCheckpoint(s);
