@@ -160,13 +160,17 @@ const EMPTY_CONSTANTS = (function(){
 })();
 
 // ---- Orphan-node observability (read-only; SPV spec §4.3) -------------------
-// Twin of xchain-indexer/src/stateCommitment.js reportOrphanStats; keep BYTE-IDENTICAL.
+// TWIN PAIR: xchain-indexer/src/stateCommitment.js and xchain-sync/src/
+// stateCommitment.js each carry this comment + function; keep the whole block
+// BYTE-IDENTICAL, comments included (drift-guarded in both repos by
+// test/unit/blockhash-conformance-twin.test.js).
+//
 // Reports total vs reachable internal nodes in the content-addressed COW
-// state_tree_nodes store so unbounded growth (reorg orphans + the per-BTC-block
-// buildFull stake-subtree churn this follower strands) is measurable. Reachability
-// marks from the UNION of EVERY retained state_tree_roots row's balances_root +
-// stakes_root: the explorer SPV proof server descends historical roots, so a node
-// is live if ANY retained root reaches it.
+// state_tree_nodes store so unbounded growth (reorg orphans + per-block stake-
+// subtree buildFull churn) is measurable. Reachability marks from the UNION of
+// EVERY retained state_tree_roots row's balances_root + stakes_root: the
+// explorer SPV proof server descends historical roots, so a node is live if
+// ANY retained root reaches it.
 //
 // Deliberately does NOT delete. A safe reclaiming sweep must serialize against
 // block-root insertion: a content-addressed node orphaned by a reorg is commonly
@@ -174,14 +178,20 @@ const EMPTY_CONSTANTS = (function(){
 // its old id), and deleting it after it is re-referenced would make the next
 // incremental _descend read a missing row as an EMPTY subtree and fork the
 // balances_root. Reclamation is deferred to a dedicated design paired with
-// root-retention pruning. `query(sql, args)` MUST run on a POOLED (non-transaction)
-// connection. Returns { totalNodes, reachableNodes, orphanCount, reachabilitySkipped }.
+// root-retention pruning (which is what would actually free the bulk that
+// retained historical roots otherwise pin).
+//
+// `query(sql, args)` MUST run on a POOLED (non-transaction) connection so this
+// never shares the caller's block-processing/apply transaction. Returns
+// { totalNodes, reachableNodes, orphanCount, reachabilitySkipped }.
 async function reportOrphanStats(query, chain, network, opts){
     opts = opts || {};
     const maxNodes = opts.maxNodes || parseInt(process.env.STATE_TREE_METRIC_MAX_NODES, 10) || 2000000;
     const cnt = await query('SELECT COUNT(*) AS c FROM state_tree_nodes', []);
     const totalNodes = cnt.length ? Number(cnt[0].c) : 0;
     if(totalNodes === 0) return { totalNodes: 0, reachableNodes: 0, orphanCount: 0, reachabilitySkipped: false };
+    // A full in-memory mark over a very large store is skipped to bound memory; the
+    // total node count still trends growth over time.
     if(totalNodes > maxNodes) return { totalNodes, reachableNodes: null, orphanCount: null, reachabilitySkipped: true };
 
     const rows = await query('SELECT node_hash, left_hash, right_hash FROM state_tree_nodes', []);
@@ -193,6 +203,8 @@ async function reportOrphanStats(query, chain, network, opts){
         'UNION SELECT DISTINCT stakes_root AS r FROM state_tree_roots WHERE chain=? AND network=?',
         [chain, network, chain, network]);
 
+    // Iterative DFS from every retained root; only push hashes that actually have a
+    // row (EMPTY constants and absent children are skipped). visited == reachable set.
     const visited = new Set();
     const stack = [];
     for(const rr of rootRows){
