@@ -96,7 +96,7 @@ jobs:
         env:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js
 
       - name: Run the e2e tier
         env:
