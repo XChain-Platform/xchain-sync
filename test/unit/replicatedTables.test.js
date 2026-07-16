@@ -47,7 +47,7 @@ describe('replicatedTables', function(){
             // legitimately diverge between nodes, so comparing their counts would
             // raise false incompleteness alarms.
             for(let t of ['markets', 'icons', 'price_snapshots',
-                          'attest_validator_stats', 'mempool_transactions']){
+                          'attest_validator_stats']){
                 assert.ok(!tables.includes(t), 'expected replicated set to exclude ' + t);
             }
         });
@@ -93,6 +93,31 @@ describe('replicatedTables', function(){
 
         it('has no action-scoped tables', function(){
             assert.strictEqual(getTopology('decoder').actionScoped.length, 0);
+        });
+
+        it('excludes mempool_transactions (non-deterministic across nodes)', function(){
+            // mempool_transactions is excluded by design from the decoder
+            // per-block stream and the /status completeness count: its contents
+            // legitimately diverge between nodes (see replicatedTables.js and
+            // xchain-sync-decoder-db-decisions). This assertion must live in the
+            // DECODER scope: the table has no indexer registry entry, so asserting
+            // its absence from the indexer set is unfalsifiable.
+            assert.ok(!getReplicatedTables('decoder').includes('mempool_transactions'),
+                      'expected decoder replicated set to exclude mempool_transactions');
+        });
+
+        it('pins the decoder replicated set by value (8 of 9 decoder tables)', function(){
+            // F-5-style by-value pin (see rollback-coverage.test.js): the decoder
+            // has no lifecycle registry to cross-check against, so an explicit
+            // literal is the only guard that makes BOTH directions - a table added
+            // to TOPOLOGY.decoder and a table dropped from it - deliberate,
+            // visible changes. The decoder schema declares 9 tables; the 9th,
+            // mempool_transactions, is excluded by design.
+            let expected = ['blocks', 'dispensers', 'events', 'index_addresses',
+                            'index_transactions', 'pubkeys', 'transaction_outputs',
+                            'transactions'];
+            assert.deepStrictEqual(getReplicatedTables('decoder').slice().sort(), expected,
+                'decoder replicated set changed: update this pin only for a deliberate topology change');
         });
     });
 

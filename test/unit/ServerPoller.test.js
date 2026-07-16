@@ -514,6 +514,32 @@ describe('ServerPoller', function(){
             assert.strictEqual(row.contract_hash, 'ch');
         });
 
+        it('ships state_hash NULL for burst-built blocks (viewTip ahead of B)', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
+            });
+            // Catch-up burst: the pinned view's tip sits ahead of the block being
+            // built, so updated_rows carry tip-state and the follower's apply-time
+            // recompute at B must be skipped via the existing NULL gate.
+            let payload = await poller._buildBlockPayload(100, null, 105);
+            assert.strictEqual(payload.state_hash, null,
+                'burst-built payload must ship state_hash NULL');
+            assert.strictEqual(payload.ledger_hash, 'lh',
+                'B-scoped hashes stay verified on the burst path');
+        });
+
+        it('keeps state_hash when the view tip IS the block (steady state) or is unknown', async function(){
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
+            });
+            let steady = await poller._buildBlockPayload(100, null, 100);
+            assert.strictEqual(steady.state_hash, 'sh', 'steady-state payload keeps state_hash');
+            let noTip = await poller._buildBlockPayload(100, null);
+            assert.strictEqual(noTip.state_hash, 'sh', 'unknown view tip keeps state_hash');
+        });
+
         it('omits sync_meta from the decoder payload', async function(){
             let decoderDb = createMockDb();
             decoderDb.dbType = 'decoder';

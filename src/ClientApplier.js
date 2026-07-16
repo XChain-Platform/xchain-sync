@@ -26,7 +26,7 @@ const { decodeValue }     = require('./wireCodec');
 const { rederiveEscrowGate } = require('./ClientRollback');
 const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
-const { OPERATOR_LOCAL_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
@@ -37,8 +37,11 @@ const MAX_SCOPED_REBUILD_IDS = 1000;
 // ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
 // closed state). When any appears, re-derive tokens.escrow_action_index from the
 // already-replicated offer/status tables (the forward-apply counterpart to the
-// reorg re-derive in ClientRollback; the gate is never carried on the wire because
-// it is fully replica-derivable). See _maybeRederiveEscrow.
+// reorg re-derive in ClientRollback). The gate ALSO rides the wire via the
+// updated_rows tokens class (full-row carry, all-column upsert), so this derive
+// is the corrective pass over a convergent carried value, not the gate's sole
+// writer. Checked against the payload's data/tables map only; updated_rows keys
+// do not trigger it. See _maybeRederiveEscrow.
 const ESCROW_TRIGGER_TABLES = new Set([
     'orders', 'order_statuses', 'swaps', 'swap_statuses',
     'dispensers', 'dispenser_statuses', 'tokens'
@@ -317,12 +320,15 @@ class ClientApplier {
                 console.error('Full-snapshot clear: local table enumeration failed; clearing payload tables only:', e.message);
             }
 
-            // Node-local tables (OPERATOR_LOCAL_TABLES) never ride snapshots; if an
-            // older source still ships one (e.g. mempool_transactions before it was
-            // excluded), drop it here rather than clobbering node-local state with
-            // the source's copy.
+            // Node-local tables (OPERATOR_LOCAL_TABLES and SOURCE_UNSTREAMED_TABLES)
+            // never ride snapshots; if an older source still ships one (e.g.
+            // mempool_transactions or merkle_reorgs before their exclusions), drop it
+            // here rather than importing another node's local state. Note the two sets
+            // differ on the clear loop above: SOURCE_UNSTREAMED_TABLES stays in
+            // localTables so a previously-imported foreign copy is purged by this very
+            // apply, while OPERATOR_LOCAL_TABLES is clear-protected.
             let payloadTables = Object.keys(snapshotData.tables).filter(t => {
-                if(!OPERATOR_LOCAL_TABLES.has(t)) return true;
+                if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
                 console.log('Ignoring node-local table shipped in full snapshot: ' + t);
                 return false;
             });
@@ -588,10 +594,12 @@ class ClientApplier {
 
     // Re-derive tokens.escrow_action_index from the already-replicated offer/status
     // tables when this payload moved any escrow-relevant row. The gate is fully
-    // replica-derivable (it is never carried on the wire), so the forward-apply
-    // path runs the SAME re-derive ClientRollback runs on reorg, keeping source
-    // and replica byte-identical with no new payload field. `tables` is the payload's
-    // table map (live block `data` or incremental `tables`).
+    // replica-derivable, and it ALSO arrives on the wire via the updated_rows
+    // tokens full-row carry (the source's own authoritative value, so the carry
+    // converges rather than forks); this forward-apply pass runs the SAME
+    // re-derive ClientRollback runs on reorg, keeping source and replica
+    // byte-identical. `tables` is the payload's table map (live block `data` or
+    // incremental `tables`); updated_rows does not trigger it.
     async _maybeRederiveEscrow(tables){
         if(!tables) return;
         let touched = false;

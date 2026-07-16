@@ -405,28 +405,37 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // Orphan-sweep parity: markets + pubkeys are derived/lookup tables the replica's
-    // replication never deletes (markets upserts from the full-dump, pubkeys is INSERT
-    // IGNORE), so the source's reorg sweep MUST be mirrored in ClientRollback or the
-    // replica keeps the orphan and serves the OLD market/pubkey on index-id reclaim.
-    // balances is excluded here: both sides rebuild it wholesale (rebuildBalances), so the
-    // orphan never re-derives. Assert both source and replica carry both sweeps.
-    it('markets + pubkeys orphan sweeps are mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
+    // Orphan-sweep parity, driven by the registry (#2273): every ORPHAN_SWEEPS
+    // entry with `replica: true` is a derived/lookup table the replica's
+    // replication never deletes (markets upserts from the full-dump, pubkeys is
+    // INSERT IGNORE, icons is an operator-local cache), so the source's reorg
+    // sweep MUST be mirrored in ClientRollback or the replica keeps the orphan
+    // and serves the OLD row on index-id reclaim. balances stays replica:false:
+    // both sides rebuild it wholesale (rebuildBalances), so the orphan never
+    // re-derives. The regexes stay hand-written (the markets sweep spans two
+    // columns and cannot be generated from {table, index}), but their key set
+    // must exactly equal the registry's replica-flagged tables, so flipping a
+    // flag without shipping (or removing) the matching sweep fails here.
+    it('registry replica-flagged orphan sweeps are mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
-        const SWEEPS = [
-            { name: 'markets orphan sweep',  re: /DELETE FROM markets WHERE tick1_id NOT IN \(SELECT id FROM index_tickers\) OR tick2_id NOT IN \(SELECT id FROM index_tickers\)/ },
-            { name: 'pubkeys orphan sweep',  re: /DELETE FROM pubkeys WHERE address_id NOT IN \(SELECT id FROM index_addresses\)/ },
-        ];
+        const SWEEP_RES = {
+            icons:   /DELETE FROM icons WHERE token_id NOT IN \(SELECT id FROM tokens\)/,
+            markets: /DELETE FROM markets WHERE tick1_id NOT IN \(SELECT id FROM index_tickers\) OR tick2_id NOT IN \(SELECT id FROM index_tickers\)/,
+            pubkeys: /DELETE FROM pubkeys WHERE address_id NOT IN \(SELECT id FROM index_addresses\)/,
+        };
+        const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
+        assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
+            'SWEEP_RES keys must equal the registry\'s replica-flagged ORPHAN_SWEEPS tables; add/remove the regex alongside the flag');
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
             const norm = fs.readFileSync(p, 'utf8')
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
                 .replace(/\s+/g, ' ');
-            for(const sw of SWEEPS){
-                assert.ok(sw.re.test(norm), `${label} is missing the ${sw.name}; source and replica must both sweep it on reorg or the replica diverges on id reclaim`);
+            for(const table of flagged){
+                assert.ok(SWEEP_RES[table].test(norm), `${label} is missing the ${table} orphan sweep; source and replica must both sweep it on reorg or the replica diverges on id reclaim`);
             }
         }
     });
@@ -780,7 +789,10 @@ describe('Rollback coverage guard @regression', function(){
     // channel, followers would apply divergent hub-timing data as if it were
     // block-deterministic, silently forking the replica. Pin the exclusion by value.
     it('F-5: hub-mirrored tables are absent from the ServerPoller replicated universe (snapshot-exclusion contract)', function(){
-        const HUB_MIRRORED = ['oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches', 'state_checkpoints'];
+        // Derived from the registry, not a hand-copied literal, so a new
+        // hub-mirror entry is covered automatically (#2271).
+        const HUB_MIRRORED = lifecycleTwin.tablesWhere(t => t.replication === 'hub-mirror');
+        assert.ok(HUB_MIRRORED.length >= 5, 'expected at least the five known hub-mirrored tables in the registry');
         const { universe } = replicatedTables('indexer');
         const universeSet = new Set(universe);
         for(const t of HUB_MIRRORED){
@@ -792,31 +804,39 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    it('F-5: OPERATOR_LOCAL_TABLES in SnapshotBuilder excludes exactly the hub-mirrored set from consensus snapshots', function(){
-        const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/SnapshotBuilder.js'), 'utf8');
-        // Extract the OPERATOR_LOCAL_TABLES Set literal and parse the quoted names from it.
-        const m = src.match(/const OPERATOR_LOCAL_TABLES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
-        assert.ok(m, 'OPERATOR_LOCAL_TABLES Set literal not found in SnapshotBuilder.js');
-        const quoted = m[1].match(/'([^']+)'/g) || [];
-        const excluded = new Set(quoted.map(s => s.replace(/'/g, '')));
-        const HUB_MIRRORED = ['oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches', 'state_checkpoints'];
-        for(const t of HUB_MIRRORED){
-            assert.ok(excluded.has(t),
-                `${t} is missing from OPERATOR_LOCAL_TABLES in SnapshotBuilder.js; ` +
-                `it must be excluded from consensus snapshots (it diverges by hub-WS timing)`);
+    it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the three permitted non-registry names', function(){
+        // Both directions (#2271). Forward: every registry table whose
+        // replication mode is local / hub-mirror / follower-derived must be
+        // snapshot-excluded (a new local table that rode consensus snapshots
+        // would ship divergent per-node state to every follower). Reverse:
+        // OPERATOR_LOCAL_TABLES may contain NOTHING else beyond the three
+        // sanctioned non-registry names, so over-exclusion (silently dropping
+        // a consensus table from snapshots) fails just as loudly. Uses the
+        // exported Set, not a source-text scrape, so it pins the value the
+        // runtime consumers (SnapshotBuilder, ClientApplier, explorer) see.
+        const { OPERATOR_LOCAL_TABLES } = require('../../src/SnapshotBuilder');
+        const derived = lifecycleTwin.tablesWhere(t =>
+            ['local', 'hub-mirror', 'follower-derived'].includes(t.replication));
+        // The ONLY permitted members with no registry entry: mempool_transactions is a
+        // decoder-DB table (registry covers the indexer DB); sync_halt / sync_state are
+        // replica-created control tables the full-snapshot clear loop must never wipe.
+        const NON_REGISTRY = ['mempool_transactions', 'sync_halt', 'sync_state'];
+        const expected = new Set([...derived, ...NON_REGISTRY]);
+
+        for(const t of expected){
+            assert.ok(OPERATOR_LOCAL_TABLES.has(t),
+                `${t} is missing from OPERATOR_LOCAL_TABLES; a registry table marked ` +
+                `local/hub-mirror/follower-derived must not ride consensus snapshots`);
         }
-        // Also verify operator-local non-hub tables remain excluded.
-        for(const t of ['icons', 'price_snapshots', 'pending_hub_pushes']){
-            assert.ok(excluded.has(t),
-                `${t} dropped out of OPERATOR_LOCAL_TABLES unexpectedly`);
+        for(const t of OPERATOR_LOCAL_TABLES){
+            assert.ok(expected.has(t),
+                `${t} is in OPERATOR_LOCAL_TABLES but is neither registry-derived nor a ` +
+                `sanctioned non-registry name; removing a table from consensus snapshots ` +
+                `is a consensus-visible change that needs a registry replication label`);
         }
-        // Replica-local durable control tables must stay excluded so the full-snapshot
-        // clear loop never wipes the halt audit record / bootstrap-base + mismatch state.
-        for(const t of ['sync_halt', 'sync_state']){
-            assert.ok(excluded.has(t),
-                `${t} is missing from OPERATOR_LOCAL_TABLES in SnapshotBuilder.js; ` +
-                `the full-snapshot clear loop would DELETE this replica-local control table`);
+        // Belt-and-suspenders: the two historically-uncovered members stay pinned by name.
+        for(const t of ['recovery_pending_rewards', 'state_tree_roots']){
+            assert.ok(OPERATOR_LOCAL_TABLES.has(t), `${t} dropped out of OPERATOR_LOCAL_TABLES`);
         }
     });
 });

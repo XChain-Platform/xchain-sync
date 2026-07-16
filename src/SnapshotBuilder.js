@@ -24,6 +24,7 @@ const { once } = require('events');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { encodeRow, encodeTables } = require('./wireCodec');
 const replicatedTables = require('./replicatedTables');
+const tableLifecycle = require('./tableLifecycle');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
@@ -34,56 +35,92 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
 // Tables holding operator-local bookkeeping state (fetch timestamps, retry counters) that
 // legitimately diverges between nodes and must not appear in consensus snapshots.
+//
+// DERIVED from the tableLifecycle registry: every entry whose `replication`
+// mode is 'local', 'hub-mirror', or 'follower-derived' is snapshot-excluded,
+// the same registry binding the per-block stream (streamTopology) and the
+// rollback lists (replicaRollbackTables) already have. A new registry entry
+// with one of those modes is excluded automatically; before this derivation a
+// new local table passed every guard and silently rode consensus snapshots
+// unless someone also hand-edited this Set (#2271). The three names appended
+// after the spread have no registry entry (mempool_transactions is a
+// decoder-DB table; sync_halt / sync_state are replica-created control
+// tables) and are the ONLY permitted non-registry members; rollback-coverage
+// F-5 pins both directions against the registry.
+//
+// Why the registry-derived members are excluded:
+//  - icons, price_snapshots, pending_hub_pushes ('local'): operator-local
+//    fetch/push bookkeeping that legitimately diverges between nodes.
+//  - recovery_pending_rewards ('local'): restore-time scratch staging for archived
+//    validator rewards (xchain-indexer F1a id-determinism fix). Recovery-local, drained
+//    into validator_rewards by the reindex apply hook, and never consensus-hashed. It
+//    must not ride snapshots (a follower has no recovery in progress, so its count
+//    legitimately differs).
+//  - Hub-mirrored tables ('hub-mirror': oracle_prices, capability_snapshots,
+//    cross_chain_calls, cross_chain_matches, state_checkpoints): pushed/retracted by
+//    hub_db_sync out-of-band with block apply, so they vary by WS arrival timing and
+//    must not appear in consensus snapshots. These are NEVER replicated by xchain-sync
+//    (excluded from the per-block stream, the incremental catch-up, AND these
+//    snapshots). A serving node does not converge them via sync: the explorer serves
+//    the consensus-relevant ones (state_checkpoints, capability_snapshots,
+//    cross_chain_matches) from the MANDATORY co-located hub DB on the same server,
+//    with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
+//    IMPORTANT: a follower node that lacks a co-located hub DB (hub-less validator)
+//    will have these five tables empty. This is by design and not a replication gap:
+//    these rows are hub-driven state that the node must receive from its OWN hub
+//    subscription (hub_db_sync), not from the sync snapshot stream. A hub-less
+//    validator cannot serve hub-dependent API surfaces correctly; provision a hub
+//    connection before running in validator mode.
+//  - state_tree_roots ('follower-derived'): the follower recomputes its OWN row at
+//    every snapshot apply (ClientApplier.seedSnapshotRoots, rebuilt from local
+//    balances/stakes; never compared to the source). The table also carries
+//    computed_at (CURRENT_TIMESTAMP), a per-node wall-clock value, so shipping the
+//    source's rows adds pure nondeterminism to the snapshot and is never consumed by
+//    the follower.
 const OPERATOR_LOCAL_TABLES = new Set([
-    'icons', 'price_snapshots', 'pending_hub_pushes',
-    // recovery_pending_rewards: restore-time scratch staging for archived validator rewards
-    // (xchain-indexer F1a id-determinism fix). Recovery-local, drained into validator_rewards
-    // by the reindex apply hook, and never consensus-hashed. It must not ride snapshots (a
-    // follower has no recovery in progress, so its count legitimately differs).
-    'recovery_pending_rewards',
-    // Hub-mirrored tables: pushed/retracted by hub_db_sync out-of-band with block
-    // apply, so they vary by WS arrival timing and must not appear in consensus snapshots.
-    // These are NEVER replicated by xchain-sync (excluded from the per-block stream, the
-    // incremental catch-up, AND these snapshots). A serving node does not converge them via
-    // sync: the explorer serves the consensus-relevant ones (state_checkpoints,
-    // capability_snapshots, cross_chain_matches) from the MANDATORY co-located hub DB on the
-    // same server, with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
-    //
-    // IMPORTANT: a follower node that lacks a co-located hub DB (hub-less validator) will
-    // have empty tables for oracle_prices, capability_snapshots, cross_chain_calls,
-    // cross_chain_matches, and state_checkpoints. This is by design and not a replication
-    // gap: these rows are hub-driven state that the node must receive from its OWN hub
-    // subscription (hub_db_sync), not from the sync snapshot stream. A hub-less validator
-    // cannot serve hub-dependent API surfaces correctly; provision a hub connection before
-    // running in validator mode.
-    'oracle_prices', 'capability_snapshots', 'cross_chain_calls', 'cross_chain_matches',
-    'state_checkpoints',
-    // state_tree_roots: the follower recomputes its OWN row at every snapshot apply
-    // (ClientApplier.seedSnapshotRoots, rebuilt from local balances/stakes; never
-    // compared to the source). The table also carries computed_at (CURRENT_TIMESTAMP),
-    // a per-node wall-clock value, so shipping the source's rows adds pure
-    // nondeterminism to the snapshot and is never consumed by the follower.
-    'state_tree_roots',
+    ...tableLifecycle.tablesWhere(t =>
+        ['local', 'hub-mirror', 'follower-derived'].includes(t.replication)),
     // mempool_transactions: node-local, non-deterministic observation state (its own
-    // schema comment forbids sharing raw values across nodes). Every other channel
-    // already excludes it: the per-block stream (replicatedTables.js), the incremental
-    // snapshot (decoderSkip in streamIncrementalSnapshot), and the /status completeness
-    // count (getReplicatedTables). Listing it here closes the one remaining leak: the
-    // FULL snapshot used to ship the source's bootstrap-instant mempool, freezing it
-    // forever on full-bootstrap decoder replicas while incremental-bootstrap replicas
-    // held zero rows for the same table.
+    // schema comment forbids sharing raw values across nodes). It is a DECODER-DB
+    // table with no registry entry (the registry covers the indexer DB). Every other
+    // channel already excludes it: the per-block stream (replicatedTables.js), the
+    // incremental snapshot (decoderSkip in streamIncrementalSnapshot), and the
+    // /status completeness count (getReplicatedTables). Listing it here closes the
+    // one remaining leak: the FULL snapshot used to ship the source's
+    // bootstrap-instant mempool, freezing it forever on full-bootstrap decoder
+    // replicas while incremental-bootstrap replicas held zero rows for the same table.
     'mempool_transactions',
     // sync_halt, sync_state: replica-local durable CONTROL tables the source never
-    // ships (created by db.verifySyncTables for both dbTypes). sync_halt holds the
-    // durable divergence-halt audit record; sync_state holds the bootstrap_base:<dbType>
-    // truncation-floor marker and the index_map_mismatch_count counters. They are not
-    // in any snapshot payload, so without listing them here the full-snapshot clear loop
-    // (ClientApplier: enumerate all BASE tables, DELETE every one not in this set) would
-    // wipe both on every full-snapshot apply, including the runtime oversized-incremental
-    // recovery fallback on a live replica: erasing halt/forensic history and the persisted
-    // bootstrap/verification posture _persistBootstrapBase wrote. They are exactly the
-    // node-local control state this exclusion set exists to protect.
+    // ships (created by db.verifySyncTables for both dbTypes; no registry entry).
+    // sync_halt holds the durable divergence-halt audit record; sync_state holds the
+    // bootstrap_base:<dbType> truncation-floor marker and the
+    // index_map_mismatch_count counters. They are not in any snapshot payload, so
+    // without listing them here the full-snapshot clear loop (ClientApplier:
+    // enumerate all BASE tables, DELETE every one not in this set) would wipe both
+    // on every full-snapshot apply, including the runtime oversized-incremental
+    // recovery fallback on a live replica: erasing halt/forensic history and the
+    // persisted bootstrap/verification posture _persistBootstrapBase wrote. They are
+    // exactly the node-local control state this exclusion set exists to protect.
     'sync_halt', 'sync_state',
+]);
+
+// Tables the SOURCE never streams (full or incremental) but that are deliberately
+// NOT in OPERATOR_LOCAL_TABLES: the applier's full-snapshot clear loop must keep
+// clearing them so a replica that imported a foreign copy before the exclusion
+// existed is healed on its next full-snapshot apply (OPERATOR_LOCAL_TABLES is
+// clear-protected, which would freeze those foreign rows forever).
+//
+// merkle_reorgs: node-local transparency-log reorg audit (server-side/indexer-only
+// per its schema header; written by TransparencyLog.pruneFrom, new_root backfilled
+// by commitEpoch). No cursor column, no replica reader, not in getReplicatedTables.
+// Before this exclusion it rode full snapshots (shipping another node's audit
+// trail, wall-clock detected_at included) and hit the incremental path's
+// action_index fall-through, where its errno 1054 was silently swallowed; now the
+// omission is a classification on record. The registry-exhaustiveness test
+// (test/unit/syncTableClassification.test.js) keeps the next sync-owned table from
+// falling through the same way.
+const SOURCE_UNSTREAMED_TABLES = new Set([
+    'merkle_reorgs',
 ]);
 
 // Guards a gzip snapshot stream against a slow or vanished reader. The snapshot
@@ -219,7 +256,8 @@ class SnapshotBuilder {
             [db.dbName],
             conn
         );
-        let allTables = rows.map(r => r.table_name || r.TABLE_NAME).filter(t => !OPERATOR_LOCAL_TABLES.has(t));
+        let allTables = rows.map(r => r.table_name || r.TABLE_NAME)
+            .filter(t => !OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t));
         return orderSnapshotTables(allTables);
     }
 
@@ -687,8 +725,10 @@ class SnapshotBuilder {
             // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
             // the snapshot's block height. Window starts at sinceBlock to match the
             // `block_index >= sinceBlock` data scoping above (over-inclusion is a
-            // harmless UPSERT). tokens.escrow_action_index is omitted; the follower
-            // re-derives it locally (ClientApplier._maybeRederiveEscrow).
+            // harmless UPSERT). tokens.escrow_action_index rides along (full-row
+            // carry); the follower also re-derives it locally when escrow tables
+            // move (ClientApplier._maybeRederiveEscrow), so the carried value is
+            // convergent, not the gate's only writer.
             await writer.write('}');
             if(dbType === 'indexer'){
                 let delay = activationDelayBlocks(coin);
@@ -823,34 +863,43 @@ class SnapshotBuilder {
     // an insert-only delta cannot replay the UPDATE/DELETE convergence. A truncated
     // replica therefore never seeds it and an incrementally-caught-up replica drifts.
     // This endpoint powers the client's periodic replace-table reconcile
-    // (ClientSync._reconcileDispensers): it pages the FULL current table by the
-    // composite (tx_index, address_id) keyset so the client can rebuild it verbatim.
+    // (ClientSync._reconcileDispensers): it serves the FULL current table in ONE
+    // response so the client rebuilds it from a single point-in-time image.
     // Decoder-only. Returns {schema_version, max_tx, max_addr, has_more, rows:[...]}.
+    //
+    // Deliberately NOT paged (item #2285): the keyset-cursor stability rationale
+    // (borrowed from streamTableRowsById) only holds for INSERT-only tables, and
+    // dispensers is exactly the table it does not hold for - the decoder
+    // soft-expires rows in place (UPDATE expired_block_index), so a soft-expire
+    // landing on an already-served page after that page shipped left the client's
+    // assembled walk carrying a torn cross-instant image, which
+    // applyDispensersReplace then wrote in as authoritative. The count backstop
+    // (_verifyTableCounts) structurally cannot see it: an UPDATE leaves counts
+    // equal on both sides. A single SELECT is statement-consistent in InnoDB, so
+    // one response can never mix instants; dispensers is small next to the
+    // multi-million-row lookups that forced paging onto the id-cursor rail. The
+    // cursor params stay honoured (filtered within the same single query) and
+    // has_more is always false, so an old paging client simply completes its walk
+    // in one round trip.
     async streamDispensers(db, afterTx, afterAddr, limit, res){
         let dbType = (db && db.dbType) || 'indexer';
         if(dbType !== 'decoder'){
             return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
         }
-        let lim = Number.isFinite(limit) ? Math.floor(limit) : SnapshotBuilder.ROWS_PAGE_DEFAULT;
-        lim = Math.max(1, Math.min(SnapshotBuilder.ROWS_PAGE_MAX, lim));
 
-        // Keyset pagination on the composite PK. The first page (no cursor) has no
-        // lower bound; later pages use the strict (tx_index, address_id) > (last)
-        // tuple, which ORDER BY tx_index, address_id makes stable across requests.
         let rows;
         if(Number.isFinite(afterTx) && Number.isFinite(afterAddr)){
             rows = await db.doQuery(
                 "SELECT * FROM `dispensers` WHERE (tx_index > ? OR (tx_index = ? AND address_id > ?)) " +
-                "ORDER BY tx_index ASC, address_id ASC LIMIT ?",
-                [afterTx, afterTx, afterAddr, lim]
+                "ORDER BY tx_index ASC, address_id ASC",
+                [afterTx, afterTx, afterAddr]
             );
         } else {
             rows = await db.doQuery(
-                "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC LIMIT ?",
-                [lim]
+                "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC"
             );
         }
-        let hasMore = rows.length === lim;
+        let hasMore = false;
         let maxTx   = rows.length ? Number(rows[rows.length - 1].tx_index)   : (Number.isFinite(afterTx)   ? afterTx   : 0);
         let maxAddr = rows.length ? Number(rows[rows.length - 1].address_id) : (Number.isFinite(afterAddr) ? afterAddr : 0);
         let schemaVersion = SCHEMA_VERSION[dbType];
@@ -885,4 +934,5 @@ class SnapshotBuilder {
 module.exports = SnapshotBuilder;
 module.exports.SnapshotStreamWriter = SnapshotStreamWriter;
 module.exports.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
+module.exports.SOURCE_UNSTREAMED_TABLES = SOURCE_UNSTREAMED_TABLES;
 module.exports.orderSnapshotTables = orderSnapshotTables;

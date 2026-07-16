@@ -24,6 +24,7 @@
 
 const balanceHelpers = require('./balance-helpers');
 const lifecycle      = require('./tableLifecycle');
+const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 
 class ClientRollback {
@@ -75,17 +76,23 @@ class ClientRollback {
         // lookup id is ever reintroduced into a consensus-visible projection, these orphan
         // rows would silently fork hashes after a reorg and this skip would become a bug.
 
-        // Block-scoped tables, deleted by block_index. Order matters: transactions
-        // is listed before blocks (tx rows scope the tx-scoped tables above them).
-        this.decoderBlockTables = ['transactions', 'blocks'];
+        // Block-scoped tables, deleted by block_index. Derived from the decoder
+        // replication topology (the same source ServerPoller streams from) so the
+        // stream and rollback sides can no longer drift apart table-by-table,
+        // mirroring the lifecycle-derived indexer lists above. Order matters:
+        // rollback deletes transactions before blocks (tx rows scope the tx-scoped
+        // tables above them), while the topology lists blocks first - hence the
+        // copy-and-reverse.
+        this.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
 
         // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
-        // dispensers is intentionally absent: it is no longer per-block replicated
-        // (the decoder live-prunes it, which the block stream can't model (see
-        // replicatedTables.js)); it converges via the full snapshot only. Deleting
-        // its rows on a reorg would corrupt that full-snapshot state with no live
-        // stream to restore them, so a reorg leaves dispensers untouched.
-        this.decoderTxScopedTables = ['transaction_outputs'];
+        // Also topology-derived. dispensers is absent from the topology's txScoped by
+        // design: it is not per-block replicated (the decoder live-prunes it, which
+        // the block stream can't model (see replicatedTables.js)); it converges via
+        // the full snapshot only. Deleting its rows on a reorg would corrupt that
+        // full-snapshot state with no live stream to restore them, so a reorg leaves
+        // dispensers untouched.
+        this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
     }
 
     // Roll back all data at or after the given block_index.

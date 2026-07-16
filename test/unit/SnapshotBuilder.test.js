@@ -563,14 +563,16 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(parsed.rows.length, 2);
             assert.strictEqual(parsed.max_tx, 7, 'max_tx is the last row tx_index');
             assert.strictEqual(parsed.max_addr, 2, 'max_addr is the last row address_id');
-            assert.strictEqual(parsed.has_more, false, 'short page -> no more');
+            assert.strictEqual(parsed.has_more, false, 'single-response contract: never more');
             let q = db.doQuery.firstCall.args[0];
-            assert.ok(/ORDER BY tx_index ASC, address_id ASC LIMIT \?/.test(q));
-            assert.ok(!/WHERE/.test(q), 'first page has no cursor predicate');
-            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [50000]);
+            assert.ok(/ORDER BY tx_index ASC, address_id ASC/.test(q));
+            assert.ok(!/LIMIT/.test(q),
+                'no LIMIT: the full table must ship in ONE statement-consistent response ' +
+                '(item #2285: cross-request pages tear under in-place soft-expires)');
+            assert.ok(!/WHERE/.test(q), 'no cursor -> no predicate');
         });
 
-        it('paged cursor binds the composite (tx_index, address_id) keyset and sets has_more on a full page', async function(){
+        it('honours a legacy cursor within the same single response and never reports more', async function(){
             let db = createMockDb();
             db.dbType = 'decoder';
             db.doQuery.resolves([{ tx_index: 8, address_id: 1 }, { tx_index: 8, address_id: 4 }, { tx_index: 9, address_id: 0 }]);
@@ -583,24 +585,12 @@ describe('SnapshotBuilder', function(){
                 builder.streamDispensers(db, 8, 1, 3, res);
             });
             let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
-            assert.strictEqual(parsed.has_more, true, 'rows.length === limit -> more pages remain');
+            assert.strictEqual(parsed.has_more, false,
+                'has_more is always false so an old paging client completes in one round trip');
             let q = db.doQuery.firstCall.args[0];
             assert.ok(/WHERE \(tx_index > \? OR \(tx_index = \? AND address_id > \?\)\)/.test(q), 'composite keyset predicate');
-            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [8, 8, 1, 3]);
-        });
-
-        it('clamps an oversized limit to the ceiling', async function(){
-            let db = createMockDb();
-            db.dbType = 'decoder';
-            db.doQuery.resolves([]);
-            let res = new PassThrough();
-            res.on('data', () => {});
-            res.setHeader = sinon.stub();
-            await new Promise((resolve) => {
-                res.on('finish', resolve);
-                builder.streamDispensers(db, NaN, NaN, 9999999, res);
-            });
-            assert.strictEqual(db.doQuery.firstCall.args[1][0], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
+            assert.ok(!/LIMIT/.test(q), 'legacy limit arg is ignored: no paging');
+            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [8, 8, 1]);
         });
     });
 

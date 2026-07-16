@@ -64,10 +64,15 @@
  *     current tokens row; the follower's upsert overwrites supply on the PRIMARY-KEY match.
  *     NOT mirrored in stateHash.js: supply is deliberately not in any hash preimage.
  *
- * tokens.escrow_action_index is intentionally NOT carried here: it is re-derived
- * on the follower from the already-replicated offer/status tables (the same
- * re-derive ClientRollback runs on reorg), so it needs no wire field. See
- * ClientApplier._maybeRederiveEscrow.
+ * tokens.escrow_action_index IS carried here (the tokens class selects `t.*` and
+ * the follower's upsert writes every column), landing the source's own
+ * authoritative gate value on the replica. The follower ALSO re-derives it from
+ * the already-replicated offer/status tables whenever a payload touches an
+ * escrow-relevant table (ClientApplier._maybeRederiveEscrow, the forward-apply
+ * counterpart of the reorg re-derive in ClientRollback), so the wire value is a
+ * convergent carry and the local derive is the corrective pass, not the sole
+ * writer. Note the derive is NOT triggered by updated_rows itself, only by
+ * payload.data tables.
  *
  ********************************************************************/
 

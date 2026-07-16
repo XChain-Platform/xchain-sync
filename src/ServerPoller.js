@@ -359,8 +359,12 @@ class ServerPoller {
             // source's live tip, and a row re-mutated right after B streamed its
             // future state under B's payload, halting a strict follower's
             // apply-time recompute (deepdive H-P2). During a catch-up burst the
-            // pin still bounds every read to one view (the batch tip), which
-            // re-emission at each subsequent window then converges.
+            // pin still bounds every read to one view (the batch tip), so blocks
+            // B < snapTip carry tip-state updated_rows; those blocks ship
+            // state_hash NULL (burst exemption in _buildBlockPayload) because the
+            // follower's apply-time recompute at B would otherwise halt on the
+            // future value, while the batch as a whole converges to exact tip
+            // state by its last block.
             let snapConn = await this.db.beginReadSnapshot();
             try {
                 // The snapshot's own tip is the batch authority: it may sit ahead of
@@ -372,7 +376,7 @@ class ServerPoller {
                 if(snapTip != null) streamTo = snapTip;
                 while(this.lastPolledBlock < streamTo && blocksProcessed < 100){
                     let nextBlock = this.lastPolledBlock + 1;
-                    let payload = await this._buildBlockPayload(nextBlock, snapConn);
+                    let payload = await this._buildBlockPayload(nextBlock, snapConn, snapTip);
                     if(payload){
                         // Record in transparency log (indexer only; decoder has no synthetic hashes)
                         if(this.transparencyLog){
@@ -484,7 +488,10 @@ class ServerPoller {
     // the reads run at the source's live tip, so a surviving row mutated again right
     // after this block streamed its FUTURE state under this block's payload and a
     // strict follower's apply-time recompute halted on the mismatch (deepdive H-P2).
-    async _buildBlockPayload(block_index, conn){
+    // viewTip: the pinned snapshot's own tip (db.getLastBlock(conn)); when it sits
+    // ahead of block_index (catch-up burst) the indexer payload's state_hash is
+    // shipped NULL, see the burst-exemption comment at the state_hash assignment.
+    async _buildBlockPayload(block_index, conn, viewTip){
         let hashRow = await this.db.getBlockHashRow(block_index, conn);
         if(!hashRow) return null;
 
@@ -512,7 +519,23 @@ class ServerPoller {
             // sync_meta / the Merkle leaf / the hub-signed checkpoint; a follower with
             // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
             // for blocks indexed before the feature (the follower then skips the check).
-            payload.state_hash    = hashRow.state_hash;
+            //
+            // Burst exemption: during a catch-up batch the pinned view sits at the batch
+            // tip, so updated_rows for every block B < viewTip carry row state as of the
+            // tip, not as of B (the tick set is B-scoped but `SELECT t.*` reads the pinned
+            // view). The follower's apply-time recompute of state_hash(B) reads those rows
+            // back and would halt on a value the source never committed at B, even though
+            // the replica converges to exact tip state by the end of the batch (each later
+            // mutation re-emits its row under its own block). Ship NULL for those blocks so
+            // the follower takes its existing pre-feature skip path -- the same posture the
+            // incremental-snapshot channel has by design (state_hash-exempt, consistent at
+            // its own view tip). Steady-state blocks (viewTip == B, the overwhelmingly
+            // common case) keep the full check; ledger/actions/contract hashes and the
+            // state-commitment roots are B-scoped committed rows and stay verified on every
+            // path.
+            payload.state_hash = (viewTip != null && Number(viewTip) > block_index)
+                ? null
+                : hashRow.state_hash;
 
             // Light-client state-commitment roots (SPV spec sec.4-5). Top-level fields
             // ONLY, like state_hash: NOT in payload.data (the follower computes its own
@@ -824,9 +847,11 @@ class ServerPoller {
         // by an earlier block's action). Carry their current full state in a separate
         // top-level `updated_rows` map so the follower can UPSERT them; without this
         // every forward in-place mutation is silently dropped on the replica. Indexer
-        // only (decoder has none of these tables). tokens.escrow_action_index is NOT
-        // included; the follower re-derives it from the replicated offer/status
-        // tables (ClientApplier._maybeRederiveEscrow). Kept OUT of payload.data so an
+        // only (decoder has none of these tables). tokens.escrow_action_index rides
+        // along (the tokens class carries the full row); the follower additionally
+        // re-derives it from the replicated offer/status tables when a payload
+        // touches an escrow table (ClientApplier._maybeRederiveEscrow), so the wire
+        // value is a convergent carry, not the gate's only writer. Kept OUT of payload.data so an
         // old follower that doesn't recognise the field simply ignores it (its apply
         // loop iterates payload.data only) rather than mis-applying a non-row map.
         if(this.dbType !== 'decoder'){

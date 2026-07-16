@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POLL_FINALIZE_TABLES` updated_rows class: the in-place poll finalization flip on a surviving `polls` row now reaches followers, with the matching re-open reset in `ClientRollback` (mirrors the source indexer).
 - `_insertRows` unit coverage pinning the full-dump write modes: `merkle_epochs` -> `INSERT IGNORE` and `markets`/`attest_validator_stats` -> `INSERT ... ON DUPLICATE KEY UPDATE` covering every column, so a future edit can't silently drop either mode.
 
+## [1.7.2] - 2026-07-16
+
+### Fixed
+- Burst-built blocks ship state_hash null via the existing NULL-skip gate so the batch-tip updated_rows vs apply-time state_hash mismatch cannot false-halt ().
+- escrow_action_index wire-carry semantics documented consistently at all 5 comment sites ().
+- merkle_reorgs classified via new SOURCE_UNSTREAMED_TABLES set in SnapshotBuilder; ClientApplier heals already-imported foreign copies; registry-exhaustiveness test guard ().
+- streamDispensers serves the full remaining set in one statement-consistent response, eliminating torn cross-request reconciles ().
+- OPERATOR_LOCAL_TABLES derived from the tableLifecycle registry; F-5 rewritten to two-direction set-equality ().
+- ClientRollback decoder table order derived from replicatedTables.getTopology('decoder') instead of hand-copied literals ().
+- Orphan-sweep parity guard derives from lifecycleTwin.ORPHAN_SWEEPS replica flags with table-keyed regexes and key-set equality, adding the icons replica sweep ().
+- Vacuous decoder-exclusion test moved into the decoder describe block with a by-value 8-table pin ().
+
+
 ## [1.7.1] - 2026-06-20
 
 ### Security
