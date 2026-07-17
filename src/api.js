@@ -218,6 +218,9 @@ async function startApi(){
             // on each successful streamFullSnapshot completion; 0 until first serve).
             let builder = syncService.getSnapshotBuilder();
             row.snapshots_served = builder ? (builder.snapshotsServed || 0) : 0;
+            // Lifetime count of snapshot requests rejected 503 by the per-Database
+            // concurrency cap ; a growing value flags a bootstrap stampede.
+            row.snapshots_rejected = builder ? (builder.snapshotsRejected || 0) : 0;
             return row;
         }
 

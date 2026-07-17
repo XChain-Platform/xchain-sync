@@ -246,6 +246,56 @@ class SnapshotBuilder {
         this.trailingTables = TRAILING_TABLES;
 
         this.pageSize = 10000;
+
+        // In-flight long-lived snapshot streams per Database instance .
+        // ServerPoller and the /snapshot routes share ONE Database (pool of
+        // DB_POOL_SIZE, default 5) per chain:network:dbType, and each full or
+        // incremental snapshot pins a pool connection for the whole stream
+        // (beginReadSnapshot). The rate limiter is per-IP only, so N validators
+        // bootstrapping at once (a flag-day cohort) could pin every connection
+        // and starve the poller's ~3s getLastBlock acquire, stalling live block
+        // broadcast. This semaphore caps concurrent streams per Database so at
+        // least one connection is always free for the poller; excess requests
+        // get 503 + Retry-After and the client retries.
+        this._inflightSnapshots = new Map();
+    }
+
+    // Per-Database cap on concurrent long-lived snapshot streams. Default is
+    // poolSize - 2 (one connection reserved for ServerPoller, one for other
+    // short reads like /status). MAX_CONCURRENT_SNAPSHOTS overrides, but is
+    // always clamped to [1, poolSize - 1] so no configuration can hand the
+    // poller's last connection to a snapshot stampede.
+    _snapshotCap(db){
+        let poolSize = (db && db.connectionPoolParams && db.connectionPoolParams.connectionLimit)
+            || parseInt(process.env.DB_POOL_SIZE) || 5;
+        let cap = parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS);
+        if(!Number.isFinite(cap)) cap = poolSize - 2;
+        return Math.max(1, Math.min(cap, poolSize - 1));
+    }
+
+    // Try to reserve a snapshot-stream slot for this Database. On saturation,
+    // answers the request itself with 503 + Retry-After (fail fast rather than
+    // queue: a queued acquire would still pin the caller and hide the overload
+    // from the client's retry logic) and returns false.
+    _acquireSnapshotSlot(db, res){
+        let inflight = this._inflightSnapshots.get(db) || 0;
+        if(inflight >= this._snapshotCap(db)){
+            this.snapshotsRejected = (this.snapshotsRejected || 0) + 1;
+            res.setHeader('Retry-After', '30');
+            res.status(503).json({
+                error: 'Too many concurrent snapshot streams; retry later',
+                code: 'SNAPSHOT_BUSY'
+            });
+            return false;
+        }
+        this._inflightSnapshots.set(db, inflight + 1);
+        return true;
+    }
+
+    _releaseSnapshotSlot(db){
+        let inflight = this._inflightSnapshots.get(db) || 0;
+        if(inflight <= 1) this._inflightSnapshots.delete(db);
+        else this._inflightSnapshots.set(db, inflight - 1);
     }
 
     // Discover all tables in the database and return them in dependency order.
@@ -270,6 +320,17 @@ class SnapshotBuilder {
     // a busy source produces mixed-block payloads that fail validator hash
     // verification on bootstrap.
     async streamFullSnapshot(db, res){
+        // Concurrency gate : reject with 503 instead of pinning yet
+        // another pool connection when the per-Database stream cap is reached.
+        if(!this._acquireSnapshotSlot(db, res)) return;
+        try {
+            await this._streamFullSnapshotLocked(db, res);
+        } finally {
+            this._releaseSnapshotSlot(db);
+        }
+    }
+
+    async _streamFullSnapshotLocked(db, res){
         let startedAt = Date.now();
         let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
@@ -392,6 +453,17 @@ class SnapshotBuilder {
     //     Without this, an incrementally-caught-up follower would never receive
     //     events rows for the gap and would silently drift behind the source.
     async streamIncrementalSnapshot(db, sinceBlock, res, coin, opts){
+        // Concurrency gate : same per-Database stream cap as the full
+        // snapshot; both hold a REPEATABLE READ pool connection end-to-end.
+        if(!this._acquireSnapshotSlot(db, res)) return;
+        try {
+            await this._streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts);
+        } finally {
+            this._releaseSnapshotSlot(db);
+        }
+    }
+
+    async _streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts){
         // opts.skipLookups: omit the append-only `.index` lookup tables (index_*,
         // and for the decoder pubkeys/events) from this response. A truncated /
         // fast-chain replica syncs those separately via the id-cursor paged route
