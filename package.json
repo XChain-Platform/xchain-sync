@@ -52,7 +52,8 @@
     "test:chaos": "mocha --timeout 240000 --recursive 'test/chaos/**/*.test.js'",
     "test:mutate": "npx stryker run test/mutation/stryker.config.json",
     "test:mutate:quick": "npx stryker run test/mutation/stryker.quick.config.json",
-    "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental"
+    "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental",
+    "test:boundary": "mocha --timeout 5000 --recursive 'test/boundary/**/*.boundary.test.js'"
   },
   "overrides": {
     "decimal.js": "10.4.3",

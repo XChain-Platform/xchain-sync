@@ -114,13 +114,20 @@ class TestDatabase {
     }
 
     async getBlockHashRow(block_index, conn) {
+        // Mirror src/db.js: the fourth (replication-integrity) state_hash is
+        // surfaced via the state_hash_id join so ServerPoller._buildBlockPayload can
+        // ship it and a follower with VERIFY_STATE_HASH can recompute + compare.
+        // NULL for blocks that never stored one (the common fixture case), which the
+        // follower skips exactly as it does for pre-feature blocks.
         let rows = await this.doQuery(`SELECT
             b.block_index, b.block_time,
-            t1.hash as ledger_hash, t2.hash as actions_hash, t3.hash as contract_hash
+            t1.hash as ledger_hash, t2.hash as actions_hash, t3.hash as contract_hash,
+            t4.hash as state_hash
             FROM blocks b
             LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
             LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
             LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
+            LEFT JOIN index_transactions t4 ON (t4.id=b.state_hash_id)
             WHERE b.block_index=?`, [block_index], conn);
         return rows.length > 0 ? rows[0] : null;
     }

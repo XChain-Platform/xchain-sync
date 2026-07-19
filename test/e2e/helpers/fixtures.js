@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const BlockHasher = require('../../../src/BlockHasher');
 const Utility = require('../../../src/utility');
 const { rebuildBalances } = require('../../../src/balance-helpers');
+const { activationDelayBlocks, gasTickSymbol } = require('../../../src/consensus-constants');
 
 const _util = new Utility();
 
@@ -352,11 +353,39 @@ async function seedLargeBlock(db, blockIndex, actionCount) {
     await rebuildBalances(db);
 }
 
+// Compute and COMMIT the replication-integrity state_hash (the fourth hash) for an
+// already-seeded block, exactly as the indexer's db.getBlockHashes state_hash branch
+// does: buildStateHashData over the source's CURRENT rows + the shared getDataHash,
+// stored on blocks.state_hash_id via index_transactions. seedBlocks commits only the
+// three consensus hashes; a scenario that must exercise the follower's apply-time
+// VERIFY_STATE_HASH check (an in-place mutation on a surviving row carried by the
+// updated_rows channel) needs this fourth hash too, or the source ships state_hash
+// NULL and the follower takes its pre-feature skip path. Computed APPLY-TIME
+// (tip = blockIndex) so it is byte-identical to what a follower recomputes at apply
+// time (BlockHasher.computeStateHash with the same chain/network). Call AFTER the
+// block's rows and any in-place mutation for this block are committed. Returns the
+// 64-hex state_hash.
+async function computeAndStoreStateHash(db, blockIndex, opts = {}) {
+    let chain   = opts.chain   || 'bitcoin';
+    let network = opts.network || 'mainnet';
+    let delay   = activationDelayBlocks(chain);
+    let hasher  = new BlockHasher(db, _util);
+    let stateHash = await hasher.computeStateHash(
+        blockIndex, (delay === undefined) ? null : delay, gasTickSymbol(), network, chain);
+    let res = await db.doQuery(
+        "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+        [stateHash]);
+    await db.doQuery("UPDATE blocks SET state_hash_id = ? WHERE block_index = ?",
+        [Number(res.insertId), blockIndex]);
+    return stateHash;
+}
+
 module.exports = {
     blockHash,
     buildBlock,
     seedBlocks,
     deleteBlocksFrom,
     seedLargeBlock,
-    computeAndInsertBlockHashes
+    computeAndInsertBlockHashes,
+    computeAndStoreStateHash
 };
