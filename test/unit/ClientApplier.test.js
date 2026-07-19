@@ -239,7 +239,7 @@ describe('ClientApplier', function(){
             // tables, so the bootstrap uses FK-safe row-by-row DELETEs.
             let deletes = db.doQuery.getCalls()
                 .map(c => c.args[0])
-                .filter(q => /^DELETE FROM/.test(q));
+                .filter(q => /^DELETE FROM `/.test(q)); // generic whole-table clears only, not the scoped state_tree_roots delete
             assert.deepStrictEqual(deletes, ['DELETE FROM `tableB`', 'DELETE FROM `tableA`']);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
         });
@@ -257,7 +257,7 @@ describe('ClientApplier', function(){
                 tables: { blocks: [{ block_index: 1 }] } // transactions empty on source, omitted
             };
             await applier.applyFullSnapshot(snapshot);
-            let deletes = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /^DELETE FROM/.test(q));
+            let deletes = db.doQuery.getCalls().map(c => c.args[0]).filter(q => /^DELETE FROM `/.test(q)); // generic whole-table clears only
             // Union of payload + local snapshot-eligible tables, reverse dependency order.
             assert.deepStrictEqual(deletes, ['DELETE FROM `transactions`', 'DELETE FROM `blocks`']);
             assert.strictEqual(db.commitTransaction.calledOnce, true);
@@ -284,6 +284,33 @@ describe('ClientApplier', function(){
             assert.deepStrictEqual(touched, [], 'sync_halt / sync_state must never be cleared by the snapshot apply');
         });
 
+        it('scoped-clears state_tree_roots at/above the snapshot height before seeding @regression', async function(){
+            // state_tree_roots is clear-protected (OPERATOR_LOCAL / follower-derived), so the
+            // generic clear loop leaves it untouched while its backing state_tree_nodes store is
+            // wiped and re-imported. Without a scoped delete, future-dated orphaned-fork roots
+            // (heights above the snapshot after a deep reorg + oversized-incremental fallback)
+            // survive and the follower serves them as authoritative SPV commitments. Regression
+            // for the sync-snapshot-source-parity finding: the applier must delete
+            // block_index >= snapshot height, mirroring ClientRollback's predicate.
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            };
+            await applier.applyFullSnapshot(snapshot);
+            let scoped = db.doQuery.getCalls().find(c =>
+                /DELETE FROM state_tree_roots/.test(c.args[0]) && /block_index >= \?/.test(c.args[0]));
+            assert.ok(scoped, 'a scoped DELETE FROM state_tree_roots ... block_index >= ? must be issued');
+            assert.strictEqual(scoped.args[1][scoped.args[1].length - 1], 10,
+                'the delete must be bounded at the snapshot height');
+            // It must NOT be swept up by the generic clear loop (that would prove it was not
+            // clear-protected); the generic loop uses backtick-quoted whole-table deletes.
+            let genericWipe = db.doQuery.getCalls()
+                .map(c => c.args[0])
+                .some(q => /^DELETE FROM `state_tree_roots`/.test(q));
+            assert.strictEqual(genericWipe, false, 'state_tree_roots must not be whole-table wiped by the clear loop');
+        });
+
         it('ignores node-local tables (mempool_transactions) shipped by an older source', async function(){
             let snapshot = {
                 schema_version: SCHEMA_VERSION.indexer,
@@ -303,6 +330,40 @@ describe('ClientApplier', function(){
             let snapshot = { schema_version: SCHEMA_VERSION.indexer, block_height: 10, tables: { t: [{ id: 1 }] } };
             await assert.rejects(() => applier.applyFullSnapshot(snapshot));
             assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+        });
+
+        it('aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error', async function(){
+            // Fail closed: an enumeration failure other than a schema gap (1146/1054)
+            // must propagate so the surrounding catch rolls the transaction back
+            // instead of committing a bootstrap with localTables=[], which would
+            // silently retain stale rows in tables omitted from the payload.
+            let enumErr = new Error('connection lost');
+            enumErr.errno = 2013;
+            db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).rejects(enumErr);
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            };
+            await assert.rejects(() => applier.applyFullSnapshot(snapshot), /connection lost/);
+            assert.strictEqual(db.commitTransaction.called, false);
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+        });
+
+        it('tolerates a genuine schema-gap error (1146) on local table enumeration', async function(){
+            // A missing information_schema view/table on a thin/older replica is the
+            // one enumeration failure safe to swallow; the apply proceeds with
+            // localTables=[] (payload tables only) and still commits.
+            let schemaGapErr = new Error('table does not exist');
+            schemaGapErr.errno = 1146;
+            db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).rejects(schemaGapErr);
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            };
+            await applier.applyFullSnapshot(snapshot);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
         });
 
         it('throws on a schema-version mismatch before opening a transaction', async function(){

@@ -305,8 +305,16 @@ class ClientApplier {
             // incremental fallback applies a full snapshot over a NON-empty replica),
             // and _verifyTableCounts only reports remote>local, so the stale rows
             // would never surface. schema_version equality with the source was
-            // enforced above, so the local table set mirrors the source's. The
-            // enumeration is best-effort: payload-named tables are always cleared.
+            // enforced above, so the local table set mirrors the source's.
+            // Enumeration failure must abort the apply: a missing table/column
+            // (1146/1054) is the only schema-gap failure worth tolerating, and
+            // information_schema has no such failure mode, so realistic failures
+            // here are transient/operational (connection drop, lock-wait,
+            // permissions). Those MUST propagate so the surrounding catch rolls
+            // the transaction back and the bootstrap is retried; committing with
+            // an un-enumerated table set leaves tables emptied on the source
+            // still populated locally, invisible to _verifyTableCounts. Mirrors
+            // the narrow catch at the escrow-gate rederive below.
             let localTables = [];
             try {
                 let schemaRows = await this.db.doQuery(
@@ -317,7 +325,8 @@ class ClientApplier {
                     .map(r => r.table_name || r.TABLE_NAME)
                     .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
             } catch(e){
-                console.error('Full-snapshot clear: local table enumeration failed; clearing payload tables only:', e.message);
+                console.error('Full-snapshot clear: local table enumeration failed:', e.message);
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Node-local tables (OPERATOR_LOCAL_TABLES and SOURCE_UNSTREAMED_TABLES)
@@ -355,6 +364,29 @@ class ClientApplier {
                 await this._insertRows(table, rows);
                 if(rows.length > 100)
                     console.log('  ' + table + ': ' + rows.length + ' rows');
+            }
+
+            // Scoped clear of state_tree_roots at/above the snapshot height. This table
+            // is 'follower-derived' (OPERATOR_LOCAL_TABLES), so the clear loop above is
+            // clear-protected and leaves it untouched, while its backing state_tree_nodes
+            // store (replication 'snapshot') was wiped and re-imported wholesale. On a
+            // full-snapshot apply over a NON-empty replica (the oversized-incremental
+            // recovery fallback), pre-existing root rows at heights ABOVE the snapshot
+            // height survive as future-dated, orphaned-fork roots the follower would serve
+            // as authoritative SPV commitments until a live block upserts over each height.
+            // Delete block_index >= snapshot height (seedSnapshotRoots re-inserts the row
+            // at the height right below), mirroring the predicate ClientRollback already
+            // applies to this same table (blockTables, DELETE WHERE block_index >= N).
+            // Run unconditionally, NOT gated on dbType/isStateCommitmentActive: the orphan
+            // roots must go even when state commitment is inactive on this node. Swallow
+            // only schema gaps (1146 table missing on decoder / older schemas, 1054 missing
+            // column); any other error must propagate so the outer catch rolls the txn back.
+            try {
+                await this.db.doQuery(
+                    'DELETE FROM state_tree_roots WHERE chain = ? AND network = ? AND block_index >= ?',
+                    [this.chain, this.network, snapshotData.block_height]);
+            } catch(e){
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Seed the light-client SMT at the snapshot tip so the first live block

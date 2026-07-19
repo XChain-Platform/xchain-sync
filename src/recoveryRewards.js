@@ -65,10 +65,17 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // applied_block guard restricts to genuine survivors (E < B): a row whose
         // earn-block is at/above the window streams normally via getBlockScopedRows and
         // must NOT ride this channel too.
+        // SELECT vr.* (not an explicit column subset): these rows are merged into the SAME
+        // payload array as the block-scoped validator_rewards rows (getBlockScopedRows uses
+        // SELECT *), and ClientApplier._insertRows derives its INSERT column list from
+        // rows[0] only. A narrower projection here omits `id` (the AUTO_INCREMENT PK), so a
+        // redriven-only or mixed batch would insert with a missing/NULL id and the replica
+        // would mint a locally-generated id diverging from the source's, invisible to the
+        // count-only parity check and later dropped by INSERT IGNORE on PK collision.
+        // vr.* keeps the redriven rows column-compatible with the block-scoped rows, exactly
+        // as the sibling collectMaturedCooldownCredits uses SELECT c.*.
         let rows = await db.doQuery(
-            "SELECT vr.source_id AS source_id, vr.signing_pubkey_id AS signing_pubkey_id, " +
-            "       vr.reward_type AS reward_type, vr.round_reference AS round_reference, " +
-            "       vr.amount AS amount, vr.block_index AS block_index " +
+            "SELECT vr.* " +
             "FROM validator_rewards vr " +
             "JOIN recovery_pending_rewards rpr " +
             "     ON rpr.source_id = vr.source_id AND rpr.reward_type = vr.reward_type " +

@@ -52,6 +52,19 @@ describe('collectRedrivenValidatorRewards (#5087)', function(){
         assert.deepStrictEqual(captured.args, [150, 150]);
     });
 
+    it('projects vr.* so redriven rows stay column-compatible with block-scoped rows (carry the id PK)', async function(){
+        // Regression: a narrow projection (source_id, signing_pubkey_id, reward_type,
+        // round_reference, amount, block_index) omits the validator_rewards AUTO_INCREMENT id.
+        // These rows merge into the same payload array as SELECT * block-scoped rows, and
+        // ClientApplier._insertRows keys its column list off rows[0], so a shape mismatch makes
+        // the replica mint a divergent local id. Must select the full row.
+        let captured = null;
+        let db = { doQuery: async (sql) => { captured = sql; return []; } };
+        await collectRedrivenValidatorRewards(db, 150, 150);
+        assert.match(captured, /SELECT\s+vr\.\*/, 'must project the full validator_rewards row (vr.*)');
+        assert.doesNotMatch(captured, /vr\.source_id\s+AS/, 'must not use the narrow id-omitting projection');
+    });
+
     it('passes the snapshot connection through for the REPEATABLE READ view', async function(){
         let captured = null;
         let db = { doQuery: async (sql, args, conn) => { captured = conn; return []; } };

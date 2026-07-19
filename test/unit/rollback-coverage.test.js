@@ -49,6 +49,14 @@ const Utility        = require('../../src/utility');
 
 // ServerPoller's constructor only assigns the per-dbType table lists (no DB or
 // network work), so we can read them straight off a stub-backed instance.
+const replicatedTablesMod = require('../../src/replicatedTables');
+
+// The `special` bucket (stream:special) carries replicated-but-not-per-scope-extracted
+// tables: sync_meta on indexer, dispensers on decoder. ServerPoller never assigns it to a
+// per-scope list, but the /status completeness count DOES include it
+// (replicatedTables.getReplicatedTables -> t.special). Fold it into the coverage universe
+// so a future stream:special table lacking replica-rollback handling can't pass CI while
+// accumulating orphaned rows on every replica after a reorg.
 function replicatedTables(dbType){
     const sp = new ServerPoller(null, null, { dbType }, null, null, {}, new Utility());
     const universe = new Set([
@@ -57,9 +65,20 @@ function replicatedTables(dbType){
         ...sp.actionScopedTables,
         ...(sp.infraTables || []),
         ...sp.indexTables,
+        ...(replicatedTablesMod.getTopology(dbType).special || []),
     ]);
     return { sp, universe: [...universe].sort() };
 }
+
+// stream:special tables deliberately NOT rolled back row-by-row on reorg, with the reason.
+// Kept in the test (not the registry) because these tables carry a non-'exempt'
+// replicaRollback mode for other paths; the exemption is specifically about the reorg
+// row-delete. dispensers: the decoder live-prunes it (soft-expire) and it converges via the
+// full snapshot only, so deleting its rows on a reorg would corrupt full-snapshot state with
+// no live stream to restore them (ClientRollback.js: decoderTxScopedTables comment).
+const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
+    dispensers: 'decoder live-prunes; converges via full snapshot, untouched on reorg',
+};
 
 // Append-only / id-keyed dedup lookups whose orphan rows are inert (re-sent INSERT
 // IGNORE on forward apply). NOTE: in the INDEXER db, index_addresses / index_tickers are
@@ -119,6 +138,19 @@ describe('Rollback coverage guard @regression', function(){
         assert.ok(universe.length > 50, `expected >50 replicated indexer tables, found ${universe.length}`);
     });
 
+    it('stream:special bucket tables join the reorg-coverage universe', function(){
+        // Regression for the gap where the guard's universe was built from ServerPoller's
+        // per-scope lists only, omitting the stream:special bucket that /status counts. A
+        // future stream:special table with no replica-rollback handling would then pass CI
+        // while orphaning rows on every replica after a reorg.
+        const idx = replicatedTables('indexer').universe;
+        assert.ok(idx.includes('sync_meta'),
+            'indexer stream:special table sync_meta must be inside the reorg-coverage universe');
+        const dec = replicatedTables('decoder').universe;
+        assert.ok(dec.includes('dispensers'),
+            'decoder stream:special table dispensers must be inside the reorg-coverage universe');
+    });
+
     it('every replicated INDEXER table is handled on reorg', function(){
         const { universe } = replicatedTables('indexer');
         const covered = new Set([
@@ -151,6 +183,7 @@ describe('Rollback coverage guard @regression', function(){
             ...rollback.decoderBlockTables,
             ...rollback.decoderTxScopedTables,
             ...Object.keys(ROLLBACK_EXEMPT),
+            ...Object.keys(SPECIAL_BUCKET_ROLLBACK_EXEMPT),
         ]);
         const uncovered = universe.filter(t => !covered.has(t) && !isLookupTable(t));
 
