@@ -260,6 +260,15 @@ async function startApi(){
             // this replica cannot answer pre-base history queries.
             row.truncated      = clientState.truncated || false;
             row.bootstrap_base = clientState.bootstrapBase != null ? clientState.bootstrapBase : null;
+            // Multi-source Byzantine quorum surface : the M-of-N agreement
+            // threshold, the active/configured denominators, how many sources agreed on
+            // the last applied block, and any Byzantine-evicted sources. Lets a monitor
+            // flag "N sources but only one distinct operator" and see evictions.
+            row.source_quorum      = clientState.sourceQuorum != null ? clientState.sourceQuorum : null;
+            row.sources_configured = clientState.sourcesConfigured != null ? clientState.sourcesConfigured : null;
+            row.sources_active     = clientState.sourcesActive != null ? clientState.sourcesActive : null;
+            row.sources_agreeing   = clientState.sourcesAgreeing != null ? clientState.sourcesAgreeing : null;
+            row.sources_evicted    = Array.isArray(clientState.sourcesEvicted) ? clientState.sourcesEvicted : [];
         }
         // Per-table row counts for replica-completeness verification.
         //

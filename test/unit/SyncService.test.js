@@ -421,7 +421,9 @@ describe('SyncService', function(){
         it('returns nulls/false when no sync exists for the key', function(){
             assert.deepStrictEqual(service.getClientSyncState('bitcoin', 'mainnet'),
                 { lastKnownServerBlock: null, sourceHeightStale: null, halted: false,
-                  haltInfo: null, truncated: false, bootstrapBase: null });
+                  haltInfo: null, truncated: false, bootstrapBase: null,
+                  sourceQuorum: null, sourcesConfigured: null, sourcesActive: null,
+                  sourcesAgreeing: null, sourcesEvicted: [] });
         });
         it('reports a live sync, including halt info when halted', function(){
             let fakeSync = {
@@ -430,7 +432,12 @@ describe('SyncService', function(){
                 isHalted: () => true,
                 getHaltInfo: () => ({ blockIndex: 42, reason: 'divergence' }),
                 isTruncated: () => true,
-                getBootstrapBase: () => 850000
+                getBootstrapBase: () => 850000,
+                getSourceQuorum: () => 2,
+                getConfiguredSourceCount: () => 3,
+                getActiveSourceCount: () => 2,
+                getSourcesAgreeing: () => 2,
+                getEvictedSources: () => ['http://b:3006']
             };
             service.clientSyncs.set('bitcoin:mainnet:indexer', fakeSync);
             let state = service.getClientSyncState('bitcoin', 'mainnet');
@@ -440,17 +447,27 @@ describe('SyncService', function(){
             assert.deepStrictEqual(state.haltInfo, { blockIndex: 42, reason: 'divergence' });
             assert.strictEqual(state.truncated, true);
             assert.strictEqual(state.bootstrapBase, 850000);
+            assert.strictEqual(state.sourceQuorum, 2);
+            assert.strictEqual(state.sourcesConfigured, 3);
+            assert.strictEqual(state.sourcesActive, 2);
+            assert.strictEqual(state.sourcesAgreeing, 2);
+            assert.deepStrictEqual(state.sourcesEvicted, ['http://b:3006']);
         });
         it('omits halt info for a healthy sync', function(){
             service.clientSyncs.set('bitcoin:mainnet:indexer',
                 { lastKnownServerBlock: 7, isSourceHeightStale: () => null,
                   isHalted: () => false, getHaltInfo: () => ({}),
-                  isTruncated: () => false, getBootstrapBase: () => null });
+                  isTruncated: () => false, getBootstrapBase: () => null,
+                  getSourceQuorum: () => 1, getConfiguredSourceCount: () => 1,
+                  getActiveSourceCount: () => 1, getSourcesAgreeing: () => null,
+                  getEvictedSources: () => [] });
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.halted, false);
             assert.strictEqual(state.haltInfo, null);
             assert.strictEqual(state.truncated, false);
             assert.strictEqual(state.bootstrapBase, null);
+            assert.strictEqual(state.sourceQuorum, 1);
+            assert.deepStrictEqual(state.sourcesEvicted, []);
         });
     });
 

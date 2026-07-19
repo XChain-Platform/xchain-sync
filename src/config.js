@@ -160,6 +160,37 @@ module.exports = {
         // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
         config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
 
+        // Multi-source Byzantine quorum . SOURCE_QUORUM is the M-of-N
+        // agreement threshold the live cross-source path requires before it applies a
+        // block: >= SOURCE_QUORUM sources must publish the SAME ledger/actions/contract
+        // hash tuple. 0 (unset) selects the simple-majority default, computed from the
+        // configured source count N in ClientSync: ceil((N+1)/2). That makes N=1 behave
+        // as the single-source posture (quorum 1), N=2 demand both sources (a 1-1 split
+        // has no majority and halts, exactly as the prior pairwise path), and N=3f+1
+        // tolerate f Byzantine sources (e.g. N=4 -> quorum 3 = 2f+1). An explicit value
+        // is clamped to [1, N]. Setting it below the majority is a footgun (f colluding
+        // sources can then out-vote the honest set) and is the operator's deliberate
+        // choice. The checkpoint-quorum anchor is the only defense against ALL sources
+        // colluding; cross-source quorum only defends against a minority.
+        config['SOURCE_QUORUM'] = parseIntMin0(process.env.SOURCE_QUORUM, 0);
+
+        // Byzantine-source eviction. A source that dissents from the applied quorum
+        // majority accrues a strike per block; once its strike count within the sliding
+        // window reaches SOURCE_EVICT_THRESHOLD it is evicted from the active quorum
+        // denominator (its WebSocket is closed and not reconnected, and an alert fires
+        // on /status). Eviction preserves liveness against a Byzantine minority instead
+        // of halting on every block it contests. Never evicts below two active sources
+        // (that would collapse to a blind single-source posture); below that floor a
+        // persistent dissenter is retained and per-block no-source-quorum halts guard
+        // safety.
+        config['SOURCE_EVICT_THRESHOLD'] = parseIntMin1(process.env.SOURCE_EVICT_THRESHOLD, 3);
+
+        // Sliding-window size (in applied blocks) over which source strikes are counted
+        // toward SOURCE_EVICT_THRESHOLD. Strikes older than this many blocks behind the
+        // current block are pruned, so a source that misbehaved long ago but has since
+        // been consistent is not evicted on stale strikes.
+        config['SOURCE_STRIKE_WINDOW'] = parseIntMin1(process.env.SOURCE_STRIKE_WINDOW, 200);
+
         // Consensus safety: on a CONFIRMED cross-source hash divergence (two honest
         // sources committed different ledger/actions/contract hashes for the same
         // block; one is on a forked/Byzantine chain), HALT durably instead of just
@@ -242,6 +273,17 @@ module.exports = {
         // catch a forged tail, so the gap is logged (advisory, never a halt: withholding is
         // not proof of forgery, and halting on absence would hand an attacker a DoS-halt).
         config['CHECKPOINT_FRESHNESS_BLOCKS'] = parseIntMin1(process.env.CHECKPOINT_FRESHNESS_BLOCKS, 500);
+
+        // CHECKPOINT_FRESHNESS_STRICT : promote the freshness bound from
+        // advisory to enforced. When on, a replica whose tip trails the newest
+        // quorum-signed checkpoint by more than CHECKPOINT_FRESHNESS_BLOCKS refuses to
+        // serve the unanchored tail and HALTs durably (reason `checkpoint-freshness-
+        // stale`) instead of only logging. Default OFF: an always-on version would hand
+        // a source that withholds fresh checkpoints a halt-DoS, so only replicas that
+        // opt in accept that trade for the stronger guarantee. Only enforced once the
+        // anchor has verified at least one checkpoint (the federation is demonstrably
+        // live), so a replica that has never seen a checkpoint is not halted at startup.
+        config['CHECKPOINT_FRESHNESS_STRICT'] = (process.env.CHECKPOINT_FRESHNESS_STRICT || '').toLowerCase() === 'true';
 
         // Security: WebSocket max incoming message size in bytes (default 1 MB)
         config['WS_MAX_PAYLOAD'] = parseIntMin1(process.env.WS_MAX_PAYLOAD, 1048576);

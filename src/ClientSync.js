@@ -167,6 +167,33 @@ class ClientSync {
         // intervenes. INERT unless HASH_CONFIRM_STRICT is on with 2+ sources.
         this._strictConfirmPending = new Set();
 
+        // --- Multi-source Byzantine quorum  ---
+        // Effective agreement threshold over the configured source set. SOURCE_QUORUM=0
+        // (unset) selects the simple-majority default ceil((N+1)/2): N=1 -> 1 (single-
+        // source posture), N=2 -> 2 (a 1-1 split has no majority and halts, exactly as
+        // the prior pairwise path), N=3 -> 2, N=4 -> 3 (=2f+1, tolerates f=1 Byzantine of
+        // 3f+1). An explicit value is clamped to [1, N]. Below-majority values let f
+        // colluding sources out-vote the honest set: an operator's deliberate choice.
+        let _numSources = this.sources.length;
+        let _rawQuorum = Number(this.config['SOURCE_QUORUM'] || 0);
+        if(_rawQuorum >= 1){
+            this.sourceQuorum = Math.min(Math.max(1, _rawQuorum), Math.max(1, _numSources));
+        } else {
+            this.sourceQuorum = _numSources >= 1 ? Math.ceil((_numSources + 1) / 2) : 1;
+        }
+
+        // Byzantine-source strike accounting. Per source index, the recent block indices
+        // at which that source dissented from the applied quorum majority. Pruned to a
+        // sliding window (SOURCE_STRIKE_WINDOW blocks); a source whose live strike count
+        // reaches SOURCE_EVICT_THRESHOLD is evicted from the active quorum denominator.
+        this._sourceStrikes = new Map();    // sourceIndex -> [blockIndex, ...]
+        this._evictedSources = new Set();   // sourceIndex
+        this._sourceEvictThreshold = Math.max(1, Number(this.config['SOURCE_EVICT_THRESHOLD'] || 3));
+        this._sourceStrikeWindow   = Math.max(1, Number(this.config['SOURCE_STRIKE_WINDOW'] || 200));
+
+        // Count of sources that agreed on the most recently applied block (for /status).
+        this._lastSourcesAgreeing = null;
+
         // Applied-block heartbeat state. After committing each live block we report
         // our applied height back to the source servers so operators can observe
         // this validator's lag via the server's /status endpoint. Debounced to avoid
@@ -244,7 +271,99 @@ class ClientSync {
                 'trusts its source(s) for row content. Treat decoder sources as trusted infrastructure.'
             );
         }
+        // Cross-source quorum only defends against a MINORITY of Byzantine sources; if
+        // every configured source colludes on the same fabrication, agreement is
+        // unanimous and wrong. Only the checkpoint-quorum anchor breaks that, because
+        // its trust root is the pinned federation set, not the sources. Warn a
+        // consensus-relevant indexer replica that runs with the anchor off or with an
+        // empty pinned set, so the "I have N sources therefore I am safe" operator
+        // learns that N colluding sources still need the anchor .
+        if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] !== false){
+            let pinned = getPinnedValidators(this.chain, this.network);
+            let havePinned = Array.isArray(pinned) && pinned.length > 0;
+            if(!this.config['VERIFY_CHECKPOINT_QUORUM'] || !havePinned){
+                console.warn(
+                    'SECURITY: ' + this.chain + '/' + this.network + '/indexer replica has NO active ' +
+                    'checkpoint-quorum anchor (' +
+                    (!this.config['VERIFY_CHECKPOINT_QUORUM'] ? 'VERIFY_CHECKPOINT_QUORUM is off'
+                        : 'no pinned validator set configured') +
+                    '). Cross-source quorum only outvotes a MINORITY of Byzantine sources; if ALL ' +
+                    'configured sources collude they agree unanimously and wrong. The federation ' +
+                    'checkpoint anchor is the only trust root that catches all-sources-collude. Enable ' +
+                    'VERIFY_CHECKPOINT_QUORUM with a pinned validator set for any consensus-relevant replica.'
+                );
+            }
+        }
     }
+
+    // --- Multi-source Byzantine quorum helpers  ---
+
+    // Stable comparison key for a source's committed hash tuple.
+    _hashTupleKey(h){
+        if(!h) return 'null';
+        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash);
+    }
+
+    // Sources still eligible to vote (configured minus evicted).
+    _activeSourceCount(){ return this.sources.length - this._evictedSources.size; }
+
+    // Effective quorum, clamped to the number of active (non-evicted) sources so an
+    // eviction lowers the denominator rather than making quorum permanently unreachable.
+    _effectiveQuorum(){ return Math.min(this.sourceQuorum, Math.max(1, this._activeSourceCount())); }
+
+    // Record a divergence strike against a source for a block, prune the sliding
+    // window, and evict once the threshold is reached (subject to the keep-quorum-
+    // viable guard). Idempotent per (source, block).
+    _strikeSource(sourceIndex, blockIndex){
+        if(this._evictedSources.has(sourceIndex)) return;
+        let strikes = this._sourceStrikes.get(sourceIndex) || [];
+        if(!strikes.length || strikes[strikes.length - 1] !== blockIndex) strikes.push(blockIndex);
+        // Prune strikes older than the sliding window.
+        let floor = blockIndex - this._sourceStrikeWindow;
+        strikes = strikes.filter(b => b > floor);
+        this._sourceStrikes.set(sourceIndex, strikes);
+        console.warn('SOURCE STRIKE: ' + (this.sources[sourceIndex] || ('#' + sourceIndex)) +
+            ' dissented from the quorum majority at block ' + blockIndex + ' (' + strikes.length + '/' +
+            this._sourceEvictThreshold + ' within ' + this._sourceStrikeWindow + ' blocks) for ' +
+            this.chain + '/' + this.network + '/' + this.dbType);
+        if(strikes.length >= this._sourceEvictThreshold) this._evictSource(sourceIndex);
+    }
+
+    // Evict a Byzantine-suspected source: remove it from the active quorum denominator,
+    // close its WebSocket (reconnect is suppressed for evicted sources), and alert.
+    // Never evicts below two active sources, or cross-source verification collapses to
+    // a single-source posture.
+    _evictSource(sourceIndex){
+        if(this._evictedSources.has(sourceIndex)) return;
+        let label = this.sources[sourceIndex] || ('#' + sourceIndex);
+        if(this._activeSourceCount() - 1 < 2){
+            console.error('SOURCE EVICTION SUPPRESSED: ' + label + ' reached the strike threshold but ' +
+                'evicting it would leave fewer than 2 active sources for ' + this.chain + '/' + this.network +
+                '/' + this.dbType + '. Retaining it; per-block no-source-quorum halts still guard safety.');
+            return;
+        }
+        this._evictedSources.add(sourceIndex);
+        this._sourceStrikes.delete(sourceIndex);
+        let ws = this.wsConns[sourceIndex];
+        if(ws){
+            try { ws._xchainEvicted = true; ws.close(); } catch(e){ /* best-effort */ }
+        }
+        console.error('================================================================');
+        console.error('SOURCE EVICTED: ' + label + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        console.error('It reached ' + this._sourceEvictThreshold + ' divergence strikes within ' +
+            this._sourceStrikeWindow + ' blocks (dissented from the quorum majority). Its WebSocket is');
+        console.error('closed and it is removed from the active quorum denominator (now ' +
+            this._activeSourceCount() + ' active source(s)). A quorum still stands behind every applied');
+        console.error('block. Investigate the evicted source for a fork/Byzantine fault.');
+        console.error('================================================================');
+    }
+
+    // --- /status getters  ---
+    getSourceQuorum(){ return this._effectiveQuorum(); }
+    getConfiguredSourceCount(){ return this.sources.length; }
+    getActiveSourceCount(){ return this._activeSourceCount(); }
+    getEvictedSources(){ return [...this._evictedSources].map(i => this.sources[i] || ('#' + i)); }
+    getSourcesAgreeing(){ return this._lastSourcesAgreeing; }
 
     async start(){
         this.running = true;
@@ -711,12 +830,31 @@ class ClientSync {
             // session, without waiting for a restart to self-heal.
             await this._clearBootstrapBase();
 
-            // Verify against second source if available.
+            // Verify against secondary sources if available.
             if(this.sources.length > 1){
                 if(this.dbType === 'indexer'){
                     // Indexer cross-source hash + table-count check, gated on VERIFY_HASHES.
-                    if(this.config['VERIFY_HASHES'])
-                        await this._verifyAgainstSource(this.sources[1], this.lastAppliedBlock);
+                    // Bootstrap Byzantine cross-check : sources[0] supplied the
+                    // applied snapshot (1 vote toward quorum). Seek agreement from enough
+                    // ADDITIONAL sources to reach SOURCE_QUORUM. _verifyAgainstSource halts
+                    // durably on a same-height divergence; a transport failure or tip-skew
+                    // to a secondary is tolerated (not counted) so an unreachable spare
+                    // cannot DoS bootstrap, but a shortfall below quorum is warned loudly.
+                    if(this.config['VERIFY_HASHES']){
+                        let need = Math.max(0, this._effectiveQuorum() - 1);
+                        let agreed = 0;
+                        for(let i = 1; i < this.sources.length && agreed < need; i++){
+                            let verdict = await this._verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
+                            if(this._halted) return false; // a divergence halted us
+                            if(verdict === 'agree') agreed++;
+                        }
+                        if(agreed < need){
+                            console.warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
+                                ' agreeing source(s) of the ' + this._effectiveQuorum() + ' required for quorum for ' +
+                                this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
+                                'bootstrap tip is under-verified until live quorum forms.');
+                        }
+                    }
                 } else {
                     // Decoder has no synthetic chain-of-state hashes to compare, but a full
                     // snapshot can still arrive truncated (network cut mid-stream) or stale.
@@ -1254,15 +1392,23 @@ class ClientSync {
 
     // Verify local block hashes against a remote source.
     // Indexer-only: decoder DB has no synthetic chain-of-state hashes to compare.
+    // Returns a verdict string the bootstrap quorum loop counts :
+    //   'agree'      confirmed same-height hash match against this source
+    //   'diverge'    same-height mismatch under HALT_ON_DIVERGENCE=false (log-only)
+    //   'halted'     divergence halted the replica (caller must stop)
+    //   'skew'       tip skew; no same-height comparison was possible
+    //   'unreachable' transport fault reaching the source
+    //   'skip'       not applicable (decoder, or no local hash row)
     async _verifyAgainstSource(source, blockHeight){
-        if(this.dbType !== 'indexer') return;
+        if(this.dbType !== 'indexer') return 'skip';
+        let verdict = 'skip';
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { timeout: 10000 });
             let remoteStatus = response.data;
 
             let localHashes = await this.db.getBlockHashRow(blockHeight);
-            if(!localHashes) return;
+            if(!localHashes) return 'skip';
 
             // Height gate: remoteStatus reports the source's CURRENT tip, whose
             // hashes describe that tip, not necessarily our bootstrap blockHeight.
@@ -1277,6 +1423,7 @@ class ClientSync {
             if(remoteStatus.block_height != null && Number(remoteStatus.block_height) !== blockHeight){
                 console.warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
                     ', source ' + source + ' height ' + remoteStatus.block_height + ')');
+                verdict = 'skew';
             } else {
                 let result = this.hashVerifier.compareBlockHashes(blockHeight, {
                     ledger_hash: localHashes.ledger_hash,
@@ -1291,15 +1438,17 @@ class ClientSync {
                 if(!result.match){
                     console.error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
                     console.error('Mismatches:', JSON.stringify(result.mismatches));
+                    verdict = 'diverge';
                     if(this.config['HALT_ON_DIVERGENCE']){
                         // Durable, alerting halt mirroring the live dual-source path:
                         // this source bulk-applied an entire replica and now disagrees
                         // at the same height, so it is on a forked/Byzantine chain.
                         await this._haltOnDivergence(blockHeight, result.mismatches, [source], 'cross-source-divergence');
-                        return;
+                        return 'halted';
                     }
                 } else {
                     console.log('Hash verification passed against ' + source);
+                    verdict = 'agree';
                 }
             }
 
@@ -1317,7 +1466,7 @@ class ClientSync {
                 });
                 if(recomputeMismatches){
                     await this._haltOnDivergence(blockHeight, recomputeMismatches, [source], 'local-recompute-divergence');
-                    return;
+                    return 'halted';
                 }
             }
 
@@ -1377,8 +1526,10 @@ class ClientSync {
                         ' (advisory, ignoring):', e.message);
                 }
             }
+            return verdict;
         } catch(e){
             console.error('Hash verification failed against ' + source + ':', e);
+            return 'unreachable';
         }
     }
 
@@ -1674,6 +1825,13 @@ class ClientSync {
     // Schedule a WebSocket reconnection
     _scheduleReconnect(source, sourceIndex){
         if(!this.running) return;
+        // An evicted (Byzantine-suspected) source stays disconnected: reconnecting it
+        // would re-admit it to the stream it was evicted from .
+        if(this._evictedSources.has(sourceIndex)){
+            console.warn('Not reconnecting evicted source ' + source + ' for ' +
+                this.chain + '/' + this.network + '/' + this.dbType);
+            return;
+        }
         setTimeout(() => {
             if(this.running)
                 this._connectWebSocket(source, sourceIndex);
@@ -1811,42 +1969,94 @@ class ClientSync {
             }
         }
 
-        // Cross-source verification: indexer only (decoder has no synthetic chain hashes)
-        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.sources.length > 1){
-            // Store hashes from this source
-            if(!this.pendingHashes.has(blockIndex))
-                this.pendingHashes.set(blockIndex, {});
+        // Cross-source M-of-N quorum verification: indexer only (decoder has no
+        // synthetic chain hashes). Apply a block once SOURCE_QUORUM active sources
+        // publish the SAME hash tuple; strike (and eventually evict) dissenters instead
+        // of halting on any disagreement; halt (no-source-quorum) only when every active
+        // source has reported and no group can reach quorum. The 2-source case behaves
+        // exactly as before (quorum 2; a 1-1 split has no majority and halts), while a
+        // larger set tolerates a Byzantine minority .
+        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this._activeSourceCount() > 1){
+            // An evicted source's in-flight delivery is ignored for the tally.
+            if(this._evictedSources.has(sourceIndex)) return;
+
+            // Record this source's hash tuple.
+            if(!this.pendingHashes.has(blockIndex)) this.pendingHashes.set(blockIndex, {});
             this.pendingHashes.get(blockIndex)[sourceIndex] = {
                 ledger_hash: event.ledger_hash,
                 actions_hash: event.actions_hash,
                 contract_hash: event.contract_hash
             };
 
-            // Check if we have hashes from at least 2 sources
+            // Tally reported, non-evicted sources by hash tuple.
             let pending = this.pendingHashes.get(blockIndex);
-            let sourceIndices = Object.keys(pending);
-            if(sourceIndices.length < 2){
-                // Arm the fallback timer once per block, regardless of which source
-                // arrived first. Without this, a non-primary source delivering block N
-                // first leaves no timer running, so if the primary never streams N the
-                // live apply for that block stalls until the NEXT block forces catch-up.
+            let groups = new Map(); // hashKey -> [sourceIndex...]
+            let reportedCount = 0;
+            for(let idxStr of Object.keys(pending)){
+                let idx = Number(idxStr);
+                if(this._evictedSources.has(idx)) continue;
+                reportedCount++;
+                let key = this._hashTupleKey(pending[idxStr]);
+                if(!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(idx);
+            }
+            let quorum  = this._effectiveQuorum();
+            let activeN = this._activeSourceCount();
+
+            // The CURRENT arrival's own group. Applying is gated on IT reaching quorum,
+            // so we only ever apply the block payload we actually hold, and (under the
+            // majority default) the winning group is unique.
+            let currentKey   = this._hashTupleKey(pending[sourceIndex]);
+            let currentGroup = groups.get(currentKey) || [];
+
+            if(currentGroup.length >= quorum){
+                // Quorum reached on the current arrival's hash. Strike every reported
+                // dissenter, record the applied majority, and apply this event.
+                for(let idxStr of Object.keys(pending)){
+                    let idx = Number(idxStr);
+                    if(this._evictedSources.has(idx)) continue;
+                    if(this._hashTupleKey(pending[idxStr]) !== currentKey) this._strikeSource(idx, blockIndex);
+                }
+                this._lastSourcesAgreeing = currentGroup.length;
+                this.pendingHashes.delete(blockIndex);
+                this._strictConfirmPending.delete(blockIndex);
+                let t = this._applyTimers.get(blockIndex);
+                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
+                // fall through to apply
+            } else if(reportedCount >= activeN){
+                // Every active source reported and no group reached quorum: genuinely
+                // contested, the replica cannot determine truth. Fail-stop.
+                this.pendingHashes.delete(blockIndex);
+                this._strictConfirmPending.delete(blockIndex);
+                let t = this._applyTimers.get(blockIndex);
+                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
+                let summary = [...groups.entries()].map(([k, arr]) => ({ hash: k, sources: arr.map(i => this.sources[i]) }));
+                if(this.config['HALT_ON_DIVERGENCE']){
+                    await this._haltOnDivergence(blockIndex, summary,
+                        [...groups.values()].reduce((a, arr) => a.concat(arr.map(i => this.sources[i])), []),
+                        'no-source-quorum');
+                    return;
+                }
+                console.error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
+                    '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
+                console.error('groups:', JSON.stringify(summary));
+                return; // Don't apply contested blocks (log-only mode)
+            } else {
+                // Not enough sources have reported to reach quorum yet. Arm the fallback
+                // timer once per block (liveness fallback for a silent/slow source; a
+                // genuine split is caught above once all active sources report).
                 if(!this._applyTimers.has(blockIndex)){
                     let timer = setTimeout(async () => {
                         this._applyTimers.delete(blockIndex);
-                        // If still waiting after timeout, handle based on strict mode
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
                             if(this.config['HASH_CONFIRM_STRICT']){
-                                console.error('STRICT: Cross-source timeout for block ' + blockIndex +
+                                console.error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
                                     ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
-                                // Do NOT delete the pending hash: retaining the first
-                                // source's entry lets a later live delivery from the
-                                // second source complete the pair and apply the block
-                                // through the confirmed path. Record the height so the
-                                // catch-up path refuses to apply it single-source in the
-                                // meantime (M-22: the strict gate must survive catch-up).
+                                // Retain the pending hashes so a later delivery can still
+                                // complete quorum; block single-source catch-up meanwhile.
                                 this._strictConfirmPending.add(blockIndex);
                             } else {
-                                console.log('Cross-source timeout for block ' + blockIndex + ', applying from primary');
+                                console.log('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
                                 try {
                                     await this._applyBlockEvent(event);
                                 } catch(e){
@@ -1860,33 +2070,6 @@ class ClientSync {
                 }
                 return;
             }
-
-            // Compare hashes
-            let hashA = pending[sourceIndices[0]];
-            let hashB = pending[sourceIndices[1]];
-            let result = this.hashVerifier.compareBlockHashes(blockIndex, hashA, hashB);
-            if(!result.match){
-                this.pendingHashes.delete(blockIndex);
-                // Two sources actively disagree: the block is contested, not merely
-                // unconfirmed. Drop any strict-pending marker (it is superseded by the
-                // divergence handling below), so a cleared/halt-recovered replica does
-                // not keep a stale single-source block.
-                this._strictConfirmPending.delete(blockIndex);
-                if(this.config['HALT_ON_DIVERGENCE']){
-                    // Durable, alerting halt: one source is on a forked/Byzantine chain.
-                    await this._haltOnDivergence(blockIndex, result.mismatches,
-                        [this.sources[sourceIndices[0]], this.sources[sourceIndices[1]]], 'cross-source-divergence');
-                    return;
-                }
-                console.error('DISCREPANCY ALERT: Hash mismatch at block ' + blockIndex);
-                console.error('Mismatches:', JSON.stringify(result.mismatches));
-                return; // Don't apply contested blocks (log-only mode)
-            }
-
-            this.pendingHashes.delete(blockIndex);
-            // Confirmed by a second source: the strict gate is satisfied, so the
-            // catch-up block on this height (if any) lifts and it applies below.
-            this._strictConfirmPending.delete(blockIndex);
         }
 
         // Apply the block
@@ -1933,6 +2116,18 @@ class ClientSync {
             console.error('committed state_root disagrees with the replica\'s own recompute). The');
             console.error('source served state the federation did not sign. HALTING (applying no');
             console.error('further blocks). Operator must investigate and clear before resuming.');
+        } else if(this._halted.reason === 'no-source-quorum'){
+            console.error('block ' + blockIndex + ': the active sources split with NO majority reaching');
+            console.error('SOURCE_QUORUM (' + this._effectiveQuorum() + ' of ' + this._activeSourceCount() +
+                ' active). The replica cannot determine which chain is canonical, so it must not');
+            console.error('pick one. HALTING (applying no further blocks). Operator must investigate');
+            console.error('the contending sources and clear before this validator can resume.');
+        } else if(this._halted.reason === 'checkpoint-freshness-stale'){
+            console.error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
+            console.error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
+            console.error('is on. The tail past the last anchor is unverifiable against the federation, so');
+            console.error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
+            console.error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
         } else {
             console.error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
             console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
@@ -2289,12 +2484,23 @@ class ClientSync {
             return;
         }
         // Freshness: if the newest quorum checkpoint trails the tip by more than the bound,
-        // the anchor cannot catch a forged tail near the tip. Advisory only (never a halt):
-        // withholding is not proof of forgery and halting on absence is a DoS vector.
+        // the anchor cannot catch a forged tail near the tip. Advisory by default (never a
+        // halt): withholding is not proof of forgery and halting on absence is a DoS vector.
+        // CHECKPOINT_FRESHNESS_STRICT  promotes it to enforced: a replica that has
+        // opted in refuses to serve the unanchored tail and HALTs. Only enforced once at
+        // least one checkpoint has been verified (the federation is demonstrably live), so a
+        // replica that has never anchored is not halted at startup.
         if(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS']){
             console.warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
                 ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
                 ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
+            if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
+                await this._haltOnDivergence(cp.block_index,
+                    [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
+                       b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }],
+                    this.sources.slice(0, 1), 'checkpoint-freshness-stale');
+                return;
+            }
         }
         if(cp.block_index > this.lastAppliedBlock) return;       // not caught up to this checkpoint yet
 

@@ -392,7 +392,13 @@ class SyncService {
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
             truncated:     sync ? sync.isTruncated() : false,
-            bootstrapBase: sync ? sync.getBootstrapBase() : null
+            bootstrapBase: sync ? sync.getBootstrapBase() : null,
+            // Multi-source Byzantine quorum surface .
+            sourceQuorum:     sync ? sync.getSourceQuorum() : null,
+            sourcesConfigured: sync ? sync.getConfiguredSourceCount() : null,
+            sourcesActive:    sync ? sync.getActiveSourceCount() : null,
+            sourcesAgreeing:  sync ? sync.getSourcesAgreeing() : null,
+            sourcesEvicted:   sync ? sync.getEvictedSources() : []
         };
     }
 
