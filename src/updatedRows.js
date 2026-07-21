@@ -48,7 +48,7 @@
  *     block), keyed by cooldown_end_block in [fromBlock, toBlock]. Forward twin
  *     of ClientRollback's reverse status reset and cooldownCredits.js's forward
  *     refund-credit selection (same maturity-block key).
- *   - invalid_archive stamp on a surviving anchor_actions v1 parent row when the
+ *   - invalid_archive stamp on a surviving anchor_actions archive-head (v1/v6) parent row when the
  *     completing v2 chunk of its batch lands in this window and CRC fails. The
  *     parent's action_index is below the window, so the action-scoped stream misses
  *     it. Keyed by the completing v2 chunk's block_index (in [fromBlock, toBlock]).
@@ -77,6 +77,8 @@
  ********************************************************************/
 
 // Tables carrying the deactivation_block stamp (value-threshold detection).
+const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
+
 const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];
 
 // SLASH amount reductions: each surviving stake/unstake row whose amount was cut
@@ -220,9 +222,11 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         }
     }
 
-    // 5. invalid_archive stamp on surviving anchor_actions v1 parent rows. When the
-    //    final v2 chunk of a chunked archive batch lands and the reassembled blob fails
-    //    its CRC check, anchor.js stamps the v1 parent 'invalid_archive' in place. The
+    // 5. invalid_archive stamp on surviving anchor_actions archive-head parent rows
+    //    (v1 legacy, v6 publisher-bearing; ARCHIVE_HEAD_VERSIONS in stateHash.js,
+    //    ). When the final v2 chunk of a chunked archive batch lands and the
+    //    reassembled blob fails its CRC check, anchor.js stamps the parent
+    //    'invalid_archive' in place. The
     //    parent's action_index is in an earlier block (chunking spans blocks by design),
     //    so the action-scoped stream for the completing chunk's block carries the chunk
     //    row but NOT the parent's flipped status. This class finds those parents via a
@@ -237,7 +241,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
             "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
             "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE p.version = 1 AND c.block_index BETWEEN ? AND ?",
+            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND c.block_index BETWEEN ? AND ?",
             [from, to], conn);
         add('anchor_actions', anchorRows);
     } catch(e){

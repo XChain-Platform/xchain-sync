@@ -572,12 +572,45 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor reset to unverified',          re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = us\.id/ },
+            // : the parent predicate must select the FULL archive-head version set
+            // (v1 legacy + v6 publisher-bearing) via the shared stateHash.js constant, on
+            // both sides. A literal `p.version = 1` regression re-wedges a reorg-orphaned
+            // v6 archive batch permanently. Matches the indexer's template-literal splice
+            // (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's string concat.
+            { name: 'archive-head version predicate (shared v1+v6 constant)',
+              re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
             const src = norm(fs.readFileSync(p, 'utf8'));
             for(const op of ANCHOR_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
             }
+        }
+    });
+
+    // : the archive-head version set is defined ONCE (stateHash.js, twinned across
+    // repos) and consumed by every parent-selecting predicate. Pin its value and the SQL
+    // fragment shape, and pin the forward updatedRows class to the same constant so a
+    // v6 parent's invalid_archive stamp keeps replicating to followers.
+    it('archive-head version set is [1, 6] via the shared stateHash constant, consumed by updatedRows ', function(){
+        const assertLocal = require('assert');
+        const sh = require('../../src/stateHash');
+        assertLocal.deepStrictEqual(sh.ARCHIVE_HEAD_VERSIONS, [1, 6],
+            'ARCHIVE_HEAD_VERSIONS must be exactly [1, 6]');
+        assertLocal.strictEqual(sh.ARCHIVE_HEAD_VERSIONS_SQL, 'IN (1, 6)',
+            'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1, 6)');
+        const fs = require('fs'), pathMod = require('path');
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8'));
+        assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND c\.block_index BETWEEN \? AND \?/.test(ur),
+            'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL');
+        // Twin-parity: the indexer stateHash.js copy (when the sibling checkout exists)
+        // must carry the identical constant, or the two repos disagree on the parent set.
+        const indexerPath = indexerFile('src/stateHash.js');
+        if(fs.existsSync(indexerPath)){
+            const ish = require(indexerPath);
+            assertLocal.deepStrictEqual(ish.ARCHIVE_HEAD_VERSIONS, sh.ARCHIVE_HEAD_VERSIONS,
+                'indexer and sync ARCHIVE_HEAD_VERSIONS must be identical');
         }
     });
 

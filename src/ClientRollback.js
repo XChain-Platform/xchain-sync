@@ -26,6 +26,7 @@ const balanceHelpers = require('./balance-helpers');
 const lifecycle      = require('./tableLifecycle');
 const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
+const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
 
 class ClientRollback {
 
@@ -471,10 +472,11 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
-            // Reset an anchor batch's surviving parent v1 stamped 'invalid_archive' by an
+            // Reset an anchor batch's surviving archive-head parent (v1/v6,
+            // ARCHIVE_HEAD_VERSIONS in stateHash.js, ) stamped 'invalid_archive' by an
             // orphaned final chunk, mirror of xchain-indexer rollback.js. When the last v2
             // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
-            // check, the source stamps the parent v1 (in an earlier, surviving block)
+            // check, the source stamps the parent (in an earlier, surviving block)
             // 'invalid_archive' IN PLACE. If that completing chunk is in the orphaned range,
             // the dataTables delete below removes the chunk but cannot undo the parent stamp,
             // leaving the replica's parent stuck 'invalid_archive' while a from-genesis replay
@@ -491,7 +493,7 @@ class ClientRollback {
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = us.id " +
-                        "WHERE p.version = 1 AND p.action_index < ?",
+                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND p.action_index < ?",
                         [firstActionIndex, firstActionIndex]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
