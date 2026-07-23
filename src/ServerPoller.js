@@ -34,7 +34,7 @@ const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
-const { activationDelayBlocks } = require('./consensus-constants');
+const { activationDelayBlocks, coinTicker } = require('./consensus-constants');
 const { isStateCommitmentActive } = require('./state_commitment_activation');
 const { SCHEMA_VERSION } = require('./schema-version');
 
@@ -64,6 +64,14 @@ class ServerPoller {
 
     constructor(chain, network, db, broadcaster, transparencyLog, config, util) {
         this.chain    = chain;
+        // Canonical TICKER form of `chain` for the per-chain '<TICKER>:<network>'
+        // activation lookup AND the state_tree_roots.chain column (the source indexer
+        // writes tickers there). `this.chain` stays the caller's full-name form because
+        // broadcast routing, payload `chain:` fields, and logging all use it. See
+        // coinTicker: passing the full name here made the gate resolve to "off" and the
+        // roots lookup miss its row, so the server published NULL roots and the
+        // follower's state-commitment check never ran .
+        this.coinTicker = coinTicker(chain);
         this.network  = network;
         this.db       = db;
         this.broadcaster    = broadcaster;
@@ -543,8 +551,8 @@ class ServerPoller {
             // before the flag-day (the follower then skips the check). The follower
             // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
             // for the later full-state_root verification (no wire change needed then).
-            if(isStateCommitmentActive(block_index, this.network, this.chain)){
-                let roots = await this.db.getStateRootsRow(this.chain, this.network, block_index, conn);
+            if(isStateCommitmentActive(block_index, this.network, this.coinTicker)){
+                let roots = await this.db.getStateRootsRow(this.coinTicker, this.network, block_index, conn);
                 payload.balances_root    = roots ? roots.balances_root    : null;
                 payload.block_merkle_root = roots ? roots.block_merkle_root : null;
                 payload.state_root       = roots ? roots.state_root       : null;

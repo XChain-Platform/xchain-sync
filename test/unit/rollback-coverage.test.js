@@ -742,10 +742,19 @@ describe('Rollback coverage guard @regression', function(){
         const bh = fs.readFileSync(pathMod.resolve(__dirname, '../../src/BlockHasher.js'), 'utf8');
         assert.ok(/computeStateHash\(block_index, activationDelay, gasTick, network, coin\)/.test(bh),
             'BlockHasher.computeStateHash must accept and forward the coin gate parameter');
+        // : threading a coin is necessary but NOT sufficient - the FORMAT must
+        // match the source. The activation maps are keyed '<TICKER>:<network>' exactly
+        // as the source indexer writes it (its db.js passes config['COIN'], a ticker),
+        // but the sync layer names a chain by cfg.coin = the FULL LOWERCASE NAME
+        // ('litecoin'). This guard previously pinned `this.chain`, which threaded the
+        // full name, missed the per-chain key, and silently computed WITHOUT the armed
+        // classes: the "guaranteed halt at the height" predicted above actually
+        // happened on every production replica (BTC 958500 / LTC 3143000 / DOGE 6291000
+        // / BTC-testnet 145000, each chain's armed height). Pin the normalized ticker.
         const cs = fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientSync.js'), 'utf8')
             .replace(/\s+/g, ' ');
-        assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.chain\)/.test(cs),
-            'ClientSync must pass this.chain as the coin gate parameter to computeStateHash');
+        assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.coinTicker\)/.test(cs),
+            'ClientSync must pass this.coinTicker (the normalized TICKER, not this.chain) as the coin gate parameter to computeStateHash');
     });
 
     // Value-level fixture assertions (F-1, F-2, F-5).

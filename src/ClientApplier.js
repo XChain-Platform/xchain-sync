@@ -26,6 +26,7 @@ const { decodeValue }     = require('./wireCodec');
 const { rederiveEscrowGate } = require('./ClientRollback');
 const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
+const { coinTicker }      = require('./consensus-constants');
 const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
@@ -56,6 +57,12 @@ class ClientApplier {
         // rows and the SMT balance/escrow keys (SPV spec sec.4). null on callers that
         // predate the feature; the state-commitment path is then simply skipped.
         this.chain   = chain || null;
+        // Canonical TICKER form of `chain` for the per-chain '<TICKER>:<network>'
+        // activation lookups and the state_tree_roots chain column, matching what the
+        // SOURCE indexer writes (config['COIN']). Passing the full name made
+        // isStateCommitmentActive resolve to "off" on every production chain, so the
+        // follower silently never computed roots or ran the commitment check.
+        this.coinTicker = coinTicker(chain) || null;
         this.network = network || null;
         // Roots the most recent applyBlock computed over the replica, for ClientSync's
         // VERIFY_STATE_COMMITMENT comparison; null when the block predates the flag-day.
@@ -172,11 +179,11 @@ class ClientApplier {
                 // event rows (credits/debits/escrows; cooldown refunds already merged by
                 // the source), mirroring the indexer's ledger-choke-point set. ClientSync
                 // reads _lastComputedRoots after commit and HALTs on divergence.
-                if(isStateCommitmentActive(payload.block_index, this.network, this.chain)){
-                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.chain);
+                if(isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
+                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
                     let touchedKeys  = isActivation ? [] : await this._collectSmtTouchedKeys(data);
                     this._lastComputedRoots = await computeFollowerRoots(
-                        this.db, this.chain, this.network, payload.block_index, touchedKeys, isActivation);
+                        this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
                 } else {
                     this._lastComputedRoots = null;
                 }
@@ -393,8 +400,8 @@ class ClientApplier {
             // (block_height+1) finds a prior balances_root (SPV spec sec.4.3). Full
             // build over the replicated state; block_merkle_root is NULL (state-at-
             // height, not the tip block's content rows). Indexer + post-flag-day only.
-            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.chain))
-                await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
+            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
+                await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();
             console.log('Full snapshot applied (' + this.util.getTimer(timer) + ')');
@@ -445,8 +452,8 @@ class ClientApplier {
                 // find no prior balances_root. Full build over the now-complete replica
                 // (correct only on a non-truncated replica; truncated / incremental-
                 // bootstrapped replicas must run VERIFY_STATE_COMMITMENT=false).
-                if(isStateCommitmentActive(snapshotData.block_height, this.network, this.chain))
-                    await seedSnapshotRoots(this.db, this.chain, this.network, snapshotData.block_height);
+                if(isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
+                    await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
             }
             await this.db.commitTransaction();
             console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');

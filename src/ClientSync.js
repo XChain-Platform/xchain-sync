@@ -33,7 +33,7 @@ const validation  = require('./validation');
 const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
 const { SCHEMA_VERSION } = require('./schema-version');
-const { activationDelayBlocks, gasTickSymbol, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
 const checkpointVerifier = require('./checkpoint');
 const M = require('./merkle');
 const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
@@ -52,6 +52,11 @@ class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
         this.chain        = chain;
+        // Canonical TICKER form of `chain`, for consensus / activation lookups keyed
+        // '<TICKER>:<network>' (see coinTicker). `this.chain` keeps the caller's form
+        // because the transport routes legitimately use the full name
+        // (/snapshot/indexer/dogecoin/testnet); only the consensus lookups need this.
+        this.coinTicker   = coinTicker(chain);
         this.network      = network;
         this.db           = db;
         this.dbType       = (db && db.dbType) ? db.dbType : 'indexer';
@@ -2355,7 +2360,7 @@ class ClientSync {
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
                 let delay = activationDelayBlocks(this.chain);
                 let localState = await this.blockHasher.computeStateHash(
-                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.chain);
+                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
                 if(localState !== event.state_hash){
                     await this._haltOnDivergence(event.block_index,
                         [{ field: 'state_hash', a: event.state_hash, b: localState }],
