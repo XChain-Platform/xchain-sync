@@ -21,6 +21,9 @@ function createMockDb(){
         getTxScopedRows: sinon.stub().resolves([]),
         getActionScopedRows: sinon.stub().resolves([]),
         getEmissionRowsForBlock: sinon.stub().resolves([]),
+        getStateRootsRow: sinon.stub().resolves({
+            balances_root: 'br', block_merkle_root: 'bmr', state_root: 'sr'
+        }),
         getTransactions: sinon.stub().resolves([]),
         getActions: sinon.stub().resolves([]),
         // Used by collectMaturedCooldownCredits; null short-circuits it to no credits.
@@ -538,6 +541,28 @@ describe('ServerPoller', function(){
             assert.strictEqual(steady.state_hash, 'sh', 'steady-state payload keeps state_hash');
             let noTip = await poller._buildBlockPayload(100, null);
             assert.strictEqual(noTip.state_hash, 'sh', 'unknown view tip keeps state_hash');
+        });
+
+        it('ships state_root NULL for burst blocks but keeps balances/merkle roots (@regression)', async function(){
+            // block 1000000 is past the state-commitment flag-day for bitcoin/mainnet.
+            db.getBlockHashRow.resolves({
+                block_index: 1000000, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
+            });
+            // Catch-up burst: state_root folds the follower-recomputed stakes_root, which
+            // is read from live tip-state stake tables during a burst, so it must be NULLed
+            // exactly like state_hash. balances_root/block_merkle_root are B-scoped and stay.
+            let burst = await poller._buildBlockPayload(1000000, null, 1000005);
+            assert.strictEqual(burst.state_root, null,
+                'burst-built payload must ship state_root NULL');
+            assert.strictEqual(burst.balances_root, 'br',
+                'balances_root stays verified on the burst path');
+            assert.strictEqual(burst.block_merkle_root, 'bmr',
+                'block_merkle_root stays verified on the burst path');
+
+            let steady = await poller._buildBlockPayload(1000000, null, 1000000);
+            assert.strictEqual(steady.state_root, 'sr',
+                'steady-state payload keeps state_root');
         });
 
         it('omits sync_meta from the decoder payload', async function(){

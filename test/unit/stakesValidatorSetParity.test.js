@@ -42,6 +42,7 @@ const INDEXER_PRESENT = fs.existsSync(BTC_CONFIG_PATH);
 
 let indexerCaps = null;     // { capability: MIN_STAKE string }
 let indexerLimit = null;
+let indexerLoadErr = null;
 if (INDEXER_PRESENT) {
     try {
         const cfg = require(BTC_CONFIG_PATH).getConfig('mainnet');
@@ -50,14 +51,29 @@ if (INDEXER_PRESENT) {
             indexerCaps[k] = cfg.STAKING.CAPABILITIES[k].MIN_STAKE;
         }
         indexerLimit = cfg.VALIDATOR_QUERY_LIMIT;
-    } catch (_e) {
+    } catch (e) {
+        // A present-but-unreadable sibling (renamed STAKING.CAPABILITIES,
+        // restructured getConfig, moved MIN_STAKE) is exactly the refactor a real
+        // capability-set change rides in on, and the drift it hides turns the
+        // follower stakes_root into a hard halt. Do NOT degrade it to a silent
+        // skip: record the error so before() hard-fails instead of pending.
+        indexerLoadErr = e;
         indexerCaps = null;
     }
 }
 
 describe('stakes_root validator-set parity: xchain-sync == xchain-indexer @regression', function () {
     before(function () {
-        if (!INDEXER_PRESENT || !indexerCaps) this.skip();
+        // Sibling present but its capability surface failed to read -> fail, never skip.
+        if (INDEXER_PRESENT && indexerLoadErr)
+            throw new Error('stakes_root parity guard cannot read the xchain-indexer sibling (present but unreadable - capability-set refactor?): ' + indexerLoadErr.message);
+        // Sibling genuinely absent: skip in standalone CI, but hard-fail in the
+        // required-siblings lane so no lane can green-by-skip.
+        if (!INDEXER_PRESENT) {
+            if (process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
+                throw new Error('stakes_root parity guard requires the xchain-indexer sibling (XCHAIN_REQUIRE_SIBLINGS=1) but BTC config not found at ' + BTC_CONFIG_PATH);
+            this.skip();
+        }
     });
 
     it('BTC_STAKE_CAPABILITIES has the identical capability set as the indexer', function () {

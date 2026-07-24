@@ -764,8 +764,10 @@ class ClientRollback {
             try {
                 await balanceHelpers.rebuildBalances(this.db);
             } catch(e){
-                if(e.errno !== 1146) throw e;
-                console.error('Error rebuilding balances after rollback:', e);
+                // Only errno 1146 (missing table on an older-schema replica) is a
+                // benign skip; log the step context and rethrow every real fault so
+                // the outer catch aborts rather than committing a partial reorg-reset.
+                if(e.errno !== 1146){ console.error('rebuildBalances after rollback failed:', e); throw e; }
             }
 
             // Recompute tokens.supply from the surviving credits/debits/escrows. The
@@ -777,8 +779,9 @@ class ClientRollback {
             try {
                 await balanceHelpers.recomputeTokenSupplies(this.db);
             } catch(e){
-                if(e.errno !== 1146) throw e;
-                console.error('Error recomputing token supplies after rollback:', e);
+                // errno 1146 (missing table) is the only benign schema gap; log the
+                // step and rethrow real faults so the outer catch rolls back.
+                if(e.errno !== 1146){ console.error('recomputeTokenSupplies after rollback failed:', e); throw e; }
             }
 
             await this.db.commitTransaction();

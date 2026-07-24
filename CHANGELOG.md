@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- State-commitment roots get the catch-up-burst exemption, bootstrap resolver converges on signed-latest, ignoreTables derives from the registry, rollback logs real faults with context, parity guards escalate under required-siblings.
+
 ### Added
 - Armed the BTC-anchored activation copies at BTC 961000 and `STATE_COMMITMENT_ACTIVATION` per chain (same heights as the state-hash gates); ClientApplier/ServerPoller thread the coin through the state-commitment gate.
 - `stateHash.js` twin gains the flag-day-gated `token_supply` class (F-1 closure) and both state-hash gate maps are ARMED per chain; `BlockHasher`/`ClientSync` thread the coin gate parameter so the follower recompute matches the source across each activation height.

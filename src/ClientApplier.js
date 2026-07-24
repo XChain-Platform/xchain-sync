@@ -28,6 +28,7 @@ const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment')
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
 const { coinTicker }      = require('./consensus-constants');
 const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
+const lifecycle           = require('./tableLifecycle');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
@@ -73,9 +74,15 @@ class ClientApplier {
         // payloads can re-send the same address's pubkey row across multiple
         // blocks, and the PK on address_id would otherwise collide.
         this.ignoreTables = new Set([
-            'index_actions', 'index_addresses', 'index_coins', 'index_fiats',
-            'index_memos', 'index_mime_types', 'index_pubkeys', 'index_statuses',
-            'index_tickers', 'index_transactions',
+            // The index_* lookup set is derived from the table-lifecycle registry
+            // (replication: 'stream:index') rather than hand-listed: the index bucket
+            // is re-sent every block by design and the lookups are NOT rolled back
+            // (replicaRollback: 'lookup'), so a new stream:index registry entry missing
+            // here would collide on its PK on the next referencing block and stall the
+            // apply transaction. Deriving it means a one-line registry add is picked up
+            // on both the stream side (ServerPoller/TOPOLOGY.indexer) and the apply side
+            // automatically, with no second source of truth to drift.
+            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
             'pubkeys',
             // events is an append-only operational log that incremental snapshots
             // re-dump in full (it has no block_index/action_index cursor to scope by).

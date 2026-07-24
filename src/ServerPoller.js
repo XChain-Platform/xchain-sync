@@ -555,7 +555,19 @@ class ServerPoller {
                 let roots = await this.db.getStateRootsRow(this.coinTicker, this.network, block_index, conn);
                 payload.balances_root    = roots ? roots.balances_root    : null;
                 payload.block_merkle_root = roots ? roots.block_merkle_root : null;
-                payload.state_root       = roots ? roots.state_root       : null;
+                // state_root folds the BTC-only stakes_root, which the follower recomputes
+                // every block from the live stakes/unstakes tables (stateCommitment
+                // .gatherStakeEntries reading amount/deactivation_block). During a catch-up
+                // burst those columns carry TIP-state (post-slash) values, not the values
+                // committed at block B, so the follower would recompute state_root over a
+                // future amount and durably HALT on a value the source never committed at B.
+                // NULL state_root for burst blocks exactly like state_hash above; the
+                // follower's per-field compare skips a null state_root. balances_root/
+                // block_merkle_root stay live: they derive from B-scoped credit/debit/content
+                // rows applied in block order and are not exposed to the tip-state drift.
+                payload.state_root       = (viewTip != null && Number(viewTip) > block_index)
+                    ? null
+                    : (roots ? roots.state_root : null);
             } else {
                 payload.balances_root    = null;
                 payload.block_merkle_root = null;

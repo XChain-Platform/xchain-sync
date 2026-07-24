@@ -4,14 +4,24 @@
  *
  * Deploy to: /var/www/virtual/sync.xchain.io/bootstraps/latest.php
  * Driven by the sibling .htaccess, which rewrites
- *   <service>/<coin>/<network>/latest.tgz        -> latest.php?dir=...&type=tgz
- *   <service>/<coin>/<network>/latest.tgz.sha256 -> latest.php?dir=...&type=sha256
- *   <service>/<coin>/<network>/latest.tgz.sig    -> latest.php?dir=...&type=sig
+ *   <service>/<coin>/<network>/latest.tgz     -> latest.php?dir=...&type=tgz
+ *   <service>/<coin>/<network>/latest.tgz.sig -> latest.php?dir=...&type=sig
  *
  * Bootstrap archives are named  <network>-<service>-<YYYYMMDD_HHMMSS>.tar.gz
  * (xchain-node BootstrapService). That timestamp suffix is lexically
  * sortable, so the newest archive is just the max filename; mtime is the
  * tie-breaker / fallback for oddly-named files.
+ *
+ * "Latest" means the newest archive that HAS a paired detached signature
+ * (<archive>.sig), never merely the newest by filename. See the resolver
+ * below for why unsigned archives are skipped rather than advertised. This
+ * is the canonical signed-latest resolver, kept in lockstep with the
+ * xchain-websites copy at sync.xchain.io/bootstraps-app/latest.php.
+ *
+ * There is no external <archive>.sha256 sidecar: BootstrapService embeds the
+ * checksum INSIDE the signature-verified outer archive (data.sha256), so the
+ * detached .sig is the sole published integrity anchor and a separate unsigned
+ * .sha256 endpoint would add nothing but a permanently-404 route.
  *
  * We 302-redirect to the real file rather than stream it: archives are
  * tens to hundreds of GB, so Apache must serve them directly to keep
@@ -63,25 +73,30 @@ usort($files, function ($a, $b) {
     return filemtime($b) <=> filemtime($a);
 });
 
-$newest = $files[0];
-$name   = basename($newest);
-
-if ($type === 'sha256') {
-    $sha = $newest . '.sha256';
-    if (!is_file($sha)) {
-        http_response_code(404);
-        header('Content-Type: text/plain');
-        exit("No checksum published\n");
-    }
-    header('Content-Type: text/plain');
-    readfile($sha);
-    exit;
+// Security: the advertised "latest" must be the newest archive that HAS a
+// paired detached signature (<archive>.sig), NOT merely the newest by filename.
+// Otherwise one unsigned publish - a newer archive dropped in without its .sig,
+// or a partial scp where the .sig never landed - becomes THE latest: every
+// fresh install fetches it, then 404s on the .sig fetch and (fail-closed)
+// aborts to a full resync, even while a good signed archive sits right
+// alongside. So skip unsigned archives and pick the newest signed one; if none
+// is signed, there is nothing installable to advertise -> 404. The tgz and sig
+// endpoints resolve the same archive, so they can never drift apart.
+$newest = null;
+foreach ($files as $f) {
+    if (is_file($f . '.sig')) { $newest = $f; break; }
 }
+if ($newest === null) {
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    exit("No signed bootstrap published\n");
+}
+$name = basename($newest);
 
 if ($type === 'sig') {
-    // Detached signature published next to the SAME newest archive. A 404 here
-    // means the newest archive is unsigned (xchain-node then treats the
-    // bootstrap as unsigned per its signature policy).
+    // Detached signature for the SAME archive the tgz endpoint serves. The
+    // selection above guarantees this file exists; the guard covers only a
+    // concurrent prune racing between the two calls.
     $sig = $newest . '.sig';
     if (!is_file($sig)) {
         http_response_code(404);

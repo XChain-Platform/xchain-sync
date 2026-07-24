@@ -19,9 +19,10 @@ RewriteBase /bootstraps/
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^(.+)/latest\.tgz$ latest.php?dir=$1&type=tgz [L,QSA]
 
-# Companion checksum, if an external <archive>.sha256 was published.
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^(.+)/latest\.tgz\.sha256$ latest.php?dir=$1&type=sha256 [L,QSA]
+# NOTE: there is deliberately no latest.tgz.sha256 rewrite. BootstrapService
+# embeds the checksum inside the signature-verified archive (data.sha256); no
+# external <archive>.sha256 sidecar is ever published, so that route would be a
+# permanent 404. The detached .sig below is the sole published integrity anchor.
 
 # Detached Ed25519 signature for the SAME newest archive (xchain-node verifies
 # this against the pinned public key). Resolved alongside latest.tgz so the

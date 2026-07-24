@@ -29,11 +29,10 @@
  * table removed from it automatically leaves.
  *
  * Scope note: this is deliberately the *per-block streamed* set. Tables that
- * only ride along in full/incremental snapshots and converge through other
- * channels are intentionally excluded, because their counts legitimately
- * diverge between nodes and comparing them would raise false incompleteness
- * alarms instead of catching real ones:
- *   - icons, price_snapshots          operator-local / hub-mirrored
+ * converge through other channels (a full/incremental snapshot ride-along, or
+ * no xchain-sync channel at all) are intentionally excluded, because their
+ * counts legitimately diverge between nodes and comparing them would raise
+ * false incompleteness alarms instead of catching real ones:
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
@@ -71,6 +70,17 @@
  *                                     _checkpointSource / _matchSource throw, and the
  *                                     explorer asserts the hub DB at startup) rather than
  *                                     silently serving stale/empty local rows (#4138).
+ *   - icons                           replication: 'local' (OPERATOR_LOCAL): never
+ *                                     leaves the node. NEVER replicated by xchain-sync:
+ *                                     excluded from the per-block stream, the incremental
+ *                                     catch-up, AND the full/incremental snapshots
+ *                                     (SnapshotBuilder.OPERATOR_LOCAL_TABLES), not a
+ *                                     snapshot ride-along.
+ *   - price_snapshots                 replication: 'hub-mirror': carried by the hub
+ *                                     (hub_db_sync), never by xchain-sync in any channel
+ *                                     (stream, incremental catch-up, or snapshots), same
+ *                                     posture as the cross_chain_* / oracle_prices group
+ *                                     above.
  *
  ********************************************************************/
 

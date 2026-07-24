@@ -48,7 +48,11 @@ if (INDEXER_PRESENT) {
 describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression', function () {
 
     before(function () {
-        if (!INDEXER_PRESENT) this.skip();
+        if (!INDEXER_PRESENT) {
+            if (process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
+                throw new Error('protocolAddressRoles consensus twin requires the xchain-indexer sibling (XCHAIN_REQUIRE_SIBLINGS=1) but INDEXER_MODULE not resolvable');
+            this.skip();
+        }
     });
 
     it('snapshot equals the indexer config-derived ROLE_BY_ADDRESS', function () {
