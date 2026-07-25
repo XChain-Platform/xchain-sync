@@ -50,10 +50,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         // No query should reference deactivation_block (delay unknown, so skip).
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
-        // The slash + request_status + poll-finalize + cooldown-status + anchor_invalid
-        // + tokens-supply classes still run, none of which depend on the activation delay
-        // (4 slash + 2 request + 1 poll + 2 cooldown-status + 1 anchor + 1 tokens = 11).
-        assert.strictEqual(db.calls.length, 11);
+        // The slash + request_status + poll-finalize + cooldown-status + bet-status
+        // + anchor_invalid + tokens-supply classes still run, none of which depend on
+        // the activation delay (4 slash + 2 request + 1 poll + 2 cooldown-status
+        // + 2 bet-status + 1 anchor + 1 tokens = 13).
+        assert.strictEqual(db.calls.length, 13);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);

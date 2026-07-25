@@ -108,6 +108,19 @@ const POLL_FINALIZE_TABLES = ['polls'];
 // credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
 const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 
+// BET in-place flips ( P4): a surviving bet_feeds row is mutated in place by
+// the closed latch (closed_block stamp, end-of-block pass) and by the terminal flip
+// (terminal_block stamp: resolve tx / cancel tx / BET_EXPIRE pass); a surviving bets
+// row is mutated by settlement (settled_block stamp: won/lost/refunded). Each class
+// is keyed by its stamp landing in the window, mirroring (forward) the exact
+// ClientRollback resets and the state_hash bet_feed_status/bet_status classes.
+// status_id is not hashed raw; the follower's upsert resolves it via the replicated
+// index_statuses table.
+const BET_STATUS_SPECS = [
+    { table: 'bet_feeds', stamps: ['closed_block', 'terminal_block'] },
+    { table: 'bets',      stamps: ['settled_block'] }
+];
+
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
 // Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
 // the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
@@ -222,6 +235,26 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         }
     }
 
+    // 4b. BET status flips on surviving bet_feeds / bets rows, keyed on the stamp
+    //     columns landing in [from, to] (a feed can latch AND go terminal in the
+    //     same window; the OR plus the Map dedup emits its row once). Carries the
+    //     full current row so the follower's upsert refreshes feed_status_id /
+    //     bet_status_id and the stamps in place. Tables may not exist on older
+    //     source schemas (pre-BET builds); skip like the classes above.
+    for(let spec of BET_STATUS_SPECS){
+        try {
+            let where = spec.stamps.map(col => "`" + col + "` BETWEEN ? AND ?").join(' OR ');
+            let args  = [];
+            for(let i = 0; i < spec.stamps.length; i++){ args.push(from); args.push(to); }
+            let rows = await db.doQuery(
+                "SELECT * FROM `" + spec.table + "` WHERE " + where, args, conn);
+            add(spec.table, rows);
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table/columns may not exist on older source schemas; skip.
+        }
+    }
+
     // 5. invalid_archive stamp on surviving anchor_actions archive-head parent rows
     //    (v1 legacy, v6 publisher-bearing; ARCHIVE_HEAD_VERSIONS in stateHash.js,
     //    ). When the final v2 chunk of a chunked archive batch lands and the
@@ -309,4 +342,4 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     return out;
 }
 
-module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES };
+module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES, BET_STATUS_SPECS };

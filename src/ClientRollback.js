@@ -216,6 +216,45 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
+                // BET in-place flip resets ( P4): the updated_rows BET classes
+                // carried surviving bet_feeds / bets rows latched, terminal-flipped or
+                // settled in the now-orphaned range; the action-scoped delete below
+                // cannot un-flip them. Mirrors xchain-indexer/src/rollback.js's BET
+                // reset block byte-for-byte in predicate order: (a) terminal feeds
+                // whose latch survives go back to 'closed'; (b) terminal feeds with
+                // no surviving latch go back to 'open'; (c) orphaned latches clear
+                // last; then settled bets re-open. Statuses resolve through the
+                // replicated index_statuses rows (JOIN misses are no-ops pre-BET).
+                try {
+                    await this.db.doQuery(
+                        "UPDATE bet_feeds f JOIN index_statuses cs ON (cs.status = 'closed') " +
+                        "SET f.feed_status_id = cs.id, f.terminal_block = NULL " +
+                        "WHERE f.terminal_block >= ? AND f.closed_block IS NOT NULL AND f.closed_block < ?",
+                        [block_index, block_index]
+                    );
+                    await this.db.doQuery(
+                        "UPDATE bet_feeds f JOIN index_statuses os ON (os.status = 'open') " +
+                        "SET f.feed_status_id = os.id, f.terminal_block = NULL " +
+                        "WHERE f.terminal_block >= ? AND (f.closed_block IS NULL OR f.closed_block >= ?)",
+                        [block_index, block_index]
+                    );
+                    await this.db.doQuery(
+                        "UPDATE bet_feeds f JOIN index_statuses os ON (os.status = 'open') " +
+                        "SET f.feed_status_id = os.id, f.closed_block = NULL " +
+                        "WHERE f.closed_block >= ?",
+                        [block_index]
+                    );
+                    await this.db.doQuery(
+                        "UPDATE bets b JOIN index_statuses os ON (os.status = 'open') " +
+                        "SET b.bet_status_id = os.id, b.settled_block = NULL " +
+                        "WHERE b.settled_block >= ?",
+                        [block_index]
+                    );
+                } catch(e){
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+
                 // contract_slash_debits restore: an orphaned SLASH reduced
                 // contract_stakes/contract_unstakes.amount IN PLACE on surviving rows (the
                 // source records each debit's pre-slash `prev_amount`). The action-scoped

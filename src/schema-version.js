@@ -90,11 +90,23 @@
  *       forced restart, and the index_* tables resume via INSERT IGNORE paged from a
  *       MAX(id) cursor (no full re-snapshot). Decoder is unaffected (these tables do
  *       not exist there) and stays at 3.
+ *   6 - (indexer only) BET parimutuel betting ( P4): four new replicated
+ *       tables (bet_feeds, bets, bet_feed_statuses, bet_statuses; stream:action
+ *       in the tableLifecycle registry, base-schema files so fresh replicas
+ *       create them from the schema fetch) and two new updated_rows classes
+ *       carrying surviving bet_feeds rows latched/terminal-flipped in place
+ *       (closed_block / terminal_block stamps) and surviving bets rows settled
+ *       in place (settled_block stamp), with matching ClientRollback resets.
+ *       A v5 follower would silently ignore the new tables and the new
+ *       updated_rows keys and serve permanently-open feeds after any latch,
+ *       terminal flip or settlement it missed, so the bump fails it closed
+ *       against a v6 snapshot and forces the coordinated server+follower
+ *       upgrade (the v3 precedent). Decoder is unaffected and stays at 3.
  *
  ********************************************************************/
 
 // Per-dbType schema version. Bump only the key whose DDL or wire encoding changed
 // so the unaffected dbType's validators need not restart.
-const SCHEMA_VERSION = { indexer: 5, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 6, decoder: 3 };
 
 module.exports = { SCHEMA_VERSION };
