@@ -102,11 +102,23 @@
  *       terminal flip or settlement it missed, so the bump fails it closed
  *       against a v6 snapshot and forces the coordinated server+follower
  *       upgrade (the v3 precedent). Decoder is unaffected and stays at 3.
+ *   7 - (indexer only) BET cancel/resolve status rows : two more
+ *       replicated tables, bet_cancels and bet_resolves (stream:action in the
+ *       tableLifecycle registry, base-schema files plus the dated migration
+ *       2026-07-26-bet-cancel-resolve-status-tables.sql). BET formats 1 and 3
+ *       previously owned no row of their own, so a chain-rejected cancel or
+ *       resolve persisted no parse status and every API consumer had to assume
+ *       it succeeded. The tables are pure reporting (no validation, settlement
+ *       or hash path reads them) and add no updated_rows class, but a v6
+ *       follower lacks the tables entirely: the per-block stream would carry
+ *       rows it cannot apply, so the bump fails it closed against a v7
+ *       snapshot and forces the coordinated server+follower upgrade. Decoder is
+ *       unaffected and stays at 3.
  *
  ********************************************************************/
 
 // Per-dbType schema version. Bump only the key whose DDL or wire encoding changed
 // so the unaffected dbType's validators need not restart.
-const SCHEMA_VERSION = { indexer: 6, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 7, decoder: 3 };
 
 module.exports = { SCHEMA_VERSION };
