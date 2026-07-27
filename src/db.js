@@ -30,6 +30,7 @@ const path       = require('path');
 const validation = require('./validation');
 const { splitSqlStatements } = require('./sqlUtil');
 const { canonicalizeHashAddress } = require('./protocolAddressRoles');
+const poolSizing = require('./poolSizing');
 const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
 
@@ -62,18 +63,21 @@ class Database {
         this.dbType = dbType || 'indexer';  // 'indexer' (default) or 'decoder'
 
         // Connection pool parameters.
-        // DB_POOL_SIZE controls the per-database connection limit (default 5).
-        // A server with 3 chains x 2 dbTypes opens 6 pools; at default size 5
-        // that is 30 connections. Raise with DB_POOL_SIZE for high-throughput hosts.
+        // Sizing is per dbType (see poolSizing.js): the indexer pool absorbs
+        // ServerPoller's ~113-query-per-block fan-out plus concurrent snapshot
+        // streams, the decoder pool replicates 8 narrow tables. Each knob honours
+        // DB_POOL_SIZE_<DBTYPE> first, then the legacy global DB_POOL_SIZE, then
+        // the per-dbType default.
+        let poolParams = poolSizing.resolvePoolParams(this.dbType);
         this.connectionPoolParams = {
             host:               this.host,
             user:               this.user,
             password:           this.pass,
             database:           this.dbName,
             port:               this.port,
-            connectionLimit:    parseInt(process.env.DB_POOL_SIZE) || 5,
-            connectTimeout:     parseInt(process.env.DB_CONNECT_TIMEOUT) || 10000,
-            acquireTimeout:     parseInt(process.env.DB_ACQUIRE_TIMEOUT) || 10000,
+            connectionLimit:    poolParams.connectionLimit,
+            connectTimeout:     poolParams.connectTimeout,
+            acquireTimeout:     poolParams.acquireTimeout,
             idleTimeout:        60000,
             insertIdAsNumber:   true,
             bigIntAsNumber:     true,
@@ -86,7 +90,7 @@ class Database {
             // INTEGER timestamps, so this is a no-op there.
             dateStrings:        true,
             minDelayValidation: 3000,
-            queryTimeout:       parseInt(process.env.DB_QUERY_TIMEOUT) || 30000
+            queryTimeout:       poolParams.queryTimeout
         };
 
         // Setup pool of connections

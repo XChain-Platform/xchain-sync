@@ -1109,10 +1109,21 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(builder._snapshotCap(db), 3);
         });
 
-        it('falls back to DB_POOL_SIZE env, then the driver default of 5', function(){
-            assert.strictEqual(builder._snapshotCap(createMockDb()), 3);
+        // : with no connectionPoolParams to read, the cap falls back to the
+        // same per-dbType sizing db.js uses (DB_POOL_SIZE_<DBTYPE> > DB_POOL_SIZE >
+        // per-dbType default), so a decoder Database never inherits the indexer's cap.
+        it('falls back to per-dbType pool sizing, then DB_POOL_SIZE env', function(){
+            let poolSizing = require('../../src/poolSizing');
+            let indexerDb  = createMockDb();
+            let decoderDb  = createMockDb();
+            decoderDb.dbType = 'decoder';
+            assert.strictEqual(builder._snapshotCap(indexerDb), poolSizing.DEFAULT_POOL_SIZE.indexer - 2);
+            assert.strictEqual(builder._snapshotCap(decoderDb), poolSizing.DEFAULT_POOL_SIZE.decoder - 2);
             process.env.DB_POOL_SIZE = '10';
             assert.strictEqual(builder._snapshotCap(createMockDb()), 8);
+            process.env.DB_POOL_SIZE_DECODER = '6';
+            assert.strictEqual(builder._snapshotCap(decoderDb), 4);
+            delete process.env.DB_POOL_SIZE_DECODER;
         });
 
         it('honours MAX_CONCURRENT_SNAPSHOTS but clamps to [1, poolSize - 1]', function(){

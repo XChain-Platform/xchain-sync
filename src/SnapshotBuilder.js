@@ -29,6 +29,7 @@ const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
 const { activationDelayBlocks } = require('./consensus-constants');
+const poolSizing = require('./poolSizing');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -248,8 +249,8 @@ class SnapshotBuilder {
         this.pageSize = 10000;
 
         // In-flight long-lived snapshot streams per Database instance .
-        // ServerPoller and the /snapshot routes share ONE Database (pool of
-        // DB_POOL_SIZE, default 5) per chain:network:dbType, and each full or
+        // ServerPoller and the /snapshot routes share ONE Database (pool sized
+        // per dbType, see poolSizing.js) per chain:network:dbType, and each full or
         // incremental snapshot pins a pool connection for the whole stream
         // (beginReadSnapshot). The rate limiter is per-IP only, so N validators
         // bootstrapping at once (a flag-day cohort) could pin every connection
@@ -267,7 +268,7 @@ class SnapshotBuilder {
     // poller's last connection to a snapshot stampede.
     _snapshotCap(db){
         let poolSize = (db && db.connectionPoolParams && db.connectionPoolParams.connectionLimit)
-            || parseInt(process.env.DB_POOL_SIZE) || 5;
+            || poolSizing.resolvePoolSize(db && db.dbType);
         let cap = parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS);
         if(!Number.isFinite(cap)) cap = poolSize - 2;
         return Math.max(1, Math.min(cap, poolSize - 1));
