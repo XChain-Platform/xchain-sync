@@ -8,7 +8,7 @@
     "url": "https://github.com/XChain-Platform/xchain-sync.git"
   },
   "dependencies": {
-    "axios": "^1.16.0",
+    "axios": "^1.18.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
@@ -57,12 +57,16 @@
     "test:boundary": "mocha --timeout 5000 --recursive 'test/boundary/**/*.boundary.test.js'"
   },
   "overrides": {
+    "brace-expansion": "^5.0.8",
+    "minimatch": "^10.2.5",
     "decimal.js": "10.4.3",
     "serialize-javascript": "^7.0.5",
     "diff": "^8.0.3",
     "tmp": "^0.2.7",
     "fast-uri": "^3.1.4",
-    "ajv": "^8.18.0"
+    "ajv": "^8.18.0",
+    "js-yaml": "^4.3.0",
+    "form-data": "^4.0.6"
   },
   "engines": {
     "node": ">=22.0.0"
