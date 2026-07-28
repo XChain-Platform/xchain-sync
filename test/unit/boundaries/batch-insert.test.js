@@ -24,6 +24,10 @@ function createMockDb(){
     };
 }
 
+// These cover batch-size boundaries only and need any plain-INSERT table. They used
+// `blocks`, which is now a localSurrogateIdTables member: its source id is stripped and
+// its rows are keyed by block_index, so these synthetic {id, value} rows are refused.
+// Retargeted to `actions`; blocks' own behaviour is pinned in ClientApplier.test.js.
 function makeRows(count){
     let rows = [];
     for(let i = 0; i < count; i++) rows.push({ id: i, value: 'v' + i });
@@ -44,49 +48,49 @@ describe('Boundary: INSERT Batch Size (100 rows)', function(){
     afterEach(function(){ sinon.restore(); });
 
     it('0 rows: no INSERT executed', async function(){
-        await applier._insertRows('blocks', []);
+        await applier._insertRows('actions', []);
         assert.strictEqual(db.doQuery.called, false);
     });
 
     it('null rows: no INSERT executed', async function(){
-        await applier._insertRows('blocks', null);
+        await applier._insertRows('actions', null);
         assert.strictEqual(db.doQuery.called, false);
     });
 
     it('1 row: single INSERT with 1 value clause', async function(){
-        await applier._insertRows('blocks', makeRows(1));
+        await applier._insertRows('actions', makeRows(1));
         assert.strictEqual(db.doQuery.callCount, 1);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 2); // 2 columns * 1 row
     });
 
     it('99 rows: single INSERT', async function(){
-        await applier._insertRows('blocks', makeRows(99));
+        await applier._insertRows('actions', makeRows(99));
         assert.strictEqual(db.doQuery.callCount, 1);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 198); // 2 cols * 99 rows
     });
 
     it('100 rows: single INSERT (at boundary)', async function(){
-        await applier._insertRows('blocks', makeRows(100));
+        await applier._insertRows('actions', makeRows(100));
         assert.strictEqual(db.doQuery.callCount, 1);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 200); // 2 cols * 100 rows
     });
 
     it('101 rows: two INSERTs: 100 + 1', async function(){
-        await applier._insertRows('blocks', makeRows(101));
+        await applier._insertRows('actions', makeRows(101));
         assert.strictEqual(db.doQuery.callCount, 2);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 200);  // 100 rows
         assert.strictEqual(db.doQuery.secondCall.args[1].length, 2);   // 1 row
     });
 
     it('200 rows: two INSERTs of 100 each', async function(){
-        await applier._insertRows('blocks', makeRows(200));
+        await applier._insertRows('actions', makeRows(200));
         assert.strictEqual(db.doQuery.callCount, 2);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 200);
         assert.strictEqual(db.doQuery.secondCall.args[1].length, 200);
     });
 
     it('250 rows: three INSERTs: 100 + 100 + 50', async function(){
-        await applier._insertRows('blocks', makeRows(250));
+        await applier._insertRows('actions', makeRows(250));
         assert.strictEqual(db.doQuery.callCount, 3);
         assert.strictEqual(db.doQuery.getCall(2).args[1].length, 100); // 50 rows * 2 cols
     });

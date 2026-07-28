@@ -428,8 +428,11 @@ describe('ClientApplier', function(){
 
         it('rolls back on error', async function(){
             db.doQuery.rejects(new Error('inc fail'));
+            // Carries block_index because `blocks` rows are now identified by it; a
+            // bare {id} row is refused before any query runs, which would mask the
+            // DB failure this case exists to check.
             await assert.rejects(() => applier.applyIncrementalSnapshot({
-                schema_version: SCHEMA_VERSION.indexer, since_block: 1, tables: { blocks: [{ id: 1 }] }
+                schema_version: SCHEMA_VERSION.indexer, since_block: 1, tables: { blocks: [{ id: 1, block_index: 1 }] }
             }), { message: 'inc fail' });
             assert.strictEqual(db.rollbackTransaction.calledOnce, true);
         });
@@ -485,23 +488,89 @@ describe('ClientApplier', function(){
             });
         }
 
+        // These three cover generic column/batch handling and used `blocks` only as an
+        // arbitrary plain-INSERT table, with synthetic {id} rows a real blocks row never
+        // has (it always carries block_index). `blocks` is now a localSurrogateIdTables
+        // member whose id is stripped, so it is no longer a neutral stand-in; retargeted
+        // to `actions`, which takes the plain-INSERT path. blocks' own behaviour is
+        // pinned separately below.
         it('batches inserts in groups of 100', async function(){
             let rows = [];
             for(let i = 0; i < 250; i++) rows.push({ id: i });
-            await applier._insertRows('blocks', rows);
+            await applier._insertRows('actions', rows);
             assert.strictEqual(db.doQuery.callCount, 3); // 100 + 100 + 50
         });
 
         it('handles null column values', async function(){
-            await applier._insertRows('blocks', [{ id: 1, name: null }]);
+            await applier._insertRows('actions', [{ id: 1, name: null }]);
             let args = db.doQuery.firstCall.args[1];
             assert.strictEqual(args[1], null);
         });
 
         it('handles undefined column values as null', async function(){
-            await applier._insertRows('blocks', [{ id: 1, name: undefined }]);
+            await applier._insertRows('actions', [{ id: 1, name: undefined }]);
             let args = db.doQuery.firstCall.args[1];
             assert.strictEqual(args[1], null);
+        });
+
+        // Item 808: litecoin/mainnet/indexer froze for days, reporting halted:false,
+        // because the source streamed a `blocks` row carrying its own surrogate id that
+        // the replica had long ago assigned to a different block, so every apply died on
+        // ER_DUP_ENTRY and rolled back the whole transaction. The replica must not
+        // inherit that id at all.
+        describe('blocks surrogate id (item 808)', function(){
+            it('strips the source id so the replica assigns its own', async function(){
+                await applier._insertRows('blocks', [{ id: 27681, block_index: 3147670, block_time: 5 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(!insert.includes('`id`'), 'the source surrogate id must not be replicated');
+                assert.ok(insert.includes('`block_index`') && insert.includes('`block_time`'),
+                    'every other column must still be written');
+            });
+
+            it('deletes the existing row for that block_index first, so a re-send is idempotent', async function(){
+                await applier._insertRows('blocks', [{ id: 27681, block_index: 3147670 }]);
+                let calls = db.doQuery.getCalls().map(c => c.args[0]);
+                let delIdx = calls.findIndex(q => /^DELETE FROM `blocks`/.test(q));
+                let insIdx = calls.findIndex(q => /^INSERT/.test(q));
+                assert.ok(delIdx !== -1, 'must clear the natural key before inserting');
+                assert.ok(delIdx < insIdx, 'the DELETE must precede the INSERT');
+                assert.ok(calls[delIdx].includes('`block_index` IN'), 'the DELETE must be scoped to block_index');
+                assert.deepStrictEqual(db.doQuery.getCall(delIdx).args[1], [3147670],
+                    'the DELETE must be scoped to exactly the block_index being applied');
+            });
+
+            it('scopes the delete to the applied blocks only, never the whole table', async function(){
+                await applier._insertRows('blocks', [
+                    { id: 1, block_index: 10 },
+                    { id: 2, block_index: 11 }
+                ]);
+                let del = db.doQuery.getCalls().find(c => /^DELETE FROM `blocks`/.test(c.args[0]));
+                assert.deepStrictEqual(del.args[1], [10, 11]);
+                assert.ok(!/DELETE FROM `blocks`\s*$/.test(del.args[0]), 'must never be an unscoped wipe');
+            });
+
+            it('does not use IGNORE or UPSERT, which would drop or overwrite a block', async function(){
+                await applier._insertRows('blocks', [{ id: 1, block_index: 10 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(!insert.startsWith('INSERT IGNORE'), 'IGNORE would silently skip the block');
+                assert.ok(!insert.includes('ON DUPLICATE KEY UPDATE'),
+                    'UPSERT would overwrite whichever unrelated block holds that id');
+            });
+
+            it('fails closed on a row with no block_index rather than appending a duplicate', async function(){
+                // block_index is a plain INDEX, not UNIQUE, so an unscoped insert cannot
+                // be de-duplicated afterwards; refuse instead of corrupting the table.
+                await assert.rejects(
+                    () => applier._insertRows('blocks', [{ id: 1, block_time: 5 }]),
+                    /missing its natural key block_index/);
+            });
+
+            it('leaves a legacy row that carries no id untouched', async function(){
+                await applier._insertRows('blocks', [{ block_index: 10, block_time: 5 }]);
+                let calls = db.doQuery.getCalls().map(c => c.args[0]);
+                assert.ok(!calls.some(q => /^DELETE/.test(q)), 'no id to strip means no delete is needed');
+                assert.ok(calls.some(q => /^INSERT INTO `blocks`/.test(q)));
+            });
         });
 
         it('backtick-wraps column names', async function(){

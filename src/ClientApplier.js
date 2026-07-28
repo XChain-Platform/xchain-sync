@@ -117,6 +117,37 @@ class ClientApplier {
             'markets',
             'attest_validator_stats'
         ]);
+
+        // Tables whose PRIMARY KEY is a purely LOCAL AUTO_INCREMENT surrogate that the
+        // replica must NOT inherit from the source, mapped to the natural key that
+        // actually identifies the row. Replicating such an id verbatim forces an
+        // agreement the protocol explicitly does not require: BlockHasher hashes the
+        // resolved canonical strings "rather than raw AUTO_INCREMENT lookup ids (which
+        // diverge across nodes after a reorg); it is id-independent". Once a rollback
+        // has deleted rows and let re-application renumber them, the replica's sequence
+        // is permanently offset from the source's, and every later apply collides on
+        // the same PK forever (ER_DUP_ENTRY 1062), aborting the whole transaction and
+        // freezing the replica while it still reports halted:false (item 808:
+        // litecoin/mainnet/indexer, ~1,400 identical failures on `Duplicate entry
+        // '27681' for key 'PRIMARY'`).
+        //
+        // Neither existing escape hatch fits `blocks`. INSERT IGNORE would SKIP the
+        // block, leaving the replica silently short a consensus-relevant row with no
+        // divergence signal; ON DUPLICATE KEY UPDATE would OVERWRITE whichever unrelated
+        // block already occupies that id. The correct treatment is to drop the source's
+        // id and let the replica assign its own, deleting any existing row for the same
+        // natural key first so the re-send stays idempotent. A scoped DELETE (not a
+        // UNIQUE constraint) is what this needs, because `blocks.block_index` carries a
+        // plain INDEX only, so ON DUPLICATE KEY has nothing to fire on and a bare INSERT
+        // of an already-present block would silently duplicate it. Same DELETE+INSERT
+        // in-one-transaction shape as applyDispensersReplace below.
+        //
+        // Nothing joins `blocks.id`: the source's own createBlock INSERTs without it,
+        // the other *_hash_id columns point into index_transactions, and the client
+        // cursor is `SELECT MAX(block_index)` (db.js getLastBlock), never an id.
+        this.localSurrogateIdTables = new Map([
+            ['blocks', 'block_index']
+        ]);
     }
 
     // Apply a single block payload from a WebSocket event
@@ -512,6 +543,40 @@ class ClientApplier {
         let useIgnore = this.ignoreTables.has(table);
         let useUpsert = this.upsertFullDumpTables.has(table);
         let columns   = Object.keys(rows[0]);
+
+        // Drop the source's local surrogate id and clear any row already holding the
+        // same natural key, so a re-sent row replaces rather than collides. See
+        // localSurrogateIdTables for why this table cannot use IGNORE or UPSERT.
+        let naturalKey = this.localSurrogateIdTables.get(table);
+        if(naturalKey && columns.includes('id')){
+            let keyCheck = validation.validateIdentifier(naturalKey);
+            if(!keyCheck.valid)
+                throw new Error('Rejected natural key in _insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
+
+            columns = columns.filter(c => c !== 'id');
+            if(columns.length === 0)
+                throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
+
+            // Fail closed on a row that cannot be identified: inserting it would append a
+            // duplicate the DELETE could never scope to (block_index is not UNIQUE).
+            let keyValues = [];
+            for(let row of rows){
+                let v = row[naturalKey];
+                if(v === undefined || v === null)
+                    throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
+                if(!keyValues.includes(v)) keyValues.push(v);
+            }
+
+            // Chunked to keep the IN list bounded on a large catch-up window.
+            let deleteBatch = 500;
+            for(let i = 0; i < keyValues.length; i += deleteBatch){
+                let slice = keyValues.slice(i, i + deleteBatch);
+                await this.db.doQuery(
+                    'DELETE FROM `' + table + '` WHERE `' + naturalKey + '` IN (' +
+                        slice.map(() => '?').join(', ') + ')',
+                    slice);
+            }
+        }
 
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
