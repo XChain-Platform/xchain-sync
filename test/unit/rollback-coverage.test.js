@@ -700,11 +700,31 @@ describe('Rollback coverage guard @regression', function(){
     // state_key_collation_activation.js gates the state_key COLLATE in the
     // contract_hash/block_merkle_root preimage on BOTH sides; a drifted copy
     // forks the recomputed hashes at/after an armed height.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'tableLifecycle.js']){
+    // state_subtree_activation.js is the flag-day gate for the RESERVED state_root
+    // slots (ownership/tokens/contract_state) and for the balances_root escrow leaf.
+    // It is inert today, but it decides on BOTH sides which sub-roots stop being
+    // EMPTY at an armed height; a drifted copy forks state_root the moment a slot
+    // arms, or halts every follower before it.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'state_subtree_activation.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
             const indexerPath = indexerFile('src/' + twin);
+            if(!requireSibling(this, indexerPath)) return;
+            assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+                twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+        });
+    }
+
+    // The gate's own conformance suite is a twin too: it is what proves the carrier
+    // is inert (identical state_root to the two-sub-root v1 assembly) and that the
+    // slot list matches merkle.STATE_SUBTREES. Both repos must assert the same
+    // thing, or one side can land an arming change the other never checked.
+    for(const twin of ['stateSubtreeActivation.test.js']){
+        it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
+            const fs = require('fs'), pathMod = require('path');
+            const syncPath    = pathMod.resolve(__dirname, '../../test/unit/' + twin);
+            const indexerPath = indexerFile('test/unit/' + twin);
             if(!requireSibling(this, indexerPath)) return;
             assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');

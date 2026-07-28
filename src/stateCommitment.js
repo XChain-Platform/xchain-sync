@@ -48,6 +48,7 @@
 
 const M = require('./merkle.js');
 const CC = require('./consensus-constants.js');
+const SUB = require('./state_subtree_activation.js');
 const { minimalDecimal } = require('./balance-helpers.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT
@@ -256,9 +257,35 @@ async function reportOrphanStats(query, chain, network, opts){
     return { totalNodes: nodes.size, reachableNodes, orphanCount: nodes.size - reachableNodes, reachabilitySkipped: false };
 }
 
-// Assemble the top-level state_root from the two v1 sub-roots (others EMPTY).
-function assembleStateRoot(balancesRootHex, stakesRootHex){
-    return M.toHex(M.stateRoot({ balances_root: balancesRootHex, stakes_root: stakesRootHex }));
+// Assemble the top-level state_root from the two v1 sub-roots plus any RESERVED
+// slot that its flag-day has armed (SPV spec §4.1; design in
+// claude/specs/spv-state-subtree-extension.md).
+//
+// `extraSubRoots` is the forward-compatible carrier for ownership_root /
+// tokens_root / contract_state_root and MUST be the output of
+// state_subtree_activation.gateSubRoots(), never a caller's raw candidates: the
+// gate is what keeps an un-armed slot EMPTY. It is null today (every slot inert),
+// and merkle.stateRoot() maps a null/absent/empty-root slot to the identical
+// EMPTY_SMT_ROOT leaf, so this is byte-identical to the old two-argument
+// assembly on every chain. The equality is asserted, not assumed, in
+// test/unit/stateSubtreeActivation.test.js.
+function assembleStateRoot(balancesRootHex, stakesRootHex, extraSubRoots){
+    const subRoots = { balances_root: balancesRootHex, stakes_root: stakesRootHex };
+    if(extraSubRoots){
+        for(const name of SUB.RESERVED_SUBTREES)
+            if(extraSubRoots[name]) subRoots[name] = extraSubRoots[name];
+    }
+    return M.toHex(M.stateRoot(subRoots));
+}
+
+// Candidate reserved sub-roots for one block, before gating. NONE are derived yet
+// (Stage A contract_state_root / Stage B escrow leaf in the design doc), so this
+// is null and the gate collapses the assembly to the v1 two-root form. It exists
+// as the single seam a landed derivation plugs into: the gate is already on the
+// block path, so arming a slot is a change here plus a height in
+// state_subtree_activation.js, never a re-plumb of the commit path.
+async function reservedSubRootCandidates(/* db, chain, network, blockIndex */){
+    return null;
 }
 
 // ---- Leaf value derivation (authoritative, never the balances cache) --------
@@ -444,7 +471,8 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
         stakesRoot = await smt.buildFull(stakeEntries);
     }
 
-    const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
+    const extraSubRoots   = SUB.gateSubRoots(await reservedSubRootCandidates(db, chain, network, blockIndex), blockIndex, network, chain);
+    const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot, extraSubRoots);
     const blockMerkleRoot = await computeBlockMerkleRoot(db, blockIndex, network, chain);
 
     await db.doQuery(
@@ -474,7 +502,8 @@ async function seedSnapshotRoots(db, chain, network, blockHeight){
         const smt = new PersistentSMT(new DbNodeStore(db));
         stakesRoot = await smt.buildFull(await gatherStakeEntries(db, chain, network, blockHeight));
     }
-    const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot);
+    const extraSubRoots   = SUB.gateSubRoots(await reservedSubRootCandidates(db, chain, network, blockHeight), blockHeight, network, chain);
+    const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot, extraSubRoots);
     const blockMerkleRoot = await computeBlockMerkleRoot(db, blockHeight, network, chain);
     await db.doQuery(
         `INSERT INTO state_tree_roots

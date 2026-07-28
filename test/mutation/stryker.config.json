@@ -5,21 +5,29 @@
     "@stryker-mutator/mocha-runner"
   ],
   "mutate": [
-    "../../src/**/*.js",
-    "!../../src/api.js"
+    "src/**/*.js",
+    "!src/api.js"
   ],
   "coverageAnalysis": "perTest",
   "mochaOptions": {
     "spec": [
-      "../../test/unit/**/*.test.js"
+      "test/unit/**/*.test.js"
+    ],
+    "ignore": [
+      "test/unit/rollback-coverage.test.js"
     ]
   },
-  "reporters": ["html", "clear-text", "json", "progress"],
+  "reporters": [
+    "html",
+    "clear-text",
+    "json",
+    "progress"
+  ],
   "htmlReporter": {
-    "fileName": "../../reports/mutation/mutation-report.html"
+    "fileName": "reports/mutation/mutation-report.html"
   },
   "jsonReporter": {
-    "fileName": "../../reports/mutation/mutation-report.json"
+    "fileName": "reports/mutation/mutation-report.json"
   },
   "thresholds": {
     "high": 95,
@@ -27,7 +35,7 @@
     "break": 80
   },
   "incremental": true,
-  "incrementalFile": "../../reports/mutation/.stryker-incremental.json",
+  "incrementalFile": "reports/mutation/.stryker-incremental.json",
   "concurrency": 4,
   "timeoutMS": 10000,
   "timeoutFactor": 1.5,
