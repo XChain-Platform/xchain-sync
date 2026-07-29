@@ -58,6 +58,17 @@ class TestDatabase {
         }
     }
 
+    // M-17 strict read. Production's doQuery collapses a NON-transactional query
+    // error into [], which is why the sub-tree derivations read through
+    // doQueryStrict; this harness's doQuery already throws on every error, so the
+    // strict contract is what it has always offered and the alias just lets those
+    // derivations resolve here. Without it, every DB-backed test that turns the
+    // state-commitment path ON dies on `doQueryStrict is not a function`, which is
+    // one structural reason no integration test had ever exercised it.
+    async doQueryStrict(query, args, conn) {
+        return await this.doQuery(query, args, conn);
+    }
+
     async getLastBlock(conn) {
         let rows = await this.doQuery("SELECT MAX(block_index) AS block_index FROM blocks", null, conn);
         if (rows.length > 0 && rows[0].block_index !== null)
@@ -226,6 +237,22 @@ class TestDatabase {
         try { await this.pool.end(); } catch (e) {}
     }
 }
+
+// Adopt selected REAL Database methods by reference rather than reimplementing
+// them here. Each one below is pure SQL over this.doQuery, so it works unchanged on
+// this wrapper, and borrowing it means the harness cannot drift from the query the
+// services actually run. A hand-copied second implementation is how a test tier ends
+// up green about SQL production does not execute.
+// The three below are what the state-commitment path reads (getStateRootsRow for the
+// prior block's roots, getBlockLeafRows for block_merkle_root, and the stake-weight
+// family for stakes_root), plus the private helpers those compose. All of them reach
+// the database only through this.doQuery / this.getStatusId, both of which this
+// wrapper already provides.
+const RealDatabase = require('../../../src/db');
+for (const method of ['getStateRootsRow', 'getBlockLeafRows',
+                      'getStakeWeightsByCapability', '_stakeWeightsSql',
+                      '_applyStakeWeightCap', '_cappedStakeWeightsSql'])
+    TestDatabase.prototype[method] = RealDatabase.prototype[method];
 
 // Create a TestDatabase for a given db name
 async function createDb(dbName) {

@@ -24,6 +24,7 @@ const balanceHelpers      = require('./balance-helpers');
 const { SCHEMA_VERSION }  = require('./schema-version');
 const { decodeValue }     = require('./wireCodec');
 const { rederiveEscrowGate } = require('./ClientRollback');
+const { generatedColumns }   = require('./generatedColumns');
 const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
 const { coinTicker }      = require('./consensus-constants');
@@ -544,6 +545,18 @@ class ClientApplier {
         let useUpsert = this.upsertFullDumpTables.has(table);
         let columns   = Object.keys(rows[0]);
 
+        // Generated columns are the DATABASE's to compute. The source reads its rows
+        // with SELECT *, so one rides the wire like any other column, and naming it in
+        // the INSERT is errno 1906: harmless on a permissive server, a hard error under
+        // STRICT_TRANS_TABLES, which every modern MariaDB defaults to. See
+        // src/generatedColumns.js for why this is a frozen map and not a schema probe.
+        let generated = generatedColumns(table);
+        if(generated.size){
+            columns = columns.filter(c => !generated.has(c));
+            if(columns.length === 0)
+                throw new Error('Refusing to insert into ' + table + ': every carried column is generated');
+        }
+
         // Drop the source's local surrogate id and clear any row already holding the
         // same natural key, so a re-sent row replaces rather than collides. See
         // localSurrogateIdTables for why this table cannot use IGNORE or UPSERT.
@@ -672,6 +685,14 @@ class ClientApplier {
         }
 
         let columns = Object.keys(rows[0]);
+        // Same errno-1906 rule as _insertRows: a generated column may ride the wire
+        // (the source reads with SELECT *) and must not be named in the write.
+        let generated = generatedColumns(table);
+        if(generated.size){
+            columns = columns.filter(c => !generated.has(c));
+            if(columns.length === 0)
+                throw new Error('Refusing to upsert into ' + table + ': every carried column is generated');
+        }
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
