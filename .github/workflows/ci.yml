@@ -92,11 +92,18 @@ jobs:
       # sibling, so they silently skip there (#4631). Run them HERE, where the
       # sibling IS checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing sibling
       # hard-fails instead of green-by-skip. Pure source comparisons (no DB).
+      # generatedColumns.test.js joins this list for exactly the reason the comment
+      # above gives, and it walked straight into the trap: it derives the frozen
+      # generated-column map from the indexer AND decoder DDL, so in the shared `ci`
+      # job (no siblings checked out) it skips, and a guard that only ever skips
+      # protects nothing. It needs the DECODER path too, which this job already has
+      # checked out for the e2e tier.
       - name: Run cross-repo consensus drift guards against the checked-out indexer
         env:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
+          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js
 
       - name: Run the e2e tier
         env:

@@ -103,7 +103,9 @@ describe('generatedColumns: the frozen map matches the indexer and decoder DDL @
     });
 
     it('covers the tables that are actually replicated, which is where it matters', function(){
-        if(!SQL_DIRS.every(d => fs.existsSync(d))){ this.skip(); return; }
+        // No sibling guard: this one reads only the frozen map and the lifecycle
+        // registry, both local, so skipping it when a sibling is absent would have
+        // withheld coverage for no reason.
         // A generated column only causes the 1906 failure on a table the follower
         // WRITES. If one ever appears on a table nobody replicates the map still lists
         // it (harmless), but the reverse is the bug, so this pins the direction.
