@@ -34,10 +34,21 @@ const path   = require('path');
 const { GENERATED_COLUMNS, generatedColumns } = require('../../src/generatedColumns');
 const lifecycle = require('../../src/tableLifecycle');
 
-// Sibling indexer schema, resolved the way the DB-backed suites do. Absent by default
+// BOTH sibling schemas, resolved the way the DB-backed suites do. Absent by default
 // in a standalone checkout; XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip fail instead.
-const SQL_DIR = process.env.XCHAIN_INDEXER_SQL_PATH
-    || path.resolve(__dirname, '..', '..', '..', 'xchain-indexer', 'src', 'sql');
+//
+// The DECODER half is not decoration. `ClientApplier._insertRows` serves indexer AND
+// decoder replicas from the one frozen map, so a generated column appearing in the
+// decoder schema would reintroduce the errno-1906 halt on the decoder replication path
+// while a guard that scanned only the indexer stayed green. There are none there today,
+// which is exactly when the scan is worth widening: the hole is invisible until the day
+// it is not.
+const SQL_DIRS = [
+    process.env.XCHAIN_INDEXER_SQL_PATH
+        || path.resolve(__dirname, '..', '..', '..', 'xchain-indexer', 'src', 'sql'),
+    process.env.XCHAIN_DECODER_SQL_PATH
+        || path.resolve(__dirname, '..', '..', '..', 'xchain-decoder', 'src', 'sql')
+];
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 
 // Every `<col> ... GENERATED ALWAYS AS (...)` in a CREATE TABLE, keyed by table.
@@ -61,33 +72,38 @@ function deriveFromDdl(sqlDir){
     return found;
 }
 
-describe('generatedColumns: the frozen map matches the indexer DDL @regression', function(){
+describe('generatedColumns: the frozen map matches the indexer and decoder DDL @regression', function(){
 
-    it('lists exactly the generated columns the schema declares', function(){
-        if(!fs.existsSync(SQL_DIR)){
+    it('lists exactly the generated columns both schemas declare', function(){
+        const present = SQL_DIRS.filter(d => fs.existsSync(d));
+        if(present.length !== SQL_DIRS.length){
             if(SIBLING_REQUIRED)
-                throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but the indexer schema is absent: ' + SQL_DIR);
+                throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but a sibling schema is absent: ' +
+                                SQL_DIRS.filter(d => !fs.existsSync(d)).join(', '));
             this.skip();
             return;
         }
-        const derived = deriveFromDdl(SQL_DIR);
+        const derived = {};
+        for(const dir of present) Object.assign(derived, deriveFromDdl(dir));
 
         // The derivation must actually find something, or a regex that stopped matching
         // would make this test pass by finding nothing on both sides.
         assert.ok(Object.keys(derived).length > 0,
-                  'derived no generated columns at all from ' + SQL_DIR + '; the DDL scan is broken');
+                  'derived no generated columns at all from ' + present.join(', ') +
+                  '; the DDL scan is broken');
 
         const frozen = {};
         for(const t of Object.keys(GENERATED_COLUMNS)) frozen[t] = [...GENERATED_COLUMNS[t]].sort();
 
         assert.deepStrictEqual(derived, frozen,
-            'src/generatedColumns.js has drifted from the indexer DDL. A table that gained a ' +
-            'generated column will make every follower fail its block apply with errno 1906 ' +
-            'under STRICT_TRANS_TABLES; one that lost it wastes a column on every insert.');
+            'src/generatedColumns.js has drifted from the indexer/decoder DDL. A table that ' +
+            'gained a generated column will make every follower fail its block apply with ' +
+            'errno 1906 under STRICT_TRANS_TABLES; one that lost it wastes a column on every ' +
+            'insert. Scanned: ' + present.join(', '));
     });
 
     it('covers the tables that are actually replicated, which is where it matters', function(){
-        if(!fs.existsSync(SQL_DIR)){ this.skip(); return; }
+        if(!SQL_DIRS.every(d => fs.existsSync(d))){ this.skip(); return; }
         // A generated column only causes the 1906 failure on a table the follower
         // WRITES. If one ever appears on a table nobody replicates the map still lists
         // it (harmless), but the reverse is the bug, so this pins the direction.
