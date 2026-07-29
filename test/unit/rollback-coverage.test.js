@@ -705,7 +705,14 @@ describe('Rollback coverage guard @regression', function(){
     // It is inert today, but it decides on BOTH sides which sub-roots stop being
     // EMPTY at an armed height; a drifted copy forks state_root the moment a slot
     // arms, or halts every follower before it.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'state_subtree_activation.js', 'tableLifecycle.js']){
+    // contractStateSubtree.js is the contract_state_root DERIVATION (SPV sub-tree
+    // spec §3 Stage A): the row-to-leaf mapping, the touched-key query and the
+    // incremental-vs-full-build decision. It deliberately owns no SMT engine and
+    // no db handle so it CAN be byte-identical, because the source and the
+    // follower must answer "which leaves does this block commit" with the same
+    // bytes: the follower recomputes and HALTs on divergence, so drift here is a
+    // fleet halt at the first armed block rather than a subtle fork.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
@@ -720,7 +727,39 @@ describe('Rollback coverage guard @regression', function(){
     // is inert (identical state_root to the two-sub-root v1 assembly) and that the
     // slot list matches merkle.STATE_SUBTREES. Both repos must assert the same
     // thing, or one side can land an arming change the other never checked.
-    for(const twin of ['stateSubtreeActivation.test.js']){
+    // state_subtree_activation.js has a THIRD carrier: xchain-sdk ships it as a
+    // client-facing consensus constant, because no proof can tell a client whether
+    // a slot is live (an armed-but-empty slot and an inert slot commit the same
+    // EMPTY_SMT_ROOT). The loop above only pairs sync with the indexer, so the SDK
+    // copy is checked here as well; xchain-sdk carries its own copy of this guard
+    // plus a golden pin for standalone checkouts.
+    it('state_subtree_activation.js is byte-identical in xchain-sdk too (client liveness export)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const sdkPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-sdk/src/state_subtree_activation.js');
+        if(!requireSibling(this, sdkPath)) return;
+        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/state_subtree_activation.js'), 'utf8'),
+                           fs.readFileSync(sdkPath, 'utf8'),
+            'the SDK activation copy drifted; a client would read different armed heights than the fleet commits');
+    });
+
+    // And a FOURTH carrier: the explorer, whose locked-balance proof endpoint
+    // refuses below the escrow leaf's armed height ( stage B2). Reserved
+    // slots need no gate there (their stored column carries the armed decision
+    // per height), but the escrow leaf lives inside balances_root with no stored
+    // signal, so the refusal requires the map itself. A drifted explorer copy
+    // either serves meaningless absence proofs early (the §4 hazard the refusal
+    // exists for; the SDK verifier's own copy still protects conforming clients)
+    // or refuses real proofs late (an availability gap).
+    it('state_subtree_activation.js is byte-identical in xchain-explorer too (escrow-leaf liveness refusal)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const expPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-explorer/src/state_subtree_activation.js');
+        if(!requireSibling(this, expPath)) return;
+        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/state_subtree_activation.js'), 'utf8'),
+                           fs.readFileSync(expPath, 'utf8'),
+            'the explorer activation copy drifted; its escrow-leaf proof refusal boundary would disagree with the fleet');
+    });
+
+    for(const twin of ['stateSubtreeActivation.test.js', 'contractStateSubtree.test.js', 'escrowLeafSubtree.test.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../test/unit/' + twin);

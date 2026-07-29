@@ -87,7 +87,12 @@ describe('ServerPoller', function(){
             assert.ok(poller.blockScopedTables.includes('capability_slash_debits'));
             // RB-ANCHOR: pre-image log of reconcile-deleted validator_rewards losers (stream:block).
             assert.ok(poller.blockScopedTables.includes('anchor_reward_reconcile_log'));
-            assert.strictEqual(poller.blockScopedTables.length, 9);
+            // Per-(address,tick) locked totals (SPV sub-tree spec Stage B). It is
+            // REPLICATED rather than recomputed on the follower, which is the whole
+            // point: four families' open-remaining logic then exists once, on the
+            // source, instead of having to agree across the twins.
+            assert.ok(poller.blockScopedTables.includes('escrow_leaf_journal'));
+            assert.strictEqual(poller.blockScopedTables.length, 10);
         });
 
         it('has action-scoped tables', function(){

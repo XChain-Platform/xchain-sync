@@ -772,8 +772,18 @@ describe('Database.ensureReplicatedColumns()', function () {
         });
         await db.ensureReplicatedColumns();
         let alters = calls.filter(s => /ALTER TABLE/.test(s));
-        // 4 drift entries → 4 ALTERs
-        assert.strictEqual(alters.length, 4);
+        // Assert the exact statements rather than a count: a count check passes
+        // when an entry is silently replaced, and each of these is the only thing
+        // standing between an aged replica and an "Unknown column" stall.
+        assert.deepStrictEqual(alters, [
+            'ALTER TABLE `orders` ADD COLUMN `give_ownership` TINYINT(1) NOT NULL DEFAULT 0',
+            'ALTER TABLE `orders` ADD COLUMN `get_ownership` TINYINT(1) NOT NULL DEFAULT 0',
+            'ALTER TABLE `swaps` ADD COLUMN `give_ownership` TINYINT(1) NOT NULL DEFAULT 0',
+            'ALTER TABLE `swaps` ADD COLUMN `get_ownership` TINYINT(1) NOT NULL DEFAULT 0',
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root` CHAR(64) NULL AFTER `block_merkle_root`',
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root_shadow` CHAR(64) NULL AFTER `contract_state_root`',
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `balances_root_escrow_shadow` CHAR(64) NULL AFTER `contract_state_root_shadow`'
+        ]);
         await db.close();
     });
 

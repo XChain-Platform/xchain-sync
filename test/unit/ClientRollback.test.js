@@ -42,8 +42,8 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 10 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 10);
+        it('has 11 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 11);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
@@ -56,6 +56,11 @@ describe('ClientRollback', function(){
             // Light-client per-block SMT roots (SPV spec sec.4), block-scoped so
             // orphaned-fork roots drop on reorg; state_tree_nodes stays (COW/immutable).
             assert.ok(rollback.blockTables.includes('state_tree_roots'));
+            // Per-(address,tick) locked totals (SPV sub-tree spec Stage B). It MUST be
+            // block-scoped: the escrow leaf derivation threads from the surviving row
+            // after a reorg, so a journal row left behind by an orphaned block would
+            // commit a locked amount for a lock that no longer exists.
+            assert.ok(rollback.blockTables.includes('escrow_leaf_journal'));
         });
 
         it('has action-scoped data tables', function(){

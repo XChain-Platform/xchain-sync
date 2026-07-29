@@ -182,6 +182,50 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
         assert.strictEqual(modifies, 0);
     });
 
+    it('adds state_tree_roots.contract_state_root on an aged replica that already has the table', async function(){
+        // The hazard this closes: state_tree_roots is FOLLOWER-DERIVED, so
+        // verifySyncTables only creates it when ABSENT and an aged replica never
+        // gains a column added to src/sql/state_tree_roots.sql afterwards. The
+        // first recomputed block then fails its INSERT with errno 1054 on every
+        // follower at once, on deploy rather than at an armed height.
+        let alters = [];
+        sinon.stub(db, 'doQuery').callsFake(async (sql, args) => {
+            if(/information_schema\.tables/i.test(sql))
+                return (args && args[1] === 'state_tree_roots') ? [{ table_name: 'state_tree_roots' }] : [];
+            if(/information_schema\.columns/i.test(sql) && /COLUMN_NAME = \?/i.test(sql)) return [];   // column absent
+            if(/IS_NULLABLE/i.test(sql))  return [{ IS_NULLABLE: 'YES' }];
+            if(/ALTER TABLE/i.test(sql)){ alters.push(sql); return []; }
+            return [];
+        });
+
+        await db.ensureReplicatedColumns();
+
+        assert.deepStrictEqual(alters, [
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root` CHAR(64) NULL AFTER `block_merkle_root`',
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root_shadow` CHAR(64) NULL AFTER `contract_state_root`',
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `balances_root_escrow_shadow` CHAR(64) NULL AFTER `contract_state_root_shadow`'
+        ]);
+    });
+
+    it('the added definition matches src/sql/state_tree_roots.sql (one column, two declarations)', function(){
+        // The drift entry and the definition file are two spellings of the same
+        // column, and a fresh install uses the file while an aged replica uses the
+        // entry. If they disagree the two populations diverge in schema, which is
+        // how a "converged" fleet ends up with a CHAR(64) on some nodes and
+        // something else on others.
+        const fs   = require('fs');
+        const path = require('path');
+        const ddl  = fs.readFileSync(path.resolve(__dirname, '../../src/sql/state_tree_roots.sql'), 'utf8');
+        assert.ok(/contract_state_root\s+CHAR\(64\)\s+NULL/i.test(ddl),
+            'src/sql/state_tree_roots.sql must declare contract_state_root CHAR(64) NULL');
+        assert.ok(/contract_state_root_shadow\s+CHAR\(64\)\s+NULL/i.test(ddl),
+            'and the §7 shadow column beside it');
+        // And it sits after block_merkle_root there, matching the AFTER anchor, so
+        // migrated and fresh tables converge on the same column order.
+        assert.ok(ddl.indexOf('block_merkle_root') < ddl.indexOf('contract_state_root'),
+            'contract_state_root must follow block_merkle_root in the definition, matching the AFTER anchor');
+    });
+
     it('does nothing on a decoder replica (early return, no queries)', async function(){
         let decoderDb = new Database('localhost', 3306, 'replica_db', 'u', 'p', { isNull: (v) => v === null || v === undefined }, 'decoder');
         let called = false;

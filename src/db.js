@@ -416,13 +416,35 @@ class Database {
     // xchain-indexer/migrations/20260531_contract_emissions_action_index_nullable.sql.
     async ensureReplicatedColumns(){
         if(this.dbType !== 'indexer') return;
+        // state_tree_roots.contract_state_root is here for a DIFFERENT reason than
+        // the four ownership columns, and the difference is worth stating because
+        // it is what makes this entry non-obvious. state_tree_roots is
+        // FOLLOWER-DERIVED, not replicated: verifySyncTables creates it from this
+        // repo's own src/sql/state_tree_roots.sql, and creation only happens when
+        // the table is ABSENT. So an aged replica that already has the table never
+        // gains a column added to that file afterwards, and every recomputed block
+        // would fail its INSERT with errno 1054 the moment the code writes the new
+        // column. Not at an armed height: on the FIRST block after deploy, on every
+        // follower at once. Fresh replicas are unaffected (they create the table
+        // with the column), which is exactly what makes it easy to ship and only
+        // discover in production. See the SPV sub-tree spec Stage A work list.
         let drift = [
-            { table: 'orders', column: 'give_ownership' },
-            { table: 'orders', column: 'get_ownership'  },
-            { table: 'swaps',  column: 'give_ownership' },
-            { table: 'swaps',  column: 'get_ownership'  }
+            { table: 'orders', column: 'give_ownership', definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
+            { table: 'orders', column: 'get_ownership',  definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
+            { table: 'swaps',  column: 'give_ownership', definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
+            { table: 'swaps',  column: 'get_ownership',  definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
+            { table: 'state_tree_roots', column: 'contract_state_root',
+              definition: 'CHAR(64) NULL AFTER `block_merkle_root`' },
+            { table: 'state_tree_roots', column: 'contract_state_root_shadow',
+              definition: 'CHAR(64) NULL AFTER `contract_state_root`' },
+            // Stage B's shadow column ( B3), same reasoning as the two
+            // above: state_tree_roots is follower-derived, so an aged replica
+            // never gains it from the definition file and the first shadow-window
+            // block would fail its INSERT with errno 1054.
+            { table: 'state_tree_roots', column: 'balances_root_escrow_shadow',
+              definition: 'CHAR(64) NULL AFTER `contract_state_root_shadow`' }
         ];
-        for(let { table, column } of drift){
+        for(let { table, column, definition } of drift){
             let tableRows = await this.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
                 [this.dbName, table]
@@ -435,8 +457,8 @@ class Database {
             );
             if(colRows.length > 0) continue;
 
-            console.log('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding TINYINT(1) NOT NULL DEFAULT 0.');
-            await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` TINYINT(1) NOT NULL DEFAULT 0');
+            console.log('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding ' + definition + '.');
+            await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` ' + definition);
         }
 
         // Nullability relaxations: each entry's column must be nullable upstream;
