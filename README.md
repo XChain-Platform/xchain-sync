@@ -116,6 +116,7 @@ npm run api
 | Command | Description |
 |---|---|
 | `npm run api` | Start the sync service |
+| `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
 | `npm test` | Run unit tests |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading) |
 | `npm run test:integration` | Integration tests (requires MariaDB + running indexer) |
@@ -132,6 +133,25 @@ npm run api
 | `npm run test:mutate` | Mutation tests (Stryker) |
 | `npm run test:mutate:quick` | Quick mutation tests |
 | `npm run test:mutate:check` | Incremental mutation tests |
+
+### Running the DB-backed tiers
+
+The unit tier runs anywhere. The integration and e2e tiers need a MariaDB, the
+canonical **indexer and decoder schemas** from their sibling repositories, and five
+environment variables. `bin/run-db-tiers.sh` supplies all of it: it starts a
+throwaway tmpfs-backed MariaDB, resolves the siblings, runs the tier and drops the
+container again.
+
+```bash
+bin/run-db-tiers.sh                    # integration tier
+bin/run-db-tiers.sh integration e2e    # both
+bin/run-db-tiers.sh -- test/integration/replication-insert-shape.test.js
+```
+
+When both siblings resolve it also sets `XCHAIN_REQUIRE_SIBLINGS=1`, which is what
+stops the cross-repo drift guards reporting green by **skipping**: several of them are
+no-ops without a sibling checkout. Needs Docker; `DB_PORT` moves the host port off the
+default 23316.
 
 ## Test Suite
 
