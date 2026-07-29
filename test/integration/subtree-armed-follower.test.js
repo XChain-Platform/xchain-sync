@@ -238,6 +238,49 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
         });
     });
 
+    it('a snapshot bootstrap AT the armed height commits the same roots as threading across it',
+       async function() {
+        this.timeout(60000);
+        await withArmed(TIP, async () => {
+            await stage();
+            const payload = await poller._buildBlockPayload(TIP);
+            await new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK).applyBlock(payload);
+            const threaded = await rootsRow(replicaDb, TIP);
+            assert.ok(threaded && threaded.contract_state_root, 'setup: the armed block did not commit');
+
+            // Stage A work item 2's hazard, stated there as: "a follower seeding from a
+            // snapshot taken at or after an armed height would otherwise commit an EMPTY
+            // slot against a source that committed a real one and halt on its first
+            // recomputed block." A1 answered it by routing all three block paths through
+            // one seam, and covered it with a unit vector. This runs the seam itself.
+            //
+            // A fresh bootstrap has the DATA a snapshot carried and no derived tree at
+            // all, so both derived tables go, not just the roots. That also makes the
+            // full build prove it does not lean on nodes left behind by the threaded run:
+            // state_tree_nodes is content-addressed, so leftovers would be silently
+            // reused and this vector would be weaker than it looks.
+            await replicaDb.doQuery('DELETE FROM state_tree_roots', []);
+            await replicaDb.doQuery('DELETE FROM state_tree_nodes', []);
+
+            await SC.seedSnapshotRoots(replicaDb, TICKER, NETWORK, TIP);
+            const seeded = await rootsRow(replicaDb, TIP);
+            assert.ok(seeded, 'seedSnapshotRoots wrote no row at the armed height');
+
+            assert.deepStrictEqual(
+                { b: seeded.balances_root, s: seeded.stakes_root,
+                  c: seeded.contract_state_root, r: seeded.state_root },
+                { b: threaded.balances_root, s: threaded.stakes_root,
+                  c: threaded.contract_state_root, r: threaded.state_root },
+                'a bootstrapped follower and one that threaded across the boundary disagree, ' +
+                'which is the halt-on-first-block hazard work item 2 exists to prevent');
+
+            // And the slot is genuinely non-empty in the bootstrapped row, so the
+            // agreement above is not two nodes agreeing on EMPTY.
+            assert.notStrictEqual(seeded.contract_state_root, SC.EMPTY_ROOT_HEX,
+                                  'the bootstrapped slot is the empty-SMT root');
+        });
+    });
+
     it('leaves both activation maps exactly as it found them', function() {
         assert.strictEqual(Object.prototype.hasOwnProperty.call(
             SUB.STATE_SUBTREE_ACTIVATION.contract_state_root, KEY), false);
