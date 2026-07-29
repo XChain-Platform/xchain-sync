@@ -909,6 +909,20 @@ class Database {
         return results;
     }
 
+    // Like doQuery, but a query error ALWAYS throws, transactional or not.
+    // The indexer twin carries the same method (xchain-indexer/src/db.js), so a
+    // byte-identical consensus module can call it on either side.
+    //
+    // For consensus-input reads: doQuery collapses a non-transactional query
+    // error into [], indistinguishable from a genuinely empty result, so a
+    // transient DB fault becomes "no data" on this node only and can fork the
+    // ledger (M-17). Inside a transaction the two are equivalent; outside one
+    // (snapshot seeding, tooling) they are not, which is exactly where the
+    // sub-tree derivations run without a transaction.
+    async doQueryStrict(query, args, conn){
+        return await this.doQuery(query, args, conn, { rethrow: true });
+    }
+
     // Get the last block index from the blocks table
     async getLastBlock(conn){
         let query = "SELECT MAX(block_index) AS block_index FROM blocks";
