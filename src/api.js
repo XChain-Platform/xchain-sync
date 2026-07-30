@@ -207,11 +207,20 @@ async function startApi(){
             row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
             // Per-table row counts (same logic as client-mode path below)
             row.table_counts = {};
+            // Ask ONCE which tables exist rather than discovering absence by failing a
+            // count against each one. The replicated-table list is static and grows with
+            // this repo, so on a replica whose source predates a family every poll used
+            // to log an ER_NO_SUCH_TABLE stack for a table neither side has .
+            // A listing failure falls back to probing, so this can only ever quieten the
+            // expected case, never hide a genuine one.
+            let presentA = null;
+            try { presentA = await db.listExistingTables(); } catch(e){ /* fall back to probing */ }
             for(let table of getReplicatedTables(dbType)){
+                if(presentA && !presentA.has(table)) continue;
                 try {
                     row.table_counts[table] = await db.getTableCount(table);
                 } catch(e){
-                    // Table absent in this schema; omit rather than fail the whole status.
+                    // Raced away between the listing and the count; omit rather than fail.
                 }
             }
             // Lifetime full-snapshot serve count (incremented by SnapshotBuilder
@@ -284,7 +293,12 @@ async function startApi(){
         // false alarms. COUNT(*) per table is acceptable here; /status is an
         // operator-polled endpoint, not a hot path.
         row.table_counts = {};
+        // One listing instead of one failing query per absent table: see the
+        // client-mode path above and .
+        let present = null;
+        try { present = await db.listExistingTables(); } catch(e){ /* fall back to probing */ }
         for(let table of getReplicatedTables(dbType)){
+            if(present && !present.has(table)) continue;
             try {
                 row.table_counts[table] = await db.getTableCount(table);
             } catch(e){

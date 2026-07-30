@@ -1584,6 +1584,27 @@ class Database {
         return conn.queryStream("SELECT * FROM `" + table + "` ORDER BY 1");
     }
 
+    // The set of BASE TABLEs that actually exist in this database.
+    //
+    // Exists so a caller can skip a table instead of discovering its absence by
+    // failing a query against it. That distinction is not cosmetic: the /status
+    // handlers enumerate the STATIC replicated-table list, which grows whenever a
+    // new family lands in this repo, so on any replica whose source predates that
+    // family every poll used to raise ER_NO_SUCH_TABLE, log a multi-line SqlError,
+    // and swallow it. Expected, tolerated, and indistinguishable in the journal
+    // from a real fault: 11,542 of them on the origin-host BTC regtest replica over
+    // two days, for tables the SOURCE does not have either .
+    //
+    // doQueryStrict, so a failure to LIST is never silently read as "nothing
+    // exists": that would empty table_counts and make an incomplete replica look
+    // complete to _verifyTableCounts. Callers fall back to probing instead.
+    async listExistingTables(conn){
+        let rows = await this.doQueryStrict(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+            [this.dbName], conn);
+        return new Set(rows.map(r => r.table_name || r.TABLE_NAME));
+    }
+
     // Get total row count for a table.
     //
     // doQueryStrict, NOT doQuery, and the reason is a live defect rather than

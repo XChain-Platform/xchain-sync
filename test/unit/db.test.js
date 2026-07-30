@@ -1244,6 +1244,39 @@ describe('Database.getTableCount()', function () {
     });
 });
 
+describe('Database.listExistingTables()', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('returns the table names as a Set, tolerating either column case', async function () {
+        sinon.stub(db, 'doQueryStrict').resolves([{ table_name: 'blocks' }, { TABLE_NAME: 'credits' }]);
+        const set = await db.listExistingTables();
+        assert.ok(set instanceof Set);
+        assert.deepStrictEqual([...set].sort(), ['blocks', 'credits']);
+    });
+
+    // The point of the helper: a caller can skip an absent table instead of
+    // discovering it by failing a query, which is what logged 11,542 stacks for
+    // tables neither the replica nor its SOURCE has .
+    it('reports a table the caller should skip', async function () {
+        sinon.stub(db, 'doQueryStrict').resolves([{ table_name: 'blocks' }]);
+        const set = await db.listExistingTables();
+        assert.ok(!set.has('bet_resolves'));
+    });
+
+    // Strict, so a failure to LIST is never read as "nothing exists": an empty set
+    // would empty table_counts and make an incomplete replica look complete to
+    // _verifyTableCounts, which is the M-17 fail-soft trap one layer up.
+    it('THROWS rather than reporting an empty schema when the listing fails', async function () {
+        const err = new Error('connection lost'); err.errno = 2013;
+        const conn = fakeConn();
+        conn.query = sinon.stub().rejects(err);
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(() => db.listExistingTables(), /connection lost/);
+    });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 23. getDatabaseStats()
 // ═══════════════════════════════════════════════════════════════════════════
