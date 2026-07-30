@@ -3,6 +3,12 @@ version: '3.8'
 # E2E test infrastructure for xchain-sync
 # Usage: docker compose -f test/e2e/docker-compose.e2e.yml up -d --wait
 
+# Pin the Compose project name rather than letting Compose derive it from this
+# file's parent directory, which is `e2e` and is therefore shared with every
+# other repo that puts its e2e compose under test/e2e. A `down -v` from one repo
+# would take another repo's containers with it.
+name: xchain-sync-e2e
+
 services:
 
   source-db:
