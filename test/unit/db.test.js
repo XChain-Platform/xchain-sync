@@ -1217,6 +1217,31 @@ describe('Database.getTableCount()', function () {
         let result = await db.getTableCount('blocks');
         assert.strictEqual(result, 42);
     });
+
+    // . getTableCount used to read through the fail-soft doQuery, which
+    // outside a transaction LOGS the SqlError and returns []; `rows[0].cnt` then
+    // threw a TypeError carrying no errno. Every caller that classifies by errno
+    // was therefore inspecting an error the database never raised, and the one
+    // that matters is ClientSync._verifyTableCounts, whose catch routes errno 1146
+    // into the debounced schema heal that CREATEs the missing table. The heal was
+    // wired and unreachable: observed live on the origin-host BTC regtest replica,
+    // where `bet_resolves` stayed absent for two days across 11,542 identical
+    // errors. So this asserts the DATABASE's error survives the call.
+    it('propagates the database error with errno intact when the table is absent', async function () {
+        const err = new Error("Table 'db.bet_resolves' doesn't exist");
+        err.errno = 1146; err.sqlState = '42S02'; err.code = 'ER_NO_SUCH_TABLE';
+        const conn = fakeConn();
+        conn.query = sinon.stub().rejects(err);
+        sinon.stub(db, 'getConnection').resolves(conn);
+
+        const caught = await db.getTableCount('bet_resolves').then(
+            () => null, e => e);
+        assert.ok(caught, 'getTableCount must reject when the table is absent');
+        assert.strictEqual(caught.errno, 1146,
+            'the caller classifies by errno; a TypeError from a fail-soft [] carries none');
+        assert.strictEqual(caught.code, 'ER_NO_SUCH_TABLE');
+        assert.ok(!(caught instanceof TypeError), 'must not surface as a TypeError');
+    });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1584,11 +1584,29 @@ class Database {
         return conn.queryStream("SELECT * FROM `" + table + "` ORDER BY 1");
     }
 
-    // Get total row count for a table
+    // Get total row count for a table.
+    //
+    // doQueryStrict, NOT doQuery, and the reason is a live defect rather than
+    // tidiness . Outside a transaction doQuery is fail-soft: it logs the
+    // SqlError and returns [], so `rows[0].cnt` then threw a TypeError with NO
+    // errno. Every caller that classifies the failure by errno was therefore
+    // reading a different error than the one the database raised, and the one
+    // that matters is ClientSync._verifyTableCounts: its catch routes errno 1146
+    // ("the source's schema moved ahead of this replica") into the debounced
+    // schema heal that CREATEs the missing table. A TypeError carries no errno,
+    // so that heal could never fire from here, and the replica stayed missing the
+    // table forever while logging the same SqlError on every status poll.
+    // Observed on the origin-host BTC regtest replica: `bet_resolves` absent and
+    // erroring 11,542 times over two days with the heal wired and unreachable.
+    //
+    // Strict here is safe for the tolerant callers too: /status wraps this in a
+    // try/catch and omits the table, which is unchanged. What changes is that the
+    // error they swallow, and the one ClientSync inspects, is now the database's
+    // own errno-bearing SqlError.
     async getTableCount(table, conn){
         assertValidIdentifier(table);
         let query = "SELECT COUNT(*) as cnt FROM `" + table + "`";
-        let rows = await this.doQuery(query, null, conn);
+        let rows = await this.doQueryStrict(query, null, conn);
         return Number(rows[0].cnt);
     }
 
