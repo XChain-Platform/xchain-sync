@@ -4,14 +4,14 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.7.1-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-725%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-1.7.2-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-1850%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/coverage-unit%20%7C%20integration%20%7C%20e2e%20%7C%20security%20%7C%20fuzz%20%7C%20chaos%20%7C%20mutation%20%7C%20performance%20%7C%20smoke-brightgreen" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-unit%20%7C%20integration%20%7C%20e2e%20%7C%20boundary%20%7C%20security%20%7C%20fuzz%20%7C%20chaos%20%7C%20mutation%20%7C%20regression%20%7C%20performance%20%7C%20smoke-brightgreen" alt="Coverage">
 </p>
 
 Database replication service for the XChain Platform. Syncs indexer and decoder databases to validators and other consumers via REST snapshots and real-time WebSocket streaming, enabling lightweight validators that don't need to run full decoder+indexer stacks.
@@ -38,7 +38,7 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 - **Automatic catch-up**: clients detect block gaps on reconnect and self-heal via incremental REST snapshots
 - **Circuit-breaker DB connections**: automatic failure detection and recovery with configurable thresholds
 - **Input validation**: SQL identifier sanitization, DDL whitelisting, WebSocket event schema validation
-- **725 tests**: unit, integration, e2e, security, fuzz, chaos, mutation, performance, smoke
+- **1850+ tests**: unit, integration, e2e, boundary, security, fuzz, chaos, mutation, regression, performance, smoke
 
 ## Documentation
 
@@ -47,9 +47,10 @@ Full xchain-sync documentation is available in the [xchain-documentation](https:
 | Document | Description |
 |---|---|
 | [README](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/README.md) | Overview, installation, quick start, scripts, dependencies |
-| [Architecture](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/ARCHITECTURE.md) | Data pipeline position, dual-mode design, internal components, sync algorithms |
-| [Configuration](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/CONFIGURATION.md) | Environment variables, hub discovery, database naming |
-| [Operations](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/OPERATIONS.md) | Running, Docker, REST/WebSocket API reference, resilience, troubleshooting |
+| [Architecture](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/architecture.md) | Data pipeline position, dual-mode design, internal components, sync algorithms |
+| [Configuration](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/configuration.md) | Environment variables, hub discovery, database naming |
+| [Operations](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/operations.md) | Running, Docker, resilience, troubleshooting |
+| [API Reference](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/sync/api.md) | REST snapshot/status/schema endpoints and the WebSocket streaming protocol |
 
 ## Quick Start
 
@@ -118,6 +119,10 @@ npm run api
 | `npm run api` | Start the sync service |
 | `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
 | `npm test` | Run unit tests |
+| `npm run ci` | Unit tests plus the security tier, exits on completion |
+| `npm run coverage` | Unit tests under `c8` coverage instrumentation |
+| `npm run test:boundary` | Boundary condition tests (consensus constants) |
+| `npm run test:regression` | Unit tests tagged `@regression` |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading) |
 | `npm run test:integration` | Integration tests (requires MariaDB + running indexer) |
 | `npm run test:e2e` | End-to-end tests (full server/client lifecycle) |
@@ -157,16 +162,17 @@ default 23316.
 
 | Type | Tests | Description |
 |---|---|---|
-| Unit - Core | ~205 | `SyncService.test.js`, `ServerPoller.test.js`, `BlockBroadcaster.test.js`, `ClientSync.test.js`, `ClientApplier.test.js`, `ClientRollback.test.js`, `HashVerifier.test.js`, `HubClient.test.js`, `TransparencyLog.test.js`, `SnapshotBuilder.test.js`, `config.test.js`, `utility.test.js` |
-| Unit - Boundary | ~159 | Block index limits, poll limits, config parsing, reorg detection, WebSocket limits, hash continuity, transparency pagination, batch insert, rollback scope, circuit breaker, source arrays |
-| Security | ~114 | Input validation, SQL injection, DDL whitelisting, API auth, WebSocket auth, client sync safety, applier safety |
-| Smoke | ~21 | Server + client startup, config loading, liveness |
-| Fuzz | ~57 | Property-based testing via fast-check: client applier, hash verifier, rollback, server poller, hub client, config |
-| Chaos | ~38 | Source DB resilience, replica DB resilience, sync resilience, network partitions |
-| Integration | ~57 | Server polling, REST API, WebSocket streaming, client bootstrap, live sync, rollback, transparency log, lifecycle |
-| E2E | ~40 | Full lifecycle, delta sync, multi-chain, reorg propagation, API endpoints |
-| Performance | 7 suites | Payload throughput, snapshot performance, bootstrap apply, subscriber scaling, sustained sync, incremental catchup, rollback performance |
-| **Total** | **~725+** | |
+| Unit - Core | ~1,236 | `SyncService.test.js`, `ServerPoller.test.js`, `BlockBroadcaster.test.js`, `ClientSync.test.js`, `ClientApplier.test.js`, `ClientRollback.test.js`, `HashVerifier.test.js`, `HubClient.test.js`, `TransparencyLog.test.js`, `SnapshotBuilder.test.js`, `config.test.js`, `utility.test.js` |
+| Boundary | ~171 | Block index limits, poll limits, config parsing, reorg detection, WebSocket limits, hash continuity, transparency pagination, batch insert, rollback scope, circuit breaker, source arrays, consensus constants |
+| Security | ~140 | Input validation, SQL injection, DDL whitelisting, API auth, WebSocket auth, client sync safety, applier safety |
+| Regression | ~4 | Curated consensus-constants regression suite |
+| Smoke | ~17 | Server + client startup, config loading, liveness |
+| Fuzz | ~55 | Property-based testing via fast-check: client applier, hash verifier, rollback, server poller, hub client, config |
+| Chaos | 38 | Source DB resilience, replica DB resilience, sync resilience, network partitions |
+| Integration | ~96 | Server polling, REST API, WebSocket streaming, client bootstrap, live sync, rollback, transparency log, lifecycle |
+| E2E | ~63 | Full lifecycle, delta sync, multi-chain, reorg propagation, API endpoints |
+| Performance | 8 suites | Payload throughput, snapshot performance, bootstrap apply, subscriber scaling, sustained sync, incremental catchup, rollback performance, bootstrap stampede |
+| **Total** | **~1,850+** | |
 
 ---
 
