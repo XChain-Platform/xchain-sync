@@ -23,6 +23,11 @@ const SnapshotBuilder  = require('../../src/SnapshotBuilder');
 const TransparencyLog  = require('../../src/TransparencyLog');
 const BlockBroadcaster = require('../../src/BlockBroadcaster');
 const ServerPoller     = require('../../src/ServerPoller');
+// Trust-proxy and rate-limiter wiring is imported from the real api.js rather
+// than re-declared here. api.js now guards its startup env check and listen()
+// behind require.main === module (see module.exports at the bottom), so
+// requiring it for these two seams no longer opens a port or starts polling.
+const { trustProxyHops, createRateLimiters } = require('../../src/api');
 
 const API_PORT = 19100;
 const HUB_PORT = 19000;
@@ -48,9 +53,26 @@ describe('Integration: REST API', function() {
         snapshotBuilder = new SnapshotBuilder(testDb.util);
         log = new TransparencyLog(sourceDb);
 
-        // Build Express app manually (avoids importing api.js which has side effects)
+        // Trust-proxy and rate-limiter wiring come from src/api.js itself (not a
+        // re-declaration), so a change to either seam is exercised here the same
+        // way it is in production.  was exactly this class of bug: a
+        // hand-rolled app that never set 'trust proxy' or mounted a limiter would
+        // pass this suite while the real service resolved every caller to one IP.
         let app = express();
+        app.set('trust proxy', trustProxyHops(false)); // matches production default: no reverse proxy trusted
         app.use(cors({ origin: '*', methods: ['GET'] }));
+
+        // Same limiter instances startApi() builds and mounts, not a
+        // re-declaration of their windows/limits/keying. TRANSPARENCY_RATE_LIMIT
+        // is widened from production's 10/min default: this suite's `before()`
+        // builds the app once for the whole file, and its transparency-route
+        // tests collectively issue more requests than that within one run.
+        let limiters = createRateLimiters({
+            SNAPSHOT_RATE_FULL: 100,
+            SNAPSHOT_RATE_INCR: 100,
+            TRANSPARENCY_RATE_LIMIT: 100000
+        });
+        app.use(limiters.backstopLimiter);
 
         app.get('/status', async (req, res) => {
             try {
@@ -106,7 +128,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', limiters.fullSnapshotLimiter, async (req, res) => {
             try {
                 await snapshotBuilder.streamFullSnapshot(sourceDb, res);
             } catch (e) {
@@ -114,7 +136,7 @@ describe('Integration: REST API', function() {
             }
         });
 
-        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', limiters.incrSnapshotLimiter, async (req, res) => {
             let sinceBlock = parseInt(req.params.blockHeight);
             if (isNaN(sinceBlock) || sinceBlock < 0)
                 return res.status(400).json({ error: 'Invalid blockHeight' });
@@ -125,7 +147,7 @@ describe('Integration: REST API', function() {
             }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/roots', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/roots', limiters.transparencyLimiter, async (req, res) => {
             try {
                 let page  = parseInt(req.query.page) || 0;
                 let limit = parseInt(req.query.limit) || 100;
@@ -134,7 +156,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', limiters.transparencyLimiter, async (req, res) => {
             if (testSyncMode !== 'server')
                 return res.status(403).json({ error: 'Transparency log only available in server mode' });
             if (req.params.dbType !== 'indexer')
@@ -149,7 +171,7 @@ describe('Integration: REST API', function() {
             } catch (e) { res.status(500).json({ error: e.message }); }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/root/latest', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/root/latest', limiters.transparencyLimiter, async (req, res) => {
             if (testSyncMode !== 'server')
                 return res.status(403).json({ error: 'Transparency log only available in server mode' });
             if (req.params.dbType !== 'indexer')
@@ -403,6 +425,59 @@ describe('Integration: REST API', function() {
             } catch (e) {
                 assert.strictEqual(e.response.status, 404);
             }
+        });
+    });
+
+    //  regression coverage, driven through THIS suite's own app-building
+    // path rather than only the dedicated security suite: boots a second,
+    // disposable server on the exact trustProxyHops/createRateLimiters imported
+    // at the top of this file, so a regression in either seam fails here too,
+    // not only in apiRateLimitProxy.security.test.js. Before this harness
+    // derived its wiring from src/api.js it built its own app with no trust-proxy
+    // setting and no limiter at all, so this class of bug could not have failed
+    // any test in this file.
+    describe('Proxy-trust rate-limit wiring ', function() {
+        let proxyServer;
+
+        afterEach(async function() {
+            if (proxyServer) await new Promise(resolve => proxyServer.close(resolve));
+            proxyServer = null;
+        });
+
+        async function bootProxyHarness(trustProxy) {
+            let proxyApp = express();
+            proxyApp.set('trust proxy', trustProxyHops(trustProxy));
+            let proxyLimiters = createRateLimiters({ SNAPSHOT_RATE_FULL: 2, SNAPSHOT_RATE_INCR: 100, TRANSPARENCY_RATE_LIMIT: 100000 });
+            proxyApp.get('/snapshot/:dbType/:chain/:network', proxyLimiters.fullSnapshotLimiter, (req, res) => {
+                res.json({ ip: req.ip });
+            });
+            proxyServer = await new Promise(resolve => {
+                let s = proxyApp.listen(0, '127.0.0.1', () => resolve(s));
+            });
+            return proxyServer.address().port;
+        }
+
+        async function hit(port, forwardedFor) {
+            let headers = forwardedFor ? { 'x-forwarded-for': forwardedFor } : {};
+            return axios.get('http://127.0.0.1:' + port + '/snapshot/indexer/bitcoin/mainnet', {
+                headers, validateStatus: () => true
+            });
+        }
+
+        it('gives independent snapshot buckets to distinct forwarded clients when TRUST_PROXY is on', async function() {
+            let port = await bootProxyHarness(true);
+            assert.strictEqual((await hit(port, '198.51.100.10')).status, 200);
+            assert.strictEqual((await hit(port, '198.51.100.10')).status, 200);
+            assert.strictEqual((await hit(port, '198.51.100.10')).status, 429, 'client should have exhausted its own budget');
+            assert.strictEqual((await hit(port, '198.51.100.11')).status, 200, 'a second forwarded client must not share the first client bucket');
+        });
+
+        it('collapses every caller onto the socket address when TRUST_PROXY is off', async function() {
+            let port = await bootProxyHarness(false);
+            assert.strictEqual((await hit(port, '198.51.100.20')).status, 200);
+            assert.strictEqual((await hit(port, '198.51.100.20')).status, 200);
+            let res = await hit(port, '198.51.100.21');
+            assert.strictEqual(res.status, 429, 'an unset trust proxy must ignore the forwarded header and share one bucket');
         });
     });
 });

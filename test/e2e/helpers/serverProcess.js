@@ -17,6 +17,11 @@ const BlockBroadcaster = require('../../../src/BlockBroadcaster');
 const TransparencyLog  = require('../../../src/TransparencyLog');
 const SnapshotBuilder  = require('../../../src/SnapshotBuilder');
 const testDb           = require('./testDb');
+// Trust-proxy and rate-limiter wiring is imported from the real api.js rather
+// than re-declared here. api.js now guards its startup env check and listen()
+// behind require.main === module (see module.exports at the bottom), so
+// requiring it for these two seams no longer opens a port or starts polling.
+const { trustProxyHops, createRateLimiters } = require('../../../src/api');
 
 class ServerProcess {
 
@@ -34,7 +39,18 @@ class ServerProcess {
             WS_STATUS_INTERVAL: 500,
             WS_PING_INTERVAL: 30000,
             SNAPSHOT_RATE_FULL: 100,
-            SNAPSHOT_RATE_INCR: 100
+            SNAPSHOT_RATE_INCR: 100,
+            // Matches the production default (no reverse proxy trusted); a test
+            // that needs to exercise the TRUST_PROXY=true path can flip this on
+            // server.config before calling start().
+            TRUST_PROXY: false,
+            // Production defaults to 10/min (see createRateLimiters in api.js).
+            // waitFor() (helpers/waitFor.js) polls /transparency/.../roots every
+            // 100ms, so the production limit would 429 a single test's own
+            // wait-loop within ~1s. The LIMITER WIRING (which route it guards,
+            // the trust-proxy-derived key) is still the real one from api.js;
+            // only this threshold is widened to fit e2e's poll cadence.
+            TRANSPARENCY_RATE_LIMIT: 100000
         };
 
         this.server      = null;
@@ -57,7 +73,20 @@ class ServerProcess {
         );
 
         let app = express();
+        // Must precede the limiters below (they read req.ip): same ordering
+        // requirement as api.js's startApi(). Deriving from trustProxyHops
+        // rather than a re-declared literal is the whole point of this seam:
+        //  was a proxy-trust bug that a hand-rolled 'false'/unset here
+        // would never have caught.
+        app.set('trust proxy', trustProxyHops(this.config.TRUST_PROXY));
         app.use(cors({ origin: '*', methods: ['GET'] }));
+
+        // Same limiter instances startApi() builds and mounts, not a
+        // re-declaration of their windows/limits/keying. Only the config
+        // values differ (see TRANSPARENCY_RATE_LIMIT above), never the code
+        // that turns them into middleware or the route->limiter assignment.
+        let limiters = createRateLimiters(this.config);
+        app.use(limiters.backstopLimiter);
 
         // Routes mirror src/api.js (all namespaced by :dbType). This helper
         // backs the e2e suite, so its surface needs to match the real API
@@ -140,7 +169,7 @@ class ServerProcess {
             }
         });
 
-        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network', limiters.fullSnapshotLimiter, async (req, res) => {
             if (!validateDbType(req.params.dbType))
                 return res.status(400).json({ error: 'Invalid dbType' });
             try {
@@ -150,7 +179,7 @@ class ServerProcess {
             }
         });
 
-        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', limiters.incrSnapshotLimiter, async (req, res) => {
             if (!validateDbType(req.params.dbType))
                 return res.status(400).json({ error: 'Invalid dbType' });
             let sinceBlock = parseInt(req.params.blockHeight);
@@ -163,7 +192,7 @@ class ServerProcess {
             }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/roots', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/roots', limiters.transparencyLimiter, async (req, res) => {
             if (req.params.dbType !== 'indexer')
                 return res.status(400).json({ error: 'Transparency log is indexer-only' });
             let page  = parseInt(req.query.page) || 0;
@@ -176,7 +205,7 @@ class ServerProcess {
             }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', limiters.transparencyLimiter, async (req, res) => {
             if (req.params.dbType !== 'indexer')
                 return res.status(400).json({ error: 'Transparency log is indexer-only' });
             let { chain, network, block_index } = req.params;
@@ -191,7 +220,7 @@ class ServerProcess {
             }
         });
 
-        app.get('/transparency/:dbType/:chain/:network/root/latest', async (req, res) => {
+        app.get('/transparency/:dbType/:chain/:network/root/latest', limiters.transparencyLimiter, async (req, res) => {
             if (req.params.dbType !== 'indexer')
                 return res.status(400).json({ error: 'Transparency log is indexer-only' });
             let { chain, network } = req.params;
