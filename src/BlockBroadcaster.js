@@ -52,11 +52,27 @@ class BlockBroadcaster {
         return chain + ':' + network + ':' + (dbType || 'indexer');
     }
 
+    // Resolve the client address used as the WS_MAX_PER_IP bucket key.
+    //
+    // TRUST_PROXY means exactly ONE trusted hop, the co-located Apache (api.js sets
+    // Express `trust proxy` to 1 off the same flag). mod_proxy APPENDS the peer it
+    // actually saw to the right of X-Forwarded-For, so the RIGHTMOST entry is the only
+    // one our trusted hop wrote; everything left of it arrived from the client and is
+    // forgeable. Keying on the leftmost entry therefore let any client rotate a fake
+    // leading value to escape the per-IP cap, or claim another validator's address and
+    // poison its connection accounting.
     _getIp(req){
         if(this.config['TRUST_PROXY']){
             let forwarded = req.headers['x-forwarded-for'];
-            if(forwarded)
-                return forwarded.split(',')[0].trim();
+            if(forwarded){
+                let entries = String(forwarded).split(',');
+                let client  = entries[entries.length - 1].trim();
+                // A malformed header (trailing comma, whitespace-only tail) would key
+                // every such connection under '' and merge unrelated clients into one
+                // bucket, which is the very accounting bug this method exists to avoid.
+                // Fall through to the socket address instead.
+                if(client) return client;
+            }
         }
         return req.socket.remoteAddress || 'unknown';
     }

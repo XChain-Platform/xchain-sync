@@ -30,7 +30,7 @@ const helmet      = require('helmet');
 const cors        = require('cors');
 const http        = require('http');
 const WebSocket   = require('ws');
-const rateLimit   = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
 const { computeArmedMapFingerprint } = require('./armedMapFingerprint');
 const SyncService = require('./SyncService');
@@ -47,31 +47,57 @@ const statusUtil = new Utility();
 dotenv.config();
 
 const REQUIRED_ENV = ['HUB_API_HOST'];
-for(const key of REQUIRED_ENV){
-    if(!process.env[key]){
-        console.error('Missing required environment variable: ' + key);
-        process.exit(1);
-    }
-}
 
 const cfg = config.getConfig();
 
-// SYNC_API_KEY is optional, matching the other services: unset leaves the
-// REST/WS replication endpoints open (single-host / regtest / managed
-// deployments; xchain-node injects no key) and is warned about loudly below;
-// when configured, every endpoint fails closed (401) without it. The
-// destructive /halt/clear admin route additionally refuses to run at all
-// while no key is configured.
-if(!cfg['SYNC_API_KEY'])
-    console.warn('WARNING: SYNC_API_KEY is not set. The REST/WS API is UNAUTHENTICATED and /halt/clear is disabled. Set a key for any shared or public-facing deployment.');
+// Startup-only environment gate. Kept out of module scope so that requiring
+// this file (the security suite does, to reach the seams below) cannot exit the
+// process; it runs from the entry-point guard at the bottom instead.
+function checkStartupEnv(){
+    for(const key of REQUIRED_ENV){
+        if(!process.env[key]){
+            console.error('Missing required environment variable: ' + key);
+            process.exit(1);
+        }
+    }
 
-async function startApi(){
+    // SYNC_API_KEY is optional, matching the other services: unset leaves the
+    // REST/WS replication endpoints open (single-host / regtest / managed
+    // deployments; xchain-node injects no key) and is warned about loudly here;
+    // when configured, every endpoint fails closed (401) without it. The
+    // destructive /halt/clear admin route additionally refuses to run at all
+    // while no key is configured.
+    if(!cfg['SYNC_API_KEY'])
+        console.warn('WARNING: SYNC_API_KEY is not set. The REST/WS API is UNAUTHENTICATED and /halt/clear is disabled. Set a key for any shared or public-facing deployment.');
+}
 
-    const app = express();
-    app.use(helmet());
-    app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
-    app.use(express.json({ limit: '16kb' }));
-    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
+// How many reverse-proxy hops express should believe when it resolves req.ip.
+// ONE hop, never `true`: the only proxy in front of this process is the
+// co-located Apache that terminates TLS on the same box and appends the real
+// client address to X-Forwarded-For, so counting back exactly one entry lands
+// on an address Apache observed rather than one the client typed. `true`
+// trusts the whole chain, which lets any caller prepend a fake X-Forwarded-For
+// and mint an unlimited number of rate-limit buckets; express-rate-limit
+// rejects that setting outright (ERR_ERL_PERMISSIVE_TRUST_PROXY). With
+// TRUST_PROXY unset the header is ignored entirely and req.ip is the socket
+// peer, which is right for a directly-exposed process.
+function trustProxyHops(trustProxy){
+    return trustProxy ? 1 : false;
+}
+
+// Key snapshot limits per (client IP + chain/network/dbType), NOT per IP alone.
+// A single replica bootstraps every chain it follows from one IP, so a global
+// per-IP bucket would let one chain's snapshot exhaust the budget and 429 all the
+// others. block-height (incremental /since/:blockHeight) is intentionally excluded
+// so the bucket is stable per resource across catch-ups.
+// ipKeyGenerator collapses an IPv6 address to its /56 network so a single
+// allocation cannot rotate through addresses for a fresh budget each time; it is
+// a no-op for IPv4 and for IPv4-mapped peers.
+const snapshotKey = (req) => ipKeyGenerator(req.ip) + '|' + req.params.dbType + '/' + req.params.chain + '/' + req.params.network;
+
+// Built here rather than inline so the security suite can exercise the same
+// limiter instances the service runs with, instead of a re-declaration of them.
+function createRateLimiters(cfg){
 
     // App-wide per-IP backstop limiter, mirroring the peer services (explorer,
     // hub, indexer, decoder, encoder, utxo-tracker all front-load one). Without
@@ -82,21 +108,13 @@ async function startApi(){
     // poller depends on. The tighter per-route snapshot buckets below still
     // apply on top of this. Generous default so legitimate replica polling is
     // unaffected; override with SYNC_RATE_LIMIT_RPM.
-    app.use(rateLimit({
+    const backstopLimiter = rateLimit({
         windowMs:        60 * 1000,
         limit:           parseInt(process.env.SYNC_RATE_LIMIT_RPM, 10) || 500,
         standardHeaders: true,
         legacyHeaders:   false,
         message:         { error: 'Too many requests', code: 'RATE_LIMITED' },
-    }));
-
-    // Rate limiters for snapshot endpoints
-    // Key snapshot limits per (client IP + chain/network/dbType), NOT per IP alone.
-    // A single replica bootstraps every chain it follows from one IP, so a global
-    // per-IP bucket would let one chain's snapshot exhaust the budget and 429 all the
-    // others. block-height (incremental /since/:blockHeight) is intentionally excluded
-    // so the bucket is stable per resource across catch-ups.
-    const snapshotKey = (req) => req.ip + '|' + req.params.dbType + '/' + req.params.chain + '/' + req.params.network;
+    });
 
     const fullSnapshotLimiter = rateLimit({
         windowMs: 60 * 60 * 1000,
@@ -131,6 +149,28 @@ async function startApi(){
         legacyHeaders: false,
         message: { error: 'Heartbeat rate limit exceeded.' }
     });
+
+    return { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter, transparencyLimiter, heartbeatLimiter };
+}
+
+async function startApi(){
+
+    const app = express();
+    // Must precede every limiter: they read req.ip, which express only derives
+    // from X-Forwarded-For once this is set. Left unset (the state this service
+    // shipped in), every request behind Apache resolves to 127.0.0.1 and the
+    // snapshot buckets below become one shared global budget that any single
+    // caller can drain for everyone.
+    app.set('trust proxy', trustProxyHops(cfg['TRUST_PROXY']));
+    app.use(helmet());
+    app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
+    app.use(express.json({ limit: '16kb' }));
+    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
+
+    const { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter,
+            transparencyLimiter, heartbeatLimiter } = createRateLimiters(cfg);
+
+    app.use(backstopLimiter);
 
     const syncService = new SyncService(cfg);
 
@@ -1013,4 +1053,13 @@ async function startApi(){
     });
 }
 
-startApi();
+// Only boot when this file IS the process entry point (`npm run api`, the
+// Dockerfile CMD). Requiring it as a module - which the security suite does to
+// reach the proxy-trust and rate-limit seams above - must not open ports or
+// start polling a source database.
+if(require.main === module){
+    checkStartupEnv();
+    startApi();
+}
+
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, startApi };
