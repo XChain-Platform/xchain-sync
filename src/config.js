@@ -118,6 +118,13 @@ module.exports = {
         config['REPLICA_DB_PORT'] = parseIntMin1(process.env.REPLICA_DB_PORT, 3306);
         config['REPLICA_DB_USER'] = process.env.REPLICA_DB_USER;
         config['REPLICA_DB_PASS'] = process.env.REPLICA_DB_PASS;
+        // Serve from a replica this process must never write to. Set on a re-serving
+        // tier whose replica is maintained by something else (MariaDB binlog
+        // replication on the sync.xchain.io web tier), where the box is read_only=1
+        // and sync_meta / merkle_epochs arrive already recorded by the upstream
+        // server. Makes the transparency log serve-only; reads are unaffected.
+        config['REPLICA_DB_READONLY'] = (process.env.REPLICA_DB_READONLY || '').toLowerCase() === 'true'
+            || process.env.REPLICA_DB_READONLY === '1';
 
         // Hub re-poll interval (default 5 minutes; override via HUB_REPOLL_INTERVAL)
         config['HUB_REPOLL_INTERVAL'] = parseIntMin0(process.env.HUB_REPOLL_INTERVAL, 300000);
@@ -257,6 +264,16 @@ module.exports = {
         // pinned set is configured for the (chain, network), the step is skipped (never
         // bypassed). CHECKPOINT_VERIFY_INTERVAL bounds how often the /latest checkpoint is
         // probed (in applied blocks; default 50).
+        //
+        // FLAG-DAY COUPLING : this default is tied to pinnedValidators.js. It stays
+        // OFF only while every pinned key is null, because a true-but-inert flag reads as
+        // "protected" while nothing is actually verified. The change that populates a real
+        // launch validator set must flip this default to ON in the same change (an operator
+        // who has a trust root available and does not use it is still trusting the source);
+        // an explicit VERIFY_CHECKPOINT_QUORUM=false remains the opt-out for throwaway
+        // mirrors. test/unit/checkpointQuorumFlagDay.test.js enforces both halves, and
+        // claude/reports/launch/TRUST-MINIMIZATION-ACTIVATION-RUNBOOK.md step 6 carries the
+        // deploy-side ordering (the federation must be serving signed checkpoints first).
         config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
         config['CHECKPOINT_VERIFY_INTERVAL'] = parseIntMin1(process.env.CHECKPOINT_VERIFY_INTERVAL, 50);
 

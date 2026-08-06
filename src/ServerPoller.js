@@ -192,6 +192,10 @@ class ServerPoller {
     // startup, before the poll loop.
     async backfillGaps(){
         if(!this.transparencyLog) return 0;
+        // A replicated log has no holes of this process's making, and every repair
+        // below is a write. Skip the scan entirely rather than let it report gaps it
+        // would then "repair" with no-op writes and log a false success.
+        if(this.transparencyLog.readOnly) return 0;
 
         let gaps = await this.transparencyLog.findGaps();
         if(gaps.length === 0) return 0;

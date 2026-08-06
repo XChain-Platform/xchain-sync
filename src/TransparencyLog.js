@@ -25,14 +25,23 @@ const MerkleTree = require('./MerkleTree.js');
 
 class TransparencyLog {
 
-    constructor(db, epochSize) {
+    // readOnly: this log is a replica of an upstream server's log, maintained by
+    // something outside this process (MariaDB binlog replication on the web tier).
+    // Every write entry point below becomes a no-op; the rows arrive already
+    // recorded, the box is read_only=1, and re-writing them here would either fail
+    // outright or fork the log from its source. Read paths (proofs, pages, roots,
+    // high-water mark, gap scan) are untouched, so the tier still serves
+    // /transparency exactly like the origin does.
+    constructor(db, epochSize, readOnly) {
         this.db        = db;
         this.epochSize = epochSize || 100;
+        this.readOnly  = readOnly === true;
     }
 
     // Record a block's hashes in the transparency log
     // Automatically commits a Merkle epoch when an epoch boundary is crossed
     async recordBlock(block_index, block_time, ledger_hash, actions_hash, contract_hash){
+        if(this.readOnly) return;
         let query = `INSERT IGNORE INTO sync_meta
             (block_index, block_time, ledger_hash, actions_hash, contract_hash)
             VALUES (?, ?, ?, ?, ?)`;
@@ -49,6 +58,7 @@ class TransparencyLog {
 
     // Commit a Merkle epoch: build tree from epoch blocks and store root
     async commitEpoch(epoch) {
+        if(this.readOnly) return;
         let startBlock = (epoch - 1) * this.epochSize + 1;
         let endBlock   = epoch * this.epochSize;
 
@@ -120,6 +130,8 @@ class TransparencyLog {
     // both DELETEs are range-deletes that no-op once the rows are gone. If any step
     // throws (DB fault), it propagates so the poll loop retries the whole prune.
     async pruneFrom(block_index){
+        // A replicated log prunes at the source; the DELETEs arrive over replication.
+        if(this.readOnly) return;
         // Committed epochs whose block range overlaps the orphaned suffix.
         let invalidated = await this.db.doQuery(
             `SELECT epoch, start_block, end_block, merkle_root
@@ -266,6 +278,7 @@ class TransparencyLog {
     // boundary block arrives; re-committing now would lock in a partial root that
     // the existing-row guard in commitEpoch would then prevent from being corrected.
     async recommitEpoch(epoch, highWaterMark) {
+        if(this.readOnly) return;
         let endBlock = epoch * this.epochSize;
         if(highWaterMark !== undefined && highWaterMark !== null && endBlock > highWaterMark)
             return;  // epoch not yet complete; let recordBlock commit it at the boundary

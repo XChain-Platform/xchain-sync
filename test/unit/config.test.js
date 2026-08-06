@@ -18,7 +18,7 @@ describe('config', function(){
         'CORS_ORIGIN', 'BLOCK_POLL_INTERVAL', 'WS_MAX_PER_IP',
         'SNAPSHOT_RATE_FULL', 'SNAPSHOT_RATE_INCR', 'SYNC_SOURCES',
         'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
-        'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'SYNC_EXCLUDE',
+        'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'REPLICA_DB_READONLY', 'SYNC_EXCLUDE',
         'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
         'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET'
     ];
@@ -182,6 +182,29 @@ describe('config', function(){
         it('ignores a malformed key with no CHAIN_NETWORK split', function(){
             process.env.SYNC_BOOTSTRAP_DEPTH_BADKEY = '500';
             assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
+        });
+    });
+
+    // Opt-in only: a tier that can write must never be silently downgraded to
+    // serve-only by a stray value, and a read_only replica must not be flipped
+    // writable by one either.
+    describe('REPLICA_DB_READONLY', function(){
+        it('defaults to false when unset', function(){
+            assert.strictEqual(config.getConfig().REPLICA_DB_READONLY, false);
+        });
+        it('is true for "1"', function(){
+            process.env.REPLICA_DB_READONLY = '1';
+            assert.strictEqual(config.getConfig().REPLICA_DB_READONLY, true);
+        });
+        it('is true for "true" in any case', function(){
+            process.env.REPLICA_DB_READONLY = 'TRUE';
+            assert.strictEqual(config.getConfig().REPLICA_DB_READONLY, true);
+        });
+        it('is false for "false", "0" and an empty value', function(){
+            for(let value of ['false', '0', '']){
+                process.env.REPLICA_DB_READONLY = value;
+                assert.strictEqual(config.getConfig().REPLICA_DB_READONLY, false, 'value: ' + value);
+            }
         });
     });
 });
