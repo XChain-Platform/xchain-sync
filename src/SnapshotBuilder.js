@@ -614,12 +614,23 @@ class SnapshotBuilder {
             //     idempotent (INSERT IGNORE on the AUTO_INCREMENT id PK). rollback:
             //     'exempt', so nothing rolls it back; the full re-dump is its only
             //     convergence path.
+            //   - pubkeys: INSERT IGNORE cache keyed by address_id, replication:
+            //     'snapshot', so streamTopology() puts it in no per-block bucket and
+            //     it reaches neither the spread above nor indexerBlockScoped. Without
+            //     a full-dump here it fell to the action_index branch, where the
+            //     missing column raised errno 1054 and was swallowed as a schema gap,
+            //     so it rode NO incremental snapshot and froze at bootstrap height on
+            //     every incrementally-caught-up follower (silent: replication:
+            //     'snapshot' keeps it out of the /status count check, and it is not
+            //     consensus-hashed). Mirrors the decoder pubkeys full-dump. It is in
+            //     ClientApplier.ignoreTables, so the re-dump is idempotent.
             let indexerFullDump    = new Set([
                 ...replicatedTables.getTopology('indexer').index,
                 'merkle_epochs',
                 'markets',
                 'attest_validator_stats',
                 'events',
+                'pubkeys',
             ]);
             // The append-only, id-PK lookup tables a skipLookups caller syncs out of
             // band via streamTableRowsById. Only these are omitted; the mutated

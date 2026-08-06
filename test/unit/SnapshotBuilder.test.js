@@ -1081,6 +1081,48 @@ describe('SnapshotBuilder', function(){
         });
     });
 
+    // The indexer `pubkeys` table is replication:'snapshot', so streamTopology()
+    // puts it in no per-block bucket. It used to fall through to the action_index
+    // branch, where the missing column raised errno 1054 and was swallowed as a
+    // schema gap: pubkeys then rode NO incremental snapshot and froze at bootstrap
+    // height on every incrementally-caught-up follower, invisibly (it is excluded
+    // from the /status count check and is not consensus-hashed).
+    describe('streamIncrementalSnapshot snapshot-replication tables', function(){
+        it('full-dumps indexer pubkeys instead of action-scoping it into errno 1054', async function(){
+            let db = createMockDb();
+            db.dbType = 'indexer';
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            // Non-null: the pre-fix code took the action_index branch precisely here.
+            db.getFirstActionIndex.resolves(500);
+            let queries = [];
+            db.doQuery.callsFake(async (query) => {
+                if(query.includes('information_schema')) return [{ table_name: 'pubkeys' }];
+                queries.push(query);
+                if(/SELECT \* FROM `pubkeys`\s*$/.test(query.trim())){
+                    return [{ address_id: 7, pubkey: 'pk7' }, { address_id: 9, pubkey: 'pk9' }];
+                }
+                if(query.includes('`pubkeys`') && query.includes('action_index')){
+                    let e = new Error("Unknown column 'action_index' in 'where clause'");
+                    e.errno = 1054;
+                    throw e;
+                }
+                return [];
+            });
+
+            let res = new PassThrough();
+            let chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+            await new Promise((resolve) => { res.on('finish', resolve); builder.streamIncrementalSnapshot(db, 80, res); });
+
+            let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
+            assert.deepStrictEqual(parsed.tables.pubkeys.map(r => r.address_id), [7, 9], 'pubkeys rides the incremental payload');
+            assert.ok(!queries.some(q => q.includes('`pubkeys`') && q.includes('action_index')),
+                'pubkeys is never action-scoped (that query 1054s and is swallowed)');
+        });
+    });
+
     // : per-Database concurrency cap on the long-lived read-snapshot
     // streams, so a bootstrap stampede can never pin every pool connection and
     // starve ServerPoller's live-broadcast reads.
