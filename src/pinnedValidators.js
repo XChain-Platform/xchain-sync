@@ -47,6 +47,11 @@
  * Replace a key's null with the oracle_publish signer set that signs the launch
  * checkpoints, stake-weighted shape per checkpoint.js verifyCheckpoint:
  *   [ { pubkey: '<64-hex ed25519>', weight: '<canonical amount>', source: '<signer/delegation source>' }, ... ]
+ *
+ * The SAME change must flip the VERIFY_CHECKPOINT_QUORUM default to true in
+ * config.js : a pinned set with the anchor still defaulting off leaves
+ * replicas trusting their source when a trust root is available.
+ * test/unit/checkpointQuorumFlagDay.test.js fails until both halves land.
  * ---------------------------------------------------------------------------
  *
  ********************************************************************/

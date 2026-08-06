@@ -535,13 +535,13 @@ class SnapshotBuilder {
             // count divergence on any follower that catches up incrementally, and a plain
             // re-dump would collide on the (tx_index, address_id) PK (dispensers is not in
             // ClientApplier.ignoreTables, so it is not INSERT IGNORE). dispensers seeds
-            // from the full snapshot; it is now in the decoder /status completeness count
-            // (replicatedTables `special`), so the soft-expire/hard-purge drift the
-            // bootstrap dump cannot replay surfaces as a TABLE_COUNT_MISMATCH rather than
-            // drifting silently. The apply-side reconcile has landed:
-            // ClientApplier.applyDispensersReplace via ClientSync._reconcileDispensers,
-            // gated by DISPENSERS_RECONCILE_EVERY / DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
-            // The count signal is now a backstop for detecting residual drift.
+            // from the full snapshot and is then held in parity SOLELY by the apply-side
+            // reconcile: ClientApplier.applyDispensersReplace via
+            // ClientSync._reconcileDispensers, gated by DISPENSERS_RECONCILE_EVERY /
+            // DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
+            // (replicatedTables `special`) is a post-replace equality sanity check, not a
+            // backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
+            // leaves the replica ahead, which _verifyTableCounts does not report.
             let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no

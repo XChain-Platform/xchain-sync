@@ -41,16 +41,16 @@
  *                                     neither mutation rides the per-block stream, so it
  *                                     is NOT per-block-streamed. It IS listed in the
  *                                     decoder `special` bucket so it joins the /status
- *                                     completeness count: the source's live count drift
- *                                     (soft-expire UPDATEs + hard-purge DELETEs the
- *                                     bootstrap full dump cannot replay) now surfaces as
- *                                     a TABLE_COUNT_MISMATCH a complete replica can act
- *                                     on, instead of drifting silently. The apply-side
- *                                     reconcile has landed: ClientApplier.applyDispensersReplace
- *                                     via ClientSync._reconcileDispensers, gated by
+ *                                     completeness count, but that count is a post-replace
+ *                                     equality sanity check, NOT a drift detector: a
+ *                                     soft-expire UPDATE leaves both counts equal, and a
+ *                                     hard-purge DELETE leaves the replica AHEAD, which
+ *                                     _verifyTableCounts never reports (it pushes a
+ *                                     mismatch on remote > local only). Parity rests
+ *                                     entirely on the apply-side reconcile:
+ *                                     ClientApplier.applyDispensersReplace via
+ *                                     ClientSync._reconcileDispensers, gated by
  *                                     DISPENSERS_RECONCILE_EVERY / DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
- *                                     The count signal is now a backstop for detecting
- *                                     residual drift between reconcile runs.
  *   - cross_chain_calls,              hub-mirrored (hub_db_sync), NOT produced by
  *     cross_chain_matches,            block processing. Pushed/retracted by the hub
  *     oracle_prices,                  (pushpricereorg / pushdexreorg) out-of-band with
@@ -112,8 +112,9 @@ const TOPOLOGY = {
         // expired_block_index) and defers the hard-purge to purgeExpiredDispensers.
         // Neither mutation rides the block stream, so streaming inserts alone would
         // let a follower's dispensers count drift away from the source. dispensers
-        // is instead listed in `special` below so it joins the /status completeness
-        // count, turning that previously-silent drift into a detectable mismatch.
+        // is instead listed in `special` below, where it converges through the
+        // periodic full-table reconcile; the count it joins there cannot detect
+        // that UPDATE/DELETE drift (see the note on that bucket).
         txScoped:     ['transaction_outputs'],
         // Decoder doesn't have action-scoped tables
         actionScoped: [],
@@ -124,9 +125,12 @@ const TOPOLOGY = {
         // per-scope loops (ServerPoller reads only blockScoped/txScoped/actionScoped/
         // index). dispensers lives here so it enters the /status row-count
         // completeness check (getReplicatedTables) without being streamed per block:
-        // it converges via full snapshot + per-catch-up re-dump, and any residual
-        // drift (the hard-purge DELETE gap) surfaces as a TABLE_COUNT_MISMATCH a
-        // complete replica can act on, instead of drifting silently.
+        // it converges via full snapshot + the periodic re-dump/replace reconcile,
+        // which is the ONLY thing keeping it in parity. The count is a post-replace
+        // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
+        // the replica ahead (_verifyTableCounts flags remote > local only) and a
+        // soft-expire UPDATE leaves counts equal, so neither can ever fire, and
+        // _incrementalCatchUp excludes the table on every non-reconcile cycle.
         special:      ['dispensers']
     },
 
