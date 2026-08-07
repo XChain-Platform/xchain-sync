@@ -97,6 +97,31 @@ function verifySignature(payload, sigHex, pubkeyHex){
 // from the checkpoint's snapshot_block + network (the SDK trusts neither the
 // server's `verified` flag nor any server-supplied `is_weighted`); only the stake
 // WEIGHTS themselves come from the supplied set, exactly as the pubkeys always have.
+
+// Does one validator entry carry the stake fields the weighted regime requires?
+// Blank source and missing weight are BOTH disqualifying: meetsStakeThreshold
+// fails closed on the former but silently reads the latter as '0', so the
+// weight check has to live here (). A negative weight is rejected
+// there and again here, since a caller reaching this gate should never see one.
+// Is the commitment active for this checkpoint while a required field is absent?
+// True means the row cannot be verified at all: the canonical it would be checked
+// against is the legacy rootless one, which is not what a post-flag-day producer signs.
+function commitmentMissing(cp){
+    if(!cp || !ckpt.isCheckpointCommitmentActive(cp.snapshot_block, cp.network)) return false;
+    return cp.state_root === null || cp.state_root === undefined
+        || cp.block_merkle_root === null || cp.block_merkle_root === undefined
+        || cp.state_root_version === null || cp.state_root_version === undefined
+        || cp.block_merkle_version === null || cp.block_merkle_version === undefined;
+}
+
+function isWeightedEntry(v){
+    if(!v || typeof v !== 'object') return false;
+    if(v.source === null || v.source === undefined || String(v.source).trim() === '') return false;
+    if(v.weight === null || v.weight === undefined || String(v.weight).trim() === '') return false;
+    let w = Number(v.weight);
+    return Number.isFinite(w) && w >= 0;
+}
+
 function verifyCheckpoint(checkpoint, validators){
     let canonical = canonicalCheckpoint(checkpoint);
     let vset      = validators || [];
@@ -107,6 +132,15 @@ function verifyCheckpoint(checkpoint, validators){
     // network, byte-for-byte the same flag-day the hub/indexer flip on, and the
     // same gating the canonical signing string already applies for the equiv header.
     let weighted = swq.isStakeWeightedQuorumActive(checkpoint && checkpoint.snapshot_block, checkpoint && checkpoint.network);
+
+    // Post-activation a checkpoint MUST carry the commitment fields. canonicalCheckpoint
+    // appends the suffix only when all four are present, and that guard is correct there
+    // (the canonical bytes must stay identical to the hub, indexer and explorer), but it
+    // means a ROOTLESS post-flag-day row silently falls back to the legacy preimage and
+    // its signatures then verify against it. Structural rejection therefore lives here,
+    // in the verifier, where failing closed masks nothing ().
+    if (commitmentMissing(checkpoint))
+        return { valid: false, validSigs: 0, quorum: quorum, weighted: weighted, canonical: canonical };
 
     let sigs = checkpoint.validator_signatures;
     if (typeof sigs === 'string'){
@@ -136,7 +170,14 @@ function verifyCheckpoint(checkpoint, validators){
         // + source. If it doesn't (e.g. a legacy bare-pubkey list, or an explorer
         // that hasn't been upgraded), we cannot confirm stake quorum; fail closed
         // (false-reject leaning, the fail-safe direction for a light client).
-        let hasWeights = vset.some(v => v && typeof v === 'object' && v.source !== undefined && v.weight !== undefined);
+        //
+        // EVERY entry, not some: `.some` let a set mix one weighted entry with
+        // unweighted ones and still pass, and meetsStakeThreshold reads a missing
+        // weight as '0', so the omitted stake left the denominator while the
+        // weighted signer kept the numerator. One 100-weight signature then
+        // cleared 3*100 > 2*100 against a set whose true stake was unknown.
+        // Empty sets fail here too (`.every` is vacuously true on []).
+        let hasWeights = vset.length > 0 && vset.every(v => isWeightedEntry(v));
         valid = hasWeights && swq.meetsStakeThreshold(vset, validSigners);
     } else {
         valid = qualified.size > 0 && validSigs >= quorum;
