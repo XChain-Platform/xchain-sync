@@ -783,6 +783,57 @@ describe('ServerPoller', function(){
             assert.strictEqual(status.block_height, null);
             assert.strictEqual(status.block_time, null);
         });
+
+        // Replication freshness (#3904). source_block_height falls back to
+        // db.getLastBlock(), a MAX(block_index) against the SERVED database, so on
+        // a node fronting a native SQL replica both heights freeze together when
+        // replication stops applying and the derived lag reads 0. These pin the
+        // fail-closed rules: only a confirmed primary or a confirmed in-window
+        // replica may report fresh.
+        describe('replication freshness', function(){
+            function statusAfter(){ return broadcaster.updateStatus.firstCall.args[2]; }
+
+            it('reports fresh on a primary (not a replica at all)', async function(){
+                db.getReplicaStatus = sinon.stub().resolves({ isReplica: false, running: null, secondsBehind: null });
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, false);
+                assert.strictEqual(statusAfter().replica_seconds_behind, null);
+            });
+
+            it('reports fresh on a replica inside the lag ceiling', async function(){
+                config.SYNC_REPLICA_MAX_LAG_S = 120;
+                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, false);
+                assert.strictEqual(statusAfter().replica_seconds_behind, 5);
+            });
+
+            it('reports stale past the lag ceiling', async function(){
+                config.SYNC_REPLICA_MAX_LAG_S = 120;
+                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 900 });
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, true);
+            });
+
+            it('reports stale when the SQL thread stopped (Seconds_Behind NULL)', async function(){
+                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: false, secondsBehind: null });
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, true,
+                    'a stopped applier is unbounded lag; this is the failure that published lag 0');
+            });
+
+            it('fails closed when the replication status is unreadable', async function(){
+                db.getReplicaStatus = sinon.stub().resolves({ isReplica: null, running: null, secondsBehind: null });
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, true);
+            });
+
+            it('fails closed when the read throws', async function(){
+                db.getReplicaStatus = sinon.stub().rejects(new Error('boom'));
+                await poller._updateStatus(100);
+                assert.strictEqual(statusAfter().replica_stale, true);
+            });
+        });
     });
 
     describe('stop', function(){

@@ -932,6 +932,45 @@ class Database {
         return null;
     }
 
+    // Read the replication engine's own view of this node's freshness (#3904).
+    // getLastBlock above reads the SERVED database, so on a node fronting a native
+    // SQL replica the source and served heights are one failure domain: replication
+    // stops applying, both freeze at the same number, and lag_blocks publishes 0
+    // while the node is hours behind. Only the replication subsystem can tell those
+    // apart. Returns { isReplica, running, secondsBehind }: isReplica false on a
+    // primary/co-located source (empty result set), null when the read itself was
+    // refused (missing REPLICATION CLIENT grant), which callers must treat as stale.
+    async getReplicaStatus(conn){
+        let rows;
+        try {
+            rows = await this.doQueryStrict("SHOW REPLICA STATUS", null, conn);
+        } catch (error){
+            // Pre-10.5 servers only know the SLAVE spelling; anything else is a
+            // genuine failure and falls through to the unknown result below.
+            try {
+                rows = await this.doQueryStrict("SHOW SLAVE STATUS", null, conn);
+            } catch (fallbackError){
+                if(!this._replicaStatusWarned){
+                    this._replicaStatusWarned = true;
+                    this.util.logError('Cannot read replication status (needs REPLICATION CLIENT):', fallbackError);
+                }
+                return { isReplica: null, running: null, secondsBehind: null };
+            }
+        }
+        if(!rows || rows.length === 0)
+            return { isReplica: false, running: null, secondsBehind: null };
+        let row = rows[0];
+        let io  = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
+        let sql = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
+        let behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
+        return {
+            isReplica: true,
+            running: io === 'Yes' && sql === 'Yes',
+            // NULL here means the SQL thread is not applying at all, never "0 behind".
+            secondsBehind: behind == null ? null : Number(behind)
+        };
+    }
+
     // Get block hash data for a given block_index.
     // Indexer: joins to index_transactions for the synthetic ledger/actions/contract hashes.
     // Decoder: joins only to the blockchain block hash (via block_hash_id -> index_transactions).

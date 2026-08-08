@@ -907,6 +907,12 @@ class ServerPoller {
             source_block_height: sourceBlockHeight != null ? sourceBlockHeight : (await this.db.getLastBlock()),
             poll_error_count:    this.pollErrorCount
         };
+        // Replication freshness (#3904). source_block_height above is read from the
+        // SERVED database, so on a node fronting a native SQL replica both heights
+        // freeze together when replication stalls and the derived lag reads 0.
+        let rep = await this._readReplicaStatus();
+        status.replica_seconds_behind = rep.secondsBehind;
+        status.replica_stale          = rep.stale;
         if(this.dbType === 'decoder'){
             status.block_hash = hashRow ? hashRow.block_hash : null;
         } else {
@@ -916,6 +922,29 @@ class ServerPoller {
         }
         status.subscriber_count = this.broadcaster.getSubscriberCount(this.chain, this.network, this.dbType);
         this.broadcaster.updateStatus(this.chain, this.network, status);
+    }
+
+    // Fail closed on everything except a confirmed primary. A stopped SQL thread
+    // reports Seconds_Behind_Source NULL, which is unbounded lag, never zero; an
+    // unreadable status (no grant, older db object without the method) is unknown
+    // and must not certify freshness either (#3904).
+    async _readReplicaStatus(){
+        let rep = null;
+        try {
+            if(typeof this.db.getReplicaStatus === 'function')
+                rep = await this.db.getReplicaStatus();
+        } catch (e){
+            this.util.logError('Replication status read failed:', e);
+        }
+        if(!rep) return { secondsBehind: null, stale: true };
+        if(rep.isReplica === false) return { secondsBehind: null, stale: false };
+        let maxLag = Number(this.config.SYNC_REPLICA_MAX_LAG_S);
+        if(!Number.isFinite(maxLag)) maxLag = 120;
+        let stale = rep.isReplica !== true
+            || !rep.running
+            || rep.secondsBehind == null
+            || rep.secondsBehind > maxLag;
+        return { secondsBehind: rep.secondsBehind, stale };
     }
 }
 

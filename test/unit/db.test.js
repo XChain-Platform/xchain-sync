@@ -863,6 +863,60 @@ describe('Database.getLastBlock()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 14b. getReplicaStatus()  (#3904)
+//
+// getLastBlock above reads the SERVED database, so on a node fronting a native
+// SQL replica the source and served heights share one failure domain: when
+// replication stops applying, both freeze at the same number and the derived
+// lag_blocks publishes 0 for an hours-behind node. Only the replication engine
+// can tell those apart, and it must fail CLOSED on every ambiguous answer.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Database.getReplicaStatus()', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('reports not-a-replica on an empty result set (primary / co-located source)', async function () {
+        sinon.stub(db, 'doQueryStrict').resolves([]);
+        assert.deepStrictEqual(await db.getReplicaStatus(),
+            { isReplica: false, running: null, secondsBehind: null });
+    });
+
+    it('reads a healthy replica row', async function () {
+        sinon.stub(db, 'doQueryStrict').resolves([{
+            Replica_IO_Running: 'Yes', Replica_SQL_Running: 'Yes', Seconds_Behind_Source: 3
+        }]);
+        assert.deepStrictEqual(await db.getReplicaStatus(),
+            { isReplica: true, running: true, secondsBehind: 3 });
+    });
+
+    it('reports a stopped SQL thread as running:false with NULL, never 0 behind', async function () {
+        sinon.stub(db, 'doQueryStrict').resolves([{
+            Replica_IO_Running: 'Yes', Replica_SQL_Running: 'No', Seconds_Behind_Source: null
+        }]);
+        let res = await db.getReplicaStatus();
+        assert.strictEqual(res.running, false);
+        assert.strictEqual(res.secondsBehind, null, 'NULL is unbounded lag, not zero');
+    });
+
+    it('falls back to the pre-10.5 SLAVE spelling', async function () {
+        let stub = sinon.stub(db, 'doQueryStrict');
+        stub.withArgs('SHOW REPLICA STATUS').rejects(new Error('You have an error in your SQL syntax'));
+        stub.withArgs('SHOW SLAVE STATUS').resolves([{
+            Slave_IO_Running: 'Yes', Slave_SQL_Running: 'Yes', Seconds_Behind_Master: 7
+        }]);
+        assert.deepStrictEqual(await db.getReplicaStatus(),
+            { isReplica: true, running: true, secondsBehind: 7 });
+    });
+
+    it('returns an unknown result when the grant is missing, never a healthy one', async function () {
+        sinon.stub(db, 'doQueryStrict').rejects(new Error('Access denied; you need REPLICATION CLIENT'));
+        assert.deepStrictEqual(await db.getReplicaStatus(),
+            { isReplica: null, running: null, secondsBehind: null });
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 14b. addMissingColumns(): remaining branch coverage
 // (The basic happy-path cases live in db-schema-evolution.test.js)
 // ═══════════════════════════════════════════════════════════════════════════

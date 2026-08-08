@@ -153,6 +153,20 @@ function createRateLimiters(cfg){
     return { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter, transparencyLimiter, heartbeatLimiter };
 }
 
+// Carry the poller's replication verdict onto a /status row (#3904).
+// source_height comes from the SERVED database, so on a node fronting a native
+// SQL replica the source and served heights freeze together when replication
+// stops applying and lag_blocks computes 0 on an hours-behind node. Withhold the
+// number rather than publish a zero the replication engine contradicts: every
+// consumer keying off `lag_blocks === 0` would otherwise certify the node.
+function applyReplicaFreshness(row, pollerStatus){
+    row.replica_seconds_behind = (pollerStatus && pollerStatus.replica_seconds_behind !== undefined)
+                                     ? pollerStatus.replica_seconds_behind : null;
+    row.replica_stale = !!(pollerStatus && pollerStatus.replica_stale);
+    if(row.replica_stale) row.lag_blocks = null;
+    return row;
+}
+
 async function startApi(){
 
     const app = express();
@@ -218,6 +232,7 @@ async function startApi(){
                 poll_error_count: (pollerStatus && pollerStatus.poll_error_count != null)
                                    ? pollerStatus.poll_error_count : 0
             };
+            applyReplicaFreshness(row, pollerStatus);
             if(dbType === 'decoder'){
                 row.block_hash = hashRow ? hashRow.block_hash : null;
             } else {
@@ -1062,4 +1077,4 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, startApi };
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, startApi };

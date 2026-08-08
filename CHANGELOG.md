@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Server status no longer certifies a stalled SQL replica as caught up ().
+- Stake-weighted quorum rejects a validator entry with a missing or non-numeric weight instead of lowering the quorum denominator ().
 - Checkpoint verification requires a valid weight on every validator entry and rejects a post-activation checkpoint missing its commitment roots, matching the SDK twin ().
 - Indexer `pubkeys` now rides every incremental snapshot via the full re-dump; it was silently dropped, so incrementally-caught-up replicas froze at bootstrap height.
 - State-commitment roots get the catch-up-burst exemption, bootstrap resolver converges on signed-latest, ignoreTables derives from the registry, rollback logs real faults with context, parity guards escalate under required-siblings.

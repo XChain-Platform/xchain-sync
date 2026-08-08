@@ -319,6 +319,13 @@ module.exports = {
         // a silently dropped WebSocket. Default 180s = 3 missed heartbeats.
         config['CLIENT_SOURCE_STALE_MS'] = parseIntMin1(process.env.CLIENT_SOURCE_STALE_MS, 180000);
 
+        // Replication freshness ceiling (server mode). The client path has the window
+        // above; a server fronting a native SQL replica had no equivalent, so a
+        // stalled replica froze the source and served heights together and published
+        // lag_blocks 0 on an hours-behind node (#3904). Seconds behind the source
+        // above this reads stale. Needs the REPLICATION CLIENT grant to be readable.
+        config['SYNC_REPLICA_MAX_LAG_S'] = parseIntMin1(process.env.SYNC_REPLICA_MAX_LAG_S, 120);
+
         // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
         // exhausts every configured source must NOT fall through to live-follow on an
         // empty replica; instead it retries the whole source rotation with bounded
