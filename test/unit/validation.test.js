@@ -14,7 +14,9 @@ const {
     validateDdl,
     validateWsEvent,
     extractColumnNames,
-    extractColumnDefinition
+    extractColumnDefinition,
+    isAutoIncrementDefinition,
+    extractKeyForColumn
 } = require('../../src/validation');
 
 describe('validation', function(){
@@ -183,6 +185,82 @@ describe('validation', function(){
         it('handles a doubled-quote escape inside a string literal', function(){
             const d = "CREATE TABLE `t` (\n  `c` varchar(10) DEFAULT 'a''(''b',\n  `d` int\n)";
             assert.strictEqual(extractColumnDefinition(d, 'c'), "`c` varchar(10) DEFAULT 'a''(''b'");
+        });
+    });
+
+    describe('isAutoIncrementDefinition', function(){
+        it('detects an AUTO_INCREMENT column definition', function(){
+            assert.strictEqual(isAutoIncrementDefinition('`id` bigint(20) unsigned NOT NULL AUTO_INCREMENT'), true);
+        });
+        it('is case-insensitive', function(){
+            assert.strictEqual(isAutoIncrementDefinition('`id` int auto_increment'), true);
+        });
+        it('is not fooled by the word inside a COMMENT', function(){
+            assert.strictEqual(isAutoIncrementDefinition("`note` varchar(32) COMMENT 'auto_increment'"), false);
+        });
+        it('is not fooled by the word inside a backtick identifier', function(){
+            assert.strictEqual(isAutoIncrementDefinition('`auto_increment` int NOT NULL'), false);
+        });
+        it('is false for an ordinary column and for non-strings', function(){
+            assert.strictEqual(isAutoIncrementDefinition('`n` int DEFAULT NULL'), false);
+            assert.strictEqual(isAutoIncrementDefinition(null), false);
+        });
+    });
+
+    describe('extractKeyForColumn', function(){
+        const ddl = [
+            'CREATE TABLE `pubkeys` (',
+            '  `address_id` bigint(20) unsigned NOT NULL,',
+            '  `pubkey` varchar(66) NOT NULL,',
+            '  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,',
+            '  PRIMARY KEY (`address_id`),',
+            '  UNIQUE KEY `id` (`id`),',
+            '  KEY `pubkey_idx` (`pubkey`(16))',
+            ') ENGINE=InnoDB'
+        ].join('\n');
+
+        it('finds the single-column UNIQUE key covering a column', function(){
+            assert.deepStrictEqual(extractKeyForColumn(ddl, 'id'),
+                { type: 'unique', name: 'id', columns: ['id'] });
+        });
+        it('finds a single-column PRIMARY KEY', function(){
+            assert.deepStrictEqual(extractKeyForColumn(ddl, 'address_id'),
+                { type: 'primary', name: null, columns: ['address_id'] });
+        });
+        it('accepts a prefix-length index part', function(){
+            assert.deepStrictEqual(extractKeyForColumn(ddl, 'pubkey'),
+                { type: 'index', name: 'pubkey_idx', columns: ['pubkey'] });
+        });
+        it('prefers PRIMARY over UNIQUE when both cover the column', function(){
+            const d = [
+                'CREATE TABLE `t` (',
+                '  `id` int NOT NULL AUTO_INCREMENT,',
+                '  UNIQUE KEY `id_u` (`id`),',
+                '  PRIMARY KEY (`id`)',
+                ')'
+            ].join('\n');
+            assert.strictEqual(extractKeyForColumn(d, 'id').type, 'primary');
+        });
+        it('ignores a multi-column key (not reproducible from one ADD COLUMN)', function(){
+            const d = 'CREATE TABLE `t` (\n  `id` int NOT NULL,\n  KEY `combo` (`id`,`other`)\n)';
+            assert.strictEqual(extractKeyForColumn(d, 'id'), null);
+        });
+        it('ignores a functional/expression index', function(){
+            const d = 'CREATE TABLE `t` (\n  `id` int NOT NULL,\n  KEY `fn` ((`id` + 1))\n)';
+            assert.strictEqual(extractKeyForColumn(d, 'id'), null);
+        });
+        it('rejects a key line carrying a semicolon', function(){
+            const d = 'CREATE TABLE `t` (\n  UNIQUE KEY `k` (`id`); DROP TABLE x\n)';
+            assert.strictEqual(extractKeyForColumn(d, 'id'), null);
+        });
+        it('rejects a key name that is not a plain identifier', function(){
+            const d = 'CREATE TABLE `t` (\n  UNIQUE KEY `bad name` (`id`)\n)';
+            assert.strictEqual(extractKeyForColumn(d, 'id'), null);
+        });
+        it('returns null when the column has no key and for non-strings', function(){
+            assert.strictEqual(extractKeyForColumn(ddl, 'missing'), null);
+            assert.strictEqual(extractKeyForColumn(null, 'id'), null);
+            assert.strictEqual(extractKeyForColumn(ddl, 42), null);
         });
     });
 

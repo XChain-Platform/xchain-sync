@@ -148,6 +148,88 @@ function extractColumnDefinition(ddl, columnName){
     return null;
 }
 
+// Blank out quoted regions ('...', `...`, "...") so a keyword scan cannot be
+// fooled by attacker or comment text inside a column definition. Doubled quotes
+// are MariaDB's escape form and stay inside the region. Length is preserved so
+// callers can still index into the original string.
+function maskSqlQuoted(sql){
+    let out   = '';
+    let quote = null;
+    for(let i = 0; i < sql.length; i++){
+        let ch = sql.charAt(i);
+        if(quote){
+            if(ch === quote && sql.charAt(i + 1) === quote){ out += '  '; i++; continue; }
+            if(ch === quote){ quote = null; out += ' '; continue; }
+            out += ' ';
+            continue;
+        }
+        if(ch === "'" || ch === '`' || ch === '"'){ quote = ch; out += ' '; continue; }
+        out += ch;
+    }
+    return out;
+}
+
+// True when a column definition line declares AUTO_INCREMENT. Quote-aware: a
+// COMMENT 'auto_increment' must not read as one, because the caller uses this
+// to decide whether the generated ALTER needs a key clause and a false positive
+// would bolt a spurious index onto an ordinary column.
+function isAutoIncrementDefinition(def){
+    if(typeof def !== 'string') return false;
+    return /\bAUTO_INCREMENT\b/i.test(maskSqlQuoted(def));
+}
+
+// Find the source-side index that covers a single column, as declared in a
+// CREATE TABLE DDL (SHOW CREATE TABLE output). Returns
+// { type: 'primary'|'unique'|'index', name, columns } for the narrowest
+// single-column key on that column, or null when the source declares none.
+//
+// Exists for the AUTO_INCREMENT case: MariaDB refuses an ALTER that adds an
+// auto-increment column without making it a key (errno 1075), so the generated
+// ALTER has to carry the source's own key rather than invent one. Multi-column
+// keys are ignored: they are not reproducible from a single ADD COLUMN and the
+// caller synthesises a UNIQUE key instead. Preference order primary > unique >
+// index keeps the replica's key as close to the source as the statement allows.
+function extractKeyForColumn(ddl, columnName){
+    if(typeof ddl !== 'string' || typeof columnName !== 'string') return null;
+    let best = null;
+    const RANK = { primary: 0, unique: 1, index: 2 };
+    for(let line of ddl.split('\n')){
+        let trimmed = line.trim().replace(/,\s*$/, '');
+        if(trimmed.indexOf(';') !== -1) continue;
+
+        let type = null, name = null, colsRaw = null, m = null;
+        // Greedy inner capture: an index part may carry a prefix length
+        // (`pubkey`(16)), so the closing paren is the LAST one on the line.
+        if((m = /^PRIMARY\s+KEY\s*\((.*)\)$/i.exec(trimmed))){
+            type = 'primary'; colsRaw = m[1];
+        } else if((m = /^UNIQUE\s+KEY\s+`([^`]+)`\s*\((.*)\)$/i.exec(trimmed))){
+            type = 'unique'; name = m[1]; colsRaw = m[2];
+        } else if((m = /^KEY\s+`([^`]+)`\s*\((.*)\)$/i.exec(trimmed))){
+            type = 'index'; name = m[1]; colsRaw = m[2];
+        } else {
+            continue;
+        }
+
+        // Index parts are `col` or `col`(n) (prefix length); anything that is not
+        // a plain backtick-quoted identifier (a functional/expression index) makes
+        // the whole key unusable here.
+        let parts = colsRaw.split(',').map(p => p.trim());
+        let cols  = [];
+        let clean = true;
+        for(let part of parts){
+            let pm = /^`([^`]+)`(\(\d+\))?$/.exec(part);
+            if(!pm || !validateIdentifier(pm[1]).valid){ clean = false; break; }
+            cols.push(pm[1]);
+        }
+        if(!clean || cols.length !== 1 || cols[0] !== columnName) continue;
+        if(name !== null && !validateIdentifier(name).valid) continue;
+
+        let candidate = { type, name: name, columns: cols };
+        if(best === null || RANK[type] < RANK[best.type]) best = candidate;
+    }
+    return best;
+}
+
 // Validate a WebSocket event has the expected shape.
 // Accepted types: block, reorg, status.
 // block/reorg require a positive integer block_index.
@@ -188,5 +270,7 @@ module.exports = {
     validateDdl,
     validateWsEvent,
     extractColumnNames,
-    extractColumnDefinition
+    extractColumnDefinition,
+    isAutoIncrementDefinition,
+    extractKeyForColumn
 };

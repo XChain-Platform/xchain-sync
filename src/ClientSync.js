@@ -701,6 +701,63 @@ class ClientSync {
         this._applyTimers.clear();
     }
 
+    // True when a snapshot download aborted because the body outgrew the axios
+    // ceiling (SNAPSHOT_MAX_CONTENT). One definition for both the incremental
+    // fallback and the bootstrap halt, so the two can never disagree on what the
+    // size wall looks like.
+    _isContentLengthOverflow(e){
+        if(!e) return false;
+        return e.code === 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED' ||
+               !!(e.message && e.message.includes('maxContentLength'));
+    }
+
+    // Seconds the source says to wait after a 429, or null when the error is not
+    // a rate-limit. Reads Retry-After first, then express-rate-limit's
+    // RateLimit-Reset; returns 0 when neither header is present so the caller can
+    // still report the 429 itself.
+    _rateLimitRetryAfterSeconds(e){
+        let resp = e && e.response;
+        if(!resp || resp.status !== 429) return null;
+        let headers = resp.headers || {};
+        let raw = headers['retry-after'] !== undefined ? headers['retry-after'] : headers['ratelimit-reset'];
+        let secs = parseInt(raw, 10);
+        return Number.isFinite(secs) && secs >= 0 ? secs : 0;
+    }
+
+    // Durable halt for a full snapshot that no longer fits under
+    // SNAPSHOT_MAX_CONTENT (same recordHalt/isHalted persistence and /status
+    // surface as the schema-apply halt, its own reason so an operator is not sent
+    // chasing DDL). Reached only from the bootstrap path, where the payload size
+    // is a property of the chain rather than of this attempt, so no retry, source
+    // rotation, or process restart can change the outcome.
+    async _haltOnSnapshotTooLarge(source, cause){
+        if(this._halted) return;
+        let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
+        let detail = [{ limit_bytes: this.config['SNAPSHOT_MAX_CONTENT'] || null,
+                        message: (cause && cause.message) || null }];
+        this._halted = {
+            blockIndex, reason: 'snapshot-too-large',
+            mismatches: detail, sources: [source],
+            at: new Date().toISOString()
+        };
+        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
+        catch(e){ console.error('CRITICAL: failed to persist snapshot-too-large halt (still halting in-memory):', e); }
+        console.error('================================================================');
+        console.error('SNAPSHOT TOO LARGE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        console.error('the full-history snapshot from ' + source + ' exceeds SNAPSHOT_MAX_CONTENT (' +
+            (this.config['SNAPSHOT_MAX_CONTENT'] || 'unset') + ' bytes).');
+        console.error('every source serves the same payload, so retrying, rotating sources, or');
+        console.error('restarting the process cannot get past this. HALTING (applying no further');
+        console.error('blocks) rather than crash-looping and exhausting the source snapshot budget.');
+        console.error('Operator must either reseed this replica as a truncated one');
+        console.error('(SYNC_BOOTSTRAP_DEPTH) or raise SNAPSHOT_MAX_CONTENT, then clear the halt.');
+        console.error('================================================================');
+        this.pendingHashes.clear();
+        this._strictConfirmPending.clear();
+        for(let [, timer] of this._applyTimers) clearTimeout(timer);
+        this._applyTimers.clear();
+    }
+
     // A missing table (errno 1146) or missing column (1054) during an apply
     // means the source's schema moved ahead of this replica AFTER bootstrap.
     // _fetchAndApplySchema only runs at bootstrap, so a server-side table
@@ -753,11 +810,12 @@ class ClientSync {
         for(let round = 0; ; round++){
             if(await this._bootstrapRotateSources()) return; // success: tip committed
             if(this._halted){
-                // A schema-apply halt was recorded mid-bootstrap. Retrying cannot
-                // help (the DDL fault persists), so stop burning rounds: throw so
+                // A halt was recorded mid-bootstrap (schema-apply fault, or a full
+                // snapshot that cannot fit under SNAPSHOT_MAX_CONTENT). Retrying
+                // cannot help in either case, so stop burning rounds: throw so
                 // start()/SyncService restarts and start() lands in the durable
                 // idle-halted state until an operator clears it.
-                throw new Error('Bootstrap aborted by schema-apply halt for ' +
+                throw new Error('Bootstrap aborted by ' + this._halted.reason + ' halt for ' +
                     this.chain + '/' + this.network + '/' + this.dbType + '; operator must clear the halt');
             }
             if(round >= maxRetries){
@@ -874,6 +932,27 @@ class ClientSync {
             console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
             return true;
         } catch(e){
+            // The full-history snapshot no longer fits under SNAPSHOT_MAX_CONTENT.
+            // Halt durably instead of rotating/retrying: every source serves the
+            // same oversized payload, so the rounds exhaust, BootstrapExhaustedError
+            // exits the process, and systemd restarts straight back into the same
+            // wall. That crash loop is what silently froze the DOGE:testnet replica
+            // and then 429'd its own snapshot budget ; the operator remedy
+            // (reseed truncated via SYNC_BOOTSTRAP_DEPTH, or raise the ceiling) is
+            // a decision no retry can make.
+            if(this._isContentLengthOverflow(e)){
+                await this._haltOnSnapshotTooLarge(source, e);
+                return false;
+            }
+            // Name a 429 rather than burying it in the axios dump: the snapshot
+            // limiter is hourly (SNAPSHOT_RATE_FULL) while this ladder retries in
+            // seconds, so an operator reading the log must see the wait it implies.
+            let retryAfter = this._rateLimitRetryAfterSeconds(e);
+            if(retryAfter !== null){
+                console.error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
+                    this.chain + '/' + this.network + '/' + this.dbType +
+                    '; the source will not serve another full snapshot for ' + retryAfter + 's.');
+            }
             console.error('Bootstrap failed:', e);
             // Try next source, but only if we haven't exhausted all sources
             if(this.sources.length > 1 && attempt < this.sources.length - 1){
@@ -1364,8 +1443,7 @@ class ClientSync {
             // no progress. Fall back to a full bootstrap (the same path start() uses
             // for an empty replica) so the node self-recovers instead of looping
             // forever and requiring a manual DB wipe.
-            let isSizeError = e && (e.code === 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED' ||
-                (e.message && e.message.includes('maxContentLength')));
+            let isSizeError = this._isContentLengthOverflow(e);
             if(isSizeError){
                 // A truncated replica (SYNC_BOOTSTRAP_DEPTH) exists precisely because
                 // its full-history snapshot exceeds SNAPSHOT_MAX_CONTENT and cannot be
@@ -1381,6 +1459,11 @@ class ClientSync {
                     await this._bootstrapFromHeightRetry(this._truncatedDepth);
                     return;
                 }
+                // A full-history replica whose chain has GROWN past the wall lands
+                // here and its full snapshot is oversized too; _bootstrapFromSnapshot
+                // now halts on that rather than crash-looping , so this stays
+                // the right call for the case it was written for (a payload window too
+                // wide to fetch incrementally but a snapshot that still fits).
                 console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                     '; falling back to full bootstrap.');
                 await this._bootstrapFromSnapshot();

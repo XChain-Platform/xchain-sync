@@ -153,8 +153,9 @@ class SyncService {
                 await db.createDatabase();
                 // Schema replication: try direct DB connection first (faster), fall back to
                 // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
+                let sourceDb = null;
                 try {
-                    let sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
+                    sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
                     // Single-attempt probe: a node-internal source DB host is often
                     // unreachable from the replica box, and verifyDatabase() would
                     // retry forever, hanging discovery instead of falling through to
@@ -163,10 +164,24 @@ class SyncService {
                     if(sourceExists){
                         await db.replicateSchema(sourceDb);
                     }
-                    await sourceDb.close();
                 } catch(e){
-                    // Source DB not reachable; schema will be fetched from server via /schema endpoint
-                    console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
+                    // A column self-heal the server REFUSED is not an unreachable source
+                    // : the schema really is behind and the /schema fetch will not
+                    // fix it, so it must not be filed under the reachability message. Say so
+                    // loudly and let ClientSync's schema apply record the durable halt.
+                    if(e && e.columnFailures){
+                        console.error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
+                            ' left columns missing on the replica: ' + e.message);
+                    } else {
+                        // Source DB not reachable; schema will be fetched from server via /schema endpoint
+                        console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
+                    }
+                } finally {
+                    // Close in finally: a thrown replicateSchema used to leak the source
+                    // pool, and a refused ALTER now throws.
+                    if(sourceDb){
+                        try { await sourceDb.close(); } catch(closeErr){ /* pool already gone */ }
+                    }
                 }
                 // Sync-owned tables: verifySyncTables is dbType-aware. Indexer
                 // replicas get the full set (sync_meta/merkle_epochs/sync_halt),

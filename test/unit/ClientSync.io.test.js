@@ -344,6 +344,138 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 2a. bootstrap size wall + rate limit 
+//
+// The DOGE:testnet replica on origin-host froze for weeks because a full-history
+// snapshot outgrew SNAPSHOT_MAX_CONTENT: every bootstrap round hit the same wall,
+// BootstrapExhaustedError exited the process, systemd restarted it, and the loop
+// drained the source's hourly full-snapshot budget until every request 429'd.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ClientSync: bootstrap size wall ', function(){
+    let sync, db, applier;
+
+    function sizeError(){
+        let e = new Error('maxContentLength size of 209715200 exceeded');
+        e.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
+        return e;
+    }
+
+    function rateLimitError(headers){
+        let e = new Error('Request failed with status code 429');
+        e.response = { status: 429, headers: headers || {} };
+        return e;
+    }
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('an oversized full snapshot halts durably instead of burning retry rounds', async function(){
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006',
+            BOOTSTRAP_MAX_RETRIES: 5
+        }));
+        let sleep = sinon.stub(sync.util, 'sleep').resolves();
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        let get = sinon.stub(axios, 'get').rejects(sizeError());
+
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /snapshot-too-large/);
+
+        // One attempt, not six: retrying cannot shrink the payload, and each extra
+        // request is one more token off the source's hourly snapshot budget.
+        assert.strictEqual(get.callCount, 1, 'must not retry an unshrinkable payload');
+        assert.strictEqual(sleep.callCount, 0, 'must not back off into another round');
+        assert.strictEqual(sync.isHalted(), true, 'halts rather than exiting for a restart');
+        assert.strictEqual(sync.getHaltInfo().reason, 'snapshot-too-large');
+        assert.strictEqual(applier.applyFullSnapshot.called, false);
+    });
+
+    it('persists the halt so the restart lands idle rather than back at the wall', async function(){
+        ({ sync, db, applier } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
+        sinon.stub(sync.util, 'sleep').resolves();
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(axios, 'get').rejects(sizeError());
+
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /operator must clear the halt/);
+
+        assert.ok(db.recordHalt.calledOnce, 'halt must survive the process');
+        assert.strictEqual(db.recordHalt.firstCall.args[2], 'snapshot-too-large');
+        // The message must name the operator's actual remedy, since no automated
+        // path can choose between truncating the replica and raising the ceiling.
+        let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+        assert.ok(logged.indexOf('SYNC_BOOTSTRAP_DEPTH') !== -1, 'names the truncation remedy');
+        assert.ok(logged.indexOf('SNAPSHOT_MAX_CONTENT') !== -1, 'names the ceiling remedy');
+    });
+
+    it('a rotating multi-source bootstrap stops at the first size wall', async function(){
+        // Every source serves the same chain, so the second source is the same wall.
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
+            BOOTSTRAP_MAX_RETRIES: 5
+        }));
+        sinon.stub(sync.util, 'sleep').resolves();
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        let get = sinon.stub(axios, 'get').rejects(sizeError());
+
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /snapshot-too-large/);
+
+        assert.strictEqual(get.callCount, 1, 'must not rotate onto an identical payload');
+    });
+
+    it('a generic transport failure still rotates and retries (no over-halting)', async function(){
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006',
+            BOOTSTRAP_MAX_RETRIES: 2
+        }));
+        sinon.stub(sync.util, 'sleep').resolves();
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(axios, 'get').rejects(new Error('ECONNRESET'));
+
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+
+        assert.strictEqual(sync.isHalted(), false, 'a transient fault must not halt');
+        assert.strictEqual(db.recordHalt.called, false);
+    });
+
+    it('a 429 is reported with the wait the source advertised', async function(){
+        ({ sync, db, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006',
+            BOOTSTRAP_MAX_RETRIES: 0
+        }));
+        sinon.stub(sync.util, 'sleep').resolves();
+        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(axios, 'get').rejects(rateLimitError({ 'retry-after': '2400' }));
+
+        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+
+        let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+        assert.ok(logged.indexOf('HTTP 429') !== -1, 'the 429 must be named, not buried in the axios dump');
+        assert.ok(logged.indexOf('2400s') !== -1, 'the advertised wait must be readable');
+        // A 429 is transient (the hourly window reopens), so it must not halt.
+        assert.strictEqual(sync.isHalted(), false);
+    });
+
+    it('falls back to RateLimit-Reset when Retry-After is absent', function(){
+        ({ sync } = makeSync());
+        assert.strictEqual(sync._rateLimitRetryAfterSeconds(rateLimitError({ 'ratelimit-reset': '900' })), 900);
+        assert.strictEqual(sync._rateLimitRetryAfterSeconds(rateLimitError({})), 0);
+        assert.strictEqual(sync._rateLimitRetryAfterSeconds(new Error('nope')), null);
+    });
+
+    it('the size wall has one definition, shared with the incremental fallback', function(){
+        ({ sync } = makeSync());
+        assert.strictEqual(sync._isContentLengthOverflow(sizeError()), true);
+        // axios raises the same wall by message alone on some transports.
+        assert.strictEqual(sync._isContentLengthOverflow(new Error('maxContentLength exceeded')), true);
+        assert.strictEqual(sync._isContentLengthOverflow(new Error('ECONNRESET')), false);
+        assert.strictEqual(sync._isContentLengthOverflow(null), false);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 2b. _bootstrapFromHeight (truncated/fast-chain bootstrap)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('ClientSync _bootstrapFromHeight', function(){

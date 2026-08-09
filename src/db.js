@@ -224,10 +224,24 @@ class Database {
     // back permanently. Source column names + definitions are derived from
     // the source's CREATE TABLE DDL (validated by validateDdl by the caller);
     // the target's columns come from INFORMATION_SCHEMA. Each gap is closed
-    // with a best-effort ALTER TABLE ADD COLUMN. A column whose definition
-    // cannot be cleanly parsed is logged and skipped rather than aborting the
-    // whole sync. DDL auto-commits, so this must run before any snapshot
-    // transaction is opened. Returns the number of columns added.
+    // with an ALTER TABLE ADD COLUMN. A column whose definition cannot be
+    // cleanly parsed is logged and skipped rather than aborting the whole sync;
+    // a column the SERVER refuses is a different thing and fails loudly (see
+    // below). DDL auto-commits, so this must run before any snapshot
+    // transaction is opened. Returns the number of columns added, and THROWS
+    // when a generated ALTER was refused by the server : the column is
+    // still missing, so every later row carrying it fails with errno 1054, and
+    // a swallowed error here is a replica that stalls silently for days.
+    // Callers route the throw into their own fail-closed path (ClientSync's
+    // schema-apply fixpoint records a durable halt).
+    //
+    // The ALTER is deliberately UNQUALIFIED (the table name alone, never
+    // db.table) and runs on the pool, whose connections carry a default
+    // database. On a replica that is itself a replication source for a
+    // downstream tier, a fully-qualified DDL statement executed with no default
+    // database is dropped by the downstream Replicate_Do_DB filter and never
+    // reaches it, so the self-heal would appear to work here while the tier
+    // below stayed broken .
     //
     // NOTE FOR OPERATORS: a replica that stalled BEFORE this fix shipped will
     // not self-heal until it next runs schema replication. If one is wedged on
@@ -243,7 +257,8 @@ class Database {
         );
         let destSet = new Set(destRows.map(r => r.column_name || r.COLUMN_NAME));
 
-        let added = 0;
+        let added  = 0;
+        let failed = [];
         for(let col of sourceColumns){
             if(destSet.has(col)) continue;
 
@@ -259,15 +274,78 @@ class Database {
                 continue;
             }
 
+            let actions = ['ADD COLUMN ' + def];
+            if(validation.isAutoIncrementDefinition(def)){
+                let keyAction = await this._autoIncrementKeyAction(tableName, col, sourceDdl);
+                actions.push(keyAction);
+            }
+            let alter = "ALTER TABLE `" + tableName + "` " + actions.join(', ');
+
             try {
-                await this.doQuery("ALTER TABLE `" + tableName + "` ADD COLUMN " + def);
+                // doQueryStrict, not doQuery: outside a transaction doQuery logs the
+                // error and returns [], so the success log below fired on a REFUSED
+                // ALTER and reported "Added column" for a column that does not exist.
+                await this.doQueryStrict(alter);
                 console.log('Added column ' + col + ' to ' + tableName);
                 added++;
             } catch(e){
-                console.error('Failed to add column ' + col + ' to ' + tableName + ':', e);
+                failed.push({ column: col, errno: (e && e.errno) || null, message: (e && e.message) || String(e) });
+                console.error('FAILED to add column ' + col + ' to ' + tableName +
+                    ' (errno ' + ((e && e.errno) || 'unknown') + '); the column is still missing. ALTER was: ' + alter, e);
             }
         }
+
+        if(failed.length){
+            let err = new Error('Schema column self-heal failed on ' + tableName + ': ' +
+                failed.map(f => f.column + ' (errno ' + f.errno + ')').join(', '));
+            err.errno         = failed[0].errno;
+            err.failedColumns = failed;
+            throw err;
+        }
         return added;
+    }
+
+    // Build the key clause that must accompany an ADD COLUMN for an
+    // AUTO_INCREMENT column. MariaDB rejects the bare add with errno 1075
+    // ("there can be only one auto column and it must be defined as a key"),
+    // which is what wedged the decoder replicas' pubkeys.id self-heal .
+    //
+    // The key is taken from the SOURCE DDL so the replica converges on the
+    // source's own definition rather than a guess. A source PRIMARY KEY is only
+    // reproducible when the replica has no primary key yet; otherwise (and when
+    // the source's covering key is multi-column or absent) a UNIQUE key on the
+    // column alone satisfies the auto-increment requirement without disturbing
+    // the existing keys.
+    async _autoIncrementKeyAction(tableName, col, sourceDdl){
+        let key = validation.extractKeyForColumn(sourceDdl, col);
+
+        if(key && key.type === 'primary' && !(await this._hasPrimaryKey(tableName)))
+            return 'ADD PRIMARY KEY (`' + col + '`)';
+
+        if(key && key.type === 'unique' && key.name)
+            return 'ADD UNIQUE KEY `' + key.name + '` (`' + col + '`)';
+
+        if(key && key.type === 'index' && key.name)
+            return 'ADD KEY `' + key.name + '` (`' + col + '`)';
+
+        return 'ADD UNIQUE KEY `' + col + '` (`' + col + '`)';
+    }
+
+    // Whether this table already carries a PRIMARY KEY on this database. A
+    // failed probe answers "yes": the caller then adds a UNIQUE key, which is
+    // valid either way, while a wrong "no" produces an ADD PRIMARY KEY that a
+    // table with one rejects outright (errno 1068).
+    async _hasPrimaryKey(tableName){
+        try {
+            let rows = await this.doQueryStrict(
+                "SELECT index_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? AND index_name = 'PRIMARY' LIMIT 1",
+                [this.dbName, tableName]
+            );
+            return rows.length > 0;
+        } catch(e){
+            console.error('Could not read primary-key state for ' + tableName + '; assuming one exists:', e);
+            return true;
+        }
     }
 
     // Replicate schema from a source database into this database.
@@ -293,6 +371,7 @@ class Database {
         let existingSet = new Set(existingTables.map(r => r.table_name || r.TABLE_NAME));
 
         let created = 0;
+        let columnFailures = [];
         for(let row of sourceTables){
             let tableName = row.table_name || row.TABLE_NAME;
 
@@ -320,7 +399,15 @@ class Database {
             // Table already exists on the replica: don't recreate it, but
             // propagate any columns the source has added since it was created.
             if(existingSet.has(tableName)){
-                await this.addMissingColumns(tableName, createSql);
+                // A refused ALTER now throws . Keep the sweep going over the
+                // remaining tables so one bad table does not hide the rest, but record
+                // it and rethrow after the sweep: the caller must not read a partial
+                // schema convergence as a complete one.
+                try {
+                    await this.addMissingColumns(tableName, createSql);
+                } catch(e){
+                    columnFailures.push({ table: tableName, errno: e.errno || null, message: e.message });
+                }
                 continue;
             }
 
@@ -379,6 +466,13 @@ class Database {
         // indexes. Ensure known secondary indexes that must exist on replicated
         // tables are present (idempotent; safe on snapshot-bootstrapped replicas).
         await this.ensureReplicaSecondaryIndexes();
+
+        if(columnFailures.length){
+            let err = new Error('Schema replication into ' + this.dbName + ' left columns missing: ' +
+                columnFailures.map(f => f.table + ' (errno ' + f.errno + ')').join(', '));
+            err.columnFailures = columnFailures;
+            throw err;
+        }
 
         console.log('Schema replication complete for ' + this.dbName);
     }

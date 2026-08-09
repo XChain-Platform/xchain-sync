@@ -989,8 +989,10 @@ describe('Database.addMissingColumns(): edge branches', function () {
         assert.strictEqual(added, 0);
     });
 
-    // Lines 233-234: ALTER TABLE throws
-    it('logs error (does not throw) when ALTER TABLE fails', async function () {
+    // A refused ALTER leaves the column missing, so it must reach the caller as a
+    // failure : the old swallow let the replica report a healed schema and
+    // then stall on errno 1054 forever.
+    it('throws and logs when ALTER TABLE fails', async function () {
         let ddl = [
             'CREATE TABLE `t` (',
             '  `newcol` int(11) DEFAULT NULL,',
@@ -1002,12 +1004,17 @@ describe('Database.addMissingColumns(): edge branches', function () {
             if (/information_schema\.columns/.test(sql)) return [];  // column missing
             if (/ALTER TABLE/.test(sql)) {
                 alterCalled = true;
-                throw new Error('alter fail');
+                let e = new Error('alter fail');
+                e.errno = 1075;
+                throw e;
             }
             return [];
         });
-        let added = await db.addMissingColumns('t', ddl);
-        assert.strictEqual(added, 0);       // ALTER failed, so not incremented
+        let thrown = null;
+        try { await db.addMissingColumns('t', ddl); } catch (e) { thrown = e; }
+        assert.ok(thrown, 'addMissingColumns must throw when an ALTER is refused');
+        assert.strictEqual(thrown.errno, 1075);
+        assert.deepStrictEqual(thrown.failedColumns.map(f => f.column), ['newcol']);
         assert.ok(alterCalled);
         assert.ok(console.error.called);
     });

@@ -106,6 +106,31 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
         assert.strictEqual(db.recordHalt.firstCall.args[2], 'schema-apply-failed');
     });
 
+    // : the table exists, so the apply never reaches CREATE TABLE and the
+    // fault is in the column self-heal. That path used to swallow the server's
+    // refusal and report success, leaving the replica to fail every later row on
+    // errno 1054 with halted:false. The refusal now reaches the fixpoint.
+    it('records a durable halt when the column self-heal on an existing table is refused', async function(){
+        sinon.stub(axios, 'get').resolves({ data: { tables: {
+            pubkeys: 'CREATE TABLE `pubkeys` (id INT)'
+        }}});
+        db.doQuery = sinon.stub().callsFake(async (sql) => {
+            if(/information_schema\.tables/.test(sql)) return [{ ok: 1 }];   // table already exists
+            return [];
+        });
+        const refusal = new Error('there can be only one auto column and it must be defined as a key');
+        refusal.errno = 1075;
+        db.addMissingColumns = sinon.stub().rejects(refusal);
+
+        await sync._fetchAndApplySchema('http://a:3006');
+
+        assert.strictEqual(sync.isHalted(), true, 'a refused ALTER must halt, not pass silently');
+        const info = sync.getHaltInfo();
+        assert.strictEqual(info.reason, 'schema-apply-failed');
+        assert.deepStrictEqual(info.mismatches.map(m => [m.table, m.errno]), [['pubkeys', 1075]]);
+        assert.ok(db.recordHalt.calledOnce);
+    });
+
     it('does NOT halt on a schema-fetch transport failure (not a DDL fault)', async function(){
         sinon.stub(axios, 'get').rejects(new Error('ECONNREFUSED'));
         await sync._fetchAndApplySchema('http://a:3006');
