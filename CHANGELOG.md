@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CORS_ORIGIN is now a comma-separated allowlist instead of being echoed back verbatim to every origin .
 - Server status no longer certifies a stalled SQL replica as caught up ().
 - Stake-weighted quorum rejects a validator entry with a missing or non-numeric weight instead of lowering the quorum denominator ().
 - Checkpoint verification requires a valid weight on every validator entry and rejects a post-activation checkpoint missing its commitment roots, matching the SDK twin ().

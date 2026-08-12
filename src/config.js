@@ -19,6 +19,7 @@
  ********************************************************************/
 
 const { coinTicker } = require('./consensus-constants');
+const { parseCorsOrigin } = require('./corsOrigin');
 
 // Parse an integer from an env var, returning defaultVal when the value is
 // absent, empty, or non-numeric.  Unlike `parseInt(x) || default`, this
@@ -139,7 +140,11 @@ module.exports = {
         // Defaults to 5 minutes.
         config['MAX_HUB_WAIT_MS'] = parseIntMin0(process.env.MAX_HUB_WAIT_MS, 300000);
 
-        config['CORS_ORIGIN']   = process.env.CORS_ORIGIN || false;
+        // A comma-separated ALLOWLIST, not a single origin: handing `cors` the raw
+        // string echoes it back verbatim to every caller, which is a multi-value
+        // header no browser accepts. Parsed here rather than at the cors() call
+        // because api.js only ever sees cfg. See src/corsOrigin.js .
+        config['CORS_ORIGIN']   = parseCorsOrigin(process.env.CORS_ORIGIN);
 
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
         // A replica/validator follows EVERY chain a server hosts over its own WS, all
