@@ -60,7 +60,6 @@ describe('03 Bootstrap Apply', function () {
         const collector = new MetricsCollector({ name: label });
         collector.start();
 
-        // Measure full bootstrap
         collector.beginOperation('bootstrap');
         client = createClient(replicaDb, server.getUrl());
         await client.bootstrap();
@@ -69,7 +68,6 @@ describe('03 Bootstrap Apply', function () {
         collector.stop();
         const stats = collector.getStats();
 
-        // Compute row counts for throughput calculation
         let totalRows = 0;
         const tables = await testDb.getTables(replicaDb);
         for (const table of tables) {
@@ -140,7 +138,6 @@ describe('03 Bootstrap Apply', function () {
         client = createClient(replicaDb, server.getUrl());
         await client.bootstrap();
 
-        // Verify row counts match across all tables
         const tables = await testDb.getTables(sourceDb);
         let mismatches = [];
         for (const table of tables) {

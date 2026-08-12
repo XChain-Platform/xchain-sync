@@ -50,7 +50,6 @@ describe('Smoke: Server Mode', function() {
         sinon.stub(console, 'error');
         util = new Utility();
 
-        // Create test database with schema
         let mariadb = await getMariadb();
         let conn = await mariadb.createConnection({
             host: TEST_DB_HOST, port: TEST_DB_PORT,
@@ -67,7 +66,6 @@ describe('Smoke: Server Mode', function() {
         });
         db = new TestDatabase(pool, SMOKE_DB_NAME);
 
-        // Seed schema from indexer SQL files
         let path = require('path');
         let fs   = require('fs');
         let sqlDir = path.join(__dirname, '..', '..', '..', 'xchain-indexer', 'src', 'sql');
@@ -80,16 +78,13 @@ describe('Smoke: Server Mode', function() {
                 try { await db.doQuery(q); } catch (e) {}
             }
         }
-        // sync_meta
         let syncSql = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'sql', 'sync_meta.sql'), 'utf8');
         for (let q of splitSqlStatements(syncSql)) {
             try { await db.doQuery(q); } catch (e) {}
         }
 
-        // Seed 3 blocks
         await fixtures.seedBlocks(db, 1, 3);
 
-        // Start mock hub
         mockHub = new MockHub();
         mockHub.setConfigs([{
             coin: 'bitcoin', network: 'mainnet',
@@ -98,7 +93,6 @@ describe('Smoke: Server Mode', function() {
         }]);
         await mockHub.start(HUB_PORT);
 
-        // Create server components
         let cfg = {
             WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50,
             BLOCK_POLL_INTERVAL: 100, SNAPSHOT_RATE_FULL: 100, SNAPSHOT_RATE_INCR: 100
@@ -108,7 +102,6 @@ describe('Smoke: Server Mode', function() {
         poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, cfg, util);
         snapshotBuilder = new SnapshotBuilder(util);
 
-        // Build Express app + WS
         let app = express();
         app.use(cors({ origin: '*', methods: ['GET'] }));
 
@@ -182,7 +175,6 @@ describe('Smoke: Server Mode', function() {
         await db.close();
     });
 
-    // Scenario 1: Config
     it('config loads with valid defaults', function() {
         let cfg = config.getConfig();
         assert.strictEqual(cfg.SYNC_MODE, 'server');
@@ -190,7 +182,6 @@ describe('Smoke: Server Mode', function() {
         assert.strictEqual(typeof cfg.BLOCK_POLL_INTERVAL, 'number');
     });
 
-    // Scenario 2: Hub connectivity
     it('hub is reachable', async function() {
         let hub = new HubClient('127.0.0.1', HUB_PORT);
         let alive = await hub.ping();
@@ -204,7 +195,6 @@ describe('Smoke: Server Mode', function() {
         assert.strictEqual(configs[0].coin, 'bitcoin');
     });
 
-    // Scenario 3: Source DB connectivity
     it('source DB connection succeeds', async function() {
         let conn = await db.getConnection();
         assert.ok(conn);
@@ -226,14 +216,12 @@ describe('Smoke: Server Mode', function() {
         assert.ok(row.contract_hash);
     });
 
-    // Scenario 4: Basic poll cycle
     it('poll cycle completes without error', async function() {
         poller.lastPolledBlock = 0;
         await poller._poll();
         assert.ok(poller.lastPolledBlock >= 1);
     });
 
-    // Scenario 5: REST API
     it('GET /status returns 200 with block data', async function() {
         let res = await axios.get(baseUrl + '/status');
         assert.strictEqual(res.status, 200);
@@ -259,7 +247,6 @@ describe('Smoke: Server Mode', function() {
         assert.ok(snapshot.tables);
     });
 
-    // Scenario 6: WebSocket
     it('WebSocket connection accepted and receives status', async function() {
         broadcaster.updateStatus('bitcoin', 'mainnet', { block_height: 3 });
         let ws = new WebSocket('ws://127.0.0.1:' + SERVER_PORT + '/subscribe/indexer/bitcoin/mainnet');

@@ -9,7 +9,7 @@
  * General Public License v3.0 or later; see LICENSE.md.
  *
  **********************************************************************
- * ClientSync: multi-source Byzantine M-of-N quorum .
+ * ClientSync: multi-source Byzantine M-of-N quorum.
  *
  * The live cross-source path applies a block once SOURCE_QUORUM active sources
  * publish the SAME ledger/actions/contract hash tuple, strikes (and eventually
@@ -284,7 +284,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
         });
     });
 
-    describe('checkpoint freshness strict ', function(){
+    describe('checkpoint freshness strict', function(){
         const ENVKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_MAINNET';
         afterEach(function(){ delete process.env[ENVKEY]; });
 

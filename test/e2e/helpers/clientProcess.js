@@ -97,7 +97,6 @@ class ClientProcess {
         this.sync._connectWebSockets();
     }
 
-    // Bootstrap and start live sync
     async start() {
         await this.bootstrap();
         await this.connectLive();
@@ -117,12 +116,10 @@ class ClientProcess {
         await this.sync._withApplyLock(() => {});
     }
 
-    // Get the last applied block index
     getLastAppliedBlock() {
         return this.sync.lastAppliedBlock;
     }
 
-    // Trigger incremental catch-up manually
     async incrementalCatchUp(sinceBlock) {
         await this.sync._incrementalCatchUp(sinceBlock);
         this.sync.lastAppliedBlock = await this.replicaDb.getLastBlock();

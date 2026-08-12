@@ -98,7 +98,7 @@ describe('stateCommitment.reportOrphanStats (sync twin) @regression @tier2', fun
 
         const stats = await SC.reportOrphanStats(makeQuery(store, [rootA, SC.EMPTY_ROOT_HEX]), 'BTC', 'regtest', { maxNodes: 1 });
         assert.ok(stats.totalNodes > 1);
-        // The estimate no longer goes silent (regression 2665): above the ceiling it
+        // The estimate no longer goes silent: above the ceiling it
         // returns a bounded, sample-scoped figure flagged as an estimate rather than null.
         assert.strictEqual(stats.reachabilitySkipped, false, 'no longer goes silent above the ceiling');
         assert.strictEqual(stats.reachabilityEstimated, true, 'flags the figure as a sample-scoped estimate');

@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// #4318 state_hash fault-injection e2e .
+// State_hash fault-injection e2e.
 //
 // The three consensus hashes (ledger/actions/contract) cover ONLY the new,
 // block-scoped rows of a block. They structurally cannot see an in-place mutation

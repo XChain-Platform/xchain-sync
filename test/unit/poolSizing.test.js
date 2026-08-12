@@ -3,7 +3,7 @@
 
 'use strict';
 
-// : connection pools are sized per dbType, and the sizing is
+// Connection pools are sized per dbType, and the sizing is
 // load-tested against the per-block query fan-out it exists to absorb.
 
 const assert     = require('assert');
@@ -28,9 +28,6 @@ function clearPoolEnv(){
     for(let k of POOL_ENV_KEYS) delete process.env[k];
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 1. resolver semantics
-// ═══════════════════════════════════════════════════════════════════════════
 describe('poolSizing.resolvePoolSize()', function(){
     let saved;
 
@@ -118,9 +115,6 @@ describe('poolSizing.resolvePoolSize()', function(){
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 2. Database wiring: the pool a chain actually opens
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database pool sizing per dbType', function(){
     let saved, createdPools;
 
@@ -186,11 +180,7 @@ describe('Database pool sizing per dbType', function(){
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 3. Fan-out load test
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Drives the real per-block query fan-out (QUERIES_PER_BLOCK queries, issued
+// Fan-out load test: drives the real per-block query fan-out (QUERIES_PER_BLOCK queries, issued
 // as fast as the pool hands out connections) through a pool harness that
 // enforces a connection limit exactly like mariadb's does, and measures how
 // deep the fan-out serializes. This is the load the pool sizing exists for:

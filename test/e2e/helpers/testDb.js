@@ -263,8 +263,8 @@ class TestDatabase {
     // A second beginReadSnapshot released the first's connection with its
     // transaction still open, implicitly ROLLING BACK whatever had ridden it
     // (fixture block seeds, TransparencyLog sync_meta records), which surfaced
-    // as the  flakes: a seeded tip that never appeared (waitFor timeout)
-    // and replica sync_meta rows the source no longer had (parity divergence).
+    // as flakes: a seeded tip that never appeared (waitFor timeout) and
+    // replica sync_meta rows the source no longer had (parity divergence).
     async beginReadSnapshot() {
         let conn = await this.pool.getConnection();
         try {
@@ -402,11 +402,11 @@ async function createDatabase(dbName, host, port, user, pass) {
 }
 
 // The schema-seed SQL may live on a shared network filesystem, which
-// intermittently blips ENOENT on an existing file/dir between calls (see the
-// project's parallels-fs-enoent-race note). A bare readdirSync/readFileSync here
-// would crash a whole chaos/e2e suite's `before all` hook and cascade-fail every
-// test under it. Retry the read a few times on ENOENT only; any other error (or a
-// genuinely missing path after retries) still throws.
+// intermittently blips ENOENT on an existing file/dir between calls. A bare
+// readdirSync/readFileSync here would crash a whole chaos/e2e suite's
+// `before all` hook and cascade-fail every test under it. Retry the read a
+// few times on ENOENT only; any other error (or a genuinely missing path
+// after retries) still throws.
 async function _fsReadRetry(fn) {
     let lastErr;
     for (let attempt = 0; attempt < 5; attempt++) {

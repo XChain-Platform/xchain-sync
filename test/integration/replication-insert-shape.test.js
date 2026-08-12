@@ -8,9 +8,9 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// Can the applier WRITE every table it claims to replicate? 
+// Can the applier WRITE every table it claims to replicate?
 //
-// WHY THIS EXISTS.  was a follower that could not replicate `contract_state`
+// WHY THIS EXISTS. A production follower once could not replicate `contract_state`
 // at ALL on a strict-mode MariaDB, live for weeks, found only when something finally
 // ran a follower over a block carrying such a row. The mechanism was mundane: the
 // source reads block rows with SELECT *, `ClientApplier._insertRows` names every
@@ -21,13 +21,13 @@
 //
 // So this stops hunting instances. For every table the follower replicates through
 // _insertRows, it synthesizes one row FROM THE REAL SCHEMA (including the generated
-// columns the source would ship, which is precisely the  condition) and
-// requires the insert to land.
+// columns the source would ship, which is precisely the condition that broke the
+// production follower above) and requires the insert to land.
 //
 // HOW FAILURES ARE CLASSIFIED, because a generic synthesizer must not cry wolf. An
 // APPLIER-class error is one where the statement itself is wrong for the schema:
 // 1906 generated column, 1054 unknown column, 1064 syntax, 1146 missing table. Those
-// FAIL, because they are the  family and no synthesized value can cause them.
+// FAIL, because they are that same failure family and no synthesized value can cause them.
 // Anything else (a NOT NULL this synthesizer filled badly, a range or charset
 // complaint) is counted as UNVERIFIED and printed, never asserted on: it is evidence
 // about this test, not about the applier. A floor on the verified count keeps the
@@ -53,7 +53,7 @@ const STREAMED = new Set(['stream:action', 'stream:block', 'stream:index',
 // Errors that mean the STATEMENT is wrong for the schema. No value this test could
 // synthesize produces any of them, so each one is an applier defect.
 const APPLIER_ERRNOS = new Map([
-    [1906, 'value supplied for a GENERATED column (the  family)'],
+    [1906, 'value supplied for a GENERATED column (the failure family described above)'],
     [1054, 'unknown column in the INSERT list'],
     [1064, 'SQL syntax error'],
     [1146, 'table does not exist']
@@ -112,7 +112,7 @@ function synthValue(col){
     }
 }
 
-describe('Integration: the applier can write every table it replicates ', function() {
+describe('Integration: the applier can write every table it replicates', function() {
 
     let replicaDb, applier;
     let schema = new Map();      // table -> column rows
@@ -175,8 +175,8 @@ describe('Integration: the applier can write every table it replicates ', functi
 
         for(const table of targets){
             // Every column the SOURCE would ship, generated ones INCLUDED. That is the
-            //  condition: before the fix, _insertRows named them and MariaDB
-            // rejected the statement under STRICT_TRANS_TABLES.
+            // condition described above: before the fix, _insertRows named them and
+            // MariaDB rejected the statement under STRICT_TRANS_TABLES.
             const row = {};
             for(const col of schema.get(table)) row[String(col.c)] = synthValue(col);
 
@@ -222,9 +222,9 @@ describe('Integration: the applier can write every table it replicates ', functi
                                  absent.length + '] ' + absent.slice(0, 8).join(', ') + '\n');
 
         assert.deepStrictEqual(applierBugs, [],
-            'the applier cannot write these replicated tables. Each is the  shape: a ' +
-            'follower would fail its block apply, roll back, retry the same block and never ' +
-            'advance, on any chain that writes one of these rows.');
+            'the applier cannot write these replicated tables. Each is the same shape as the ' +
+            'incident described above: a follower would fail its block apply, roll back, retry ' +
+            'the same block and never advance, on any chain that writes one of these rows.');
 
         // A floor, so the suite cannot pass by verifying nothing: most tables must have
         // genuinely round-tripped through the applier.

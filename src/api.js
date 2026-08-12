@@ -20,7 +20,7 @@
  * All routes are namespaced by :dbType (indexer or decoder), e.g.
  * /snapshot/indexer/BTC/mainnet, /subscribe/decoder/LTC/testnet.
  * Transparency endpoints are indexer-only (decoder has no synthetic
- * chain-of-state hashes; see xchain-sync-decoder-db-decisions).
+ * chain-of-state hashes).
  *
  ********************************************************************/
 
@@ -153,7 +153,7 @@ function createRateLimiters(cfg){
     return { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter, transparencyLimiter, heartbeatLimiter };
 }
 
-// Carry the poller's replication verdict onto a /status row (#3904).
+// Carry the poller's replication verdict onto a /status row.
 // source_height comes from the SERVED database, so on a node fronting a native
 // SQL replica the source and served heights freeze together when replication
 // stops applying and lag_blocks computes 0 on an hours-behind node. Withhold the
@@ -172,7 +172,7 @@ function applyReplicaFreshness(row, pollerStatus){
 // Module-scope (not a closure inside startApi) and exported so the row shape is
 // unit-testable against a mock SyncService/Database: the fields here are the
 // contract a monitor keys off, and `missing_tables` in particular exists to be
-// alerted on , so it must be verifiable without standing up the service.
+// alerted on, so it must be verifiable without standing up the service.
 async function buildStatusRow(syncService, db, dbType, chain, network){
     if(cfg['SYNC_MODE'] === 'server'){
         // In server mode, block_height is the broadcaster's last-polled position
@@ -229,7 +229,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                 }
             }
         }
-        // Advisory per-table CONTENT parity (NON-consensus, default off, ).
+        // Advisory per-table CONTENT parity (NON-consensus, default off).
         // Published for BOTH dbTypes, unlike the three hashes and the index-map
         // checksum above: the decoder side has no synthetic hashes at all, so its
         // replicated tables had no content commitment of any kind.
@@ -256,7 +256,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // Ask ONCE which tables exist rather than discovering absence by failing a
         // count against each one. The replicated-table list is static and grows with
         // this repo, so on a replica whose source predates a family every poll used
-        // to log an ER_NO_SUCH_TABLE stack for a table neither side has .
+        // to log an ER_NO_SUCH_TABLE stack for a table neither side has.
         // A listing failure falls back to probing, so this can only ever quieten the
         // expected case, never hide a genuine one.
         let presentA = null;
@@ -270,14 +270,14 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
             }
         }
         // Companion to table_counts, which can only omit a table it cannot count:
-        // an absent table looks exactly like a table nobody asked about .
+        // an absent table looks exactly like a table nobody asked about.
         row.missing_tables = missingReplicatedTables(presentA, dbType);
         // Lifetime full-snapshot serve count (incremented by SnapshotBuilder
         // on each successful streamFullSnapshot completion; 0 until first serve).
         let builder = syncService.getSnapshotBuilder();
         row.snapshots_served = builder ? (builder.snapshotsServed || 0) : 0;
         // Lifetime count of snapshot requests rejected 503 by the per-Database
-        // concurrency cap ; a growing value flags a bootstrap stampede.
+        // concurrency cap; a growing value flags a bootstrap stampede.
         row.snapshots_rejected = builder ? (builder.snapshotsRejected || 0) : 0;
         return row;
     }
@@ -318,7 +318,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // this replica cannot answer pre-base history queries.
         row.truncated      = clientState.truncated || false;
         row.bootstrap_base = clientState.bootstrapBase != null ? clientState.bootstrapBase : null;
-        // Multi-source Byzantine quorum surface : the M-of-N agreement
+        // Multi-source Byzantine quorum surface: the M-of-N agreement
         // threshold, the active/configured denominators, how many sources agreed on
         // the last applied block, and any Byzantine-evicted sources. Lets a monitor
         // flag "N sources but only one distinct operator" and see evictions.
@@ -342,8 +342,8 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
     // false alarms. COUNT(*) per table is acceptable here; /status is an
     // operator-polled endpoint, not a hot path.
     row.table_counts = {};
-    // One listing instead of one failing query per absent table: see the
-    // client-mode path above and .
+    // One listing instead of one failing query per absent table, for the reason
+    // given on the client-mode path above.
     let present = null;
     try { present = await db.listExistingTables(); } catch(e){ /* fall back to probing */ }
     for(let table of getReplicatedTables(dbType)){
@@ -355,7 +355,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
             // indexer split); omit rather than fail the whole status.
         }
     }
-    // Replica-completeness gap, made monitorable .
+    // Replica-completeness gap, made monitorable.
     //
     // Every apply path tolerates errno 1146 so a replica whose schema lags the
     // source does not wedge; the consequence is that entire tables can fail to
@@ -413,7 +413,7 @@ async function startApi(){
         // Startup is not health. server.listen() runs before syncService.start(),
         // and start() can wait on the hub for MAX_HUB_WAIT_MS (default 5 min); until
         // it returns there are no chains, so the loop below has nothing to degrade on
-        // and the probe reported 'healthy' with zero pollers running ().
+        // and the probe reported 'healthy' with zero pollers running.
         // Report 'starting' + 503 for that whole window instead.
         if(typeof syncService.isReady === 'function' && !syncService.isReady()){
             res.status(503);
@@ -454,7 +454,7 @@ async function startApi(){
             // Sync rediscovers chains from hub config on a timer; a climbing age here while
             // status stays healthy means the hub is unreachable and the chain set is stale.
             hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-            // Consensus-gate build fingerprint : one string per process so a
+            // Consensus-gate build fingerprint: one string per process so a
             // fleet sweep can confirm every deployed sync runs the same armed map
             // before a flag-day height (twin module in xchain-indexer exposes the
             // same field on the indexer health method).
@@ -1115,7 +1115,6 @@ async function startApi(){
         console.log('xchain-sync API listening on port ' + cfg['SYNC_API_PORT']);
     });
 
-    // Start the SyncService (discovers chains and begins polling/syncing)
     syncService.start().catch((error) => {
         console.error('Fatal SyncService error:', error);
         process.exit(1);

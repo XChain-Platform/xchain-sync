@@ -177,7 +177,7 @@ class ClientSync {
         // intervenes. INERT unless HASH_CONFIRM_STRICT is on with 2+ sources.
         this._strictConfirmPending = new Set();
 
-        // --- Multi-source Byzantine quorum  ---
+        // Multi-source Byzantine quorum.
         // Effective agreement threshold over the configured source set. SOURCE_QUORUM=0
         // (unset) selects the simple-majority default ceil((N+1)/2): N=1 -> 1 (single-
         // source posture), N=2 -> 2 (a 1-1 split has no majority and halts, exactly as
@@ -287,7 +287,7 @@ class ClientSync {
         // its trust root is the pinned federation set, not the sources. Warn a
         // consensus-relevant indexer replica that runs with the anchor off or with an
         // empty pinned set, so the "I have N sources therefore I am safe" operator
-        // learns that N colluding sources still need the anchor .
+        // learns that N colluding sources still need the anchor.
         if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] !== false){
             let pinned = getPinnedValidators(this.chain, this.network);
             let havePinned = Array.isArray(pinned) && pinned.length > 0;
@@ -307,7 +307,7 @@ class ClientSync {
     }
 
     // One-time startup WARN naming every per-block replicated table this replica's
-    // schema lacks .
+    // schema lacks.
     //
     // The errno-1146 tolerance in every apply path is correct and stays: an older
     // replica schema must not wedge on a table the source has gained. What it costs
@@ -350,7 +350,7 @@ class ClientSync {
     // the check has not run / could not read the table listing.
     getMissingTables(){ return this._missingTables === undefined ? null : this._missingTables; }
 
-    // --- Multi-source Byzantine quorum helpers  ---
+    // Multi-source Byzantine quorum helpers.
 
     // Stable comparison key for a source's committed hash tuple.
     _hashTupleKey(h){
@@ -412,7 +412,7 @@ class ClientSync {
         console.error('================================================================');
     }
 
-    // --- /status getters  ---
+    // /status getters for the Byzantine quorum surface.
     getSourceQuorum(){ return this._effectiveQuorum(); }
     getConfiguredSourceCount(){ return this.sources.length; }
     getActiveSourceCount(){ return this._activeSourceCount(); }
@@ -468,7 +468,6 @@ class ClientSync {
         // _verifyRecompute and the depth guard see the persisted floor.
         await this._loadBootstrapBase();
 
-        // Check local replica state
         this.lastAppliedBlock = await this.db.getLastBlock();
 
         if(this.lastAppliedBlock === null){
@@ -524,10 +523,8 @@ class ClientSync {
         // never arrive.
         await this._warnMissingTables();
 
-        // Load last block hashes for continuity checking
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
 
-        // Open WebSocket connections to all sources
         this._connectWebSockets();
 
         // Keep alive
@@ -536,7 +533,6 @@ class ClientSync {
         }
     }
 
-    // Stop the client sync
     stop(){
         this.running = false;
         if(this._hbTimer){
@@ -604,7 +600,6 @@ class ClientSync {
         await axios.post(url, body, { timeout: 5000, headers });
     }
 
-    // Fetch and apply schema from a remote sync server
     async _fetchAndApplySchema(source){
         console.log('Fetching schema from ' + source + '...');
         let schema;
@@ -917,7 +912,6 @@ class ClientSync {
 
             let jsonStr = response.data;
             if(Buffer.isBuffer(jsonStr)){
-                // Try to decompress if gzipped
                 try {
                     jsonStr = zlib.gunzipSync(jsonStr);
                 } catch(e){
@@ -954,7 +948,7 @@ class ClientSync {
             if(this.sources.length > 1){
                 if(this.dbType === 'indexer'){
                     // Indexer cross-source hash + table-count check, gated on VERIFY_HASHES.
-                    // Bootstrap Byzantine cross-check : sources[0] supplied the
+                    // Bootstrap Byzantine cross-check: sources[0] supplied the
                     // applied snapshot (1 vote toward quorum). Seek agreement from enough
                     // ADDITIONAL sources to reach SOURCE_QUORUM. _verifyAgainstSource halts
                     // durably on a same-height divergence; a transport failure or tip-skew
@@ -994,7 +988,7 @@ class ClientSync {
             // same oversized payload, so the rounds exhaust, BootstrapExhaustedError
             // exits the process, and systemd restarts straight back into the same
             // wall. That crash loop is what silently froze the DOGE:testnet replica
-            // and then 429'd its own snapshot budget ; the operator remedy
+            // and then 429'd its own snapshot budget. The operator remedy
             // (reseed truncated via SYNC_BOOTSTRAP_DEPTH, or raise the ceiling) is
             // a decision no retry can make.
             if(this._isContentLengthOverflow(e)){
@@ -1518,7 +1512,7 @@ class ClientSync {
                 }
                 // A full-history replica whose chain has GROWN past the wall lands
                 // here and its full snapshot is oversized too; _bootstrapFromSnapshot
-                // now halts on that rather than crash-looping , so this stays
+                // now halts on that rather than crash-looping, so this stays
                 // the right call for the case it was written for (a payload window too
                 // wide to fetch incrementally but a snapshot that still fits).
                 console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
@@ -1537,7 +1531,7 @@ class ClientSync {
 
     // Verify local block hashes against a remote source.
     // Indexer-only: decoder DB has no synthetic chain-of-state hashes to compare.
-    // Returns a verdict string the bootstrap quorum loop counts :
+    // Returns a verdict string the bootstrap quorum loop counts:
     //   'agree'      confirmed same-height hash match against this source
     //   'diverge'    same-height mismatch under HALT_ON_DIVERGENCE=false (log-only)
     //   'halted'     divergence halted the replica (caller must stop)
@@ -1697,14 +1691,14 @@ class ClientSync {
         }
     }
 
-    // Advisory per-table CONTENT parity (NON-consensus; never halts, ).
+    // Advisory per-table CONTENT parity (NON-consensus; never halts).
     //
     // The index-map check proves the id->address map; this one proves the ROWS of
     // every replicated table the registry declares covered. Without it the three
     // block hashes covered the ledger/actions/contract projections, the state hashes
     // covered the in-place mutation classes, and the row-count check covered
     // cardinality only, so a substitution that kept the count equal in any other
-    // replicated table passed everything a follower ran (review xchain-platform #4486).
+    // replicated table passed everything a follower ran.
     //
     // Called from BOTH verification paths, and the decoder is the reason it is a
     // method rather than an inline block: _verifyAgainstSource returns early for
@@ -1753,7 +1747,7 @@ class ClientSync {
         }
     }
 
-    // Durably count advisory table-content parity mismatches , the twin of
+    // Durably count advisory table-content parity mismatches, the twin of
     // _recordIndexMapMismatch above and never a consensus gate. Never throws. Also
     // stores the diverging TABLE NAMES, because unlike the index-map counter this
     // check spans ~93 tables and "which one" is the whole diagnostic; the list is
@@ -1828,7 +1822,7 @@ class ClientSync {
                 console.log('Table-count verification passed against ' + source);
             }
 
-            // Decoder content parity (advisory, ). The counts above are the
+            // Decoder content parity (advisory). The counts above are the
             // ONLY other signal this DB has: no ledger/actions/contract hash, no state
             // hash, so an equal-count content substitution in blocks, transactions,
             // transaction_outputs or the lookups was invisible here.
@@ -1963,14 +1957,12 @@ class ClientSync {
         }
     }
 
-    // Connect WebSocket to all sources for live sync
     _connectWebSockets(){
         for(let i = 0; i < this.sources.length; i++){
             this._connectWebSocket(this.sources[i], i);
         }
     }
 
-    // Connect a single WebSocket
     _connectWebSocket(source, sourceIndex){
         // Per-chain sync mode preference: 'full' (default) or 'infra-only'
         // Set via env: SYNC_MODE_BTC, SYNC_MODE_LTC, SYNC_MODE_DOGE (e.g., SYNC_MODE_DOGE=infra-only)
@@ -2051,11 +2043,10 @@ class ClientSync {
         console.error('Error handling WebSocket message:', e);
     }
 
-    // Schedule a WebSocket reconnection
     _scheduleReconnect(source, sourceIndex){
         if(!this.running) return;
         // An evicted (Byzantine-suspected) source stays disconnected: reconnecting it
-        // would re-admit it to the stream it was evicted from .
+        // would re-admit it to the stream it was evicted from.
         if(this._evictedSources.has(sourceIndex)){
             console.warn('Not reconnecting evicted source ' + source + ' for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
@@ -2067,7 +2058,6 @@ class ClientSync {
         }, this.config['CLIENT_RECONNECT_DELAY']);
     }
 
-    // Handle an incoming WebSocket event
     async _handleEvent(event, sourceIndex){
         if(event.type === 'block'){
             // Track the server's advancing block height
@@ -2106,7 +2096,6 @@ class ClientSync {
         }
     }
 
-    // Handle a block event
     async _handleBlock(event, sourceIndex){
         let blockIndex = event.block_index;
 
@@ -2204,7 +2193,7 @@ class ClientSync {
         // of halting on any disagreement; halt (no-source-quorum) only when every active
         // source has reported and no group can reach quorum. The 2-source case behaves
         // exactly as before (quorum 2; a 1-1 split has no majority and halts), while a
-        // larger set tolerates a Byzantine minority .
+        // larger set tolerates a Byzantine minority.
         if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this._activeSourceCount() > 1){
             // An evicted source's in-flight delivery is ignored for the tally.
             if(this._evictedSources.has(sourceIndex)) return;
@@ -2301,7 +2290,6 @@ class ClientSync {
             }
         }
 
-        // Apply the block
         await this._applyBlockEvent(event);
     }
 
@@ -2386,7 +2374,7 @@ class ClientSync {
     // pass opts.failClosed instead: there the recompute is the ONLY verification
     // of the whole applied range (the join recompute is what catches a
     // disconnect-spanning reorg stitched onto an orphaned tip), so an error is
-    // retried briefly and then THROWN for the caller to halt on .
+    // retried briefly and then THROWN for the caller to halt on.
     async _verifyRecompute(event, committedOverride, opts = {}){
         if(this.dbType !== 'indexer') return null;
         // Truncated-replica join block: `base` has no in-replica `base-1`
@@ -2437,7 +2425,7 @@ class ClientSync {
     // (bootstrap terminal, catch-up join, catch-up terminal). Halts durably on a
     // hash mismatch AND on a recompute error that survives the retries: unlike
     // the live path, this recompute is the only verification of the applied
-    // range, so an unverifiable range must not be served . Returns true
+    // range, so an unverifiable range must not be served. Returns true
     // when it halted (caller must stop), false when the block verified or the
     // committed hash is not yet resolvable (NULL ledger_hash / missing row, the
     // pre-existing skip the lookup re-page minimizes).
@@ -2545,7 +2533,6 @@ class ClientSync {
         return was;
     }
 
-    // Apply a verified block event
     async _applyBlockEvent(event){
         // Refuse to apply anything once halted on a divergence: never replicate
         // onto a chain we could not agree with the fleet on.
@@ -2715,7 +2702,7 @@ class ClientSync {
         // Freshness: if the newest quorum checkpoint trails the tip by more than the bound,
         // the anchor cannot catch a forged tail near the tip. Advisory by default (never a
         // halt): withholding is not proof of forgery and halting on absence is a DoS vector.
-        // CHECKPOINT_FRESHNESS_STRICT  promotes it to enforced: a replica that has
+        // CHECKPOINT_FRESHNESS_STRICT promotes it to enforced: a replica that has
         // opted in refuses to serve the unanchored tail and HALTs. Only enforced once at
         // least one checkpoint has been verified (the federation is demonstrably live), so a
         // replica that has never anchored is not halted at startup.
@@ -2891,7 +2878,6 @@ class ClientSync {
         return { verdict: 'wait' };
     }
 
-    // Handle a reorg event
     async _handleReorg(event){
         console.log('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
 
@@ -2931,7 +2917,6 @@ class ClientSync {
             return;
         }
 
-        // Enforce max rollback depth
         if(this.lastAppliedBlock !== null){
             let depth = this.lastAppliedBlock - event.block_index + 1;
             if(depth > this.config['MAX_ROLLBACK_DEPTH']){

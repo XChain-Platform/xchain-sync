@@ -187,7 +187,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(poller.lastPolledBlock, 95);
         });
 
-        it('detects a net-forward reorg via a changed same-height hash (item 4623)', async function(){
+        it('detects a net-forward reorg via a changed same-height hash', async function(){
             poller.lastPolledBlock = 100;
             poller.lastPolledBlockHash = 'old-ledger-hash';
             db.getLastBlock.resolves(100); // height unchanged: rollback + readvance within one interval
@@ -205,7 +205,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(poller.lastPolledBlock, 99); // rolled back one for the next-poll walk-back
         });
 
-        it('resolves a multi-block net-forward reorg to the true fork in a single poll (item 4830)', async function(){
+        it('resolves a multi-block net-forward reorg to the true fork in a single poll', async function(){
             // Pre-reorg the poller had broadcast blocks 98, 99, 100; their hashes
             // are recorded. A net-forward reorg rewrote BOTH 99 and 100 within one
             // interval; 98 is the unchanged true fork point.
@@ -478,7 +478,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(payload.block_time, 1700000000);
             assert.strictEqual(payload.ledger_hash, 'lh');
             assert.ok(payload.data);
-            // 5250: live block payloads must carry schema_version so ClientApplier
+            // Live block payloads must carry schema_version so ClientApplier
             // can enforce the version-pin gate the snapshot paths enforce.
             const { SCHEMA_VERSION } = require('../../src/schema-version');
             assert.strictEqual(payload.schema_version, SCHEMA_VERSION['indexer'],
@@ -784,7 +784,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(status.block_time, null);
         });
 
-        // Replication freshness (#3904). source_block_height falls back to
+        // Replication freshness. source_block_height falls back to
         // db.getLastBlock(), a MAX(block_index) against the SERVED database, so on
         // a node fronting a native SQL replica both heights freeze together when
         // replication stops applying and the derived lag reads 0. These pin the

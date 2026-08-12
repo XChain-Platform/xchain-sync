@@ -209,8 +209,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
         await decoderFixtures.seedDecoderSchema(sourceDb);
         await decoderFixtures.seedDecoderSchema(replicaDb);
 
-        // Mute the chatty src/ console output during the run.
-        // (Unstub temporarily when debugging a hook/setup failure.)
+        // Mute chatty src/ console output; unstub when debugging a hook/setup failure.
         if(!process.env.E2E_DEBUG){
             sinon.stub(console, 'log');
             sinon.stub(console, 'error');
@@ -334,13 +333,11 @@ describe('E2E: Decoder DB Lifecycle', function() {
             let replicaLast = await replicaDb.getLastBlock();
             assert.strictEqual(replicaLast, 10);
 
-            // Row-count parity for all replicated decoder tables.
-            // events: re-dumped in full on every snapshot (INSERT IGNORE on PK),
-            //   so the replica count converges to source at bootstrap.
-            // pubkeys: fetched per-block by address_id; idempotent INSERT IGNORE.
-            // dispensers: intentionally excluded from per-block replication (soft-
-            //   expire/hard-purge mutations don't ride the block stream), but the
-            //   full snapshot dumps current rows, so count should match here too.
+            // Row-count parity across replicated decoder tables: events and pubkeys
+            // are idempotently re-dumped/upserted on each snapshot so they converge
+            // to source; dispensers are excluded from per-block replication (their
+            // soft-expire/hard-purge mutations don't ride the block stream) but the
+            // full snapshot dumps current rows so parity still holds here.
             let tables = ['blocks', 'transactions', 'transaction_outputs',
                           'index_addresses', 'index_transactions', 'events', 'pubkeys'];
             for(let t of tables){
@@ -349,7 +346,6 @@ describe('E2E: Decoder DB Lifecycle', function() {
                 assert.strictEqual(r, s, t + ' row count mismatch: source=' + s + ' replica=' + r);
             }
 
-            // block_hash should match for the head block.
             let srcHead = await sourceDb.getBlockHashRow(10);
             let rplHead = await replicaDb.getBlockHashRow(10);
             assert.ok(srcHead && rplHead, 'both heads should resolve');
@@ -362,10 +358,10 @@ describe('E2E: Decoder DB Lifecycle', function() {
         it('catches replica up from a since-block, including tx-scoped tables', async function() {
             this.timeout(30000);
 
-            // Seed first window, bootstrap, then seed second window and trigger
-            // /snapshot/.../since/N. The replica should converge to the full set
-            // including transaction_outputs (tx-scoped, the failure mode pre-fix),
-            // and events/pubkeys (full-dump on each incremental snapshot).
+            // No WS connection in this test: the /since/N incremental-snapshot
+            // endpoint is the only path exercised, and it must also carry
+            // transaction_outputs, which is tx-scoped rather than block-scoped
+            // (previously the failure mode this test guards against).
             await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 5);
             await startServer();
 
@@ -373,17 +369,13 @@ describe('E2E: Decoder DB Lifecycle', function() {
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 5);
 
-            // Add a second window on source. No WS connection here; the incremental
-            // snapshot endpoint is the only path that carries these blocks.
             await decoderFixtures.seedDecoderBlocks(sourceDb, 6, 12);
 
             await client.incrementalCatchUp(6);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 12);
 
-            // Row-count parity: transaction_outputs (tx-scoped), index_addresses
-            // and index_transactions (append-only), events and pubkeys (full-dump
-            // on each incremental snapshot, so counts must match after catch-up).
+            // Same table set and parity rationale as the bootstrap test above.
             for(let t of ['blocks', 'transactions', 'transaction_outputs',
                           'index_addresses', 'index_transactions', 'events', 'pubkeys']){
                 let s = await sourceDb.getTableCount(t);
@@ -398,7 +390,6 @@ describe('E2E: Decoder DB Lifecycle', function() {
         it('rolls back blocks + tx-scoped rows and keeps index tables intact', async function() {
             this.timeout(30000);
 
-            // Bootstrap with 10 blocks.
             await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 10);
             await startServer();
             client = makeClient();
@@ -407,7 +398,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
 
             let initialAddrCount = await replicaDb.getTableCount('index_addresses');
 
-            // Roll back to block 8 (so blocks 8, 9, 10 are removed).
+            // rollback(8) removes blocks 8, 9, 10, leaving the tip at 7.
             await client.rollback(8);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 7);
@@ -425,7 +416,6 @@ describe('E2E: Decoder DB Lifecycle', function() {
                 'index_addresses must not change on rollback'
             );
 
-            // Head block hash should match the source for block 7.
             let srcHead = await sourceDb.getBlockHashRow(7);
             let rplHead = await replicaDb.getBlockHashRow(7);
             assert.strictEqual(rplHead.block_hash, srcHead.block_hash);
@@ -443,11 +433,8 @@ describe('E2E: Decoder DB Lifecycle', function() {
             client = makeClient();
             await client.bootstrap();
             await client.connectLive();
-
-            // Wait for WS to attach.
             await new Promise(r => setTimeout(r, 500));
 
-            // Add blocks 6..8 to source. Poller will pick them up and broadcast.
             await decoderFixtures.seedDecoderBlocks(sourceDb, 6, 8);
 
             await waitFor(async () => {
@@ -458,7 +445,6 @@ describe('E2E: Decoder DB Lifecycle', function() {
             let last = await replicaDb.getLastBlock();
             assert.strictEqual(last, 8);
 
-            // Confirm replica saw the actual block_hash, not an indexer field.
             let head = await replicaDb.getBlockHashRow(8);
             assert.ok(head.block_hash, 'replica head should have block_hash');
             let src = await sourceDb.getBlockHashRow(8);

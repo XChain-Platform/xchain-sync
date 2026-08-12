@@ -11,12 +11,12 @@
  **********************************************************************
  *
  * Generator for test/fixtures/block-hash-vectors.json: the BlockHasher
- * conformance lock. It runs BlockHasher's assembly over canned replica rows
- * but computes the final hash with the REAL xchain-indexer getDataHash, so the
- * expected hashes are authentically the indexer's (not a sync-side echo). The
- * committed JSON then locks sync's BlockHasher + utility.getDataHash against
- * regression with NO runtime cross-repo dependency in the unit test. The
- * xchain-e2e-test recompute scenario is the live cross-repo drift guard.
+ * conformance lock. It runs BlockHasher's assembly over canned replica rows but
+ * computes the final hash with the REAL xchain-indexer getDataHash, so the
+ * expected hashes are authentically the indexer's, not a sync-side echo, and
+ * the committed JSON locks BlockHasher + utility.getDataHash against regression
+ * with no runtime cross-repo dependency in the unit test (xchain-e2e-test's
+ * recompute scenario is the live cross-repo drift guard).
  *
  * Run manually (sibling xchain-indexer must be present) and commit the output:
  *   INDEXER_COIN=BTC INDEXER_NETWORK=regtest \

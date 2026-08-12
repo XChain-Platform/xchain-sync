@@ -45,8 +45,8 @@
 // Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
 const BLOCK_HASH_VERSION = 1;
 
-// Default block/row span of the advisory content-parity window  when the
-// caller passes none. Big enough that a periodic verification pass covers the blocks
+// Default block/row span of the advisory content-parity window when the caller
+// passes none. Big enough that a periodic verification pass covers the blocks
 // applied since the last one, small enough that turning the check on never reads a
 // table's whole history. The SOURCE's value is the one that counts: it publishes the
 // window it used and the follower recomputes over that, so the two sides cannot
@@ -106,7 +106,6 @@ class BlockHasher {
                 ORDER BY
                     c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
         ledger.credits = await this.db.doQuery(query, [block_index]);
-        // debits
         query = `SELECT
                     d.action_index,
                     a1.address AS address,
@@ -121,7 +120,6 @@ class BlockHasher {
                 ORDER BY
                     d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
         ledger.debits = await this.db.doQuery(query, [block_index]);
-        // escrows
         query = `SELECT
                     e.action_index,
                     a1.address AS address,
@@ -145,7 +143,7 @@ class BlockHasher {
         for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-        // actions (hash the resolved action-type string, never the index_actions id)
+        // Hash the resolved action-type string, never the index_actions id.
         query = `SELECT
                     a.action_index,
                     a.tx_index,
@@ -157,7 +155,6 @@ class BlockHasher {
                 ORDER BY
                     a.action_index ASC`;
         actions = await this.db.doQuery(query, [block_index]);
-        // contract hash data
         let contracts_data = {
             contracts:   [],
             state:       [],
@@ -166,7 +163,7 @@ class BlockHasher {
             deposits:    [],
             withdrawals: []
         };
-        // new deployments (resolve source_id -> address, status_id -> status string)
+        // New deployments, resolving source_id to an address and status_id to a status.
         query = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
                  FROM contracts c
                  INNER JOIN actions a ON (a.action_index=c.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=c.source_id)
@@ -191,7 +188,7 @@ class BlockHasher {
                  ) latest ON cs.id = latest.max_id
                  ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
         contracts_data.state = await this.db.doQuery(query, [block_index]);
-        // executions (resolve caller_id -> address, status_id -> status string)
+        // Executions, resolved the same way as deployments above.
         query = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
                  FROM contract_executions ce
                  INNER JOIN actions a ON (a.action_index=ce.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=ce.caller_id)
@@ -199,7 +196,7 @@ class BlockHasher {
                  WHERE a.block_index=?
                  ORDER BY ce.action_index ASC`;
         contracts_data.executions = await this.db.doQuery(query, [block_index]);
-        // emissions (join through executions to get block scope)
+        // Emissions carry no block column, so scope comes through their execution.
         query = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
                  FROM contract_emissions em
                  INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index)
@@ -207,8 +204,8 @@ class BlockHasher {
                  WHERE a.block_index=?
                  ORDER BY em.execution_index ASC, em.position ASC`;
         contracts_data.emissions = await this.db.doQuery(query, [block_index]);
-        // deposits (resolve source_id -> address, tick_id -> tick, status_id -> status; the
-        // resolved secondary sort keys use a pinned BINARY collation, mirroring the indexer)
+        // Deposits, with the resolved secondary sort keys pinned to a BINARY collation so
+        // the tie-break order cannot vary with a node's default collation.
         query = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
                  FROM deposits d
                  INNER JOIN actions a ON (a.action_index=d.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=d.source_id)
@@ -217,7 +214,7 @@ class BlockHasher {
                  WHERE a.block_index=?
                  ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
         contracts_data.deposits = await this.db.doQuery(query, [block_index]);
-        // withdrawals (same resolution + tie-order treatment as deposits)
+        // Same resolution and tie-order treatment as deposits.
         query = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
                  FROM withdrawals w
                  INNER JOIN actions a ON (a.action_index=w.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=w.source_id)
@@ -226,7 +223,7 @@ class BlockHasher {
                  WHERE a.block_index=?
                  ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
         contracts_data.withdrawals = await this.db.doQuery(query, [block_index]);
-        // previous block's committed hashes (for the chain)
+        // Previous block's committed hashes, which chain this block to the last.
         let prev_block_index = block_index - 1;
         query = `SELECT
                 t1.hash as ledger,
@@ -245,7 +242,7 @@ class BlockHasher {
             hashes['actions']   = results[0].actions;
             hashes['contracts'] = results[0].contracts;
         }
-        // hash each of ledger / actions / contracts with block_index + previous hash
+        // Each of ledger / actions / contracts is hashed with block_index + previous hash.
         let tables = ['ledger','actions','contracts'];
         tables.forEach(table => {
             var data = null;
@@ -326,7 +323,7 @@ class BlockHasher {
         return this.util.getDataHash({ index_map: mapped });
     }
 
-    // ADVISORY, NON-CONSENSUS . Same posture as computeIndexMapChecksum
+    // ADVISORY, NON-CONSENSUS. Same posture as computeIndexMapChecksum
     // above: not a block hash, not in BLOCK_HASH_VERSION, no indexer twin. Its only
     // conformance requirement is server-vs-client agreement, and both sides call
     // THIS method over the bound the SOURCE published, so they agree by construction.
@@ -337,7 +334,7 @@ class BlockHasher {
     // only signal that catches an equal-COUNT content substitution in a table no
     // consensus hash reads: the three block hashes cover the ledger/actions/contract
     // projections, state_hash covers in-place mutations, the /status row counts cover
-    // cardinality, and everything else was uncommitted (review xchain-platform #4486).
+    // cardinality, and everything else was uncommitted.
     //
     // Shape (published on /status, consumed by ClientSync._verifyAgainstSource):
     //   { window, block, tables: { <table>: { n, h, id_max? } } }
@@ -365,7 +362,7 @@ class BlockHasher {
 
         // Ask ONCE which tables exist, so a replica whose schema predates a family
         // skips it instead of raising (and logging) a missing-table error per table
-        // on every status poll (the  lesson from table_counts). A failed
+        // on every status poll, which is the lesson from table_counts. A failed
         // listing degrades to probing, never to "nothing exists".
         let present = null;
         try { present = await this.db.listExistingTables(); } catch(e){ /* fall back to probing */ }

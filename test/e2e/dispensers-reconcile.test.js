@@ -23,9 +23,9 @@
  *   -> ClientSync._reconcileDispensers (paged re-fetch under the apply lock)
  *   -> ClientApplier.applyDispensersReplace (atomic DELETE + INSERT).
  *
- * This was the validation gap flagged in the 2026-06-18 handover: the unit
- * tests cover the pieces, but no e2e proved end-to-end convergence over a
- * real HTTP surface against a drifted source. Covered here:
+ * Unit tests cover the individual pieces, but nothing previously proved
+ * end-to-end convergence over a real HTTP surface against a drifted source.
+ * Covered here:
  *   - Seed-from-empty: a full-snapshot bootstrap leaves dispensers empty
  *     (snapshot-skipped); a reconcile seeds them to parity.
  *   - Drift convergence: a source that has hard-purged, soft-expired AND
@@ -312,7 +312,6 @@ describe('E2E: Decoder dispensers reconcile', function() {
         await sourceDb.doQuery('UPDATE dispensers SET expired_block_index = 5 WHERE tx_index = 30'); // soft-expire
         await insertDispenser(sourceDb, 40, 5, 4000000009, null);            // new
 
-        // Before reconcile the replica still holds the stale set.
         assert.notDeepStrictEqual(await dumpDispensers(replicaDb), await dumpDispensers(sourceDb));
 
         await client.reconcile();
@@ -333,7 +332,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
         await insertDispenser(sourceDb, 20, 3, 4000000001, null);
         await startServer();
 
-        // ----- every=99: a single catch-up must NOT reconcile -----
+        // every=99: a single catch-up must NOT reconcile.
         client = makeClient({ every: 99 });
         await client.bootstrap();
         await client.reconcile(); // seed to parity first
@@ -350,7 +349,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
             'with every=99 a single catch-up must leave the dispensers drift in place');
         client.stop();
 
-        // ----- every=1: the next catch-up reconciles and converges -----
+        // every=1: the next catch-up reconciles and converges.
         await decoderFixtures.truncateAll(sourceDb);
         await decoderFixtures.truncateAll(replicaDb);
         await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 5);

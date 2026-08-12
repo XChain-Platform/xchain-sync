@@ -222,7 +222,7 @@ describe('SyncService', function(){
             assert.strictEqual(startSync.callCount, 1);
         });
 
-        // : an unmatched SYNC_BOOTSTRAP_DEPTH_* key is not inert. It resolves to
+        // An unmatched SYNC_BOOTSTRAP_DEPTH_* key is not inert. It resolves to
         // depth 0, the FULL-history snapshot branch, so a typo'd key silently starts the
         // unbounded bootstrap it was set to prevent (measured on the 2026-08-10 DOGE
         // reseed). Discovery must refuse it BEFORE any ClientSync is started.
@@ -562,7 +562,7 @@ describe('SyncService', function(){
         });
     });
 
-    // : api.js listens before start() runs, and start() can sit in
+    // api.js listens before start() runs, and start() can sit in
     // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes). /health's per-chain loop
     // has nothing to degrade on while getChains() is empty, so the probe reported
     // 'healthy' with zero pollers running. isReady() is what /health gates on now.

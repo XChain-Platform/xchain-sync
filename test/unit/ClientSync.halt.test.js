@@ -214,7 +214,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
     });
 });
 
-describe('ClientSync: bulk-range boundary recompute fails CLOSED  @regression', function(){
+describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', function(){
     // The live path above fails OPEN on a recompute error (an infra fault must
     // not fork the validator). At a bulk-range boundary (catch-up join/terminal,
     // bootstrap terminal) that posture is a hole: the join recompute is the ONLY

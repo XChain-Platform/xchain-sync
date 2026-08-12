@@ -108,7 +108,7 @@ describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
         ]);
     });
 
-    it('REFUSES a null weight rather than defaulting it to "0" ', async function(){
+    it('REFUSES a null weight rather than defaulting it to "0"', async function(){
         // The old default was the defect: a coerced zero keeps the source in the
         // quorum's dedupe map with no stake, so the denominator S shrinks and a
         // smaller real stake clears the two-thirds bar. stakes.amount is NOT NULL

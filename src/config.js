@@ -143,13 +143,13 @@ module.exports = {
         // A comma-separated ALLOWLIST, not a single origin: handing `cors` the raw
         // string echoes it back verbatim to every caller, which is a multi-value
         // header no browser accepts. Parsed here rather than at the cors() call
-        // because api.js only ever sees cfg. See src/corsOrigin.js .
+        // because api.js only ever sees cfg. See src/corsOrigin.js.
         config['CORS_ORIGIN']   = parseCorsOrigin(process.env.CORS_ORIGIN);
 
         config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
         // A replica/validator follows EVERY chain a server hosts over its own WS, all
-        // from one IP; node-host-b alone serves 12 chain/network/dbType streams. The old
-        // default of 3 closed 9 of them with 1008 "Too many connections", causing a
+        // from one IP, and a single chain-node host alone serves 12 of those streams.
+        // The old default of 3 closed 9 of them with 1008 "Too many connections", a
         // permanent reconnect storm that also broke gap-detection-driven catch-up.
         config['WS_MAX_PER_IP']       = parseIntMin1(process.env.WS_MAX_PER_IP, 100);
         // Per-resource (IP + chain/network/dbType) limits; see snapshotKey in api.js.
@@ -232,7 +232,7 @@ module.exports = {
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure (item 5410): a replica is dropped only when its send buffer
+        // WebSocket backpressure: a replica is dropped only when its send buffer
         // is genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory (a peer
         // accumulating past this is not draining); STALL_MS is how long the buffer may go
         // without making downward progress before the peer is dropped. This replaces the old
@@ -241,7 +241,7 @@ module.exports = {
         config['WS_BACKPRESSURE_MAX_BYTES'] = parseIntMin1(process.env.WS_BACKPRESSURE_MAX_BYTES, 16777216); // 16 MiB
         config['WS_BACKPRESSURE_STALL_MS']  = parseIntMin1(process.env.WS_BACKPRESSURE_STALL_MS, 30000);     // 30 s
         if(process.env.WS_BACKPRESSURE_LIMIT !== undefined)
-            console.log('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead (item 5410).');
+            console.log('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead.');
 
         // WebSocket status broadcast interval (default 60 seconds; override via WS_STATUS_INTERVAL)
         config['WS_STATUS_INTERVAL'] = parseIntMin0(process.env.WS_STATUS_INTERVAL, 60000);
@@ -264,7 +264,7 @@ module.exports = {
         // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
         config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
 
-        // Multi-source Byzantine quorum . SOURCE_QUORUM is the M-of-N
+        // Multi-source Byzantine quorum. SOURCE_QUORUM is the M-of-N
         // agreement threshold the live cross-source path requires before it applies a
         // block: >= SOURCE_QUORUM sources must publish the SAME ledger/actions/contract
         // hash tuple. 0 (unset) selects the simple-majority default, computed from the
@@ -350,7 +350,7 @@ module.exports = {
         // before enabling on a high-volume chain).
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
 
-        // TABLE_CONTENT_PARITY_CHECK : advisory per-table CONTENT parity over
+        // TABLE_CONTENT_PARITY_CHECK: advisory per-table CONTENT parity over
         // every replicated table the registry declares covered (src/tableLifecycle.js
         // CONTENT_PARITY_*). Same posture as INDEX_MAP_PARITY_CHECK and for the same
         // reason, one scope wider: the row counts published beside it prove only
@@ -387,15 +387,15 @@ module.exports = {
         // bypassed). CHECKPOINT_VERIFY_INTERVAL bounds how often the /latest checkpoint is
         // probed (in applied blocks; default 50).
         //
-        // FLAG-DAY COUPLING : this default is tied to pinnedValidators.js. It stays
+        // FLAG-DAY COUPLING: this default is tied to pinnedValidators.js. It stays
         // OFF only while every pinned key is null, because a true-but-inert flag reads as
         // "protected" while nothing is actually verified. The change that populates a real
         // launch validator set must flip this default to ON in the same change (an operator
         // who has a trust root available and does not use it is still trusting the source);
         // an explicit VERIFY_CHECKPOINT_QUORUM=false remains the opt-out for throwaway
-        // mirrors. test/unit/checkpointQuorumFlagDay.test.js enforces both halves, and
-        // claude/reports/launch/TRUST-MINIMIZATION-ACTIVATION-RUNBOOK.md step 6 carries the
-        // deploy-side ordering (the federation must be serving signed checkpoints first).
+        // mirrors. test/unit/checkpointQuorumFlagDay.test.js enforces both halves, and the
+        // launch activation runbook carries the deploy-side ordering (the federation must
+        // be serving signed checkpoints first).
         config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
         config['CHECKPOINT_VERIFY_INTERVAL'] = parseIntMin1(process.env.CHECKPOINT_VERIFY_INTERVAL, 50);
 
@@ -413,7 +413,7 @@ module.exports = {
         // not proof of forgery, and halting on absence would hand an attacker a DoS-halt).
         config['CHECKPOINT_FRESHNESS_BLOCKS'] = parseIntMin1(process.env.CHECKPOINT_FRESHNESS_BLOCKS, 500);
 
-        // CHECKPOINT_FRESHNESS_STRICT : promote the freshness bound from
+        // CHECKPOINT_FRESHNESS_STRICT: promote the freshness bound from
         // advisory to enforced. When on, a replica whose tip trails the newest
         // quorum-signed checkpoint by more than CHECKPOINT_FRESHNESS_BLOCKS refuses to
         // serve the unanchored tail and HALTs durably (reason `checkpoint-freshness-
@@ -444,7 +444,7 @@ module.exports = {
         // Replication freshness ceiling (server mode). The client path has the window
         // above; a server fronting a native SQL replica had no equivalent, so a
         // stalled replica froze the source and served heights together and published
-        // lag_blocks 0 on an hours-behind node (#3904). Seconds behind the source
+        // lag_blocks 0 on an hours-behind node. Seconds behind the source
         // above this reads stale. Needs the REPLICATION CLIENT grant to be readable.
         config['SYNC_REPLICA_MAX_LAG_S'] = parseIntMin1(process.env.SYNC_REPLICA_MAX_LAG_S, 120);
 

@@ -59,8 +59,7 @@ describe('Boundary: HubClient Port Parsing', function(){
         });
 
         it('uses secondary when primary is non-numeric', function(){
-            // primary 'abc' → fallback to secondary? No; primary is not empty/null/undefined
-            // so it's used directly → parseInt('abc') = NaN → defaults to 3306
+            // A non-numeric primary is not empty/null/undefined, so it is used directly (parseInt fails to NaN) rather than falling back to secondary.
             assert.strictEqual(HubClient._parsePort('abc', '5432'), 3306);
         });
 

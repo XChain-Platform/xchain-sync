@@ -28,9 +28,7 @@ CREATE INDEX idx_block  ON escrow_leaf_journal (block_index);
 --   SELECT locked_amount ... WHERE address_id=? AND tick_id=? [AND block_index<=?] ORDER BY id DESC LIMIT 1
 CREATE INDEX idx_latest ON escrow_leaf_journal (address_id, tick_id, id DESC);
 
---********************************************************************
--- WHY THIS TABLE EXISTS (design: claude/specs/spv-state-subtree-extension.md
--- §3 Stage B, decided by the B0 run 2026-07-28, ).
+-- WHY THIS TABLE EXISTS (SPV sub-tree spec §3 Stage B).
 --
 -- The `escrows` ledger cannot answer "how much does this address have locked".
 -- It is a per-tick CONSERVATION ledger, not a per-address lock ledger: of the 26
@@ -38,40 +36,33 @@ CREATE INDEX idx_latest ON escrow_leaf_journal (address_id, tick_id, id DESC);
 -- releases, NINE of which key to whoever RECEIVES the funds (order/swap matches
 -- key to GET_ADDRESS, dispense and dispenser-close to DESTINATION, cross-settle
 -- to payoutAddr). So SUM(escrows) per (address, tick) leaves the locker's key
--- stale-positive and drives the recipient's negative; only the per-tick global
--- sum nets to zero. That is the 2026-06-18 finding, and it is why the escrow
--- leaf cannot be derived from `escrows`.
+-- stale-positive and drives the recipient's negative, and only the per-tick
+-- global sum nets to zero (2026-06-18 finding).
 --
--- The obvious alternative, recomputing each locker's open remaining at read
--- time, is worse than it looks: GIVE_REMAINING IS NOT A STORED COLUMN in ANY
--- family. It is recomputed by db.getOrderAmountsRemaining and
--- db.getDispenserAmountRemaining (the latter folding dispenser EDITs), so
--- "reconstruct as of height H" would mean a SECOND implementation of four
--- families' remaining logic living inside a consensus surface. Two
--- implementations of a computed quantity is the shape that forks.
+-- Recomputing each locker's open remaining at read time is worse than it looks:
+-- GIVE_REMAINING IS NOT A STORED COLUMN in ANY family. It is recomputed by
+-- db.getOrderAmountsRemaining and db.getDispenserAmountRemaining (the latter
+-- folding dispenser EDITs), so "reconstruct as of height H" would put a SECOND
+-- implementation of four families' remaining logic inside a consensus surface,
+-- which is the shape that forks.
 --
--- So the source computes each key's locked total ONCE, when the block that
--- changes it is processed, using the same house functions that already exist,
--- and appends it here. The table is then shaped exactly like `contract_state`,
--- whose properties Stage A already depends on and has vectors for:
---   * append-only + block_index + idx_block  => the touched set is one indexed
---     query with one answer on both twins;
---   * rollback:'block'                       => a reorg deletes rows >= the
---     orphan height and the next block threads from the surviving root, so
---     there is no repair pass to write or to get wrong;
---   * latest row at or below H               => as-of-height proof reads, the
---     requirement mutable order rows could not meet;
---   * NULL locked_amount                     => the delete-on-zero tombstone,
---     byte-identical in meaning to a NULL contract_state value.
+-- So the source computes each key's locked total ONCE, while processing the
+-- block that changes it, and appends it here, shaped exactly like
+-- `contract_state` because Stage A already depends on those properties:
+-- append-only + block_index + idx_block makes the touched set one indexed query
+-- with one answer on both twins; rollback:'block' means a reorg deletes rows at
+-- or above the orphan height and the next block threads from the surviving root,
+-- so there is no repair pass to get wrong; the latest row at or below H serves
+-- as-of-height proof reads that mutable order rows could not; and a NULL
+-- locked_amount is the delete-on-zero tombstone, identical in meaning to a NULL
+-- contract_state value.
 --
--- REPLICATED, NOT RECOMPUTED (replication 'stream:block'). xchain-sync mirrors
+-- REPLICATED, NOT RECOMPUTED (replication 'stream:block'): xchain-sync mirrors
 -- these rows rather than deriving them, which is what keeps four families'
--- remaining logic from having to exist twice. The follower still recomputes the
--- ROOT from the replicated rows and halts on divergence, exactly as it does for
--- contract state.
+-- remaining logic from existing twice. The follower still recomputes the ROOT
+-- from the replicated rows and halts on divergence, as it does for contract state.
 --
--- NOT A COMMITMENT. Nothing in this table enters a hash until the escrow leaf is
--- armed (ESCROW_LOCKED_LEAF_ACTIVATION), so it can be populated below an armed
--- height with no consensus effect at all. That is also why Stage B needs no
--- shadow column: the journal IS its own shadow window.
---********************************************************************
+-- NOT A COMMITMENT. Nothing here enters a hash until the escrow leaf is armed
+-- (ESCROW_LOCKED_LEAF_ACTIVATION), so it can be populated below an armed height
+-- with no consensus effect. That is also why Stage B needs no shadow column: the
+-- journal IS its own shadow window.

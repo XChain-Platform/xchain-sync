@@ -57,7 +57,6 @@ describe('07 Rollback Performance', function () {
         server = createServer(sourceDb, SERVER_PORT);
         await server.start();
 
-        // Bootstrap client with all blocks
         client = createClient(replicaDb, server.getUrl());
         await client.bootstrap();
         assert.strictEqual(await replicaDb.getLastBlock(), totalBlocks);
@@ -65,7 +64,6 @@ describe('07 Rollback Performance', function () {
         const collector = new MetricsCollector({ name: label });
         collector.start();
 
-        // Execute rollback
         const rollbackToBlock = totalBlocks - rollbackDepth + 1;
 
         collector.beginOperation('rollback');
@@ -75,7 +73,6 @@ describe('07 Rollback Performance', function () {
         collector.stop();
         const stats = collector.getStats();
 
-        // Count remaining rows
         const remainingBlocks = await testDb.getRowCount(replicaDb, 'blocks');
         const remainingActions = await testDb.getRowCount(replicaDb, 'actions');
 
@@ -98,7 +95,6 @@ describe('07 Rollback Performance', function () {
             blocksPerSecond: stats.rollbackMetrics.blocksPerSecond
         };
 
-        // Verify rollback correctness
         const lastBlock = await replicaDb.getLastBlock();
         assert.ok(lastBlock !== null && lastBlock < rollbackToBlock + rollbackDepth,
             `Last block should be before rollback point (got ${lastBlock})`);
@@ -147,7 +143,6 @@ describe('07 Rollback Performance', function () {
     });
 
     it('rollback time scales sub-quadratically with depth', async function () {
-        // Rollback 100 blocks should not take more than 20x the time of 5 blocks
         const small = allStats['depth-5'];
         const large = allStats['depth-100'];
 
@@ -172,18 +167,15 @@ describe('07 Rollback Performance', function () {
         client = createClient(replicaDb, server.getUrl());
         await client.bootstrap();
 
-        // Rollback to block 10
         await client.rollbacker.rollback(10);
 
-        // Verify blocks 10+ are gone
         const lastBlock = await replicaDb.getLastBlock();
         assert.ok(lastBlock < 10, 'All blocks >= 10 should be removed');
 
-        // Verify remaining data is consistent: credits/debits should match balances
         const balanceCount = await testDb.getRowCount(replicaDb, 'balances');
         const creditCount = await testDb.getRowCount(replicaDb, 'credits');
-        // After rollback with balance rebuild, balances should be non-negative
-        // (or zero if all credits were in rolled-back blocks)
+        // Balance rows are rebuilt during rollback, so the count should never go
+        // negative, even when every remaining credit was in a rolled-back block.
         assert.ok(balanceCount >= 0, 'Balances should be rebuilt');
 
         client.stop();

@@ -18,26 +18,14 @@ class DataGenerator {
         this.db = db;
     }
 
-    /**
-     * Seed a contiguous range of blocks (1 action each).
-     * Wraps fixtures.seedBlocks().
-     */
     async seedBlockRange(start, end, opts) {
         return await fixtures.seedBlocks(this.db, start, end, opts);
     }
 
-    /**
-     * Seed a single block with many actions.
-     * Wraps fixtures.seedLargeBlock().
-     */
     async seedLargeBlock(blockIndex, actionCount) {
         return await fixtures.seedLargeBlock(this.db, blockIndex, actionCount);
     }
 
-    /**
-     * Delete blocks from a given index onward.
-     * Wraps fixtures.deleteBlocksFrom().
-     */
     async deleteBlocksFrom(blockIndex) {
         return await fixtures.deleteBlocksFrom(this.db, blockIndex);
     }

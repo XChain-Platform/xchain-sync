@@ -176,7 +176,7 @@ async function seedBlocks(db, startBlock, endBlock, opts = {}) {
         // transactions/actions/credits WITHOUT its blocks row; the incremental
         // snapshot's unbounded `block_index >= since` scans then shipped those
         // stray rows above block_height, and the later live apply of the same
-        // block hit duplicate-key errors and wedged the replica .
+        // block hit duplicate-key errors and wedged the replica (a known flake class).
         await db.withTransaction(async (conn) => {
             for (let addr of block.index_addresses)
                 await db.doQuery("INSERT IGNORE INTO index_addresses (address) VALUES (?)", [addr.address], conn);

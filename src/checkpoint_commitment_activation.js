@@ -40,13 +40,12 @@
 // every chain + the hub flip the signed shape on the same anchor.
 const CHECKPOINT_COMMITMENT_ACTIVATION = {
     mainnet: 961000,      // ARMED 2026-07-07: BTC anchor ~2026-08-04; deploy hub + ALL indexers (+ sdk/explorer/sync copies) before this height
-    testnet: 146000,      // ARMED 2026-07-22 ( lead 0e418c8c): first BTC-testnet anchor past all three STATE_COMMITMENT testnet thresholds; was 0, which forced the SPV root suffix from testnet genesis before the indexer computes roots, so the hub refused to sign every testnet checkpoint
+    testnet: 146000,      // ARMED 2026-07-22 (lead 0e418c8c): first BTC-testnet anchor past all three STATE_COMMITMENT testnet thresholds; was 0, which forced the SPV root suffix from testnet genesis before the indexer computes roots, so the hub refused to sign every testnet checkpoint
     regtest: 0,
 };
 
-// Whether the checkpoint/ANCHOR commits the light-client roots for a checkpoint
-// whose BTC-anchored snapshot is at `snapshotBlock` on `network`. Below the
-// threshold -> off (old canonical shape, no roots). Unknown network -> off (safe).
+// Below the threshold this is off (old canonical shape, no roots), and an
+// unknown network is off too, which is the safe direction.
 function isCheckpointCommitmentActive(snapshotBlock, network){
     let sb = parseInt(snapshotBlock);
     if(!Number.isFinite(sb)) return false;

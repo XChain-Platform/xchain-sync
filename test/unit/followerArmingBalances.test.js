@@ -10,7 +10,7 @@
  *
  **********************************************************************
  *
- * The FOLLOWER twin of the escrow arming-block full build ().
+ * The FOLLOWER twin of the escrow arming-block full build.
  *
  * The source twin's gate lives in xchain-indexer/src/stateCommitment.js and is
  * pinned by its own vectors in that repo's test/unit/stateCommitment.test.js. This
@@ -19,8 +19,7 @@
  * is unchanged, so touched-set application at the arming height misses it, and the
  * prior committed root holds no escrow leaves at all (block-1 is below the armed
  * height). A source that full-builds and a live follower that still threads
- * incrementally commit two different balances_roots for one block, which is the same
- * false halt the item names, merely between different pairs of nodes.
+ * incrementally commit two different balances_roots for one block.
  *
  * BTC:regtest is the only chain the escrow leaf is armed on
  * (state_subtree_activation.js, block 11200), so the boundary is 11200.
@@ -73,7 +72,7 @@ function makeFollowerDb({ priorRow, liveJournalRows }){
     return { db, persisted };
 }
 
-describe('follower: escrow arming block full-builds balances (item 4363) @regression', function(){
+describe('follower: escrow arming block full-builds balances @regression', function(){
 
     it('commits the live escrow leaf that has no arming-height journal row', async function(){
         const { db, persisted } = makeFollowerDb({
@@ -88,7 +87,7 @@ describe('follower: escrow arming block full-builds balances (item 4363) @regres
             'the follower must commit the same root the source and a snapshot node commit');
         assert.strictEqual(persisted.balances_root, expected);
         assert.notStrictEqual(out.balances_root, SC.EMPTY_ROOT_HEX,
-            'threading the prior root drops the unchanged live lock (the #4363 divergence)');
+            'threading the prior root drops the unchanged live lock');
     });
 
     it('the block AFTER arming still threads incrementally', async function(){

@@ -13,7 +13,7 @@
  **********************************************************************
  * test/unit/blockhash-conformance-twin.test.js
  *
- * Static drift-lock for the consensus block-hash CONFORMANCE PAIR .
+ * Static drift-lock for the consensus block-hash CONFORMANCE PAIR.
  *
  * xchain-sync/src/BlockHasher.js computeBlockHashes() is a hand-ported twin of
  * xchain-indexer/src/db.js getBlockHashes(): same consensus SELECTs, same
@@ -126,7 +126,7 @@ function sqlLiterals(fnSrc){
 function syncFile(rel){ return path.join(SYNC_ROOT, rel); }
 function indexerFile(rel){ return path.join(INDEXER_ROOT, rel); }
 
-describe('consensus block-hash conformance twins (static drift-lock, ) @regression', function(){
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
 
     function loadPair(ctx, syncRel, indexerRel){
         if(!requireSibling(ctx, indexerFile(indexerRel))) return null;

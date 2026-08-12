@@ -185,10 +185,10 @@ describe('config', function(){
             assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
         });
 
-        // : the documented DOGE_TESTNET spelling produced 'DOGE:TESTNET' while
-        // ClientSync looked up the hub's `cfg.coin` ('dogecoin'), so the documented key
-        // never matched and the miss fell through to depth 0 (the FULL-snapshot branch).
-        // Both spellings must now land on the ticker key ClientSync asks for.
+        // The documented DOGE_TESTNET spelling produced 'DOGE:TESTNET' while ClientSync
+        // looked up the hub's `cfg.coin` ('dogecoin'), so the documented key never matched
+        // and the miss fell through to depth 0 (the FULL-snapshot branch). Both spellings
+        // must now land on the ticker key ClientSync asks for.
         it('folds the full coin name onto the same ticker key as the ticker spelling', function(){
             process.env.SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET = '50000';
             assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, { 'DOGE:TESTNET': 50000 });
@@ -207,9 +207,9 @@ describe('config', function(){
         });
     });
 
-    // : an unmatched depth key is NOT inert. The lookup falls through to 0,
-    // which is the full-history snapshot branch, so a key that names no discovered
-    // chain silently starts the unbounded bootstrap it was set to prevent.
+    // An unmatched depth key is NOT inert. The lookup falls through to 0, which is
+    // the full-history snapshot branch, so a key that names no discovered chain
+    // silently starts the unbounded bootstrap it was set to prevent.
     describe('assertBootstrapDepthChains', function(){
         const CHAINS = [
             { coin: 'dogecoin', network: 'testnet', dbType: 'indexer' },

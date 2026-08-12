@@ -48,7 +48,6 @@ describe('Integration: ClientRollback', function() {
             let blocksAfter = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blocksAfter, 7);
 
-            // Verify blocks 1-7 remain
             let rows = await replicaDb.doQuery("SELECT block_index FROM blocks ORDER BY block_index");
             assert.strictEqual(rows.length, 7);
             assert.strictEqual(Number(rows[0].block_index), 1);
@@ -81,7 +80,6 @@ describe('Integration: ClientRollback', function() {
 
         it('removes sync_meta entries at and after rollback point', async function() {
             await fixtures.seedBlocks(replicaDb, 1, 10);
-            // Insert sync_meta entries
             for (let i = 1; i <= 10; i++) {
                 await replicaDb.doQuery(
                     "INSERT IGNORE INTO sync_meta (block_index, block_time, ledger_hash) VALUES (?, ?, ?)",
@@ -98,28 +96,24 @@ describe('Integration: ClientRollback', function() {
 
     describe('balance recalculation', function() {
         it('rebuilds balances from remaining credits/debits', async function() {
-            // Seed blocks with credits
             await fixtures.seedBlocks(replicaDb, 1, 10, { creditAmount: '500' });
 
-            // Verify balances before rollback
             let balancesBefore = await replicaDb.doQuery("SELECT * FROM balances");
             assert.ok(balancesBefore.length > 0);
 
-            // Rollback to block 6 (removes blocks 6-10, keeping 1-5)
+            // rollback(6) removes blocks >= 6, keeping blocks 1-5.
             await rollback.rollback(6);
 
-            // Verify balances recalculated
             let balancesAfter = await replicaDb.doQuery("SELECT * FROM balances");
             assert.ok(balancesAfter.length > 0);
 
-            // Each remaining block had a credit of 500
-            // With unique addresses per block, each address should have 500
+            // Each remaining block credits a distinct address 500, so this count
+            // stands in for an exact per-address balance check.
             let creditsRemaining = await testDb.getRowCount(replicaDb, 'credits');
             assert.strictEqual(creditsRemaining, 5);
         });
 
         it('excludes zero-balance entries', async function() {
-            // Seed blocks with matching credits and debits
             await fixtures.seedBlocks(replicaDb, 1, 5, {
                 creditAmount: '1000', debitAmount: '1000',
                 sourceAddr: 'same_addr', tickName: 'ZERO'
@@ -135,7 +129,8 @@ describe('Integration: ClientRollback', function() {
 
     describe('rollback with no actions', function() {
         it('handles block with no actions cleanly', async function() {
-            // Insert a block without actions
+            // fixtures.seedBlocks always attaches an action, so insert directly here
+            // to get a block with none.
             await replicaDb.doQuery(
                 "INSERT INTO blocks (block_index, block_time) VALUES (?, ?)",
                 [1, 1700000001]
@@ -160,13 +155,11 @@ describe('Integration: ClientRollback', function() {
             let blocksAfterRollback = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blocksAfterRollback, 5);
 
-            // Re-seed blocks 6-8 with different data
             await fixtures.seedBlocks(replicaDb, 6, 8, { creditAmount: '9999' });
 
             let blocksAfterResync = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blocksAfterResync, 8);
 
-            // Verify new credit amounts
             let credits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index INNER JOIN transactions t ON t.tx_index = a.tx_index WHERE t.block_index >= 6"
             );

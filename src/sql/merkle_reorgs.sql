@@ -12,13 +12,12 @@
 --
 --********************************************************************
 
--- Transparency-log reorg markers (xchain-sync, server-side / indexer only).
+-- Transparency-log reorg markers (server-side / indexer only): one row per
+-- committed merkle_epoch invalidated by a chain reorg.
 --
--- One row per committed merkle_epoch invalidated by a chain reorg. On a reorg the
--- source prunes + re-derives sync_meta and merkle_epochs over the canonical chain
--- (see TransparencyLog.pruneFrom); this table is the append-only audit record of
--- that change. old_root is the root committed before the reorg; new_root is
--- backfilled with the root recomputed over the canonical chain when the epoch
+-- On a reorg the source prunes and re-derives sync_meta and merkle_epochs over
+-- the canonical chain (see TransparencyLog.pruneFrom), and this table is the
+-- append-only audit record of that change. new_root is backfilled when the epoch
 -- re-commits, giving an auditable old->new trail for every root that changed.
 
 CREATE TABLE merkle_reorgs (

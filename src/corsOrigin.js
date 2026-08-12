@@ -17,13 +17,11 @@
 /**
  * Parse the CORS_ORIGIN env var into a value the `cors` package matches per-origin.
  *
- * The reason this exists rather than passing the raw string through: `cors`
- * treats a String origin as ONE exact origin and echoes it back verbatim to
- * every caller. So `CORS_ORIGIN="a,b"` emits `Access-Control-Allow-Origin: a,b`
- * to a, to b, and to a hostile origin alike - a multi-value header no browser
- * accepts, which blocks all of them while a header dump reads as configured.
- * sync.xchain.io is read cross-origin by more than one browser surface, so an
- * allowlist is the real shape of the setting and a single string never was.
+ * Passing the raw string through does not work: `cors` treats a String origin as
+ * ONE exact origin and echoes it back verbatim, so `CORS_ORIGIN="a,b"` emits
+ * `Access-Control-Allow-Origin: a,b` to a, to b and to a hostile origin alike, a
+ * multi-value header no browser accepts. That blocks every caller while a header
+ * dump still reads as configured. An allowlist is the real shape of the setting.
  *
  * Fails CLOSED on anything ambiguous: an empty or all-blank value disables CORS
  * exactly as an unset var does, and `*` only means "any origin" when it is the
@@ -34,12 +32,8 @@
  * Unlike the sibling services this is applied in src/config.js rather than at the
  * cors() call, because sync resolves every setting into `cfg` first and api.js
  * reads cfg['CORS_ORIGIN']. Parsing at the config seam is what keeps the raw env
- * string from reaching `cors` at all.
- *
- * Identical by intent to xchain-encoder/src/corsOrigin.js, xchain-hub's
- * src/lib/corsOrigin.js, xchain-indexer/src/corsOrigin.js,
- * xchain-utxo-tracker/src/corsOrigin.js and xchain-sdk/src/corsOrigin.js; keep
- * the six in step .
+ * string from reaching `cors` at all. The other XChain services carry the same
+ * parser; keep them in step.
  *
  * @param {string|undefined|null} raw - the raw CORS_ORIGIN value
  * @returns {false|string|string[]} `false` (disabled), `'*'` (any), one origin, or an allowlist

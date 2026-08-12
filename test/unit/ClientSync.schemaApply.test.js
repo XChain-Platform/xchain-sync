@@ -6,13 +6,11 @@
 // This file is part of XChain Platform. Licensed under the GNU Affero
 // General Public License v3.0 or later; see LICENSE.md.
 
-// _fetchAndApplySchema multi-pass + fail-closed halt. The old single-pass catch
-// swallowed every DDL error: an FK-ordering miss self-healed across bootstrap
-// re-routes, but a genuine fault (permissions, disk, lock, malformed DDL) left
-// the table uncreated and the next snapshot apply looped forever on errno
-// 1146/1054 with halted:false (no signal). The fix runs an ordering fixpoint
-// (so ordering misses resolve in one bootstrap) and then records a DURABLE halt
-// for any table still failing.
+// _fetchAndApplySchema needs a multi-pass, fail-closed halt: the old single-pass catch swallowed every DDL
+// error, so an FK-ordering miss self-healed across bootstrap re-routes but a genuine fault (permissions, disk,
+// lock, malformed DDL) left the table uncreated and the next snapshot apply looped forever on errno 1146/1054
+// with halted:false (no signal). The fix runs an ordering fixpoint so ordering misses resolve in one
+// bootstrap, then records a durable halt for any table still failing.
 
 const assert = require('assert');
 const sinon  = require('sinon');
@@ -106,10 +104,9 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
         assert.strictEqual(db.recordHalt.firstCall.args[2], 'schema-apply-failed');
     });
 
-    // : the table exists, so the apply never reaches CREATE TABLE and the
-    // fault is in the column self-heal. That path used to swallow the server's
-    // refusal and report success, leaving the replica to fail every later row on
-    // errno 1054 with halted:false. The refusal now reaches the fixpoint.
+    // The table already exists, so the apply never reaches CREATE TABLE and the fault is in the column
+    // self-heal. That path used to swallow the server's refusal and report success, leaving the replica to
+    // fail every later row on errno 1054 with halted:false. The refusal now reaches the fixpoint.
     it('records a durable halt when the column self-heal on an existing table is refused', async function(){
         sinon.stub(axios, 'get').resolves({ data: { tables: {
             pubkeys: 'CREATE TABLE `pubkeys` (id INT)'

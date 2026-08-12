@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// Advisory table-content parity (TABLE_CONTENT_PARITY_CHECK, ).
+// Advisory table-content parity (TABLE_CONTENT_PARITY_CHECK).
 //
 // The gap this closes: getReplicatedTables('indexer') returns 107 per-block
 // replicated tables, while the block hashes commit the ledger/actions/contract
@@ -16,8 +16,7 @@
 // commitment covers balances + stakes, computeIndexMapChecksum covers
 // index_addresses, and _verifyTableCounts compares CARDINALITY only (and only
 // flags remote > local). An equal-count content substitution in any other
-// replicated table therefore passed every check a follower ran
-// (review xchain-platform #4486).
+// replicated table therefore passed every check a follower ran.
 //
 // Acceptance cases, modelled on test/integration/index-map-parity.test.js:
 //   1. every replicated table is committed by something: covered here, or
@@ -68,7 +67,7 @@ function fakeDb(tables, opts){
 
 const hasherFor = (tables, opts) => new BlockHasher(fakeDb(tables, opts), new Utility());
 
-describe('Advisory table-content parity ', function(){
+describe('Advisory table-content parity', function(){
 
     describe('coverage contract', function(){
 

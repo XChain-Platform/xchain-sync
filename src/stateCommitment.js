@@ -69,7 +69,7 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 // place that chooses, and the fallback writes the identical rows in the identical
 // order, so a store without it is slow, never wrong.
 //
-// : putMany exists because ONE key update writes SMT_DEPTH internal nodes
+// putMany exists because ONE key update writes SMT_DEPTH internal nodes
 // and a value leaf's ancestors are never an empty subtree, so the write loop is
 // always a full 256 rows. Issued one statement at a time that is 256 sequential
 // round trips per key, which on the BTC regtest venue (49 stake keys rebuilt from
@@ -169,7 +169,7 @@ class PersistentSMT {
     }
 
     // Persist a path's nodes, preferring the store's batch write. The fallback
-    // is the pre- behaviour and exists only for stores that predate
+    // is the pre-batching behaviour and exists only for stores that predate
     // putMany (bare {get, put} fakes and the bin/ instrumentation decorator);
     // it writes the same rows in the same order at one round trip each.
     async _putBatch(nodes){
@@ -187,7 +187,7 @@ class PersistentSMT {
         const { siblings } = await this._descend(rootHex, keyBuf);
         let cur = (newLeafHexOrNull == null) ? EMPTY0_HEX : newLeafHexOrNull;
         // Collect the path's nodes and write them in ONE batch after the climb
-        // rather than a round trip per level . Deferring is safe because
+        // rather than a round trip per level. Deferring is safe because
         // the climb reads NOTHING: every parent is hashed from `cur` and the
         // sibling already captured by _descend, so no node written here is read
         // back before the flush. The flush is inside update() and not hoisted to
@@ -344,8 +344,7 @@ async function reportOrphanStats(query, chain, network, opts){
 }
 
 // Assemble the top-level state_root from the two v1 sub-roots plus any RESERVED
-// slot that its flag-day has armed (SPV spec §4.1; design in
-// claude/specs/spv-state-subtree-extension.md).
+// slot that its flag-day has armed (SPV spec §4.1, sub-tree extension design).
 //
 // `extraSubRoots` is the forward-compatible carrier for ownership_root /
 // tokens_root / contract_state_root and MUST be the output of
@@ -440,7 +439,7 @@ async function getNetBalance(db, address, tick){
 }
 
 // Locked-escrow leaf (XCHAIN_ESC): BUILT and gated, no longer deferred (SPV
-// sub-tree spec §3 Stage B, ), matching the indexer twin. The 2026-06-18
+// sub-tree spec §3 Stage B), matching the indexer twin. The 2026-06-18
 // finding that killed the naive derivation still stands and is why the journal
 // exists: nine escrow release sites key to the recipient, so SUM(escrows) per
 // (address, tick) does not net per key. The SOURCE's writer re-keys those rows
@@ -564,7 +563,7 @@ async function gatherStakeEntries(db, chain, network, blockIndex){
     return entries;
 }
 
-// Rebuild the stakes tree only when the stake set actually changed .
+// Rebuild the stakes tree only when the stake set actually changed.
 //
 // buildFull writes SMT_DEPTH nodes per key, so this tree costs keys x 256 node
 // writes on EVERY BTC block - 12,544 on the regtest venue's 49 keys - and the
@@ -585,7 +584,7 @@ async function gatherStakeEntries(db, chain, network, blockIndex){
 // on the digest alone, so a reorg, a rollback, or a cold start lands on a block
 // that is not the memo's successor and rebuilds. That direction matters: a cache
 // in a consensus path may only ever fail toward the slow correct answer, and the
-// one that failed the other way here  did so because it was keyed on a
+// one that failed the other way here did so because it was keyed on a
 // MUTABLE dense id rather than on its own inputs.
 let _stakesMemo = null;
 
@@ -646,7 +645,7 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     // cross-twin comparison.
     const escShadow = SUB.isEscrowLockedLeafShadowActive(blockIndex, network, chain);
     // The ARMING BLOCK full-builds too, byte-for-byte with the source twin's gate in
-    // xchain-indexer/src/stateCommitment.js (). The incremental branch below
+    // xchain-indexer/src/stateCommitment.js. The incremental branch below
     // applies escrow leaves from journal rows stamped at THIS height only, while the
     // arming replay deliberately writes no row for a key whose locked total is
     // unchanged. After a §7 shadow window every still-unchanged live lock therefore has

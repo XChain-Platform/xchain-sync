@@ -23,33 +23,35 @@ const crypto = require('crypto');
 
 class MerkleTree {
 
-    // Compute a leaf hash from the three per-block hashes
+    // Leaf preimage is the three per-block hashes concatenated in this fixed
+    // order; a missing hash contributes the empty string, never a placeholder.
     static computeLeaf(ledgerHash, actionsHash, contractHash) {
         let data = (ledgerHash || '') + (actionsHash || '') + (contractHash || '');
         return crypto.createHash('sha256').update(data).digest('hex');
     }
 
-    // Hash two nodes together (internal node)
     static hashPair(left, right) {
         let data = left + right;
         return crypto.createHash('sha256').update(data).digest('hex');
     }
 
-    // Build a Merkle tree from an array of leaf hashes
-    // Returns { root: string, layers: string[][] } where layers[0] = leaves, layers[last] = [root]
+    // Returns { root, layers } where layers[0] = leaves and layers[last] = [root];
+    // the caller keeps `layers` because generateProof walks it, not the root.
     static buildTree(leaves) {
         if (!leaves || leaves.length === 0) {
             return { root: null, layers: [] };
         }
 
-        let layers = [leaves.slice()]; // Copy leaves as first layer
+        let layers = [leaves.slice()];
 
         let currentLayer = leaves.slice();
         while (currentLayer.length > 1) {
             let nextLayer = [];
             for (let i = 0; i < currentLayer.length; i += 2) {
                 let left  = currentLayer[i];
-                let right = (i + 1 < currentLayer.length) ? currentLayer[i + 1] : left; // Duplicate last if odd
+                // An odd final node is paired with itself; verifiers must use
+                // the same convention or the reconstructed root diverges.
+                let right = (i + 1 < currentLayer.length) ? currentLayer[i + 1] : left;
                 nextLayer.push(MerkleTree.hashPair(left, right));
             }
             layers.push(nextLayer);
@@ -62,8 +64,8 @@ class MerkleTree {
         };
     }
 
-    // Generate an inclusion proof for a leaf at a given index
-    // Returns array of { hash, position } where position is 'left' or 'right'
+    // Returns an ordered array of { hash, position } siblings, position being
+    // 'left' or 'right' relative to the value being folded in at that level.
     static generateProof(layers, leafIndex) {
         if (!layers || layers.length === 0 || leafIndex < 0 || leafIndex >= layers[0].length) {
             return null;
@@ -83,7 +85,7 @@ class MerkleTree {
                     position: isRight ? 'left' : 'right'
                 });
             } else {
-                // Odd node: sibling is self (duplicated)
+                // Mirrors buildTree's odd-node self-pairing.
                 proof.push({
                     hash:     layer[index],
                     position: 'right'
@@ -96,8 +98,6 @@ class MerkleTree {
         return proof;
     }
 
-    // Verify an inclusion proof
-    // Returns true if the proof reconstructs the expected root
     static verifyProof(leaf, proof, expectedRoot) {
         if (!leaf || !proof || !expectedRoot) return false;
 

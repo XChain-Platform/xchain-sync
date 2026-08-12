@@ -54,7 +54,7 @@ describe('state_hash index-map class (id-determinism P4) - follower twin @regres
     // regtest since 2026-07-07): their query slots would shift the canned
     // call-order mock and their preimage keys would break the shape assertions.
     // The index-map class itself is also disarmed suite-locally (armed on regtest
-    // since 2026-07-16, ) so the inert-shape tests below still exercise the
+    // since 2026-07-16) so the inert-shape tests below still exercise the
     // below-threshold preimage; withArmed() re-arms per test.
     let pollPrev, tokenPrev, indexPrev, betPrev;
     before(function(){
@@ -74,8 +74,8 @@ describe('state_hash index-map class (id-determinism P4) - follower twin @regres
         BET_STATUS_STATE_HASH_ACTIVATION.regtest    = betPrev;
     });
 
-    it('gate: regtest armed from genesis , arms at/after the per-chain height', function(){
-        assert.strictEqual(indexPrev, 0, 'regtest armed from genesis ');
+    it('gate: regtest armed from genesis, arms at/after the per-chain height', function(){
+        assert.strictEqual(indexPrev, 0, 'regtest armed from genesis');
         assert.strictEqual(isIndexMapStateHashActive(7, 'regtest'), false, 'suite-local disarm holds');
         assert.strictEqual(isIndexMapStateHashActive(7, null), false);
         return withArmed(5, () => {

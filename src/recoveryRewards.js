@@ -37,43 +37,34 @@
  *
  ********************************************************************/
 
-// Select validator_rewards rows that were re-materialized (recovery_pending_rewards.
-// applied_block) inside the inclusive window [fromBlock, toBlock] but whose own
-// block_index (earn-block E) is BELOW that window block, so the normal block-scoped
-// channels missed them. Returns raw validator_rewards rows; the caller merges them into
-// the block / snapshot `validator_rewards` array and dedups on the UNIQUE identity
-// (source_id, signing_pubkey_id, reward_type, round_reference).
-//
-//   db        the source Database (indexer dbType only; callers must gate)
-//   fromBlock inclusive lower applied_block bound
-//   toBlock   inclusive upper applied_block bound (for a single live block, pass
-//             fromBlock === toBlock)
-//   conn      optional connection (so a snapshot's REPEATABLE READ view reads these at
-//             the same height as the rest of the payload)
+// Selects validator_rewards rows re-materialized (recovery_pending_rewards.applied_block)
+// inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)
+// is BELOW that window, so the normal block-scoped channels missed them. Returns raw
+// rows for the caller to merge into the `validator_rewards` array, deduped on the UNIQUE
+// identity (source_id, signing_pubkey_id, reward_type, round_reference). `db` must be an
+// indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
+// REPEATABLE READ view read these at the same height as the rest of its payload.
 async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
 
-    // Dedup by the validator_rewards UNIQUE identity. The same survivor can be reached by
-    // both the live per-block channel and the incremental snapshot when their windows
-    // overlap; the follower's INSERT IGNORE also makes a duplicate a no-op, but dedup the
-    // selection here so the payload stays minimal.
+    // The same survivor can be reached by both the live per-block channel and the
+    // incremental snapshot when their windows overlap. The follower's INSERT IGNORE
+    // already makes a duplicate a no-op; dedup here anyway to keep the payload minimal.
     let acc = new Map();
     try {
-        // applied_block (= the reorg point B) is the forward-window key, the mirror of
-        // ClientRollback's block_index >= B reverse delete. The vr.block_index <
-        // applied_block guard restricts to genuine survivors (E < B): a row whose
-        // earn-block is at/above the window streams normally via getBlockScopedRows and
+        // applied_block (= the reorg point B) is the forward-window key, mirroring
+        // ClientRollback's block_index >= B reverse delete, and the vr.block_index <
+        // applied_block guard restricts this to genuine survivors (E < B): a row whose
+        // earn-block is at or above the window already streams via getBlockScopedRows and
         // must NOT ride this channel too.
-        // SELECT vr.* (not an explicit column subset): these rows are merged into the SAME
-        // payload array as the block-scoped validator_rewards rows (getBlockScopedRows uses
-        // SELECT *), and ClientApplier._insertRows derives its INSERT column list from
-        // rows[0] only. A narrower projection here omits `id` (the AUTO_INCREMENT PK), so a
-        // redriven-only or mixed batch would insert with a missing/NULL id and the replica
-        // would mint a locally-generated id diverging from the source's, invisible to the
-        // count-only parity check and later dropped by INSERT IGNORE on PK collision.
-        // vr.* keeps the redriven rows column-compatible with the block-scoped rows, exactly
-        // as the sibling collectMaturedCooldownCredits uses SELECT c.*.
+        //
+        // SELECT vr.* rather than a column subset is load-bearing. These rows are merged
+        // into the SAME payload array as the block-scoped rows (which use SELECT *), and
+        // ClientApplier._insertRows derives its INSERT column list from rows[0] only. A
+        // narrower projection drops `id`, the AUTO_INCREMENT PK, so a redriven-only or
+        // mixed batch would let the replica mint its own diverging id, invisible to the
+        // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
         let rows = await db.doQuery(
             "SELECT vr.* " +
             "FROM validator_rewards vr " +

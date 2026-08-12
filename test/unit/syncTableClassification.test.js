@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// Registry-exhaustiveness guard for the sync-owned table set (item #2283).
+// Registry-exhaustiveness guard for the sync-owned table set.
 //
 // Every table created from xchain-sync/src/sql/*.sql exists on every
 // indexer-shaped DB (db.verifySyncTables applies each file), so every one of

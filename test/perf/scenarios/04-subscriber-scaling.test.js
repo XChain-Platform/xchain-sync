@@ -51,7 +51,6 @@ describe('04 Subscriber Scaling', function () {
             const ws = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
             ws.on('open', () => resolve(ws));
             ws.on('error', reject);
-            // Timeout after 5s
             setTimeout(() => reject(new Error('WS connect timeout')), 5000);
         });
     }
@@ -60,7 +59,6 @@ describe('04 Subscriber Scaling', function () {
         await resetAll();
 
         const gen = createGenerator(sourceDb);
-        // Seed initial blocks
         await gen.seedBlockRange(1, 10);
 
         server = createServer(sourceDb, SERVER_PORT);
@@ -68,7 +66,6 @@ describe('04 Subscriber Scaling', function () {
         server.config.WS_MAX_PER_IP = subscriberCount + 10;
         await server.start();
 
-        // Connect all subscribers
         const wsUrl = server.getWsUrl();
         const subscribers = [];
         const receivedBlocks = new Map(); // subscriberIndex → Set of blockIndices
@@ -87,7 +84,6 @@ describe('04 Subscriber Scaling', function () {
             subscribers.push(ws);
         }
 
-        // Seed additional blocks and measure broadcast performance
         const newBlockStart = 11;
         const newBlockEnd = 10 + BLOCK_COUNT;
         await gen.seedBlockRange(newBlockStart, newBlockEnd);
@@ -95,7 +91,6 @@ describe('04 Subscriber Scaling', function () {
         const collector = new MetricsCollector({ name: label });
         collector.start();
 
-        // Poll all new blocks through the server
         collector.beginOperation('broadcastAll');
         for (let i = 0; i < BLOCK_COUNT; i++) {
             const t = process.hrtime.bigint();
@@ -106,13 +101,12 @@ describe('04 Subscriber Scaling', function () {
         }
         const broadcastMs = collector.endOperation('broadcastAll');
 
-        // Wait for subscribers to receive messages (allow up to 5s)
+        // Wait for subscribers to receive messages (allow up to 2s)
         await new Promise(r => setTimeout(r, 2000));
 
         collector.stop();
         const stats = collector.getStats();
 
-        // Count how many subscribers received all blocks
         let fullReceiveCount = 0;
         let totalReceived = 0;
         let backpressureDrops = 0;
@@ -149,7 +143,6 @@ describe('04 Subscriber Scaling', function () {
             blocksPerSecond: stats.throughput.blocksPerSecond
         };
 
-        // Close all subscribers
         for (const ws of subscribers) {
             try { ws.close(); } catch (e) {}
         }

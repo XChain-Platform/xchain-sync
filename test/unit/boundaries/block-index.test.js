@@ -48,9 +48,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('block_index = 0', function(){
         it('getLastBlock returns 0 (not null) when MAX is 0', async function(){
-            // Simulate: rows[0].block_index is 0, which is not null
-            // The db.js code: rows[0].block_index !== null → Number(0) = 0
-            // We verify the logic via ServerPoller
+            // db.js treats block_index 0 as `!== null`, so it must initialize lastPolledBlock to 0 rather than leaving it unset.
             let broadcaster = { broadcast: sinon.stub(), updateStatus: sinon.stub(), getSubscribers: sinon.stub().returns([]), getSubscriberCount: sinon.stub().returns(0) };
             let log = { recordBlock: sinon.stub().resolves(), pruneFrom: sinon.stub().resolves() };
             let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, { BLOCK_POLL_INTERVAL: 100 }, util);
@@ -96,12 +94,10 @@ describe('Boundary: Block Index Values', function(){
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
 
-            // First poll: initialize
             poller.lastPolledBlock = null;
             await poller._poll();
             assert.strictEqual(poller.lastPolledBlock, 1);
 
-            // Second poll: no new blocks
             await poller._poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
@@ -109,7 +105,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('large block indices', function(){
         it('JS safe integer max (2^53-1) preserved correctly', function(){
-            let safeMax = Number.MAX_SAFE_INTEGER; // 9007199254740991
+            let safeMax = Number.MAX_SAFE_INTEGER;
             assert.strictEqual(Number(safeMax), safeMax);
             assert.strictEqual(safeMax + 1 !== safeMax, true); // still distinct
         });
@@ -152,8 +148,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('client skip logic', function(){
         it('skips block with index <= lastAppliedBlock', function(){
-            // ClientSync._handleBlock: blockIndex <= this.lastAppliedBlock → return
-            // This is tested indirectly through the unit tests, but we verify the comparison
+            // Verifies the comparison ClientSync._handleBlock relies on to skip already-applied blocks.
             let lastApplied = 10;
             assert.strictEqual(10 <= lastApplied, true);  // same block: skipped
             assert.strictEqual(9 <= lastApplied, true);   // earlier: skipped

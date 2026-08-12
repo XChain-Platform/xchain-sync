@@ -76,8 +76,8 @@ class ServerProcess {
         // Must precede the limiters below (they read req.ip): same ordering
         // requirement as api.js's startApi(). Deriving from trustProxyHops
         // rather than a re-declared literal is the whole point of this seam:
-        //  was a proxy-trust bug that a hand-rolled 'false'/unset here
-        // would never have caught.
+        // a hand-rolled 'false'/unset here previously let a proxy-trust bug
+        // through that this real wiring catches.
         app.set('trust proxy', trustProxyHops(this.config.TRUST_PROXY));
         app.use(cors({ origin: '*', methods: ['GET'] }));
 

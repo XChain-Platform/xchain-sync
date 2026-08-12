@@ -61,21 +61,16 @@ describe('E2E: Error Handling & Recovery', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 10);
 
-            // Stop server
             await server.stop();
             server = null;
 
-            // Add blocks while server is down
             await fixtures.seedBlocks(sourceDb, 11, 15);
 
-            // Wait a moment for client to detect disconnect
             await new Promise(r => setTimeout(r, 1000));
 
-            // Restart server
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            // Client should reconnect and catch up
             await waitForReplicaBlock(replicaDb, 15, 20000);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 15);
@@ -94,18 +89,15 @@ describe('E2E: Error Handling & Recovery', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            // First client session: bootstrap
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
             client.stop();
 
-            // Add blocks while client is down
             await fixtures.seedBlocks(sourceDb, 21, 40);
             // Seeded rows are servable only once the poller records them (100/cycle cap).
             await server.pollUntil(40);
 
-            // New client session: incremental catch-up
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.incrementalCatchUp(21);
 
@@ -118,16 +110,14 @@ describe('E2E: Error Handling & Recovery', function() {
         it('server handles missing hub gracefully', async function() {
             this.timeout(15000);
 
-            // The ServerProcess helper doesn't use the hub (direct DB connection),
-            // so we test the HubClient retry logic in isolation by verifying
-            // the server starts fine without hub and serves data correctly.
-
+            // ServerProcess connects to the DB directly rather than through the
+            // hub, so this only confirms the server still serves data with no
+            // hub present; it does not exercise HubClient's own retry logic.
             await fixtures.seedBlocks(sourceDb, 1, 5);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            // Server should be operational
             let axios = require('axios');
             let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 5000 });
             assert.strictEqual(res.data.block_height, 5);
@@ -149,15 +139,13 @@ describe('E2E: Error Handling & Recovery', function() {
 
             let blockCountBefore = await testDb.getRowCount(replicaDb, 'blocks');
 
-            // Force a poll that re-processes existing blocks (simulates duplicate broadcast)
-            // Reset poller to re-broadcast all blocks
+            // Resetting lastPolledBlock forces the poller to re-broadcast blocks
+            // it already sent, simulating a duplicate delivery.
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            // Wait to ensure any duplicate processing completes
             await new Promise(r => setTimeout(r, 2000));
 
-            // Block count should not change (duplicates skipped)
             let blockCountAfter = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blockCountAfter, blockCountBefore);
         });
@@ -172,14 +160,11 @@ describe('E2E: Error Handling & Recovery', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            // Verify server is polling successfully
             let lastBlock = await sourceDb.getLastBlock();
             assert.strictEqual(lastBlock, 5);
 
-            // Add more blocks
             await fixtures.seedBlocks(sourceDb, 6, 10);
 
-            // Wait for server to pick them up
             let axios = require('axios');
             await waitFor(async () => {
                 let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });

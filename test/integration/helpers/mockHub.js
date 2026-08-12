@@ -18,10 +18,8 @@ class MockHub {
         this.configs = {};
     }
 
-    // Set the configs the hub will return
     // configs: array of { coin, network, db_host, db_port, db_name, db_user, db_pass }
     setConfigs(configs) {
-        // Build the nested hub response format
         this.configs = {};
         for (let cfg of configs) {
             if (!this.configs[cfg.coin]) this.configs[cfg.coin] = {};

@@ -23,9 +23,9 @@
  * single lying source cannot forge a quorum of federation signatures, so it
  * cannot make a fabricated state_root pass.
  *
- * The sync-side analogue of the SDK D4 registry
- * (xchain-sdk/src/pinnedCheckpoints.js); kept here because xchain-sync has no
- * xchain-sdk dependency by design. Keyed by "chain:network".
+ * The sync-side analogue of the SDK registry (xchain-sdk/src/pinnedCheckpoints.js),
+ * duplicated here because xchain-sync has no xchain-sdk dependency by design.
+ * Keyed by "chain:network".
  *
  * INERT until populated: every real (chain, network) ships null, so with
  * VERIFY_CHECKPOINT_QUORUM off (the default) AND no pinned set, behavior is
@@ -34,25 +34,21 @@
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
  *
- * Validator ROTATION past the launch epoch: the launch `validators` set above
- * eventually stops signing. `getPinnedCheckpoint` (below) provides the out-of-band
- * SEED checkpoint (a committed state_root + its block/snapshot height) from which a
- * client rolls its trust root FORWARD, proving each successor oracle_publish set
- * against the committed BTC stakes_root and adopting the next checkpoint (spec §7.3,
- * the sync analogue of the SDK light client's followForward). The seed registry is
- * also INERT (null per key) until launch values land; the client-side walk consumes
- * it. Env override: CHECKPOINT_SEED_<CHAIN>_<NETWORK> (JSON, fail-closed).
+ * Validator ROTATION past the launch epoch: the launch set eventually stops
+ * signing, so `getPinnedCheckpoint` below provides the out-of-band SEED checkpoint
+ * (a committed state_root plus its block/snapshot height) from which a client rolls
+ * its trust root FORWARD, proving each successor oracle_publish set against the
+ * committed BTC stakes_root (spec §7.3). That registry is INERT too until launch
+ * values land. Env override: CHECKPOINT_SEED_<CHAIN>_<NETWORK> (JSON, fail-closed).
  *
- * ---- FILL AT LAUNCH --------------------------------------------------------
- * Replace a key's null with the oracle_publish signer set that signs the launch
- * checkpoints, stake-weighted shape per checkpoint.js verifyCheckpoint:
+ * FILL AT LAUNCH: replace a key's null with the oracle_publish signer set that signs
+ * the launch checkpoints, in the stake-weighted shape checkpoint.js verifyCheckpoint
+ * expects:
  *   [ { pubkey: '<64-hex ed25519>', weight: '<canonical amount>', source: '<signer/delegation source>' }, ... ]
- *
  * The SAME change must flip the VERIFY_CHECKPOINT_QUORUM default to true in
- * config.js : a pinned set with the anchor still defaulting off leaves
+ * config.js, because a pinned set with the anchor still defaulting off leaves
  * replicas trusting their source when a trust root is available.
  * test/unit/checkpointQuorumFlagDay.test.js fails until both halves land.
- * ---------------------------------------------------------------------------
  *
  ********************************************************************/
 

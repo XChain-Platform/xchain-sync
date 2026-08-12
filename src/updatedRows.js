@@ -48,37 +48,32 @@
  *     block), keyed by cooldown_end_block in [fromBlock, toBlock]. Forward twin
  *     of ClientRollback's reverse status reset and cooldownCredits.js's forward
  *     refund-credit selection (same maturity-block key).
- *   - invalid_archive stamp on a surviving anchor_actions archive-head (v1/v6) parent row when the
- *     completing v2 chunk of its batch lands in this window and CRC fails. The
- *     parent's action_index is below the window, so the action-scoped stream misses
- *     it. Keyed by the completing v2 chunk's block_index (in [fromBlock, toBlock]).
- *     Forward twin of ClientRollback's reverse 'unverified' reset (which joins on
- *     exactly this predicate). status_id is not hashed raw; it is resolved via
- *     status name by the follower's upsert using the replicated index_statuses table.
- *   - supply refresh on a surviving tokens row (db.createToken / db.updateTokens UPDATE
- *     tokens.supply in place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). The
- *     row's action_index AND last_action_index both stay at the DEPLOY action, below the
- *     cursor, so the action-scoped stream misses every later supply bump. Found via the
- *     ticks touched by a credit / debit / escrow row in this window (those ledger tables
- *     are action-scoped, so they pin the supply-change to a block). Carries the full
- *     current tokens row; the follower's upsert overwrites supply on the PRIMARY-KEY match.
- *     NOT mirrored in stateHash.js: supply is deliberately not in any hash preimage.
+ *   - invalid_archive stamp on a surviving anchor_actions archive-head (v1/v6) parent
+ *     row when the completing v2 chunk of its batch lands in this window and CRC
+ *     fails. The parent's action_index is below the window, so the action-scoped
+ *     stream misses it; this is keyed by the completing chunk's block_index instead.
+ *     Forward twin of ClientRollback's reverse 'unverified' reset. status_id is not
+ *     hashed raw; the follower's upsert resolves it by name through index_statuses.
+ *   - supply refresh on a surviving tokens row (the indexer UPDATEs tokens.supply in
+ *     place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). Both
+ *     action_index and last_action_index stay pinned at the DEPLOY action, below the
+ *     cursor, so the action-scoped stream misses every later supply bump. Found via
+ *     the ticks touched by a credit / debit / escrow row in this window, since those
+ *     ledger tables are action-scoped and pin the supply change to a block.
  *
- * tokens.escrow_action_index IS carried here (the tokens class selects `t.*` and
- * the follower's upsert writes every column), landing the source's own
- * authoritative gate value on the replica. The follower ALSO re-derives it from
- * the already-replicated offer/status tables whenever a payload touches an
- * escrow-relevant table (ClientApplier._maybeRederiveEscrow, the forward-apply
- * counterpart of the reorg re-derive in ClientRollback), so the wire value is a
- * convergent carry and the local derive is the corrective pass, not the sole
- * writer. Note the derive is NOT triggered by updated_rows itself, only by
- * payload.data tables.
+ * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
+ * source's own authoritative gate value lands on the replica. The follower ALSO
+ * re-derives it from the already-replicated offer/status tables whenever a payload
+ * touches an escrow-relevant table (ClientApplier._maybeRederiveEscrow), so the wire
+ * value is a convergent carry and the local derive is the corrective pass rather than
+ * the sole writer. That derive is triggered only by payload.data tables, never by
+ * updated_rows itself.
  *
  ********************************************************************/
 
-// Tables carrying the deactivation_block stamp (value-threshold detection).
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
 
+// Tables carrying the deactivation_block stamp (value-threshold detection).
 const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];
 
 // SLASH amount reductions: each surviving stake/unstake row whose amount was cut
@@ -108,7 +103,7 @@ const POLL_FINALIZE_TABLES = ['polls'];
 // credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
 const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 
-// BET in-place flips ( P4): a surviving bet_feeds row is mutated in place by
+// BET in-place flips: a surviving bet_feeds row is mutated in place by
 // the closed latch (closed_block stamp, end-of-block pass) and by the terminal flip
 // (terminal_block stamp: resolve tx / cancel tx / BET_EXPIRE pass); a surviving bets
 // row is mutated by settlement (settled_block stamp: won/lost/refunded). Each class
@@ -121,18 +116,12 @@ const BET_STATUS_SPECS = [
     { table: 'bets',      stamps: ['settled_block'] }
 ];
 
-// Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
-// Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
-// the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
-//
-//   db              the source Database (indexer dbType only; callers must gate)
-//   fromBlock       inclusive lower block bound of the window
-//   toBlock         inclusive upper block bound of the window
-//   activationDelay frozen per-chain ACTIVATION_DELAY_BLOCKS; null skips the
-//                   deactivation_block class (matching ClientRollback's caution
-//                   when no coin is known) rather than scanning with a wrong delay
-//   conn            optional connection (so a snapshot's REPEATABLE READ view reads
-//                   the updated rows at the same height as the rest of the payload)
+// Returns a { tableName: [rows] } map of non-empty tables. Rows are raw DB rows; the
+// caller wire-encodes binary columns. `db` must be an indexer-dbType Database (callers
+// gate that). A null `activationDelay` SKIPS the deactivation_block class rather than
+// scanning with a wrong delay, matching ClientRollback's caution when no coin is known.
+// Passing `conn` lets a snapshot's REPEATABLE READ view read these at the same height
+// as the rest of its payload.
 async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
@@ -218,11 +207,9 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     // 4. cooldown-maturity status_id flip on surviving unstakes / contract_unstakes.
     //    markCooldownsCompleted flips status_id to 'completed' in place on a row whose
     //    creating action is in an earlier block, so the action-scoped stream misses it.
-    //    The flip lands at the maturity block, falling in [from, to] iff
-    //    cooldown_end_block in [from, to] (no activation-delay offset, unlike the
-    //    deactivation_block stamp). Carries the current row state, mirroring how the
-    //    deactivation_block class carries the surviving stamped row. add() dedups by
-    //    the UNIQUE action_index against any SLASH row for the same unstake.
+    //    The flip lands at the maturity block, so cooldown_end_block in [from, to] is
+    //    the key, with no activation-delay offset unlike the deactivation_block stamp.
+    //    add() dedups by the UNIQUE action_index against any SLASH row for the same row.
     for(let table of COOLDOWN_STATUS_TABLES){
         try {
             let rows = await db.doQuery(
@@ -256,18 +243,14 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     }
 
     // 5. invalid_archive stamp on surviving anchor_actions archive-head parent rows
-    //    (v1 legacy, v6 publisher-bearing; ARCHIVE_HEAD_VERSIONS in stateHash.js,
-    //    ). When the final v2 chunk of a chunked archive batch lands and the
-    //    reassembled blob fails its CRC check, anchor.js stamps the parent
-    //    'invalid_archive' in place. The
-    //    parent's action_index is in an earlier block (chunking spans blocks by design),
-    //    so the action-scoped stream for the completing chunk's block carries the chunk
-    //    row but NOT the parent's flipped status. This class finds those parents via a
-    //    self-join to their completing v2 chunk, keyed by the chunk's block_index in
-    //    [from, to]. Mirrors ClientRollback's reverse 'unverified' reset predicate.
-    //    Carries the full parent row so the follower's upsert refreshes status_id in
-    //    place (INSERT ... ON DUPLICATE KEY UPDATE). Table may not exist on schemas
-    //    without ANCHOR support.
+    //    (v1 legacy, v6 publisher-bearing; ARCHIVE_HEAD_VERSIONS in stateHash.js). When
+    //    the final v2 chunk of a chunked archive batch lands and the reassembled blob
+    //    fails CRC, the parent is stamped 'invalid_archive' in place. Chunking spans
+    //    blocks by design, so the parent's action_index is in an earlier block and the
+    //    action-scoped stream carries the chunk row but not the parent's flipped status.
+    //    The self-join keyed on the completing chunk's block_index mirrors
+    //    ClientRollback's reverse 'unverified' reset predicate. Table may not exist on
+    //    schemas without ANCHOR support.
     try {
         let anchorRows = await db.doQuery(
             "SELECT DISTINCT p.* FROM anchor_actions p " +
@@ -282,41 +265,28 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         // Table/columns may not exist on older source schemas; skip.
     }
 
-    // 6. tokens.supply refresh on surviving token rows. The indexer materialises
-    //    tokens.supply as an in-place UPDATE (db.createToken on DEPLOY/ISSUE/MINT and
-    //    db.updateTokens after order/swap/dispense settlement and STAKE rebalances). The
-    //    row's action_index stays at the DEPLOY action, and last_action_index is also
-    //    written back to that same DEPLOY index (createToken sets both from the first
-    //    valid issuance), so BOTH columns sit below the catch-up cursor: the
-    //    action-scoped stream keyed on action_index never carries the later supply bump.
-    //    Followers therefore served a stale supply (invisible to /status counts and not
-    //    covered by any hash). Supply changes exactly when a credit / debit / escrow row
-    //    is written for the tick, and those ledger tables ARE action-scoped (they ride the
-    //    per-block / catch-up stream). So the set of ticks whose supply moved in this
-    //    window is exactly the set of tick_ids touched by a credit / debit / escrow row
-    //    whose action falls in [from, to]. We carry the CURRENT full tokens row for those
-    //    ticks (SELECT t.* -> the source `id`, which followers replicate verbatim, so the
-    //    follower's INSERT ... ON DUPLICATE KEY UPDATE lands on the matching PRIMARY KEY
-    //    row and overwrites supply to the source's current value). Idempotent: re-sending
-    //    an already-current row is a no-op. Reorg-safe: on rollback the source
-    //    re-materialises supply (rollback.js -> updateTokens) and the next forward window's
-    //    ledger changes re-emit the refreshed row; in-order block apply means a later
-    //    window's row never lands before an earlier one. tokens.supply stays out of the
-    //    consensus block hashes, but since 2026-07-07 this class HAS a state_hash twin:
-    //    buildStateHashData's token_supply class hashes (tick, supply) for the same
-    //    ledger-touched tick set (flag-day gated per chain via
-    //    TOKEN_SUPPLY_STATE_HASH_ACTIVATION), so once armed, a follower that drops this
-    //    upsert halts at the block instead of serving a stale supply.
+    // 6. tokens.supply refresh on surviving token rows. The indexer materialises supply
+    //    as an in-place UPDATE on DEPLOY/ISSUE/MINT, on settlement and on STAKE
+    //    rebalances, while action_index and last_action_index both stay pinned at the
+    //    DEPLOY action, below the catch-up cursor, so the action-scoped stream never
+    //    carries a later supply bump and followers served a stale supply. Supply moves
+    //    exactly when a credit / debit / escrow row is written for the tick, and those
+    //    ledger tables ARE action-scoped, so the ticks touched in [from, to] are exactly
+    //    the set to refresh. Carrying the full current row makes the follower's upsert
+    //    land on the matching PRIMARY KEY and overwrite supply, idempotently. Reorg-safe
+    //    because the source re-materialises supply on rollback and the next forward
+    //    window's ledger changes re-emit the row, and block apply is in order.
+    //    tokens.supply is in no consensus block hash, but it does have a state_hash twin
+    //    (buildStateHashData's token_supply class, flag-day gated per chain), so once
+    //    armed a follower that drops this upsert halts instead of serving stale supply.
     try {
-        // Join each ledger table to `actions` independently and UNION the tick_ids,
-        // rather than UNION ALL-ing the three full tables into a derived table and
-        // joining once. The derived-table form forces MariaDB to materialise every
-        // credits/debits/escrows row before the block-range predicate can apply (it
-        // cannot push `a.block_index BETWEEN ? AND ?` down into the UNION ALL), an
-        // O(total ledger size) scan on every block/catch-up window. Per-branch joins
-        // let the optimiser drive from `actions` (block_index range) into each table
-        // via its action_index index. UNION (not UNION ALL) preserves the original
-        // SELECT DISTINCT semantics, so the emitted tick set is byte-identical.
+        // Join each ledger table to `actions` independently and UNION the tick_ids rather
+        // than UNION ALL-ing the three full tables into a derived table. MariaDB cannot
+        // push `a.block_index BETWEEN ? AND ?` down into a UNION ALL, so the derived-table
+        // form materialises every credits/debits/escrows row first, an O(total ledger)
+        // scan on every window. Per-branch joins let the optimiser drive from `actions`
+        // into each table via its action_index index. UNION, not UNION ALL, preserves the
+        // original SELECT DISTINCT semantics, so the emitted tick set is unchanged.
         let tokenRows = await db.doQuery(
             "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
                 "SELECT c.tick_id FROM credits c JOIN actions a ON a.action_index = c.action_index " +

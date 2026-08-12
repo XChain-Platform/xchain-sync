@@ -11,7 +11,7 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * Unit: coinTicker() normalization for per-chain activation lookups 
+ * Unit: coinTicker() normalization for per-chain activation lookups
  *
  * The sync layer identifies a chain by `cfg.coin`, which arrives as the FULL
  * LOWERCASE NAME ('litecoin'). Every per-chain activation map is keyed
@@ -34,7 +34,7 @@ const assert = require('assert');
 const { coinTicker } = require('../../src/consensus-constants');
 const { isStateCommitmentActive } = require('../../src/state_commitment_activation');
 
-describe('coinTicker() + per-chain activation lookup ', function () {
+describe('coinTicker() + per-chain activation lookup', function () {
 
     describe('normalization', function () {
         it('maps full lowercase chain names to their ticker', function () {
@@ -82,7 +82,7 @@ describe('coinTicker() + per-chain activation lookup ', function () {
             }
         });
 
-        it('the FULL-NAME form silently resolves to OFF (the  bug)', function () {
+        it('the FULL-NAME form silently resolves to OFF (the full-name lookup bug)', function () {
             for (const c of ARMED) {
                 assert.strictEqual(
                     isStateCommitmentActive(c.height, c.network, c.full), false,

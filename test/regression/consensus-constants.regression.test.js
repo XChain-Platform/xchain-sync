@@ -1,6 +1,3 @@
-//  doctrine test-coverage program: regression coverage for
-// src/consensus-constants.js.
-//
 // [regression:p1] The follower's frozen consensus constants are DERIVED from
 // the canonical coin registry precisely so they can never drift from the source
 // indexer (a drift soft-forks the federation). This locks the derivation

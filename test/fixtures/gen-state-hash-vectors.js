@@ -14,9 +14,9 @@
  * conformance lock (sibling of gen-block-hash-vectors.js). It runs the shared
  * buildStateHashData over canned RESOLVED rows but computes the final hash with
  * the REAL xchain-indexer getDataHash, so the expected hash is authentically the
- * indexer's. The committed JSON then locks sync's stateHash.js assembly +
- * utility.getDataHash with NO runtime cross-repo dependency in the unit test.
- * The xchain-e2e-test recompute scenario is the live cross-repo drift guard.
+ * indexer's, and the committed JSON locks stateHash.js assembly + utility.getDataHash
+ * with no runtime cross-repo dependency in the unit test (xchain-e2e-test's
+ * recompute scenario is the live cross-repo drift guard).
  *
  * Run manually (sibling xchain-indexer must be present) and commit the output:
  *   INDEXER_COIN=BTC INDEXER_NETWORK=regtest \
@@ -47,23 +47,23 @@ const COMPLETED_ID    = 7;
 // Surrogate ids are already resolved to canonical strings by the live JOINs, so
 // these model the resolved column set exactly.
 const results = [
-    // --- deactivation_block stamps (value = BLOCK_INDEX + ACTIVATION_DELAY = 1006) ---
+    // deactivation_block stamps (value = BLOCK_INDEX + ACTIVATION_DELAY = 1006)
     [ { action_index: 10, deactivation_block: 1006 } ],   // stakes
     [],                                                   // delegations
     [ { action_index: 11, deactivation_block: 1006 } ],   // contract_stakes
     [],                                                   // contract_delegations
-    // --- SLASH amount cuts ---
+    // SLASH amount cuts
     [ { action_index: 12, amount: '900' } ],              // stakes
     [],                                                   // unstakes
     [],                                                   // contract_stakes
     [ { action_index: 13, amount: '50' } ],               // contract_unstakes
-    // --- v0 request_status flips ---
+    // v0 request_status flips
     [ { action_index: 14, request_status: 'fulfilled', resolved_block: 1000 } ], // attests
     [ { action_index: 15, request_status: 'expired',   resolved_block: 1000 } ], // xcalls
-    // --- cooldown-maturity status flips (status_id resolved) ---
+    // cooldown-maturity status flips (status_id resolved)
     [ { action_index: 16, status: 'completed' } ],        // unstakes
     [ { action_index: 17, status: 'completed' } ],        // contract_unstakes
-    // --- backdated refund credits (capability GAS + contract own-tick, UNION ALL) ---
+    // backdated refund credits (capability GAS + contract own-tick, UNION ALL)
     [ { action_index: 16, address: '1JDogZS6tQcSxwfxhv6XKKjcyicYA4Feev', tick: 'XCHAIN', amount: '1000' },
       { action_index: 17, address: '1FuckButtZ6tQcSxwfxhv6XKKjcyiabcde', tick: 'JDOG',   amount: '500'  } ]
 ];

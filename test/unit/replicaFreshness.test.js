@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// #3904: /status derived lag_blocks as source_height - block_height, and
+// /status derived lag_blocks as source_height - block_height, and
 // source_height falls back to db.getLastBlock(), a MAX(block_index) against the
 // SERVED database. On a node fronting a native SQL replica those are one failure
 // domain: replication stops applying, both heights freeze at the same number,
@@ -24,7 +24,7 @@ function baseRow(){
     return { block_height: 100, source_height: 100, lag_blocks: 0 };
 }
 
-describe('/status replication freshness (#3904)', function(){
+describe('/status replication freshness', function(){
 
     it('withholds lag_blocks when the replication engine says the node is stale', function(){
         let row = applyReplicaFreshness(baseRow(), { replica_stale: true, replica_seconds_behind: null });

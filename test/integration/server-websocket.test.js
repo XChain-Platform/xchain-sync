@@ -40,7 +40,6 @@ describe('Integration: WebSocket Broadcasting', function() {
         log = new TransparencyLog(sourceDb);
         poller = new ServerPoller('bitcoin', 'mainnet', sourceDb, broadcaster, log, config, testDb.util);
 
-        // Create HTTP + WS server
         let app = express();
         server = http.createServer(app);
         wss = new WebSocket.Server({ noServer: true });
@@ -69,7 +68,6 @@ describe('Integration: WebSocket Broadcasting', function() {
         await testDb.truncateAll(sourceDb);
     });
 
-    // Helper: connect a WS client and return {ws, messages}
     function connectWs(chain, network) {
         return new Promise((resolve, reject) => {
             let messages = [];
@@ -80,7 +78,6 @@ describe('Integration: WebSocket Broadcasting', function() {
         });
     }
 
-    // Helper: wait until messages array has at least n entries
     function waitForMessages(messages, n, timeout = 5000) {
         return new Promise((resolve, reject) => {
             let timer = setTimeout(() => reject(new Error('Timeout waiting for ' + n + ' messages, got ' + messages.length)), timeout);

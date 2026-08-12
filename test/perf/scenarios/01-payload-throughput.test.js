@@ -62,7 +62,6 @@ describe('01 Payload Throughput', function () {
         const collector = new MetricsCollector({ name: label, warmupBlocks: 5 });
         collector.start();
 
-        // Process all blocks via manual poll cycles
         let processed = 0;
         while (processed < blockCount) {
             let beforeBlock = await sourceDb.getLastBlock();
@@ -81,7 +80,6 @@ describe('01 Payload Throughput', function () {
                 collector.endBlock(newBlock, { poll: pollMs });
                 processed += blocksThisPoll;
             } else {
-                // No progress, poll again
                 collector.endBlock(startBlock, { poll: pollMs });
             }
         }

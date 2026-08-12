@@ -61,7 +61,6 @@ describe('02 Snapshot Performance', function () {
             const collector = new MetricsCollector({ name: label });
             collector.start();
 
-            // Measure snapshot download
             collector.beginOperation('fullSnapshot');
             const res = await axios.get(
                 server.getUrl() + '/snapshot/indexer/bitcoin/mainnet',
@@ -69,12 +68,10 @@ describe('02 Snapshot Performance', function () {
             );
             const downloadMs = collector.endOperation('fullSnapshot');
 
-            // Measure decompression
             collector.beginOperation('decompress');
             const decompressed = zlib.gunzipSync(res.data);
             const decompressMs = collector.endOperation('decompress');
 
-            // Measure JSON parse
             collector.beginOperation('parse');
             const snapshot = JSON.parse(decompressed.toString());
             const parseMs = collector.endOperation('parse');
@@ -82,7 +79,6 @@ describe('02 Snapshot Performance', function () {
             collector.stop();
             const stats = collector.getStats();
 
-            // Add snapshot-specific metrics
             stats.snapshotMetrics = {
                 compressedBytes: res.data.length,
                 uncompressedBytes: decompressed.length,

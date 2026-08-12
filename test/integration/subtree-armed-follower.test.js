@@ -8,13 +8,13 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// The FOLLOWER at an ARMED height, and a reorg across it .
+// The FOLLOWER at an ARMED height, and a reorg across it.
 //
 // WHAT IS UNTESTED HERE AND WHY IT MATTERS. Stage A's arming was verified on a live
 // chain, but only on the SOURCE: the indexer committed the slot, the root moved, the
 // version flipped. The follower half of the same boundary has never run anywhere,
 // because no indexer-plus-follower venue exists. That absence has already cost
-// something real once (: the follower could not replicate contract_state at
+// something real once (a follower could not replicate contract_state at
 // all under strict mode, live for weeks, found the first time a follower saw such a
 // block), which is the argument for spending the harness on the armed path too rather
 // than only on the shadow window.

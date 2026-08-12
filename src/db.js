@@ -51,7 +51,7 @@ function assertValidIdentifier(table){
 // predicate then has to fail closed on. Twin of the indexer's requireStakeWeight.
 const STAKE_WEIGHT_NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)$/;
 
-// Fail CLOSED on a weightless stake-weight row . The source-keyed weight
+// Fail CLOSED on a weightless stake-weight row. The source-keyed weight
 // producer routes through here instead of resolving a missing weight to '0'. The '0'
 // looks harmless and is not: the source stays in the quorum's dedupe map carrying no
 // stake, so the denominator S shrinks while a signer keeps the full numerator, and a
@@ -118,11 +118,9 @@ class Database {
             queryTimeout:       poolParams.queryTimeout
         };
 
-        // Setup pool of connections
         this.pool = mariadb.createPool(this.connectionPoolParams);
         this.transactionConnection = null;
 
-        // Circuit breaker state
         this.circuitState     = 'closed';
         this.circuitFailures  = 0;
         this.circuitThreshold = 10;
@@ -130,7 +128,6 @@ class Database {
         this.circuitOpenUntil = 0;
     }
 
-    // Verify a database exists
     async verifyDatabase(){
         let connectionParams = {
             host:     this.host,
@@ -173,7 +170,6 @@ class Database {
         }
     }
 
-    // Create a database if it doesn't exist
     async createDatabase(){
         let connectionParams = {
             host:     this.host,
@@ -228,7 +224,8 @@ class Database {
         return true;
     }
 
-    // Create a table from a local SQL file (only used for sync-service-owned tables like sync_meta)
+    // Only for sync-service-owned tables such as sync_meta; replicated tables come
+    // from the source's own DDL.
     async _createTableFromFile(file){
         let dir     = path.join(__dirname, 'sql');
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
@@ -254,7 +251,7 @@ class Database {
     // a column the SERVER refuses is a different thing and fails loudly (see
     // below). DDL auto-commits, so this must run before any snapshot
     // transaction is opened. Returns the number of columns added, and THROWS
-    // when a generated ALTER was refused by the server : the column is
+    // when a generated ALTER was refused by the server: the column is
     // still missing, so every later row carrying it fails with errno 1054, and
     // a swallowed error here is a replica that stalls silently for days.
     // Callers route the throw into their own fail-closed path (ClientSync's
@@ -266,7 +263,7 @@ class Database {
     // downstream tier, a fully-qualified DDL statement executed with no default
     // database is dropped by the downstream Replicate_Do_DB filter and never
     // reaches it, so the self-heal would appear to work here while the tier
-    // below stayed broken .
+    // below stayed broken.
     //
     // NOTE FOR OPERATORS: a replica that stalled BEFORE this fix shipped will
     // not self-heal until it next runs schema replication. If one is wedged on
@@ -333,7 +330,7 @@ class Database {
     // Build the key clause that must accompany an ADD COLUMN for an
     // AUTO_INCREMENT column. MariaDB rejects the bare add with errno 1075
     // ("there can be only one auto column and it must be defined as a key"),
-    // which is what wedged the decoder replicas' pubkeys.id self-heal .
+    // which is what wedged the decoder replicas' pubkeys.id self-heal.
     //
     // The key is taken from the SOURCE DDL so the replica converges on the
     // source's own definition rather than a guess. A source PRIMARY KEY is only
@@ -382,13 +379,11 @@ class Database {
     async replicateSchema(sourceDb){
         console.log('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
 
-        // Get list of all tables in the source database
         let sourceTables = await sourceDb.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
             [sourceDb.dbName]
         );
 
-        // Get list of existing tables in this (target) database
         let existingTables = await this.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
             [this.dbName]
@@ -407,7 +402,6 @@ class Database {
                 continue;
             }
 
-            // Get the CREATE TABLE DDL from the source
             let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
             if(ddlRows.length === 0) continue;
 
@@ -424,7 +418,7 @@ class Database {
             // Table already exists on the replica: don't recreate it, but
             // propagate any columns the source has added since it was created.
             if(existingSet.has(tableName)){
-                // A refused ALTER now throws . Keep the sweep going over the
+                // A refused ALTER now throws. Keep the sweep going over the
                 // remaining tables so one bad table does not hide the rest, but record
                 // it and rethrow after the sweep: the caller must not read a partial
                 // schema convergence as a complete one.
@@ -556,7 +550,7 @@ class Database {
               definition: 'CHAR(64) NULL AFTER `block_merkle_root`' },
             { table: 'state_tree_roots', column: 'contract_state_root_shadow',
               definition: 'CHAR(64) NULL AFTER `contract_state_root`' },
-            // Stage B's shadow column ( B3), same reasoning as the two
+            // Stage B's shadow column, same reasoning as the two
             // above: state_tree_roots is follower-derived, so an aged replica
             // never gains it from the definition file and the first shadow-window
             // block would fail its INSERT with errno 1054.
@@ -606,7 +600,6 @@ class Database {
         // stripped-state origin cloned the stripped DDL and have no automated path.
         // Detect a missing AUTO_INCREMENT on the id column and restore it here.
         // Idempotent: MODIFY to the same definition is a no-op; table absent = skip.
-        // #3713
         let autoIncTables = [
             'price_snapshots',
             'cross_chain_matches',
@@ -877,7 +870,6 @@ class Database {
         return connection;
     }
 
-    // Release a connection
     async releaseConnection(){
         if(this.transactionConnection != null){
             await this.transactionConnection.release();
@@ -885,7 +877,6 @@ class Database {
         }
     }
 
-    // Begin a SQL transaction
     async beginTransaction(){
         if(this.transactionConnection != null)
             await this.releaseConnection();
@@ -899,7 +890,6 @@ class Database {
         }
     }
 
-    // Roll back a SQL transaction
     async rollbackTransaction(){
         if(this.transactionConnection != null){
             // Log the DB name and type so a rollback entry in the journal is
@@ -915,7 +905,6 @@ class Database {
         }
     }
 
-    // Commit a SQL transaction
     async commitTransaction(){
         if(this.transactionConnection != null){
             try {
@@ -1042,7 +1031,6 @@ class Database {
         return await this.doQuery(query, args, conn, { rethrow: true });
     }
 
-    // Get the last block index from the blocks table
     async getLastBlock(conn){
         let query = "SELECT MAX(block_index) AS block_index FROM blocks";
         let rows  = await this.doQuery(query, null, conn);
@@ -1051,7 +1039,7 @@ class Database {
         return null;
     }
 
-    // Read the replication engine's own view of this node's freshness (#3904).
+    // Read the replication engine's own view of this node's freshness.
     // getLastBlock above reads the SERVED database, so on a node fronting a native
     // SQL replica the source and served heights are one failure domain: replication
     // stops applying, both freeze at the same number, and lag_blocks publishes 0
@@ -1263,7 +1251,6 @@ class Database {
     async getBlockLeafRows(block_index, conn, network, coin){
         let q;
         let ledger = { credits: [], debits: [], escrows: [] };
-        // credits
         q = `SELECT c.action_index, a1.address AS address, t1.tick AS tick, c.amount
              FROM credits c
                 INNER JOIN actions        a  ON (a.action_index=c.action_index)
@@ -1272,7 +1259,6 @@ class Database {
              WHERE a.block_index=?
              ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
         ledger.credits = await this.doQuery(q, [block_index], conn);
-        // debits
         q = `SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount
              FROM debits d
                 INNER JOIN actions        a  ON (a.action_index=d.action_index)
@@ -1281,7 +1267,6 @@ class Database {
              WHERE a.block_index=?
              ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
         ledger.debits = await this.doQuery(q, [block_index], conn);
-        // escrows
         q = `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount
              FROM escrows e
                 INNER JOIN actions        a  ON (a.action_index=e.action_index)
@@ -1300,7 +1285,6 @@ class Database {
         for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-        // actions
         q = `SELECT a.action_index, a.tx_index, ia.action AS action
              FROM actions a
                 LEFT JOIN index_actions ia ON (ia.id=a.action_id)
@@ -1308,7 +1292,6 @@ class Database {
              ORDER BY a.action_index ASC`;
         let actions = await this.doQuery(q, [block_index], conn);
         let contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
-        // new deployments
         q = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
              FROM contracts c
                 INNER JOIN actions a ON (a.action_index=c.action_index)
@@ -1331,7 +1314,6 @@ class Database {
                 ) latest ON cs.id = latest.max_id
              ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
         contracts.state = await this.doQuery(q, [block_index], conn);
-        // executions
         q = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
              FROM contract_executions ce
                 INNER JOIN actions a ON (a.action_index=ce.action_index)
@@ -1348,7 +1330,6 @@ class Database {
              WHERE a.block_index=?
              ORDER BY em.execution_index ASC, em.position ASC`;
         contracts.emissions = await this.doQuery(q, [block_index], conn);
-        // deposits
         q = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
              FROM deposits d
                 INNER JOIN actions a ON (a.action_index=d.action_index)
@@ -1358,7 +1339,6 @@ class Database {
              WHERE a.block_index=?
              ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
         contracts.deposits = await this.doQuery(q, [block_index], conn);
-        // withdrawals
         q = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
              FROM withdrawals w
                 INNER JOIN actions a ON (a.action_index=w.action_index)
@@ -1405,7 +1385,6 @@ class Database {
         return await this.doQuery(query, [startBlock, endBlock]);
     }
 
-    // Get the first action_index at or after a given block
     async getFirstActionIndex(block_index, conn){
         let query = `SELECT action_index FROM actions a WHERE a.block_index >= ? ORDER BY a.action_index ASC LIMIT 1`;
         let rows  = await this.doQuery(query, [block_index], conn);
@@ -1651,7 +1630,7 @@ class Database {
         return rows;
     }
 
-    // ── Advisory content-parity reads  ─────────────────────────────
+    // Advisory content-parity reads.
     //
     // Every row of `table` inside a block window, reached through the SAME scope
     // join the per-block stream uses, so what the checksum sees is exactly what
@@ -1744,7 +1723,7 @@ class Database {
     // block, so the payload builder can fetch only those. Without it _buildBlockPayload
     // issues getActionScopedRows once per table in the lifecycle registry (86 today),
     // empty ones included, and that count rises with every replicated table added
-    // ().
+    // over time.
     //
     // The existence predicate is getActionScopedRows' predicate verbatim (same INNER
     // JOIN on action_index, same a.block_index = ?), so "absent from this Set" means
@@ -1810,7 +1789,6 @@ class Database {
         return await this.doQuery(query, [block_index], conn);
     }
 
-    // Get transactions for a given block
     async getTransactions(block_index, conn){
         let query = "SELECT * FROM transactions WHERE block_index = ? ORDER BY tx_index ASC";
         return await this.doQuery(query, [block_index], conn);
@@ -1855,8 +1833,8 @@ class Database {
     // new family lands in this repo, so on any replica whose source predates that
     // family every poll used to raise ER_NO_SUCH_TABLE, log a multi-line SqlError,
     // and swallow it. Expected, tolerated, and indistinguishable in the journal
-    // from a real fault: 11,542 of them on the origin-host BTC regtest replica over
-    // two days, for tables the SOURCE does not have either .
+    // from a real fault: 11,542 of them on a production BTC regtest replica over
+    // two days, for tables the SOURCE does not have either.
     //
     // doQueryStrict, so a failure to LIST is never silently read as "nothing
     // exists": that would empty table_counts and make an incomplete replica look
@@ -1871,7 +1849,7 @@ class Database {
     // Get total row count for a table.
     //
     // doQueryStrict, NOT doQuery, and the reason is a live defect rather than
-    // tidiness . Outside a transaction doQuery is fail-soft: it logs the
+    // tidiness. Outside a transaction doQuery is fail-soft: it logs the
     // SqlError and returns [], so `rows[0].cnt` then threw a TypeError with NO
     // errno. Every caller that classifies the failure by errno was therefore
     // reading a different error than the one the database raised, and the one
@@ -1880,7 +1858,7 @@ class Database {
     // schema heal that CREATEs the missing table. A TypeError carries no errno,
     // so that heal could never fire from here, and the replica stayed missing the
     // table forever while logging the same SqlError on every status poll.
-    // Observed on the origin-host BTC regtest replica: `bet_resolves` absent and
+    // Observed on a production BTC regtest replica: `bet_resolves` absent and
     // erroring 11,542 times over two days with the heal wired and unreachable.
     //
     // Strict here is safe for the tolerant callers too: /status wraps this in a
@@ -1907,13 +1885,11 @@ class Database {
         return await this.doQuery(query);
     }
 
-    // Truncate a table
     async truncateTable(table){
         assertValidIdentifier(table);
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
     }
 
-    // Close all connections in the pool
     async close(){
         try {
             await this.pool.end();

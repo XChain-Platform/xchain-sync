@@ -13,7 +13,7 @@
  *
  **********************************************************************
  *
- *  - per-block fan-out load test against a REAL MariaDB.
+ * Per-block fan-out load test against a REAL MariaDB.
  *
  * ServerPoller assembles each indexer block payload from ~113 sequential
  * queries; every one takes a pooled connection. This runner replays that
@@ -147,7 +147,7 @@ function fmt(v){
         console.error('Missing DB env (' + PREFIX + 'USER / ' + PREFIX + 'NAME or DB_USER / DB_NAME).');
         process.exit(2);
     }
-    console.log(' pool fan-out load: dbType=' + DBTYPE + ' schema=' + CONF.name +
+    console.log('Pool fan-out load: dbType=' + DBTYPE + ' schema=' + CONF.name +
                 ' blocks=' + BLOCKS + ' queries/block=' + QUERIES_PER_BLOCK);
     console.log('    pool   median(ms)      min      max   pinned  pollerAcquire+query(ms)');
     let results = [];

@@ -43,7 +43,7 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 // rollback lists (replicaRollbackTables) already have. A new registry entry
 // with one of those modes is excluded automatically; before this derivation a
 // new local table passed every guard and silently rode consensus snapshots
-// unless someone also hand-edited this Set (#2271). The three names appended
+// unless someone also hand-edited this Set. The three names appended
 // after the spread have no registry entry (mempool_transactions is a
 // decoder-DB table; sync_halt / sync_state are replica-created control
 // tables) and are the ONLY permitted non-registry members; rollback-coverage
@@ -65,7 +65,7 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 //    snapshots). A serving node does not converge them via sync: the explorer serves
 //    the consensus-relevant ones (state_checkpoints, capability_snapshots,
 //    cross_chain_matches) from the MANDATORY co-located hub DB on the same server,
-//    with no local-mirror fallback (fails loud if the hub DB is absent; #4138).
+//    with no local-mirror fallback (it fails loud if the hub DB is absent).
 //    IMPORTANT: a follower node that lacks a co-located hub DB (hub-less validator)
 //    will have these five tables empty. This is by design and not a replication gap:
 //    these rows are hub-driven state that the node must receive from its OWN hub
@@ -248,7 +248,7 @@ class SnapshotBuilder {
 
         this.pageSize = 10000;
 
-        // In-flight long-lived snapshot streams per Database instance .
+        // In-flight long-lived snapshot streams per Database instance.
         // ServerPoller and the /snapshot routes share ONE Database (pool sized
         // per dbType, see poolSizing.js) per chain:network:dbType, and each full or
         // incremental snapshot pins a pool connection for the whole stream
@@ -321,7 +321,7 @@ class SnapshotBuilder {
     // a busy source produces mixed-block payloads that fail validator hash
     // verification on bootstrap.
     async streamFullSnapshot(db, res){
-        // Concurrency gate : reject with 503 instead of pinning yet
+        // Concurrency gate: reject with 503 instead of pinning yet
         // another pool connection when the per-Database stream cap is reached.
         if(!this._acquireSnapshotSlot(db, res)) return;
         try {
@@ -470,7 +470,7 @@ class SnapshotBuilder {
     //     Without this, an incrementally-caught-up follower would never receive
     //     events rows for the gap and would silently drift behind the source.
     async streamIncrementalSnapshot(db, sinceBlock, res, coin, opts){
-        // Concurrency gate : same per-Database stream cap as the full
+        // Concurrency gate: same per-Database stream cap as the full
         // snapshot; both hold a REPEATABLE READ pool connection end-to-end.
         if(!this._acquireSnapshotSlot(db, res)) return;
         try {
@@ -682,7 +682,7 @@ class SnapshotBuilder {
                     // append-only on an AUTO_INCREMENT id yet absent from lookupSet: its
                     // replication class is 'snapshot', not 'stream:index', so the branch
                     // above cannot reach it and it fell to the bundled `SELECT *` below,
-                    // materializing the whole audit log per catch-up (). Page it
+                    // materializing the whole audit log per catch-up. Page it
                     // by the same id cursor, which emits a byte-identical "events":[...]
                     // key, so no client, protocol, or schema change is implied. Unlike the
                     // lookupSet tables it is NOT synced out of band, so it must still be
@@ -982,7 +982,7 @@ class SnapshotBuilder {
     // response so the client rebuilds it from a single point-in-time image.
     // Decoder-only. Returns {schema_version, max_tx, max_addr, has_more, rows:[...]}.
     //
-    // Deliberately NOT paged (item #2285): the keyset-cursor stability rationale
+    // Deliberately NOT paged: the keyset-cursor stability rationale
     // (borrowed from streamTableRowsById) only holds for INSERT-only tables, and
     // dispensers is exactly the table it does not hold for - the decoder
     // soft-expires rows in place (UPDATE expired_block_index), so a soft-expire

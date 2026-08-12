@@ -51,7 +51,6 @@ describe('05 Sustained Sync', function () {
 
         const gen = createGenerator(sourceDb);
 
-        // Seed initial blocks for bootstrap
         await gen.seedBlockRange(1, 10);
 
         server = createServer(sourceDb, SERVER_PORT);
@@ -71,21 +70,17 @@ describe('05 Sustained Sync', function () {
         while (Date.now() < endTime) {
             const batchEnd = currentBlock + BLOCKS_PER_BATCH - 1;
 
-            // Seed a batch of blocks
             collector.beginOperation('seedBatch');
             await gen.seedBlockRange(currentBlock, batchEnd);
             collector.endOperation('seedBatch');
 
-            // Wait for client to sync all blocks
             collector.beginBlock(currentBlock);
             const t = process.hrtime.bigint();
 
-            // Poll server to detect new blocks
             for (let i = 0; i < BLOCKS_PER_BATCH; i++) {
                 await server.poll();
             }
 
-            // Wait for replica to catch up
             try {
                 await waitForReplicaBlock(replicaDb, batchEnd, 30000);
             } catch (e) {
@@ -128,7 +123,6 @@ describe('05 Sustained Sync', function () {
         assert.ok(heapGrowth < 50,
             `Heap grew by ${heapGrowth}MB during sustained sync (possible memory leak)`);
 
-        // Verify replica is consistent
         const replicaBlock = await replicaDb.getLastBlock();
         assert.ok(replicaBlock >= currentBlock - BLOCKS_PER_BATCH,
             'Replica should have kept up with source');

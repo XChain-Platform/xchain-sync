@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// Guards the sync replica's deactivation_block re-NULL mirror (#3976 / #4110):
+// Guards the sync replica's deactivation_block re-NULL mirror:
 // on a reorg the source indexer re-NULLs deactivation_block stamps that orphaned
 // UNSTAKE / DELEGATE-revoke actions wrote in place on surviving parent rows
 // (xchain-indexer/src/rollback.js). The thin replica must mirror those four
@@ -40,7 +40,7 @@ function deactivationResets(db){
         typeof c.args[0] === 'string' && c.args[0].includes('deactivation_block = NULL'));
 }
 
-describe('deactivation_block sync-mirror (#3976/#4110)', function(){
+describe('deactivation_block sync-mirror', function(){
 
     afterEach(function(){ sinon.restore(); });
 

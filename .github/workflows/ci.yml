@@ -12,7 +12,7 @@ on:
 
 jobs:
   ci:
-    uses: XChain-Platform/.github/.github/workflows/ci-reusable.yml@aae44352361242d334234593c39d88be007d2ed3 # pin: XChain-Platform/.github @ master 2026-07-08; bump deliberately 
+    uses: XChain-Platform/.github/.github/workflows/ci-reusable.yml@aae44352361242d334234593c39d88be007d2ed3 # pin: XChain-Platform/.github @ master 2026-07-08; bump deliberately
     # Override the Node version for a repo if ever needed:
     # with:
     #   node-version: "20"
@@ -114,8 +114,8 @@ jobs:
       # Integration tier (DB-backed; previously un-run in CI because it lives in the
       # tier the shared job skips). Seeds the canonical indexer schema (via
       # XCHAIN_INDEXER_SQL_PATH) into the source-db service. test:integration:ci runs
-      # every integration suite EXCEPT five quarantined as red at HEAD (validated on
-      # test-host 2026-06-22): client-bootstrap / client-live-sync / lifecycle fail on
+      # every integration suite EXCEPT five quarantined as red at HEAD (validated
+      # 2026-06-22): client-bootstrap / client-live-sync / lifecycle fail on
       # the new fail-closed schema-apply halt (in-flight sync work), client-rollback
       # on a missing db.getStatusId helper, emissions-parity on its own hardcoded
       # 30s before-all timeout. Un-quarantine each in package.json as it goes green.
@@ -131,7 +131,7 @@ jobs:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
         run: npm run test:integration:ci
 
-  # Cross-repo drift guards (SD-1 / ): this repo vendors the canonical
+  # Cross-repo drift guards: this repo vendors the canonical
   # coin registry from xchain-hub, and per-repo CI cannot see sibling repos, so
   # a drifted vendored copy previously shipped green (the byte-identity checks
   # ran only in the monorepo's manual bin/ci-all.sh). This job recreates the
@@ -172,7 +172,7 @@ jobs:
             console.log("consensus pin conformance OK (testnet, regtest)");
           '
 
-  # Coverage ratchet : re-run the unit suite under c8 and fail if line or
+  # Coverage ratchet: re-run the unit suite under c8 and fail if line or
   # branch coverage drops below this repo's floor in bin/coverage-thresholds.json
   # (mirrored into the `coverage:check` npm script). Catches silent coverage
   # regression the pass/fail gate cannot see: a change that keeps every test green

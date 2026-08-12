@@ -103,12 +103,10 @@ describe('Boundary: Source Array Parsing', function(){
     describe('_bootstrapRotateSources rotation (one round, returns boolean)', function(){
         it('does not recurse when only 1 source', async function(){
             let cs = createSync('http://s1');
-            // Stub axios to fail
             let axios = require('axios');
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs._bootstrapRotateSources();
             assert.strictEqual(ok, false);
-            // Should not rotate (only 1 source)
             assert.deepStrictEqual(cs.sources, ['http://s1']);
             axios.get.restore();
         });

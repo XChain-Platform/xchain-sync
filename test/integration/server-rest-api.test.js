@@ -55,9 +55,9 @@ describe('Integration: REST API', function() {
 
         // Trust-proxy and rate-limiter wiring come from src/api.js itself (not a
         // re-declaration), so a change to either seam is exercised here the same
-        // way it is in production.  was exactly this class of bug: a
-        // hand-rolled app that never set 'trust proxy' or mounted a limiter would
-        // pass this suite while the real service resolved every caller to one IP.
+        // way it is in production. A hand-rolled app that never set 'trust proxy'
+        // or mounted a limiter would pass this suite while the real service
+        // resolved every caller to one IP, which happened before this fix.
         let app = express();
         app.set('trust proxy', trustProxyHops(false)); // matches production default: no reverse proxy trusted
         app.use(cors({ origin: '*', methods: ['GET'] }));
@@ -428,15 +428,15 @@ describe('Integration: REST API', function() {
         });
     });
 
-    //  regression coverage, driven through THIS suite's own app-building
-    // path rather than only the dedicated security suite: boots a second,
-    // disposable server on the exact trustProxyHops/createRateLimiters imported
-    // at the top of this file, so a regression in either seam fails here too,
-    // not only in apiRateLimitProxy.security.test.js. Before this harness
+    // Regression coverage for proxy-trust/rate-limit wiring, driven through THIS
+    // suite's own app-building path rather than only the dedicated security suite:
+    // boots a second, disposable server on the exact trustProxyHops/createRateLimiters
+    // imported at the top of this file, so a regression in either seam fails here
+    // too, not only in apiRateLimitProxy.security.test.js. Before this harness
     // derived its wiring from src/api.js it built its own app with no trust-proxy
     // setting and no limiter at all, so this class of bug could not have failed
     // any test in this file.
-    describe('Proxy-trust rate-limit wiring ', function() {
+    describe('Proxy-trust rate-limit wiring', function() {
         let proxyServer;
 
         afterEach(async function() {

@@ -33,10 +33,6 @@ const fixtures      = require('../../e2e/helpers/fixtures');
 const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
 
-// -------------------------------------------------------------------------
-// Connection constants: proxied ports from docker-compose.chaos.yml
-// -------------------------------------------------------------------------
-
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
 const SOURCE_PROXY_PORT  = parseInt(process.env.SOURCE_PROXY_PORT  || '33060', 10);
 const REPLICA_PROXY_PORT = parseInt(process.env.REPLICA_PROXY_PORT || '33061', 10);
@@ -47,17 +43,9 @@ const CHAOS_DB_PASS      = 'xchain-fixture-throwaway';
 const SOURCE_DB_NAME  = 'xchain_chaos_source';
 const REPLICA_DB_NAME = 'xchain_chaos_replica';
 
-// -------------------------------------------------------------------------
-// Database singletons
-// -------------------------------------------------------------------------
-
 let sourceDb       = null;   // through proxy (33060), used by ServerProcess
 let replicaDb      = null;   // through proxy (33061), used by ClientProcess
 let sourceDbDirect = null;   // direct (33065), for seeding while proxy is down
-
-// -------------------------------------------------------------------------
-// Database lifecycle
-// -------------------------------------------------------------------------
 
 async function bootstrapDatabases() {
     console.log('    [chaos setup] Creating databases through proxied ports...');
@@ -101,10 +89,6 @@ async function resetDatabases() {
     if (replicaDb) await testDb.truncateAll(replicaDb);
 }
 
-// -------------------------------------------------------------------------
-// Server / Client process creation
-// -------------------------------------------------------------------------
-
 function createServer(port, chain, network) {
     return new ServerProcess(sourceDb, port, chain || 'bitcoin', network || 'mainnet');
 }
@@ -124,37 +108,20 @@ function createClient(serverUrl, opts = {}) {
     );
 }
 
-// -------------------------------------------------------------------------
-// Data seeding
-// -------------------------------------------------------------------------
-
-/**
- * Seed blocks into the source DB through the proxied connection.
- * Use this when the source proxy is enabled (normal case).
- */
+// Use seedSourceBlocks when the source proxy is enabled (normal case);
+// use seedSourceDirect when it's disabled, e.g. during CE-SRC-05, CE-SYNC-04.
 async function seedSourceBlocks(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDb, startBlock, endBlock, opts);
 }
 
-/**
- * Seed blocks into the source DB through the direct connection.
- * Use this when the source proxy is disabled (e.g., CE-SRC-05, CE-SYNC-04).
- */
 async function seedSourceDirect(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDbDirect, startBlock, endBlock, opts);
 }
 
-/**
- * Delete blocks from a given height in the source DB.
- * Simulates a chain reorganization on the source side.
- */
+// Simulates a chain reorg on the source side.
 async function deleteSourceBlocksFrom(blockIndex) {
     return fixtures.deleteBlocksFrom(sourceDb, blockIndex);
 }
-
-// -------------------------------------------------------------------------
-// HTTP helpers for server status checks
-// -------------------------------------------------------------------------
 
 function httpGet(urlPath, opts = {}) {
     const base = opts.baseUrl;
@@ -176,10 +143,7 @@ function httpGet(urlPath, opts = {}) {
     });
 }
 
-/**
- * Check if the server process is alive by hitting its status endpoint.
- * Returns true if the server responds (any HTTP status), false on ECONNREFUSED.
- */
+// Returns true if the server responds with any HTTP status, false on ECONNREFUSED.
 async function isServerAlive(serverUrl) {
     try {
         const res = await httpGet('/status', { baseUrl: serverUrl, timeout: 5000 });
@@ -189,14 +153,7 @@ async function isServerAlive(serverUrl) {
     }
 }
 
-// -------------------------------------------------------------------------
-// Recovery and monitoring helpers
-// -------------------------------------------------------------------------
-
-/**
- * Wait until the replica DB reaches a given block height.
- * Returns elapsed ms, or -1 if timeout expires.
- */
+// Returns elapsed ms once the replica DB reaches expectedBlock, or -1 on timeout.
 async function waitForSyncRecovery(expectedBlock, timeoutMs = 60000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -213,10 +170,8 @@ async function waitForSyncRecovery(expectedBlock, timeoutMs = 60000) {
     return -1;
 }
 
-/**
- * Wait until the replica DB reaches a given block height.
- * Uses the direct source connection to check the source as well.
- */
+// Same as waitForSyncRecovery, but polls through a freshly opened connection
+// to the replica DB instead of the shared singleton.
 async function waitForSyncRecoveryDirect(expectedBlock, timeoutMs = 60000) {
     const start = Date.now();
     const directReplica = await testDb.createDb(
@@ -240,10 +195,8 @@ async function waitForSyncRecoveryDirect(expectedBlock, timeoutMs = 60000) {
     }
 }
 
-/**
- * Poll replica block height at an interval and collect results.
- * Returns a stop function. Results are pushed to the provided array.
- */
+// Polls replica block height at an interval, pushing results to the provided
+// array, and returns a stop function.
 function startReplicaPoller(results, intervalMs = 500) {
     const poll = async () => {
         try {
@@ -270,10 +223,6 @@ function startReplicaPoller(results, intervalMs = 500) {
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-// -------------------------------------------------------------------------
-// Exports
-// -------------------------------------------------------------------------
 
 module.exports = {
     bootstrapDatabases,

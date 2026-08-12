@@ -118,7 +118,7 @@ describe('ClientRollback', function(){
             );
             // Block-scoped deletes cover both blockTables and the index id tables
             // (index_addresses / index_tickers), which are also pruned by block_index >=, plus
-            // the one validator_rewards delete keyed on derive_block_index , whose
+            // the one validator_rewards delete keyed on derive_block_index, whose
             // column name ends in the same substring this filter matches on.
             assert.strictEqual(blockDeletes.length,
                 rollback.blockTables.length + rollback.indexTables.length + 1);
@@ -304,7 +304,7 @@ describe('ClientRollback', function(){
             // ORIGINAL earn-block SURVIVES the reorg (reward_block_index < reorg); byte-mirrors the source.
             assert.ok(/d\.block_index\s*>=\s*\?/.test(restore.args[0]));
             assert.ok(/d\.reward_block_index\s*<\s*\?/.test(restore.args[0]));
-            // : a loser MATERIALIZED inside the orphaned range must stay deleted, or the
+            // A loser MATERIALIZED inside the orphaned range must stay deleted, or the
             // replica restores an orphan the source (and a from-genesis replay) does not have.
             assert.ok(/d\.reward_derive_block_index IS NULL OR d\.reward_derive_block_index\s*<\s*\?/.test(restore.args[0]),
                 'restore must also require the loser materialization block to survive the reorg');
@@ -316,11 +316,11 @@ describe('ClientRollback', function(){
             assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'reconcile restore must precede the validator_rewards delete');
         });
 
-        //  / . An  derived anchor reward is EARNED at the checkpoint's
-        // snapshot_block but MATERIALIZED at a later BTC block, so the block_index loop above
-        // cannot reach it for a reorg landing between the two heights. The replica must drop
-        // exactly what the source drops or the two disagree on SUM(validator_rewards).
-        it('deletes validator_rewards by derive_block_index as well, mirroring the source ', async function(){
+        // A derived anchor reward is EARNED at the checkpoint's snapshot_block but MATERIALIZED
+        // at a later BTC block, so the block_index loop above cannot reach it for a reorg landing
+        // between the two heights. The replica must drop exactly what the source drops or the
+        // two disagree on SUM(validator_rewards).
+        it('deletes validator_rewards by derive_block_index as well, mirroring the source', async function(){
             await rollback.rollback(100);
             let calls = db.doQuery.getCalls();
             let del = calls.find(c => /DELETE FROM validator_rewards WHERE derive_block_index\s*>=\s*\?/.test(c.args[0]));
@@ -451,11 +451,11 @@ describe('ClientRollback', function(){
         });
     });
 
-    // : the replica used to run ONLY the dangling-tick markets sweep, so a
-    // market whose pair kept both ticks but lost its only order/trade to the reorg was
-    // deleted on the source and retained here. markets rides the snapshot as an
-    // UPSERT-only full dump, so no later replication could remove the stale zeroed
-    // OHLCV row that xchain-explorer then served.
+    // The replica used to run ONLY the dangling-tick markets sweep, so a market whose
+    // pair kept both ticks but lost its only order/trade to the reorg was deleted on
+    // the source and retained here. markets rides the snapshot as an UPSERT-only full
+    // dump, so no later replication could remove the stale zeroed OHLCV row that
+    // xchain-explorer then served.
     describe('pair-scoped markets rollback (IDX-2 mirror)', function(){
         // Answer the affected-pair collection with one pair, everything else empty, so
         // the survival probes find no surviving orders/order_matches for it.

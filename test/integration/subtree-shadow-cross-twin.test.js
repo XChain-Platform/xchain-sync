@@ -8,13 +8,13 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// SPV sub-tree shadow window, the CROSS-TWIN leg (spec §7 step 1, /).
+// SPV sub-tree shadow window, the CROSS-TWIN leg (spec §7 step 1).
 //
 // WHAT WAS MISSING AND WHY A LIVE VENUE WAS NOT ACTUALLY THE ONLY WAY TO GET IT.
 // The spec's shadow window asks for two things. Its SOURCE-SIDE half ran on three
 // real regtest ledgers and is green. Its cross-twin half was recorded as blocked on
-// "an indexer plus a follower on one chain", a venue that does not exist on
-// devhost, and the spec then narrowed honestly what that venue would actually
+// "an indexer plus a follower on one chain", a venue that does not exist in this
+// environment, and the spec then narrowed honestly what that venue would actually
 // prove: the reader is a byte-identical twin and cannot diverge, and the journal is
 // source-authored and REPLICATED rather than recomputed, so its VALUES cannot
 // diverge either. What is genuinely unproven is **replication TIMING**: that the

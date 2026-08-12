@@ -36,51 +36,28 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
- *   - dispensers (decoder)            soft-expired (UPDATE expired_block_index) with
- *                                     hard-purge deferred to purgeExpiredDispensers;
- *                                     neither mutation rides the per-block stream, so it
- *                                     is NOT per-block-streamed. It IS listed in the
- *                                     decoder `special` bucket so it joins the /status
- *                                     completeness count, but that count is a post-replace
- *                                     equality sanity check, NOT a drift detector: a
- *                                     soft-expire UPDATE leaves both counts equal, and a
- *                                     hard-purge DELETE leaves the replica AHEAD, which
- *                                     _verifyTableCounts never reports (it pushes a
- *                                     mismatch on remote > local only). Parity rests
- *                                     entirely on the apply-side reconcile:
+ *   - dispensers (decoder)            soft-expired by UPDATE and hard-purged later by
+ *                                     purgeExpiredDispensers; neither mutation rides the
+ *                                     per-block stream. It IS in the decoder `special`
+ *                                     bucket so it joins the /status completeness count,
+ *                                     but that count is a post-replace equality sanity
+ *                                     check, never a drift detector: a soft-expire leaves
+ *                                     the counts equal and a hard-purge leaves the replica
+ *                                     AHEAD, which _verifyTableCounts does not report.
+ *                                     Parity rests entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
- *                                     ClientSync._reconcileDispensers, gated by
- *                                     DISPENSERS_RECONCILE_EVERY / DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
- *   - cross_chain_calls,              hub-mirrored (hub_db_sync), NOT produced by
- *     cross_chain_matches,            block processing. Pushed/retracted by the hub
- *     oracle_prices,                  (pushpricereorg / pushdexreorg) out-of-band with
- *     capability_snapshots,           block apply, so they cannot ride the per-block
- *     state_checkpoints               stream. They are NEVER replicated by xchain-sync:
- *                                     excluded from the per-block stream, the incremental
- *                                     catch-up, AND the full/incremental snapshots
- *                                     (SnapshotBuilder.OPERATOR_LOCAL_TABLES). On a source
- *                                     node they converge via hub_db_sync. The serving node
- *                                     does NOT serve these from any local replica copy:
- *                                     the explorer reads the consensus-relevant ones
- *                                     (state_checkpoints, capability_snapshots,
- *                                     cross_chain_matches) authoritatively from the
- *                                     MANDATORY co-located hub DB on the same server. There
- *                                     is no local-mirror fallback: a serving node without a
- *                                     co-located hub DB fails loud (explorer db.js
- *                                     _checkpointSource / _matchSource throw, and the
- *                                     explorer asserts the hub DB at startup) rather than
- *                                     silently serving stale/empty local rows (#4138).
- *   - icons                           replication: 'local' (OPERATOR_LOCAL): never
- *                                     leaves the node. NEVER replicated by xchain-sync:
- *                                     excluded from the per-block stream, the incremental
- *                                     catch-up, AND the full/incremental snapshots
- *                                     (SnapshotBuilder.OPERATOR_LOCAL_TABLES), not a
- *                                     snapshot ride-along.
- *   - price_snapshots                 replication: 'hub-mirror': carried by the hub
- *                                     (hub_db_sync), never by xchain-sync in any channel
- *                                     (stream, incremental catch-up, or snapshots), same
- *                                     posture as the cross_chain_* / oracle_prices group
- *                                     above.
+ *                                     ClientSync._reconcileDispensers.
+ *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
+ *     cross_chain_matches,            processing, and pushed or retracted by the hub out
+ *     oracle_prices,                  of band with block apply, so they cannot ride the
+ *     capability_snapshots,           per-block stream. xchain-sync NEVER replicates them
+ *     state_checkpoints,              on any channel, snapshots included. A serving node
+ *     price_snapshots                 does not fall back to a local mirror either: the
+ *                                     explorer reads the consensus-relevant ones from the
+ *                                     MANDATORY co-located hub DB and fails loud without
+ *                                     it, rather than serving stale local rows.
+ *   - icons                           replication 'local': never leaves the node, on any
+ *                                     channel, and is not a snapshot ride-along.
  *
  ********************************************************************/
 
@@ -100,37 +77,23 @@ const lifecycle = require('./tableLifecycle');
 const TOPOLOGY = {
 
     // Decoder schema: 9 tables, much smaller surface area than indexer.
-    // mempool_transactions is intentionally excluded (non-deterministic across
-    // nodes; see xchain-sync-decoder-db-decisions).
+    // mempool_transactions is intentionally excluded, being non-deterministic
+    // across nodes.
     decoder: {
-        // Block-scoped tables (key off block_index directly)
         blockScoped:  ['blocks', 'transactions'],
-        // Tx-scoped tables (key off tx_index -> transactions.block_index).
-        // dispensers is deliberately NOT per-block-streamed: per-block replication
-        // captures only rows *inserted* in a block (via the tx_index->block_index
-        // join), but the decoder also soft-expires dispensers (UPDATE
-        // expired_block_index) and defers the hard-purge to purgeExpiredDispensers.
-        // Neither mutation rides the block stream, so streaming inserts alone would
-        // let a follower's dispensers count drift away from the source. dispensers
-        // is instead listed in `special` below, where it converges through the
-        // periodic full-table reconcile; the count it joins there cannot detect
-        // that UPDATE/DELETE drift (see the note on that bucket).
+        // Keyed off tx_index -> transactions.block_index. dispensers is deliberately
+        // absent: that join captures only rows INSERTED in a block, while the decoder
+        // also soft-expires and later hard-purges dispensers off-stream, so streaming
+        // inserts alone would let a follower's count drift. It rides `special` instead.
         txScoped:     ['transaction_outputs'],
-        // Decoder doesn't have action-scoped tables
         actionScoped: [],
-        // Append-only lookup tables that may grow as new blocks are processed.
-        // events is operational/logging; included so consumers see decoder activity.
+        // Append-only lookups that grow as blocks are processed. events is
+        // operational/logging, included so consumers can see decoder activity.
         index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
-        // Replicated-for-completeness-counting but NOT extracted by ServerPoller's
-        // per-scope loops (ServerPoller reads only blockScoped/txScoped/actionScoped/
-        // index). dispensers lives here so it enters the /status row-count
-        // completeness check (getReplicatedTables) without being streamed per block:
-        // it converges via full snapshot + the periodic re-dump/replace reconcile,
-        // which is the ONLY thing keeping it in parity. The count is a post-replace
-        // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
-        // the replica ahead (_verifyTableCounts flags remote > local only) and a
-        // soft-expire UPDATE leaves counts equal, so neither can ever fire, and
-        // _incrementalCatchUp excludes the table on every non-reconcile cycle.
+        // Counted for completeness but NOT read by ServerPoller's per-scope loops.
+        // dispensers converges only through the full snapshot plus the periodic
+        // re-dump/replace reconcile, and _incrementalCatchUp excludes it on every
+        // non-reconcile cycle; see the header note on why its count detects nothing.
         special:      ['dispensers']
     },
 
@@ -163,9 +126,9 @@ function getReplicatedTables(dbType){
     return [...new Set(all)];
 }
 
-// The advisory content-parity plan for a dbType : the replicated tables
-// whose CONTENT (not merely their row count) a follower can prove against the
-// source, each paired with the bound its checksum window uses.
+// The advisory content-parity plan for a dbType: the replicated tables whose
+// CONTENT (not merely their row count) a follower can prove against the source,
+// each paired with the bound its checksum window uses.
 //
 // Coverage is the per-block replicated set minus the two exclusion classes the
 // registry declares (src/tableLifecycle.js CONTENT_PARITY_*): the operator
@@ -207,9 +170,8 @@ function contentParityPlan(dbType){
 
 // Every replicated table that is NOT in the content-parity plan, mapped to the
 // reason it is out. Exists so the coverage guard can assert the complement is
-// exactly the two declared exclusion classes and nothing has silently fallen
-// through: a replicated table that is neither checked nor knowingly excluded is
-// the defect  was raised for.
+// exactly the two declared exclusion classes: a replicated table that is neither
+// checked nor knowingly excluded is the defect this whole check exists to catch.
 function contentParityExclusions(dbType){
     let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
     let mutable = new Set(lifecycle.contentParityMutableTables());
@@ -222,7 +184,7 @@ function contentParityExclusions(dbType){
     return out;
 }
 
-// Per-block replicated tables that do NOT exist in a schema .
+// Per-block replicated tables that do NOT exist in a schema.
 //
 // `present` is the Set of local base-table names from db.listExistingTables().
 // Every apply path tolerates MariaDB errno 1146 so an older replica schema
@@ -244,20 +206,17 @@ function missingReplicatedTables(present, dbType){
 }
 
 // The cursor column for id-ordered paging of an append-only lookup table
-// (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged). Almost
-// every lookup table has an AUTO_INCREMENT `id` PK and pages by it. The decoder
-// `pubkeys` table is the special case: its PRIMARY KEY is `address_id` (an FK into
-// index_addresses.id), which is NOT monotonic with respect to INSERT order. A
-// pubkeys row is inserted at first-SPEND, but its address_id was assigned earlier
-// at first-SEEN, so a freshly inserted row can carry an address_id BELOW the
-// replica's current high-water and would be permanently skipped by an address_id
-// cursor (an indexer getDecoderBlockData() LEFT JOIN then resolves source_pubkey to
-// NULL -> consensus divergence; #4413). pubkeys therefore pages by the surrogate
-// AUTO_INCREMENT `id` (added in src/sql/pubkeys.sql + the
-// 2026-06-17-pubkeys-add-monotonic-id migration), which increases with insert
-// (first-spend) order. That `id` is a replication cursor only and is never hashed.
-// All cursor columns are now monotonic and the tables are INSERT-only, so
-// `<col> > cursor ORDER BY <col>` is a stable cursor.
+// (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged).
+//
+// It is always the AUTO_INCREMENT `id`, and the decoder `pubkeys` table is why that
+// is stated rather than assumed: its PRIMARY KEY is `address_id`, which is NOT
+// monotonic with INSERT order, because a pubkeys row is inserted at first-SPEND while
+// its address_id was assigned earlier at first-SEEN. An address_id cursor therefore
+// skips a fresh row that lands below the replica's high-water mark permanently, and
+// the indexer's LEFT JOIN then resolves source_pubkey to NULL, which is a consensus
+// divergence. pubkeys carries a surrogate AUTO_INCREMENT `id` for exactly this, used
+// as a replication cursor only and never hashed. Every cursor column is monotonic and
+// every such table is INSERT-only, so `<col> > cursor ORDER BY <col>` is stable.
 function lookupCursorColumn(table){
     // eslint-disable-next-line no-unused-vars
     return 'id';

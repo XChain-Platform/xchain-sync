@@ -43,16 +43,13 @@ class SyncService {
         let hubEndpoints = HubClient.parseEndpoints(config);
         this.hubClient = new HubClient(hubEndpoints);
 
-        // Database pools per chain/network/dbType:
-        //   Map<"chain:network:dbType", { db, config, dbType }>
-        // dbType is one of: 'indexer', 'decoder'
+        // Map<"chain:network:dbType", { db, config, dbType }>, dbType being
+        // 'indexer' or 'decoder'. The pollers/syncs maps use the same key.
         this.databases = new Map();
 
-        // Active pollers/syncs per chain/network/dbType
         this.pollers = new Map();
         this.clientSyncs = new Map();
 
-        // Shared components
         this.broadcaster    = null;
         this.snapshotBuilder = null;
         this.hashVerifier   = new HashVerifier();
@@ -61,7 +58,7 @@ class SyncService {
         // polling. api.js listens BEFORE start() runs and start() can sit in
         // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
         // getChains() is empty and /health's per-chain loop finds nothing to
-        // degrade on: the probe read healthy while nothing was syncing ().
+        // degrade on, so the probe read healthy while nothing was syncing.
         this.ready = false;
     }
 
@@ -159,7 +156,7 @@ class SyncService {
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
-                // Client mode: create replica database with same name using client DB credentials
+                // The replica keeps the source's db_name but uses the client's own creds.
                 db = new Database(
                     this.config['REPLICA_DB_HOST'],
                     this.config['REPLICA_DB_PORT'],
@@ -184,10 +181,10 @@ class SyncService {
                         await db.replicateSchema(sourceDb);
                     }
                 } catch(e){
-                    // A column self-heal the server REFUSED is not an unreachable source
-                    // : the schema really is behind and the /schema fetch will not
-                    // fix it, so it must not be filed under the reachability message. Say so
-                    // loudly and let ClientSync's schema apply record the durable halt.
+                    // A column self-heal the server REFUSED is not an unreachable source:
+                    // the schema really is behind and the /schema fetch will not fix it, so
+                    // it must not be filed under the reachability message. Say so loudly and
+                    // let ClientSync's schema apply record the durable halt.
                     if(e && e.columnFailures){
                         console.error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
                             ' left columns missing on the replica: ' + e.message);
@@ -257,8 +254,6 @@ class SyncService {
             assertBootstrapDepthChains(this.config, this.getChains());
         }
 
-        // Start components for newly discovered chains.
-        // Both server and client modes now support indexer + decoder DBs.
         if(newChains.length > 0){
             for(let { key, db, config: cfg } of newChains){
                 if(this.config['SYNC_MODE'] === 'server'){
@@ -302,10 +297,9 @@ class SyncService {
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
-        // Start polling in background (fire and forget; runs indefinitely).
-        // A throw here means this chain's poller is permanently dead, which is
-        // invisible at the /status endpoint (stale block_height, live timestamp).
-        // Log the full error and exit so the container restart policy surfaces it.
+        // Fire and forget: a throw here means this chain's poller is permanently dead,
+        // which /status cannot show (stale block_height under a live timestamp), so log
+        // the full error and exit and let the container restart policy surface it.
         poller.start().catch(e => {
             console.error('Poller crashed for ' + key + '; exiting for restart:', e);
             process.exit(1);
@@ -404,8 +398,7 @@ class SyncService {
         return this.snapshotBuilder;
     }
 
-    // Get the database for a chain/network/dbType (used by api.js for status/snapshot endpoints).
-    // dbType defaults to 'indexer' for callers that haven't been updated to be dbType-aware yet.
+    // dbType defaults to 'indexer' for callers that are not yet dbType-aware.
     getDatabase(chain, network, dbType){
         let type = dbType || 'indexer';
         let key = chain + ':' + network + ':' + type;
@@ -429,8 +422,7 @@ class SyncService {
         return chains;
     }
 
-    // Get client sync state for a chain/network/dbType (client mode only).
-    // Returns an object with null values for fields not yet observed.
+    // Client mode only; fields not yet observed come back null rather than absent.
     getClientSyncState(chain, network, dbType){
         let type = dbType || 'indexer';
         let key  = chain + ':' + network + ':' + type;
@@ -442,7 +434,7 @@ class SyncService {
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
             truncated:     sync ? sync.isTruncated() : false,
             bootstrapBase: sync ? sync.getBootstrapBase() : null,
-            // Multi-source Byzantine quorum surface .
+            // Multi-source Byzantine quorum surface.
             sourceQuorum:     sync ? sync.getSourceQuorum() : null,
             sourcesConfigured: sync ? sync.getConfiguredSourceCount() : null,
             sourcesActive:    sync ? sync.getActiveSourceCount() : null,
@@ -463,9 +455,8 @@ class SyncService {
         return this.pollers.get(chain + ':' + network + ':' + (dbType || 'indexer')) || null;
     }
 
-    // Get the transparency log for a chain/network. Indexer-only: the decoder
-    // DB does not maintain a transparency log (see decoder-DB architecture
-    // decisions: skip TransparencyLog for decoder).
+    // Indexer-only: decoder content is deterministic from the coin node, so decoder
+    // DBs deliberately maintain no transparency log.
     getTransparencyLog(chain, network){
         let key = chain + ':' + network + ':indexer';
         let entry = this.databases.get(key);

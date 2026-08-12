@@ -1,9 +1,8 @@
-//  doctrine test-coverage program: unit coverage for
-// src/state_key_collation_activation.js. Gates the contract-state state_key
-// binary-collation flip that changes the contract_hash preimage, so an ungated
-// or mis-resolved threshold forks against deployed nodes. Pins the per-chain
-// resolution order ('<COIN>:<network>' first, then bare network) and the
-// fail-closed handling of unknown chains.
+// Gates the contract-state state_key binary-collation flip that changes the
+// contract_hash preimage, so an ungated or mis-resolved threshold forks
+// against deployed nodes. Pins the per-chain resolution order
+// ('<COIN>:<network>' first, then bare network) and the fail-closed handling
+// of unknown chains.
 
 const assert = require('assert');
 const {

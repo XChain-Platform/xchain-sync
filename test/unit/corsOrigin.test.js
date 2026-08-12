@@ -22,7 +22,7 @@
 // only ever reads cfg, so the fix lives at the config seam and these tests drive
 // getConfig() rather than process.env directly. A test that called
 // parseCorsOrigin itself would still pass if config.js went back to the raw var.
-// Twin of the encoder, hub, indexer, tracker and sdk suites .
+// Twin of the encoder, hub, indexer, tracker and sdk suites.
 
 const assert  = require('assert');
 const express = require('express');

@@ -50,17 +50,14 @@ describe('E2E: Full Lifecycle', function() {
         it('bootstraps replica from server snapshot with correct data', async function() {
             this.timeout(30000);
 
-            // Seed source with 50 blocks
             await fixtures.seedBlocks(sourceDb, 1, 50);
 
-            // Start server and client
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.bootstrap();
 
-            // Verify replica has all data
             let replicaBlock = await replicaDb.getLastBlock();
             assert.strictEqual(replicaBlock, 50);
 
@@ -68,11 +65,9 @@ describe('E2E: Full Lifecycle', function() {
             let replicaBlockCount = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(replicaBlockCount, sourceBlockCount);
 
-            // Verify hashes at last block
             await assertHashesMatch(sourceDb, replicaDb, 50);
 
-            // Verify credits synced
-            // Full parity oracle: byte-identical tables + recompute conformance
+            // Full parity oracle: byte-identical tables + recompute conformance.
             await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
@@ -89,16 +84,13 @@ describe('E2E: Full Lifecycle', function() {
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.start();
 
-            // Add blocks 21-25 to source
             await fixtures.seedBlocks(sourceDb, 21, 25);
 
-            // Wait for server to poll and client to receive
             await waitForReplicaBlock(replicaDb, 25, 15000);
 
             let replicaBlock = await replicaDb.getLastBlock();
             assert.strictEqual(replicaBlock, 25);
 
-            // Verify new blocks present
             await assertBlockExists(replicaDb, 21);
             await assertBlockExists(replicaDb, 25);
         });
@@ -116,7 +108,6 @@ describe('E2E: Full Lifecycle', function() {
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.start();
 
-            // Insert blocks one at a time with small delays
             for (let i = 11; i <= 60; i++) {
                 await fixtures.seedBlocks(sourceDb, i, i);
                 if (i % 10 === 0) {
@@ -146,10 +137,8 @@ describe('E2E: Full Lifecycle', function() {
 
             await waitForReplicaBlock(replicaDb, 10);
 
-            // Wait idle period
             await new Promise(r => setTimeout(r, 3000));
 
-            // Replica should still be at block 10
             let replicaBlock = await replicaDb.getLastBlock();
             assert.strictEqual(replicaBlock, 10);
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 10);
@@ -170,10 +159,8 @@ describe('E2E: Full Lifecycle', function() {
 
             await waitForReplicaBlock(replicaDb, 10);
 
-            // Idle period
             await new Promise(r => setTimeout(r, 2000));
 
-            // Add new blocks
             await fixtures.seedBlocks(sourceDb, 11, 15);
 
             await waitForReplicaBlock(replicaDb, 15);

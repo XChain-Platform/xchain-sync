@@ -56,23 +56,18 @@ class HashVerifier {
         };
     }
 
-    // Advisory: compare local vs remote per-table content checksums (NON-consensus,
-    // ). Both sides are BlockHasher.computeTableContentChecksums results over
-    // the SAME window and the same published bounds.
+    // Advisory: compare local vs remote per-table content checksums (NON-consensus).
+    // Both sides are BlockHasher.computeTableContentChecksums results over the SAME
+    // window and the same published bounds.
     //
-    // The comparison is deliberately gated on EQUAL ROW COUNTS, and that gate is what
-    // makes the signal trustworthy rather than noisy:
-    //
-    //   - counts differ  -> a completeness gap or a bound the two sides read a beat
-    //     apart (a source one block ahead has already inserted or deleted inside the
-    //     window). Reported as SKIPPED, never as a mismatch: incompleteness is what
-    //     the /status row-count check exists for, and the source having advanced is
-    //     not a defect at all.
-    //   - table on one side only -> same reasoning, skipped with its own reason so an
-    //     operator can tell "the source has rows here and we have none" from a
-    //     genuine content fork.
-    //   - counts equal, digests differ -> CONTENT DIVERGENCE. This is the case no
-    //     other check on the follower can see, and the only one reported.
+    // Gating on EQUAL ROW COUNTS is what makes the signal trustworthy rather than
+    // noisy. Differing counts, or a table present on one side only, mean a
+    // completeness gap or a bound the two sides read a beat apart (a source one block
+    // ahead has already inserted or deleted inside the window); those are reported as
+    // SKIPPED with a reason, never as a mismatch, because incompleteness is what the
+    // /status row-count check exists for. Equal counts with differing digests is
+    // CONTENT DIVERGENCE, the case no other follower check can see, and the only one
+    // reported.
     //
     // Returns { match, blockHeight, compared, mismatches: [...], skipped: [...] }.
     // The caller logs + counts a mismatch and CONTINUES; it must never halt on this.
@@ -105,20 +100,16 @@ class HashVerifier {
         };
     }
 
-    // Verify hash chain continuity between a stored previous block and a new payload
-    // prevHashes: { ledger_hash, actions_hash, contract_hash } from the client's last applied block
-    // payload: incoming block event with hashes
-    // Returns { valid: bool, reason: string|null }
+    // prevHashes is { ledger_hash, actions_hash, contract_hash } from the client's last
+    // applied block; returns { valid, reason: string|null }.
     verifyChainContinuity(prevBlockIndex, prevHashes, payload){
-        // If no previous block, can't verify continuity (first block after bootstrap)
+        // No previous block means the first block after bootstrap, nothing to chain to.
         if(prevBlockIndex === null || prevHashes === null)
             return { valid: true, reason: null };
 
-        // Guard against null/undefined payload
         if(!payload || payload.block_index === undefined || payload.block_index === null)
             return { valid: false, reason: 'Invalid payload: missing block_index' };
 
-        // The new block should be exactly prevBlockIndex + 1 for continuity
         if(payload.block_index !== prevBlockIndex + 1){
             return {
                 valid: false,
@@ -126,16 +117,11 @@ class HashVerifier {
             };
         }
 
-        // Hash chain verification: the indexer includes previous_hash in each block's hash
-        // computation, so if we verify the hash chain across our stored blocks, we can detect
-        // any tampering. However, we can't directly verify the previous_hash embedding without
-        // recomputing the hash from raw data (which we don't have on the client side).
-        //
-        // Instead, we rely on:
-        // 1. Cross-source comparison (two honest sources produce identical hashes)
-        // 2. The hash chain property (any modification cascades to all subsequent hashes)
-        //
-        // The continuity check here just verifies sequential block ordering.
+        // Sequential ordering is ALL this verifies. The indexer folds previous_hash into
+        // each block's hash, but confirming that embedding would mean recomputing from
+        // raw data the client does not hold. Tamper detection therefore rests on the
+        // cross-source comparison (two honest sources produce identical hashes) plus the
+        // chain property that any modification cascades into every later hash.
         return { valid: true, reason: null };
     }
 }

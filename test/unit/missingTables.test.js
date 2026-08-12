@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// Silent-partial-replication visibility .
+// Silent-partial-replication visibility.
 //
 // Every apply path tolerates MariaDB errno 1146 so a replica whose schema lags
 // its source does not wedge on a table the source has gained. The cost is that
@@ -38,7 +38,7 @@ function presentExcept(dbType, absent){
     return new Set(getReplicatedTables(dbType).filter(t => !skip.has(t)));
 }
 
-describe('missingReplicatedTables ', function(){
+describe('missingReplicatedTables', function(){
 
     it('returns an empty array when the schema carries every replicated table', function(){
         let present = new Set(getReplicatedTables('indexer'));
@@ -76,7 +76,7 @@ describe('missingReplicatedTables ', function(){
     });
 });
 
-describe('ClientSync._warnMissingTables ', function(){
+describe('ClientSync._warnMissingTables', function(){
 
     function makeSync(dbOverrides, dbType){
         let db = Object.assign({
@@ -183,7 +183,7 @@ describe('ClientSync._warnMissingTables ', function(){
     });
 });
 
-describe('/status missing_tables ', function(){
+describe('/status missing_tables', function(){
 
     // api.js reads SYNC_MODE once at require time, so each mode gets its own
     // freshly-loaded copy of the module.

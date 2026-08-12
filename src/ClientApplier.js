@@ -97,7 +97,7 @@ class ClientApplier {
             // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
             'sync_meta',
             // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent (item 4622).
+            // full-dump re-send on an incremental catch-up idempotent.
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
             // reward_type, round_reference). The recovery-redriven collector
@@ -113,7 +113,7 @@ class ClientApplier {
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
         // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values (4622).
+        // STALE row, so they must UPSERT to overwrite with the source values.
         this.upsertFullDumpTables = new Set([
             'markets',
             'attest_validator_stats'
@@ -128,9 +128,9 @@ class ClientApplier {
         // has deleted rows and let re-application renumber them, the replica's sequence
         // is permanently offset from the source's, and every later apply collides on
         // the same PK forever (ER_DUP_ENTRY 1062), aborting the whole transaction and
-        // freezing the replica while it still reports halted:false (item 808:
-        // litecoin/mainnet/indexer, ~1,400 identical failures on `Duplicate entry
-        // '27681' for key 'PRIMARY'`).
+        // freezing the replica while it still reports halted:false. That was observed
+        // on a production litecoin/mainnet replica as ~1,400 identical failures on
+        // `Duplicate entry '27681' for key 'PRIMARY'`.
         //
         // Neither existing escape hatch fits `blocks`. INSERT IGNORE would SKIP the
         // block, leaving the replica silently short a consensus-relevant row with no
@@ -151,7 +151,6 @@ class ClientApplier {
         ]);
     }
 
-    // Apply a single block payload from a WebSocket event
     async applyBlock(payload){
         // Clear any prior block's computed roots up front: on an early return
         // (malformed payload or an already-applied duplicate) ClientSync must NOT
@@ -451,7 +450,6 @@ class ClientApplier {
         }
     }
 
-    // Apply an incremental snapshot
     async applyIncrementalSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 

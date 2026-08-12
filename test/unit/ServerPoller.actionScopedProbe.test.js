@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 /*********************************************************************
- * ServerPoller: the action-scoped non-empty-table probe ().
+ * ServerPoller: the action-scoped non-empty-table probe.
  *
  * _buildBlockPayload used to call getActionScopedRows once per table in the
  * lifecycle registry (86 today), empty ones included, so the per-block

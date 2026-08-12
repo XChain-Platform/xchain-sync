@@ -113,7 +113,6 @@ class ClientRollback {
         let timer = this.util.startTimer();
         console.log('Starting indexer rollback to block ' + block_index + '...');
 
-        // Get the first action_index at or after the given block
         let firstActionIndex = await this.db.getFirstActionIndex(block_index);
 
         // Truncation floor, read BEFORE the transaction opens (getSyncState may run its
@@ -259,7 +258,7 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // BET in-place flip resets ( P4): the updated_rows BET classes
+                // BET in-place flip resets: the updated_rows BET classes
                 // carried surviving bet_feeds / bets rows latched, terminal-flipped or
                 // settled in the now-orphaned range; the action-scoped delete below
                 // cannot un-flip them. Mirrors xchain-indexer/src/rollback.js's BET
@@ -384,7 +383,7 @@ class ClientRollback {
                 // frozen consensus reward constant per round, so INSERT IGNORE is value-stable and
                 // idempotent whether or not the source's forward DELETE reached this replica. Runs
                 // BEFORE the generic delete so the log rows still exist. A loser whose
-                // MATERIALIZATION block (reward_derive_block_index, ) is itself inside the
+                // MATERIALIZATION block (reward_derive_block_index) is itself inside the
                 // orphaned range is NOT restored: its earn-block survives, but a replay to
                 // reorg_block-1 never derived it, so restoring it would mint an orphan.
                 try {
@@ -559,7 +558,7 @@ class ClientRollback {
             }
 
             // Reset an anchor batch's surviving archive-head parent (v1/v6,
-            // ARCHIVE_HEAD_VERSIONS in stateHash.js, ) stamped 'invalid_archive' by an
+            // ARCHIVE_HEAD_VERSIONS in stateHash.js) stamped 'invalid_archive' by an
             // orphaned final chunk, mirror of xchain-indexer rollback.js. When the last v2
             // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
             // check, the source stamps the parent (in an earlier, surviving block)
@@ -588,7 +587,6 @@ class ClientRollback {
                 }
             }
 
-            // Delete from action-scoped data tables
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
                     try {
@@ -642,7 +640,6 @@ class ClientRollback {
                 if(e.errno !== 1146) throw e;
             }
 
-            // Delete from block-scoped tables
             for(let table of this.blockTables){
                 try {
                     await this.db.doQuery("DELETE FROM `" + table + "` WHERE block_index >= ?", [block_index]);
@@ -655,8 +652,8 @@ class ClientRollback {
             }
 
             // validator_rewards MATERIALIZATION-block delete, mirror of
-            // xchain-indexer/src/rollback.js . The loop above scopes on block_index,
-            // which for a reward is its EARN block. The  BTC-side anchor/archive
+            // xchain-indexer/src/rollback.js. The loop above scopes on block_index,
+            // which for a reward is its EARN block. The BTC-side anchor/archive
             // derivation earns at the checkpoint's SNAPSHOT_BLOCK but writes the row while
             // processing a later BTC block, stamped derive_block_index, so a reorg into that
             // gap orphans the block that minted the reward while leaving its earn-block below
@@ -842,7 +839,6 @@ class ClientRollback {
                 //</CROSS-CHAIN-MIRROR-REORG-DELETE>
             }
 
-            // Delete from sync_meta transparency log
             try {
                 await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
             } catch(e){

@@ -14,16 +14,13 @@ let sourceDb  = null;
 let replicaDb = null;
 let source2Db = null;
 
-// Global setup: create databases and seed schema
 async function globalSetup(opts = {}) {
     console.log('    [e2e setup] Creating test databases...');
 
-    // Create source database with full indexer schema
     sourceDb = await testDb.createDatabase(testDb.SOURCE_DB_NAME);
     await testDb.seedSchema(sourceDb);
     console.log('    [e2e setup] Source database ready: ' + testDb.SOURCE_DB_NAME);
 
-    // Create replica database with full indexer schema
     replicaDb = await testDb.createDatabase(
         testDb.REPLICA_DB_NAME,
         testDb.REPLICA_DB_HOST,
@@ -48,7 +45,6 @@ async function globalSetup(opts = {}) {
     }
 }
 
-// Global teardown: drop databases and close pools
 async function globalTeardown() {
     console.log('    [e2e teardown] Dropping test databases...');
     if (sourceDb)  await sourceDb.close();

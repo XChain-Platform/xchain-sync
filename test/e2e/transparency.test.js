@@ -80,11 +80,10 @@ describe('E2E: Transparency Log', function() {
             assert.strictEqual(res.data.total, 20);
             assert.strictEqual(res.data.results.length, 20);
 
-            // Results are ordered DESC; first result is block 20
+            // Results are ordered DESC; first result is block 20.
             assert.strictEqual(Number(res.data.results[0].block_index), 20);
             assert.strictEqual(Number(res.data.results[19].block_index), 1);
 
-            // Each entry should have all three hashes
             for (let entry of res.data.results) {
                 assert.ok(entry.ledger_hash, 'Entry should have ledger_hash');
                 assert.ok(entry.actions_hash, 'Entry should have actions_hash');
@@ -92,7 +91,6 @@ describe('E2E: Transparency Log', function() {
                 assert.ok(entry.logged_at, 'Entry should have logged_at');
             }
 
-            // Verify hashes match source DB
             let block10Entry = res.data.results.find(e => Number(e.block_index) === 10);
             let sourceHash = await sourceDb.getBlockHashRow(10);
             assert.strictEqual(block10Entry.ledger_hash, sourceHash.ledger_hash);
@@ -109,13 +107,10 @@ describe('E2E: Transparency Log', function() {
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
-            // The poller's default init skips history (production semantic);
-            // for transparency we need recordBlock to fire for the pre-seeded
-            // blocks, so reset the cursor and force a poll cycle.
+            // Same pre-seeded-history poller-cursor reset as 8.1 above.
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
                     server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
@@ -124,14 +119,11 @@ describe('E2E: Transparency Log', function() {
                 return res.data.total >= 20;
             }, 15000);
 
-            // Simulate reorg at block 18
             await fixtures.deleteBlocksFrom(sourceDb, 18);
             await server.poll();
 
-            // Add new blocks 18-22
             await fixtures.seedBlocks(sourceDb, 18, 22, { creditAmount: '7777' });
 
-            // Poll to process new blocks
             for (let i = 0; i < 10; i++) {
                 await server.poll();
                 await new Promise(r => setTimeout(r, 200));
@@ -150,10 +142,9 @@ describe('E2E: Transparency Log', function() {
                 { timeout: 5000 }
             );
 
-            // Should have 22 entries (17 original + 5 new)
+            // 22 = 17 surviving originals + 5 replacements.
             assert.strictEqual(res.data.total, 22);
 
-            // Entries 1-17 should still exist
             let block5Entry = res.data.results.find(e => Number(e.block_index) === 5);
             assert.ok(block5Entry, 'Block 5 entry should still exist');
         });
@@ -167,13 +158,10 @@ describe('E2E: Transparency Log', function() {
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
-            // The poller's default init skips history (production semantic);
-            // for transparency we need recordBlock to fire for the pre-seeded
-            // blocks, so reset the cursor and force a poll cycle.
+            // Same pre-seeded-history poller-cursor reset as 8.1 above.
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
                     server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
@@ -222,7 +210,6 @@ describe('E2E: Transparency Log', function() {
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            // Wait until the epoch root is committed (root/latest returns non-null)
             await waitFor(async () => {
                 let res = await axios.get(
                     server.getUrl() + '/transparency/indexer/bitcoin/mainnet/root/latest',
@@ -231,7 +218,6 @@ describe('E2E: Transparency Log', function() {
                 return res.data.epoch !== null;
             }, 15000);
 
-            // Fetch the latest root
             let rootRes = await axios.get(
                 server.getUrl() + '/transparency/indexer/bitcoin/mainnet/root/latest',
                 { timeout: 5000 }
@@ -239,7 +225,6 @@ describe('E2E: Transparency Log', function() {
             assert.strictEqual(Number(rootRes.data.epoch), 1);
             assert.ok(rootRes.data.merkle_root, 'should have a merkle_root');
 
-            // Fetch inclusion proof for an interior block
             let proofRes = await axios.get(
                 server.getUrl() + '/transparency/indexer/bitcoin/mainnet/proof/50',
                 { timeout: 5000 }
@@ -250,7 +235,6 @@ describe('E2E: Transparency Log', function() {
             assert.ok(Array.isArray(proofRes.data.proof), 'proof should be an array');
             assert.strictEqual(proofRes.data.verified, true);
 
-            // The proof's merkleRoot must match what /root/latest reports
             assert.strictEqual(proofRes.data.merkleRoot, rootRes.data.merkle_root);
         });
     });
@@ -259,7 +243,6 @@ describe('E2E: Transparency Log', function() {
         it('returns null epoch and merkle_root before any blocks are recorded', async function() {
             this.timeout(15000);
 
-            // No blocks seeded; start server against an empty database
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 

@@ -25,8 +25,7 @@
  *     tables, infra tables, and three-hash transparency log
  *   - 'decoder':           simpler payload with transactions + tx-scoped
  *     tables (transaction_outputs). No actions, no transparency log
- *     (decoder content is deterministic from the coin node; see
- *     xchain-sync-decoder-db-decisions memory).
+ *     (decoder content is deterministic from the coin node).
  *
  ********************************************************************/
 
@@ -39,7 +38,7 @@ const { isStateCommitmentActive } = require('./state_commitment_activation');
 const { SCHEMA_VERSION } = require('./schema-version');
 
 // How many recently broadcast block hashes to retain in memory for the
-// net-forward reorg walk-back (item 4830). Comfortably above the source
+// net-forward reorg walk-back. Comfortably above the source
 // indexer's MAX_ROLLBACK_DEPTH (100) so a deep same-interval reorg can be
 // walked back one height per poll against the pre-reorg hash we recorded,
 // rather than against a fresh (post-reorg) source read that always matches.
@@ -70,7 +69,7 @@ class ServerPoller {
         // broadcast routing, payload `chain:` fields, and logging all use it. See
         // coinTicker: passing the full name here made the gate resolve to "off" and the
         // roots lookup miss its row, so the server published NULL roots and the
-        // follower's state-commitment check never ran .
+        // follower's state-commitment check never ran.
         this.coinTicker = coinTicker(chain);
         this.network  = network;
         this.db       = db;
@@ -91,14 +90,14 @@ class ServerPoller {
         this.lastPolledBlock = null;
         // Hash of lastPolledBlock's content on the source, so a net-forward reorg
         // (rollback + readvance within one poll interval, which keeps the height
-        // monotonic) is detectable by a changed hash, not just a lower height (4623).
+        // monotonic) is detectable by a changed hash, not just a lower height.
         this.lastPolledBlockHash = null;
         // Bounded map of recently broadcast block hashes (block_index -> content
         // hash WE broadcast for that height). On a net-forward reorg the walk-back
         // seeds lastPolledBlockHash from the PRE-reorg hash recorded here, so a
-        // reorg deeper than one block keeps walking back over subsequent polls
-        // (item 4830). Works for both dbTypes (the decoder has no sync_meta to read
-        // a recorded hash from). Capped to the last RECENT_HASH_CAP heights.
+        // reorg deeper than one block keeps walking back over subsequent polls.
+        // Works for both dbTypes (the decoder has no sync_meta to read a recorded
+        // hash from). Capped to the last RECENT_HASH_CAP heights.
         this.recentBroadcastHashes = new Map();
         this.running = false;
 
@@ -257,7 +256,7 @@ class ServerPoller {
         // fires, yet the block we already broadcast was orphaned and re-mined. Detect
         // it by re-reading the source hash at lastPolledBlock; a change means the chain
         // forked at or below it. Roll back one block and re-read the prior hash so a
-        // deeper reorg is walked back over subsequent polls (item 4623).
+        // deeper reorg is walked back over subsequent polls.
         if(this.lastPolledBlockHash !== null){
             let srcHash = await this._sourceBlockHash(this.lastPolledBlock);
             if(srcHash !== null && srcHash !== this.lastPolledBlockHash){
@@ -309,7 +308,6 @@ class ServerPoller {
             }
         }
 
-        // Detect reorgs: if current block is less than last polled, a rollback occurred
         if(currentBlock < this.lastPolledBlock){
             // Resolve the TRUE fork point before broadcasting (same walk-back as the
             // net-forward path). A poll can observe the source MID-REWRITE: tip
@@ -319,7 +317,7 @@ class ServerPoller {
             // pre-reorg blocks at/below it, and a catch-up racing the next poll (which
             // would detect the deeper rewrite via the seeded pre-reorg hash) stitches
             // post-reorg blocks onto the stale range: the join recompute then halts on
-            // a divergence no delivery interruption caused . Walking the
+            // a divergence no delivery interruption caused. Walking the
             // recorded pre-reorg hashes down from currentBlock resolves the full depth
             // in THIS poll, so the one reorg event carries the true fork point.
             let forkBlock = await this._resolveForkPoint(currentBlock + 1);
@@ -407,10 +405,10 @@ class ServerPoller {
                         this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
 
                         // Track the hash we just broadcast so the next poll can detect a
-                        // net-forward reorg that rewrites this block (item 4623).
+                        // net-forward reorg that rewrites this block.
                         this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
                         // Record it for the net-forward walk-back so a deeper reorg can be
-                        // detected against this pre-reorg hash on a later poll (item 4830).
+                        // detected against this pre-reorg hash on a later poll.
                         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
                         if(nextBlock > RECENT_HASH_CAP)
                             this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);
@@ -646,8 +644,8 @@ class ServerPoller {
             let scopedStartedAt = Date.now();
 
             // Discover in ONE round-trip which action-scoped tables carry rows this block,
-            // then fetch only those (: the loop below otherwise queries all 86
-            // registry tables, empty ones included, and grows with every table added).
+            // then fetch only those, because the loop below otherwise queries all 86
+            // registry tables, empty ones included, and grows with every table added.
             // Skipping a probe-absent table cannot change payload.data: the probe runs
             // getActionScopedRows' own predicate, so its verdict IS that fetch's row count,
             // and an empty fetch is already dropped by the length check below.
@@ -950,7 +948,7 @@ class ServerPoller {
     // block cost and how many of them carried rows. probe_queries is 1 when the
     // non-empty-table probe answered (so `queries` is content-shaped) and 0 when the
     // build fell back to querying every registry table, which is what makes a silent
-    // regression to the old N+1 visible rather than merely slow (). Reads
+    // regression to the old N+1 visible rather than merely slow. Reads
     // counters only, never payload.data, so the consensus hash is untouched. Interval is
     // SYNC_QUERY_METRIC_INTERVAL_MS (default 15m, 0 disables), so this is one line per
     // interval, not per block. Twin of SyncService's STATE_TREE_METRIC_INTERVAL_MS.
@@ -980,7 +978,7 @@ class ServerPoller {
             source_block_height: sourceBlockHeight != null ? sourceBlockHeight : (await this.db.getLastBlock()),
             poll_error_count:    this.pollErrorCount
         };
-        // Replication freshness (#3904). source_block_height above is read from the
+        // Replication freshness. source_block_height above is read from the
         // SERVED database, so on a node fronting a native SQL replica both heights
         // freeze together when replication stalls and the derived lag reads 0.
         let rep = await this._readReplicaStatus();
@@ -1000,7 +998,7 @@ class ServerPoller {
     // Fail closed on everything except a confirmed primary. A stopped SQL thread
     // reports Seconds_Behind_Source NULL, which is unbounded lag, never zero; an
     // unreadable status (no grant, older db object without the method) is unknown
-    // and must not certify freshness either (#3904).
+    // and must not certify freshness either.
     async _readReplicaStatus(){
         let rep = null;
         try {

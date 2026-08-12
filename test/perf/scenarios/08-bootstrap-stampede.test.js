@@ -10,23 +10,24 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-//  leg (b): N-concurrent-bootstrap load test against one sync server.
+// N-concurrent-bootstrap load test against one sync server.
 //
-// The failure this exists to catch ('s premise): ServerPoller and every
-// /snapshot route share ONE Database, i.e. one mariadb pool, per
-// chain:network:dbType. A full snapshot pins a pool connection for the entire
-// duration of its stream. The HTTP rate limiter is per-IP, and a validator
-// cohort bootstrapping on flag day is N DIFFERENT IPs, so nothing upstream of
-// the pool bounds them. Enough simultaneous bootstraps and every connection is
-// pinned, the poller's getLastBlock acquire starves, and live block broadcast
-// stops for every already-synced follower on the network. That is a
-// network-wide liveness outage triggered by ordinary, legitimate traffic.
+// The failure this exists to catch: ServerPoller and every /snapshot route
+// share ONE Database, i.e. one mariadb pool, per chain:network:dbType. A full
+// snapshot pins a pool connection for the entire duration of its stream. The
+// HTTP rate limiter is per-IP, and a validator cohort bootstrapping on flag
+// day is N DIFFERENT IPs, so nothing upstream of the pool bounds them. Enough
+// simultaneous bootstraps and every connection is pinned, the poller's
+// getLastBlock acquire starves, and live block broadcast stops for every
+// already-synced follower on the network. That is a network-wide liveness
+// outage triggered by ordinary, legitimate traffic.
 //
-//  added a per-Database semaphore that fails fast with 503 SNAPSHOT_BUSY
-// rather than queueing. It has unit coverage but has never been driven at
-// cohort size against a real server, a real pool and a real poller. Cohort C
-// bootstraps ~2026-08-13, so this harness proves three things together, under
-// load, which is the only way any of them means anything:
+// A per-Database semaphore fails fast with 503 SNAPSHOT_BUSY rather than
+// queueing. It has unit coverage but has never been driven at cohort size
+// against a real server, a real pool and a real poller. A validator cohort of
+// this size is expected to bootstrap soon, so this harness proves three
+// things together, under load, which is the only way any of them means
+// anything:
 //
 //   1. the semaphore SHEDS: concurrent accepted streams never exceed the cap,
 //      and the excess is refused immediately with a retryable answer, not
@@ -70,9 +71,9 @@ const STAMPEDE_ACTIONS = parseInt(process.env.PERF_STAMPEDE_ACTIONS || '10');
 // traffic whose delivery must survive the bootstrap load.
 const LIVE_BLOCKS = parseInt(process.env.PERF_STAMPEDE_LIVE_BLOCKS || '12');
 
-// Budgets. The poller's own pool acquire is what  protects, so the
-// ceiling is expressed against it: a cycle that takes longer than this is a
-// stall by any operator's definition, whatever the cause.
+// Budgets. The poller's own pool acquire is what the snapshot semaphore
+// protects, so the ceiling is expressed against it: a cycle that takes longer
+// than this is a stall by any operator's definition, whatever the cause.
 const BUDGET_X = Number(process.env.PERF_BUDGET_MULTIPLIER) > 0
     ? Number(process.env.PERF_BUDGET_MULTIPLIER) : 1;
 const POLL_MAX_BUDGET_MS      = 5000 * BUDGET_X;
@@ -88,7 +89,7 @@ function median(values) {
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-describe('08 Bootstrap Stampede', function () {
+describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
     this.timeout(900000);
 
     const reporter = new ReportGenerator();
@@ -211,7 +212,7 @@ describe('08 Bootstrap Stampede', function () {
             } catch (e) { /* status frames and other event types are not under test */ }
         });
 
-        // ── The stampede: N validators asking for a full snapshot at once ──
+        // The stampede: N validators asking for a full snapshot at once
         const startedAt = Date.now();
         const snapshotResults = [];
         const stampede = [];
@@ -230,7 +231,7 @@ describe('08 Bootstrap Stampede', function () {
             );
         }
 
-        // ── Live traffic, concurrent with the stampede ──
+        // Live traffic, concurrent with the stampede
         const pollLatencies = [];
         const liveBlocks = [];
         const liveLoop = (async () => {
@@ -331,8 +332,9 @@ describe('08 Bootstrap Stampede', function () {
     }
 
     it('derives a cap that always leaves the poller a connection', function () {
-        // The clamp is the load-bearing half of : no operator setting may
-        // hand the poller's last connection to a snapshot stampede.
+        // The clamp is the load-bearing half of the snapshot semaphore: no
+        // operator setting may hand the poller's last connection to a snapshot
+        // stampede.
         const builder = new SnapshotBuilder(null);
         const db = { dbType: 'indexer', connectionPoolParams: { connectionLimit: POOL_LIMIT } };
 

@@ -14,7 +14,7 @@
 
 'use strict';
 
-// Unit coverage for collectRedrivenValidatorRewards (review #5087): the forward collector
+// Unit coverage for collectRedrivenValidatorRewards: the forward collector
 // that delivers a reorg-redriven survivor validator_rewards row (block_index = earn-block
 // E < B) to followers, selected by recovery_pending_rewards.applied_block. Mock-based (no
 // live MariaDB): locks the query SHAPE, the arg order, the dedup, and error tolerance. The
@@ -31,7 +31,7 @@ function row(over){
     }, over || {});
 }
 
-describe('collectRedrivenValidatorRewards (#5087)', function(){
+describe('collectRedrivenValidatorRewards', function(){
     it('returns [] (no throw) when the source has no re-driven rows', async function(){
         let db = { doQuery: async () => [] };
         let out = await collectRedrivenValidatorRewards(db, 150, 150);

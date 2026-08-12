@@ -179,7 +179,6 @@ class BlockBroadcaster {
         }
     }
 
-    // Update status data for a chain/network/dbType
     updateStatus(chain, network, statusObj){
         // dbType is part of the statusObj per ServerPoller._updateStatus.
         // Fall back to 'indexer' for backward compat with code that doesn't set it.
@@ -266,15 +265,13 @@ class BlockBroadcaster {
         }
     }
 
-    // Return per-subscriber lag info for a chain/network/dbType, used by /status.
-    // Each entry: { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived, lagStatus }.
-    // lastSentBlock is null until the first block is broadcast; appliedBlock is null
-    // until the subscriber sends its first heartbeat; lag (lastSentBlock - appliedBlock)
-    // is null whenever either side is unavailable. heartbeatReceived is true once the
-    // subscriber has reported an applied block at least once; it lets callers tell a
-    // caught-up subscriber (lag 0) apart from one that has never reported (lag null
-    // because it is unknown, not because it is in sync). Clients that never send a
-    // heartbeat (legacy builds, third-party validators) stay heartbeatReceived:false.
+    // Per-subscriber lag info for /status:
+    // { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived, lagStatus }.
+    // lastSentBlock is null until the first block is broadcast, appliedBlock until the
+    // subscriber's first heartbeat, and lag whenever either side is unavailable.
+    // heartbeatReceived is what lets a caller tell a caught-up subscriber (lag 0) from
+    // one that has never reported (lag null because unknown, not because in sync);
+    // clients that never send heartbeats stay false forever.
     getSubscribers(chain, network, dbType){
         let subs = this.subscribers.get(this._key(chain, network, dbType));
         if(!subs) return [];
@@ -290,13 +287,10 @@ class BlockBroadcaster {
                 appliedBlock: applied,
                 lag,
                 heartbeatReceived,
-                // lagStatus is an explicit machine-readable signal so an operator or
-                // alerting script does not have to interpret what a null `lag` means.
-                // 'known':   a heartbeat established a baseline, so `lag` is a real
-                //            number (including a genuine 0 = caught up).
-                // 'unknown': no heartbeat yet, so `lag` is null because it is
-                //            undetermined, NOT because the subscriber is in sync.
-                //            Scanning only for non-zero `lag` would silently skip these.
+                // Machine-readable so an alerting script never has to guess what a null
+                // `lag` means: 'known' is a real number including a genuine 0, while
+                // 'unknown' means undetermined, NOT in sync. Scanning only for non-zero
+                // `lag` would silently skip every 'unknown' subscriber.
                 lagStatus: heartbeatReceived ? 'known' : 'unknown'
             });
         }
@@ -319,13 +313,12 @@ class BlockBroadcaster {
         }
     }
 
-    // Send a message to a single WebSocket with backpressure handling
     _send(ws, message, isPreSerialized){
         if(ws.readyState !== WebSocket.OPEN) return;
 
         let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
 
-        // Backpressure (item 5410): drop a peer only when it is genuinely stuck, not merely
+        // Backpressure: drop a peer only when it is genuinely stuck, not merely
         // slow. Two independent signals on the OS send buffer:
         //   1) a hard byte ceiling - the peer is accumulating unboundedly (server-memory risk);
         //   2) a non-draining stall timeout - the buffer has not made any downward progress for
@@ -383,29 +376,23 @@ class BlockBroadcaster {
     //                   lag_blocks = source block_height - applied_height (null when
     //                   undeterminable) and a `status` of 'known' | 'unknown' |
     //                   'stale' | 'absent'.
-    //   total:          number of live (non-stale) validators with a heartbeat on record.
-    //                   Stale entries remain visible in the validators map but are
-    //                   excluded from total so a going-stale validator decrements the
-    //                   count (the only meaningful erosion signal for an operator).
-    //   expected_total: size of the configured EXPECTED_VALIDATORS roster, or null when
-    //                   no roster is configured. Gives operators a denominator: when
-    //                   total < expected_total a federation member is missing.
-    //   unknown_count:  how many on-record entries have lag_blocks === null (source
-    //                   height not yet known), i.e. their lag is genuinely unknown
-    //                   rather than 0.
+    //   total:          live (non-stale) validators with a heartbeat on record. Stale
+    //                   entries stay visible in the map but are excluded here, so a
+    //                   going-stale validator decrements the count, which is the only
+    //                   meaningful erosion signal an operator gets.
+    //   expected_total: size of the EXPECTED_VALIDATORS roster, or null when unconfigured.
+    //                   It is the denominator: total < expected_total means a federation
+    //                   member is missing.
+    //   unknown_count:  on-record entries whose lag_blocks is null because the source
+    //                   height is not yet known, so their lag is unknown rather than 0.
     //
-    // Two statuses close the silent-loss gaps a heartbeat-only view would otherwise have:
-    //   'stale':  a previously-active validator whose last_seen lapsed past the TTL.
-    //             evictStaleValidators() transitions it in place instead of deleting it,
-    //             so a validator that restarted or briefly partitioned stays visible
-    //             (with its last known applied_height) rather than silently vanishing.
-    //   'absent': a member of the EXPECTED_VALIDATORS roster that has never POSTed a
-    //             heartbeat for this chain/network/dbType. Without the roster such a
-    //             validator (misconfigured sync URL, partitioned before its first POST)
-    //             would be completely invisible. Surfaced here with null lag/last_seen.
-    //
-    // When no roster is configured the method behaves exactly as before for observed
-    // validators; 'absent' entries simply never appear and expected_total is null.
+    // Two statuses close silent-loss gaps a heartbeat-only view would have. 'stale' is a
+    // previously-active validator whose last_seen lapsed past the TTL, transitioned in
+    // place rather than deleted so a restarted or briefly-partitioned one stays visible
+    // with its last known applied_height. 'absent' is a roster member that has never
+    // POSTed at all, which without the roster (misconfigured sync URL, partitioned before
+    // its first POST) would be completely invisible. With no roster configured, 'absent'
+    // entries never appear and expected_total is null.
     getValidatorHeartbeats(chain, network, dbType){
         let key = this._key(chain, network, dbType);
         let map = this.validatorHeartbeats.get(key);

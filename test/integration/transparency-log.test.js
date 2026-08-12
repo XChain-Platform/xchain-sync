@@ -61,7 +61,6 @@ describe('Integration: TransparencyLog', function() {
             let count = await testDb.getRowCount(sourceDb, 'sync_meta');
             assert.strictEqual(count, 1);
 
-            // Original values preserved
             let rows = await sourceDb.doQuery("SELECT * FROM sync_meta WHERE block_index = 5");
             assert.strictEqual(rows[0].ledger_hash, 'a');
         });
@@ -119,7 +118,6 @@ describe('Integration: TransparencyLog', function() {
             let count = await testDb.getRowCount(sourceDb, 'sync_meta');
             assert.strictEqual(count, 7);
 
-            // Entries 1-7 still exist
             let result = await log.getPage(0, 100);
             assert.strictEqual(result.total, 7);
             assert.strictEqual(Number(result.results[0].block_index), 7);

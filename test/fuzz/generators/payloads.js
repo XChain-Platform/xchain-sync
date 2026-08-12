@@ -50,7 +50,6 @@ function blockDataObject() {
         credits: rowArray(creditsRow(), 0, 5),
         debits: rowArray(debitsRow(), 0, 5),
     }).chain(core => {
-        // Add 0–5 random action-scoped tables
         return fc.array(
             fc.tuple(
                 fc.constantFrom(...ACTION_TABLES),

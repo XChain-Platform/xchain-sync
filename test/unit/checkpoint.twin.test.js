@@ -45,14 +45,12 @@ function signedCheckpoint(signer, overrides){
 }
 
 describe('vendored checkpoint verifier (twin conformance) @regression', function(){
-    // Byte-parity guard for the canonical signing string. Every other case in this
-    // suite signs and verifies through sync's OWN builder, so a symmetric one-sided
-    // edit (drop/reorder a field, change a delimiter) keeps sign==verify green while
-    // real hub-signed federation checkpoints silently fail to verify. Pin the exact
-    // output to the same golden literal xchain-sdk/test/unit/checkpoint.test.js pins,
-    // so drift of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies
-    // fails here rather than in production. (mainnet CHECKPOINT_COMMITMENT is inert, so
-    // the canonical carries no SPV root suffix, matching the SDK's golden vector.)
+    // Byte-parity guard for the canonical signing string: every other case in this suite signs and verifies
+    // through sync's own builder, so a symmetric one-sided edit (drop/reorder a field, change a delimiter)
+    // would keep sign==verify green while real hub-signed federation checkpoints silently fail to verify.
+    // Pins the exact output to the same golden literal xchain-sdk/test/unit/checkpoint.test.js uses, so drift
+    // of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies fails here, not in production.
+    // (mainnet CHECKPOINT_COMMITMENT is inert, so the canonical carries no SPV root suffix, matching the SDK's golden vector.)
     it('canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)', function(){
         const cp = { chain: 'BTC', network: 'mainnet', block_index: 900123,
             block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32),
@@ -65,17 +63,14 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             'sync canonicalCheckpoint drifted from the canonical XCHECKPOINT signing string; re-align the vendored twin to the SDK copy');
     });
 
-    // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical: the
-    // launch-epoch shape real hub-signed federation checkpoints use. Every quorum
-    // case below signs and verifies through sync's OWN builder, so a one-sided drift
-    // of the appended state_root|state_root_version|block_merkle_root|block_merkle_version
-    // suffix (or the EQUIV header wrap) keeps sign==verify green AND keeps the rootless
-    // mainnet golden green, while sync silently fails to verify real hub checkpoints.
-    // regtest activates both CHECKPOINT_COMMITMENT and the EQUIV header at height 0, so
-    // the canonical commits the four SPV-root fields and is EQUIV-wrapped. The expected
-    // string is reconstructed here from the documented spec parts (NOT from the builder),
-    // so a drift of canonicalCheckpoint fails here rather than in production. Mirrors the
-    // explorer's 'regtest row with SPV roots' cross-check, but for the sync verifier.
+    // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical, the launch-epoch shape real
+    // hub-signed federation checkpoints use. Every quorum case below signs and verifies through sync's own
+    // builder, so a one-sided drift of the appended state_root|state_root_version|block_merkle_root|block_merkle_version
+    // suffix (or the EQUIV header wrap) would keep sign==verify green and keep the rootless mainnet golden
+    // green, while sync silently fails to verify real hub checkpoints. Regtest activates both CHECKPOINT_COMMITMENT
+    // and the EQUIV header at height 0, so the canonical commits the four SPV-root fields and is EQUIV-wrapped;
+    // the expected string below is reconstructed from the documented spec parts (not from the builder) so
+    // drift fails here rather than in production. Mirrors the explorer's 'regtest row with SPV roots' cross-check.
     it('canonicalCheckpoint matches the ACTIVE SPV-root spec byte-for-byte (EQUIV-wrapped, roots committed)', function(){
         const cp = { chain: 'BTC', network: 'regtest', block_index: 100,
             block_hash: 'c0'.repeat(32), ledger_hash: 'a1'.repeat(32),

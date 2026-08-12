@@ -13,15 +13,15 @@
  **********************************************************************
  *
  * Generator for test/fixtures/merkle-vectors.json: the frozen golden lock for
- * src/merkle.js (SPV light-client primitives, spec §3-§5). Sibling of
+ * src/merkle.js (SPV light-client primitives, spec §3-§5), sibling of
  * gen-block-hash-vectors.js / gen-state-hash-vectors.js.
  *
  * It embeds canonical INPUTS and computes the expected OUTPUTS with the REAL
- * src/merkle.js, so the committed JSON authentically locks the scheme. The unit
+ * src/merkle.js, so the committed JSON authentically locks the scheme; the unit
  * test (test/unit/merkle.test.js) reloads the JSON, recomputes from the same
- * inputs, and asserts byte-equality. xchain-sync/src/merkle.js is the byte-
- * identical twin; its own copy of this golden + the e2e recompute scenario are
- * the cross-repo drift guard.
+ * inputs, and asserts byte-equality. This merkle.js is meant to stay byte-
+ * identical to its twin in the indexer, so this golden plus the e2e recompute
+ * scenario together form the cross-repo drift guard.
  *
  * Run manually and commit the output:
  *   node test/fixtures/gen-merkle-vectors.js
@@ -34,7 +34,7 @@ const fs   = require('fs');
 const path = require('path');
 const M    = require('../../src/merkle.js');
 
-// ---- canonical INPUTS (frozen) ----------------------------------------------
+// canonical INPUTS (frozen)
 const CHAIN = 'BTC', NETWORK = 'regtest';
 
 const BAL_ENTRIES = [

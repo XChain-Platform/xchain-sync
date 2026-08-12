@@ -100,7 +100,7 @@ const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTw
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
 // and exports XCHAIN_INDEXER_SQL_PATH (=<root>/src/sql); locally it is the monorepo
-// sibling three levels up. (#4631: the unit tier previously hard-coded only the
+// sibling three levels up. (The unit tier previously hard-coded only the
 // monorepo path, which CI never populates, so every cross-repo guard below skipped.)
 function indexerFile(rel){
     const pathMod = require('path');
@@ -308,7 +308,7 @@ describe('Rollback coverage guard @regression', function(){
         assert.ok(!rollback.blockTables.includes('balances'));
     });
 
-    // Cross-repo drift guard for the escrow re-derive SQL (#4017). The
+    // Cross-repo drift guard for the escrow re-derive SQL. The
     // tokens.escrow_action_index re-derive must run the SAME logic on the source
     // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js),
     // or a reorg leaves source and replica with different gate values (a silent consensus
@@ -333,7 +333,7 @@ describe('Rollback coverage guard @regression', function(){
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
 
-    // Cross-repo drift guard for the cross-chain mirror reorg delete (#4995). On reorg
+    // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
     // both the source (xchain-indexer/src/rollback.js) and the replica
     // (xchain-sync/src/ClientRollback.js) locally prune the hub-mirrored
     // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
@@ -407,7 +407,7 @@ describe('Rollback coverage guard @regression', function(){
     // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
     // in-place reset on SURVIVING credits/unstakes/contract_unstakes rows. Those tables are
     // already in both rollback lists, so the table-membership guard above structurally cannot
-    // catch an unmirrored reset (this is exactly how the gap reached HEAD, see #4248/#4249).
+    // catch an unmirrored reset (this is exactly how the gap reached HEAD undetected).
     // Assert both rollback.js (source) and ClientRollback.js (replica) carry all four operations
     // the source added in 309fec7. If you add a new in-place reorg reset to one file, mirror it
     // in the other and extend this guard.
@@ -438,7 +438,7 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // Orphan-sweep parity, driven by the registry (#2273): every ORPHAN_SWEEPS
+    // Orphan-sweep parity, driven by the registry: every ORPHAN_SWEEPS
     // entry with `replica: true` is a derived/lookup table the replica's
     // replication never deletes (markets upserts from the full-dump, pubkeys is
     // INSERT IGNORE, icons is an operator-local cache), so the source's reorg
@@ -473,9 +473,9 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // IDX-2 pair-scoped markets parity (#4485). The dangling-tick sweep guarded above
+    // IDX-2 pair-scoped markets parity. The dangling-tick sweep guarded above
     // misses a market whose pair kept both ticks but lost its only order/trade to the
-    // reorg; the source deletes that row, and until #4485 the replica did not. markets
+    // reorg; the source deletes that row, and the replica used to miss it too. markets
     // rides the snapshot as an UPSERT-only full dump, so a row the replica keeps can
     // never be removed by replication and xchain-explorer serves the stale zeroed OHLCV
     // forever. Both sides must carry the same three statements: the survival probe over
@@ -509,7 +509,7 @@ describe('Rollback coverage guard @regression', function(){
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
     // above removes the refund credit on reorg, but the FORWARD path must stream that same
     // credit to followers in the first place, keyed by maturity block, since its backdated
-    // action_index escapes every action-scoped channel (see #4316). The selection lives in
+    // action_index escapes every action-scoped channel. The selection lives in
     // cooldownCredits.js and MUST mirror the reverse join keys / cooldown_end_block predicate,
     // or source and follower diverge. If you change one side, change the other and this guard.
     it('forward cooldown-credit selection mirrors the reverse delete keys (bespoke-logic drift guard)', function(){
@@ -539,7 +539,7 @@ describe('Rollback coverage guard @regression', function(){
     // on the surviving unstake row. The credit rides the credits channel; the status flip
     // must ride the updated_rows channel keyed by cooldown_end_block (the forward twin of
     // ClientRollback's reverse status reset). Without it the follower keeps a stale 'valid'
-    // unstake while its balance is already refunded (see #4317).
+    // unstake while its balance is already refunded.
     it('updated_rows carries the cooldown-maturity status_id flip keyed by cooldown_end_block', function(){
         const { COOLDOWN_STATUS_TABLES } = require('../../src/updatedRows');
         assert.deepStrictEqual(COOLDOWN_STATUS_TABLES, ['unstakes', 'contract_unstakes'],
@@ -551,7 +551,7 @@ describe('Rollback coverage guard @regression', function(){
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
     });
 
-    // Forward parity for recovery-redriven validator rewards (#5087): a reorg re-drain
+    // Forward parity for recovery-redriven validator rewards: a reorg re-drain
     // re-materializes a survivor reward at block_index = earn-block E < B, which escapes
     // the block-scoped forward channels. recoveryRewards.js must select it by applied_block
     // (the re-drain point B, the forward analogue of ClientRollback's block_index >= B
@@ -605,7 +605,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor reset to unverified',          re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = us\.id/ },
-            // : the parent predicate must select the FULL archive-head version set
+            // The parent predicate must select the FULL archive-head version set
             // (v1 legacy + v6 publisher-bearing) via the shared stateHash.js constant, on
             // both sides. A literal `p.version = 1` regression re-wedges a reorg-orphaned
             // v6 archive batch permanently. Matches the indexer's template-literal splice
@@ -621,11 +621,11 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // : the archive-head version set is defined ONCE (stateHash.js, twinned across
+    // The archive-head version set is defined ONCE (stateHash.js, twinned across
     // repos) and consumed by every parent-selecting predicate. Pin its value and the SQL
     // fragment shape, and pin the forward updatedRows class to the same constant so a
     // v6 parent's invalid_archive stamp keeps replicating to followers.
-    it('archive-head version set is [1, 6] via the shared stateHash constant, consumed by updatedRows ', function(){
+    it('archive-head version set is [1, 6] via the shared stateHash constant, consumed by updatedRows', function(){
         const assertLocal = require('assert');
         const sh = require('../../src/stateHash');
         assertLocal.deepStrictEqual(sh.ARCHIVE_HEAD_VERSIONS, [1, 6],
@@ -776,7 +776,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // And a FOURTH carrier: the explorer, whose locked-balance proof endpoint
-    // refuses below the escrow leaf's armed height ( stage B2). Reserved
+    // refuses below the escrow leaf's armed height (Stage B2). Reserved
     // slots need no gate there (their stored column carries the armed decision
     // per height), but the escrow leaf lives inside balances_root with no stored
     // signal, so the refusal requires the map itself. A drifted explorer copy
@@ -834,7 +834,7 @@ describe('Rollback coverage guard @regression', function(){
         const bh = fs.readFileSync(pathMod.resolve(__dirname, '../../src/BlockHasher.js'), 'utf8');
         assert.ok(/computeStateHash\(block_index, activationDelay, gasTick, network, coin\)/.test(bh),
             'BlockHasher.computeStateHash must accept and forward the coin gate parameter');
-        // : threading a coin is necessary but NOT sufficient - the FORMAT must
+        // Threading a coin is necessary but NOT sufficient - the FORMAT must
         // match the source. The activation maps are keyed '<TICKER>:<network>' exactly
         // as the source indexer writes it (its db.js passes config['COIN'], a ticker),
         // but the sync layer names a chain by cfg.coin = the FULL LOWERCASE NAME
@@ -957,7 +957,7 @@ describe('Rollback coverage guard @regression', function(){
     // block-deterministic, silently forking the replica. Pin the exclusion by value.
     it('F-5: hub-mirrored tables are absent from the ServerPoller replicated universe (snapshot-exclusion contract)', function(){
         // Derived from the registry, not a hand-copied literal, so a new
-        // hub-mirror entry is covered automatically (#2271).
+        // hub-mirror entry is covered automatically.
         const HUB_MIRRORED = lifecycleTwin.tablesWhere(t => t.replication === 'hub-mirror');
         assert.ok(HUB_MIRRORED.length >= 5, 'expected at least the five known hub-mirrored tables in the registry');
         const { universe } = replicatedTables('indexer');
@@ -972,7 +972,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the three permitted non-registry names', function(){
-        // Both directions (#2271). Forward: every registry table whose
+        // Both directions. Forward: every registry table whose
         // replication mode is local / hub-mirror / follower-derived must be
         // snapshot-excluded (a new local table that rode consensus snapshots
         // would ship divergent per-node state to every follower). Reverse:

@@ -70,9 +70,6 @@ function silenceConsole() {
     sinon.stub(console, 'warn');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 1. close()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.close()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -92,9 +89,6 @@ describe('Database.close()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 1b. constructor: dbType default
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database constructor: dbType default', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -106,9 +100,6 @@ describe('Database constructor: dbType default', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 2. doQuery()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.doQuery()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -215,9 +206,6 @@ describe('Database.doQuery()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 3. getConnection(): circuit breaker
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getConnection(): circuit breaker', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -305,9 +293,6 @@ describe('Database.getConnection(): circuit breaker', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 4. releaseConnection()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.releaseConnection()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -328,9 +313,6 @@ describe('Database.releaseConnection()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 5. beginTransaction()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.beginTransaction()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -368,9 +350,6 @@ describe('Database.beginTransaction()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 6. rollbackTransaction()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.rollbackTransaction()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -401,9 +380,6 @@ describe('Database.rollbackTransaction()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 7. commitTransaction()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.commitTransaction()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -438,9 +414,6 @@ describe('Database.commitTransaction()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 8. beginReadSnapshot()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.beginReadSnapshot()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -481,9 +454,6 @@ describe('Database.beginReadSnapshot()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 8b. commitReadSnapshot() / rollbackReadSnapshot()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.commitReadSnapshot() / rollbackReadSnapshot()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -525,10 +495,7 @@ describe('Database.commitReadSnapshot() / rollbackReadSnapshot()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 9. verifyDatabase(): retry loop
-// (Uses proxyquire because mariadb is an ES module; sinon can't stub it directly)
-// ═══════════════════════════════════════════════════════════════════════════
+// Uses proxyquire because mariadb is an ES module; sinon can't stub it directly.
 describe('Database.verifyDatabase()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -565,9 +532,6 @@ describe('Database.verifyDatabase()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 10. verifyDatabaseOnce()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.verifyDatabaseOnce()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -611,9 +575,6 @@ describe('Database.verifyDatabaseOnce()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 11. createDatabase()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.createDatabase()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -651,9 +612,6 @@ describe('Database.createDatabase()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 12. verifySyncTables() + _createTableFromFile()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.verifySyncTables()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -739,9 +697,6 @@ describe('Database.verifySyncTables()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 13. ensureReplicatedColumns()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.ensureReplicatedColumns()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -835,9 +790,6 @@ describe('Database.ensureReplicatedColumns()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 14. getLastBlock()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getLastBlock()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -862,15 +814,11 @@ describe('Database.getLastBlock()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 14b. getReplicaStatus()  (#3904)
-//
 // getLastBlock above reads the SERVED database, so on a node fronting a native
 // SQL replica the source and served heights share one failure domain: when
 // replication stops applying, both freeze at the same number and the derived
 // lag_blocks publishes 0 for an hours-behind node. Only the replication engine
 // can tell those apart, and it must fail CLOSED on every ambiguous answer.
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getReplicaStatus()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -916,10 +864,7 @@ describe('Database.getReplicaStatus()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 14b. addMissingColumns(): remaining branch coverage
-// (The basic happy-path cases live in db-schema-evolution.test.js)
-// ═══════════════════════════════════════════════════════════════════════════
+// The basic happy-path cases live in db-schema-evolution.test.js.
 describe('Database.addMissingColumns(): edge branches', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -990,7 +935,7 @@ describe('Database.addMissingColumns(): edge branches', function () {
     });
 
     // A refused ALTER leaves the column missing, so it must reach the caller as a
-    // failure : the old swallow let the replica report a healed schema and
+    // failure: the old swallow let the replica report a healed schema and
     // then stall on errno 1054 forever.
     it('throws and logs when ALTER TABLE fails', async function () {
         let ddl = [
@@ -1020,9 +965,6 @@ describe('Database.addMissingColumns(): edge branches', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 15. getBlockHashRow(): indexer vs decoder branching
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getBlockHashRow()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -1070,9 +1012,6 @@ describe('Database.getBlockHashRow()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 16. getBlockRows(): indexer vs decoder
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getBlockRows()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -1102,9 +1041,6 @@ describe('Database.getBlockRows()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 17. getFirstActionIndex()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getFirstActionIndex()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1123,9 +1059,6 @@ describe('Database.getFirstActionIndex()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 18. getBlockScopedRows()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getBlockScopedRows()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1142,9 +1075,6 @@ describe('Database.getBlockScopedRows()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 19. getActionScopedRows()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getActionScopedRows()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1161,9 +1091,6 @@ describe('Database.getActionScopedRows()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 19-z. getNonEmptyActionScopedTables()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getNonEmptyActionScopedTables()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1217,9 +1144,6 @@ describe('Database.getNonEmptyActionScopedTables()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 19-a. getEmissionRowsForBlock()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getEmissionRowsForBlock()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1250,9 +1174,6 @@ describe('Database.getEmissionRowsForBlock()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 20. getTxScopedRows()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getTxScopedRows()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1269,9 +1190,6 @@ describe('Database.getTxScopedRows()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 21. getTransactions() / getActions()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getTransactions()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1302,9 +1220,6 @@ describe('Database.getActions()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 22. streamTableRows() / getTableCount()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.streamTableRows()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1335,15 +1250,13 @@ describe('Database.getTableCount()', function () {
         assert.strictEqual(result, 42);
     });
 
-    // . getTableCount used to read through the fail-soft doQuery, which
-    // outside a transaction LOGS the SqlError and returns []; `rows[0].cnt` then
-    // threw a TypeError carrying no errno. Every caller that classifies by errno
-    // was therefore inspecting an error the database never raised, and the one
-    // that matters is ClientSync._verifyTableCounts, whose catch routes errno 1146
-    // into the debounced schema heal that CREATEs the missing table. The heal was
-    // wired and unreachable: observed live on the origin-host BTC regtest replica,
-    // where `bet_resolves` stayed absent for two days across 11,542 identical
-    // errors. So this asserts the DATABASE's error survives the call.
+    // getTableCount used to read through the fail-soft doQuery, which outside a
+    // transaction logs the SqlError and returns []; `rows[0].cnt` then threw a
+    // TypeError with no errno, so every errno-based caller (notably
+    // ClientSync._verifyTableCounts, whose catch routes errno 1146 into a schema
+    // heal that CREATEs the missing table) never actually fired. Observed live
+    // on a production replica: `bet_resolves` stayed absent for two days across
+    // 11,542 identical errors. This asserts the DATABASE's error survives the call.
     it('propagates the database error with errno intact when the table is absent', async function () {
         const err = new Error("Table 'db.bet_resolves' doesn't exist");
         err.errno = 1146; err.sqlState = '42S02'; err.code = 'ER_NO_SUCH_TABLE';
@@ -1375,7 +1288,7 @@ describe('Database.listExistingTables()', function () {
 
     // The point of the helper: a caller can skip an absent table instead of
     // discovering it by failing a query, which is what logged 11,542 stacks for
-    // tables neither the replica nor its SOURCE has .
+    // tables neither the replica nor its SOURCE has.
     it('reports a table the caller should skip', async function () {
         sinon.stub(db, 'doQueryStrict').resolves([{ table_name: 'blocks' }]);
         const set = await db.listExistingTables();
@@ -1394,9 +1307,6 @@ describe('Database.listExistingTables()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 23. getDatabaseStats()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getDatabaseStats()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1412,9 +1322,6 @@ describe('Database.getDatabaseStats()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 24. truncateTable()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.truncateTable()', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1429,9 +1336,6 @@ describe('Database.truncateTable()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 25. recordHalt() / getActiveHalt() / clearHalt()
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database halt methods', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1543,9 +1447,6 @@ describe('Database halt methods', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 26. replicateSchema(): integration of stubbed higher-level paths
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.replicateSchema()', function () {
     let db, sourceDb;
     beforeEach(function () {
@@ -1865,9 +1766,6 @@ describe('Database.replicateSchema()', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Table-identifier guard (getTableCount / streamTableRows / truncateTable)
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database: table identifier guard', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1902,13 +1800,10 @@ describe('Database: table identifier guard', function () {
     });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ensureReplicaSecondaryIndexes(): votes append-only unique-key migration (M-20)
 // A replica that bootstrapped before indexer 219da33 carries the stale
 // UNIQUE(poll_voter_choice) key; append-only re-ballot rows then wedge it on
 // ER_DUP_ENTRY (unhealable, since the applier's last-write-wins pre-delete was
 // removed). The self-heal must drop the stale key and add the widened one.
-// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.ensureReplicaSecondaryIndexes(): votes append-only migration', function () {
     // Fake doQuery that treats only `votes` as present and all other tables
     // (index_tickers/index_addresses/attests) as absent, so the pre-existing

@@ -49,18 +49,15 @@ function activationDelayBlocks(coin){
     return ticker ? ACTIVATION_DELAY_BLOCKS_BY_COIN[ticker] : undefined;
 }
 
-// Normalize a chain identifier to its canonical TICKER for consensus / activation
-// lookups. The sync layer identifies a chain by `cfg.coin`, which arrives as the FULL
-// LOWERCASE NAME ('litecoin'), while every per-chain activation map is keyed
-// '<TICKER>:<network>' ('LTC:mainnet') exactly as the SOURCE indexer writes it (its
-// db.js passes config['COIN'], a ticker). Passing the full name silently missed the
-// key, with two consequences: the state-hash classes resolved differently from the
-// source, so the recompute diverged on every block at/after each chain's activation
-// height and halted every replica; and isStateCommitmentActive fell through to "off",
-// so the follower never computed the SMT roots and the light-client state-commitment
-// check never ran at all (failing OPEN rather than halting). Callers MUST pass this
-// ticker form anywhere the source passes config['COIN']. Unrecognized input is
-// returned UNCHANGED so no caller regresses relative to the previous behaviour.
+// Callers MUST pass this ticker form anywhere the source passes config['COIN'].
+// `cfg.coin` arrives as the FULL LOWERCASE NAME ('litecoin'), while every per-chain
+// activation map is keyed '<TICKER>:<network>' ('LTC:mainnet') exactly as the source
+// indexer writes it. Passing the full name silently missed the key twice over: the
+// state-hash classes resolved differently from the source, so the recompute diverged
+// at every chain's activation height and halted every replica; and
+// isStateCommitmentActive fell through to "off", so the follower silently skipped the
+// SMT roots entirely, failing OPEN rather than halting. Unrecognized input is returned
+// UNCHANGED so no caller regresses relative to the previous behaviour.
 function coinTicker(coin){
     if(coin === undefined || coin === null) return coin;
     return COIN_ALIASES[String(coin).toLowerCase()] || coin;

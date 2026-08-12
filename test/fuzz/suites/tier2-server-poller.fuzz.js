@@ -137,7 +137,6 @@ describe('Tier 2 - ServerPoller @tier2', function () {
                     db.getActions.resolves([]);
                     db.doQuery.resolves([]);
 
-                    // Should not throw; errors are caught per table
                     let result = await poller._buildBlockPayload(1);
                     assert.ok(result !== null);
                 }

@@ -52,7 +52,6 @@ describe('Integration: Full Lifecycle', function() {
         await testDb.truncateAll(replicaDb);
     });
 
-    // Helper: wait for condition
     async function waitFor(fn, timeout = 10000) {
         let start = Date.now();
         while (Date.now() - start < timeout) {
@@ -124,11 +123,9 @@ describe('Integration: Full Lifecycle', function() {
         it('completes full lifecycle correctly', async function() {
             this.timeout(30000);
 
-            // 1. Seed source with 10 blocks
             await fixtures.seedBlocks(sourceDb, 1, 10);
             await startServer();
 
-            // 2. Bootstrap client from snapshot
             let applier    = new ClientApplier(replicaDb, testDb.util);
             let rollbacker = new ClientRollback(replicaDb, testDb.util);
             let verifier   = new HashVerifier();
@@ -143,56 +140,45 @@ describe('Integration: Full Lifecycle', function() {
             cs.lastAppliedBlock = 10;
             cs.lastHashes = await replicaDb.getBlockHashRow(10);
 
-            // Verify bootstrap
             let replicaBlocks = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(replicaBlocks, 10);
 
-            // 3. Connect WS for live sync
             cs._connectWebSockets();
             await new Promise(r => setTimeout(r, 500));
 
-            // 4. Add blocks 11-15 to source and poll
             await fixtures.seedBlocks(sourceDb, 11, 15);
             poller.lastPolledBlock = 10;
             await poller._poll();
 
-            // Wait for replica to catch up
             await waitFor(async () => {
                 let count = await testDb.getRowCount(replicaDb, 'blocks');
                 return count === 15;
             });
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 15);
 
-            // 5. Simulate reorg: delete blocks 13-15, insert new blocks 13-16
             await fixtures.deleteBlocksFrom(sourceDb, 13);
             poller.lastPolledBlock = 15;
-            await poller._poll(); // This broadcasts the reorg event
+            await poller._poll(); // Broadcasts the reorg event.
 
-            // Wait for client to process reorg
             await waitFor(async () => {
                 return cs.lastAppliedBlock <= 12;
             }, 5000);
 
-            // Now source has blocks 1-12, add new 13-16
             await fixtures.seedBlocks(sourceDb, 13, 16, { creditAmount: '7777' });
             poller.lastPolledBlock = 12;
             await poller._poll();
 
-            // Wait for replica to have 16 blocks
             await waitFor(async () => {
                 let count = await testDb.getRowCount(replicaDb, 'blocks');
                 return count === 16;
             });
 
-            // 6. Final verification
             let finalBlockCount = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(finalBlockCount, 16);
 
-            // Verify source and replica block counts match
             let sourceBlockCount = await testDb.getRowCount(sourceDb, 'blocks');
             assert.strictEqual(finalBlockCount, sourceBlockCount);
 
-            // Verify new credit amounts for blocks 13-16
             let newCredits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index INNER JOIN transactions t ON t.tx_index = a.tx_index WHERE t.block_index >= 13"
             );
@@ -200,7 +186,6 @@ describe('Integration: Full Lifecycle', function() {
                 assert.strictEqual(row.amount, '7777');
             }
 
-            // Verify transparency log has entries
             let syncMetaCount = await testDb.getRowCount(sourceDb, 'sync_meta');
             assert.ok(syncMetaCount > 0);
 

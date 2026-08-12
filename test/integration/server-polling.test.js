@@ -95,7 +95,6 @@ describe('Integration: ServerPoller', function() {
             assert.strictEqual(broadcaster.broadcast.callCount, 5);
             assert.strictEqual(poller.lastPolledBlock, 5);
 
-            // Verify block order
             for (let i = 0; i < 5; i++) {
                 let event = broadcaster.broadcast.getCall(i).args[2];
                 assert.strictEqual(event.block_index, i + 1);
@@ -115,7 +114,6 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 10);
             poller.lastPolledBlock = 10;
 
-            // Simulate reorg at source
             await fixtures.deleteBlocksFrom(sourceDb, 8);
 
             await poller._poll();
@@ -200,13 +198,13 @@ describe('Integration: ServerPoller', function() {
         });
     });
 
-    // . The payload build used to issue one getActionScopedRows per registry
-    // table (86 today, growing with every replicated table added); it now asks
+    // The payload build used to issue one getActionScopedRows per registry table
+    // (86 today, growing with every replicated table added); it now asks
     // getNonEmptyActionScopedTables once and fetches only what answers. payload.data
     // feeds a consensus hash followers recompute, so the only acceptable evidence is
     // byte-identity against a REAL database, not a mock: these run the same block
     // through both paths on the same rows and compare the serialized payloads.
-    describe('_buildBlockPayload action-scoped probe ()', function() {
+    describe('_buildBlockPayload action-scoped probe', function() {
         // Same build with the probe removed from the db object, which is the pre-fix
         // query-every-table path verbatim.
         // getNonEmptyActionScopedTables lives on TestDatabase's PROTOTYPE, so it is

@@ -106,12 +106,12 @@ describe('Database.addMissingColumns', function(){
     });
 });
 
-// : the decoder replicas' pubkeys table pre-dates the monotonic-id
-// migration, so the self-heal had to ADD an AUTO_INCREMENT column. MariaDB
-// refuses that without a key in the same statement (errno 1075, "there can be
-// only one auto column and it must be defined as a key"), the generated ALTER
-// carried none, and the failure was reported as "Added column" while the
-// BTC:testnet decoder sat 345 blocks behind for two days.
+// The decoder replicas' pubkeys table pre-dates the monotonic-id migration, so
+// the self-heal had to ADD an AUTO_INCREMENT column. MariaDB refuses that
+// without a key in the same statement (errno 1075, "there can be only one auto
+// column and it must be defined as a key"), the generated ALTER carried none,
+// and the failure was reported as "Added column" while the BTC:testnet decoder
+// sat 345 blocks behind for two days.
 describe('Database.addMissingColumns: AUTO_INCREMENT key clause', function(){
 
     // The source shape the fleet actually runs: a composite-free primary key on
@@ -269,7 +269,7 @@ describe('Database.addMissingColumns: AUTO_INCREMENT key clause', function(){
     it('emits an UNQUALIFIED ALTER against the pool default database, so Replicate_Do_DB forwards it', async function(){
         // A fully-qualified `db`.`tbl` DDL executed with no default database is
         // dropped by the downstream tier's Replicate_Do_DB filter, which is why the
-        // hand-applied fix had to be repeated directly on each web node .
+        // hand-applied fix had to be repeated directly on each web node.
         let alters = stubReplica({ hasPk: true });
 
         await db.addMissingColumns('pubkeys', PUBKEYS_DDL);

@@ -101,11 +101,9 @@ class MetricsCollector {
         const measured = this.blockTimings.slice(this.warmupBlocks);
         const totalBlocks = this.blockTimings.length;
 
-        // Block timing stats
         const times = measured.map(b => b.totalMs);
         const blockTiming = this._computeDistribution(times);
 
-        // Phase timing stats: collect all unique phase names
         const phaseNames = new Set();
         for (const b of measured) {
             if (b.phases) {
@@ -118,13 +116,11 @@ class MetricsCollector {
             phaseTiming[name] = this._computeDistribution(vals);
         }
 
-        // Operation timing stats
         const operationStats = {};
         for (const [name, vals] of Object.entries(this.operationTimings)) {
             operationStats[name] = this._computeDistribution(vals);
         }
 
-        // Memory stats
         const heaps = this.memSnapshots.map(s => s.heapUsed);
         const memory = {
             initialHeapMb: heaps.length > 0 ? (heaps[0] / 1048576).toFixed(1) : 0,
@@ -135,7 +131,6 @@ class MetricsCollector {
                 : 0
         };
 
-        // Event loop delay stats
         const eventLoop = {};
         if (this.elMonitor) {
             eventLoop.meanMs = +(this.elMonitor.mean / 1e6).toFixed(2);

@@ -12,26 +12,22 @@
  *
  **********************************************************************
  *
- * Deployed-process armed-map fingerprint .
+ * Deployed-process armed-map fingerprint.
  *
  * Services install from release tarballs with no .git and stale package
  * versions, so nothing a process reports says WHICH consensus-gate build it
- * actually runs; before a flag-day height the operator must confirm every
- * deployed process carries the same armed map or a straggler forks/halts at
+ * actually runs. Before a flag-day height the operator must confirm every
+ * deployed process carries the same armed map or a straggler forks or halts at
  * the boundary (this exact mode halted LTC:testnet at 4805000 on 2026-07-10).
- * This module hashes the byte content of the consensus-gate source files in
- * the RUNNING build - the same byte-identity standard the twin-parity CI
- * gates use - and the health endpoint exposes it, so a fleet sweep can
- * compare one string per process instead of docker-cp'ing files around
- * (bin/check-flagday-deploy.sh remains the deep/manual variant).
+ * Hashing the byte content of the running build's gate files, and exposing that
+ * on the health endpoint, lets a fleet sweep compare one string per process
+ * instead of copying files out of containers.
  *
- * Exposes per-file sha256 hashes too: gate files that are byte-identical
- * twins across repos (stateHash.js and the *_activation.js set exist in both
- * xchain-indexer and xchain-sync) can be cross-compared service-to-service,
- * while the combined fingerprint compares like-for-like processes of the
- * SAME service. This module is itself a byte-identical twin in both repos
- * (the FIXED_GATE_FILES filter simply matches whichever carriers exist in
- * each repo's src/); keep the two copies in sync.
+ * Per-file sha256 hashes are exposed too, because gate files that are twins
+ * across repos can then be cross-compared service-to-service, while the
+ * combined fingerprint only compares like-for-like processes of the SAME
+ * service. This module is itself a twin in xchain-indexer (FIXED_GATE_FILES
+ * simply matches whichever carriers exist in each repo's src/); keep them in step.
  *
  ********************************************************************/
 

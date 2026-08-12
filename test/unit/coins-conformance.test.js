@@ -12,21 +12,16 @@
 
 // Per-repo coin-registry conformance guard. The coin registry (BTC/LTC/DOGE +
 // index.js + consensus_pin.js) is CONSENSUS-CRITICAL and vendored byte-identically
-// from canonical xchain-hub/src/coins into 10 consumer repos. Until now the
-// pin==consensusHash conformance test lived only in xchain-hub's suite and the
-// byte-identity drift check only in the aggregate bin/ci-all.sh, so a
-// consumer-only edit (coin file + consensus_pin.js changed together in one repo)
-// passed that repo's own CI while forking from the canonical hub. This guard
-// runs in THIS repo's own suite and asserts BOTH:
+// from canonical xchain-hub/src/coins into multiple consumer repos, so this guard
+// runs in this repo's own suite and asserts both:
 //   1. CONFORMANCE - the vendored pin equals the vendored files' consensusHash
 //      (catches a pin/coin edit that was not made in lockstep).
 //   2. IDENTITY    - every vendored file is byte-identical to the canonical
 //      xchain-hub copy (catches any consumer-only edit, even a consistent one).
 // When the sibling xchain-hub checkout is absent (standalone deploy), the
-// identity tier skips rather than fails, matching ConsensusPrimitiveConformance;
-// set XCHAIN_REQUIRE_SIBLINGS=1 in CI (with the sibling checked out, or
-// XCHAIN_HUB_DIR pointed at it) so a missing sibling hard-fails instead of
-// green-by-skip.
+// identity tier skips rather than fails; set XCHAIN_REQUIRE_SIBLINGS=1 in CI
+// (with the sibling checked out, or XCHAIN_HUB_DIR pointed at it) so a missing
+// sibling hard-fails instead of green-by-skip.
 
 const assert = require('assert');
 const fs     = require('fs');

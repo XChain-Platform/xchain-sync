@@ -66,10 +66,6 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
-// -------------------------------------------------------------------------
-// Suite setup / teardown
-// -------------------------------------------------------------------------
-
 describe('Chaos: Network Partition', function () {
 
     let server, client;
@@ -85,20 +81,15 @@ before(async function () {
     await createWsProxy(SERVER_PORT);
 
     await bootstrapDatabases();
-
-    // Seed initial blocks 1-20 into source
     await seedSourceBlocks(1, 20);
 
-    // Start sync server on SERVER_PORT
     server = createServer(SERVER_PORT);
     await server.start();
 
-    // Client connects through the WS proxy
     const wsProxiedUrl = `http://127.0.0.1:${WS_PROXY_PORT}`;
     client = createClient(wsProxiedUrl);
     await client.start();
 
-    // Wait for initial sync
     const recoveryMs = await waitForSyncRecovery(20, 30000);
     expect(recoveryMs).to.be.above(-1, 'Initial sync should complete within 30s');
     console.log(`    [setup] Initial sync to block 20 completed in ${recoveryMs}ms`);
@@ -112,10 +103,6 @@ after(async function () {
     await resetBoth();
 });
 
-// -------------------------------------------------------------------------
-// CE-NET-01: Full WebSocket Partition
-// -------------------------------------------------------------------------
-
 describe('CE-NET-01: Full WebSocket Partition', function () {
 
     afterEach(async function () {
@@ -128,17 +115,16 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
     });
 
     it('client detects disconnect and blocks stop flowing during partition', async function () {
-        // Sever the WebSocket link
+        // dbDown()/dbUp() are the generic fault API; on the WS proxy they
+        // sever/restore the WebSocket link rather than a database connection.
         await wsFaults.dbDown();
 
-        // Seed new blocks while partition is active
         await seedSourceBlocks(21, 30);
         await server.poll();
 
         // Wait for client to detect disconnect (ping timeout ~30s or close event)
         await sleep(5000);
 
-        // Client should NOT have received the new blocks
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const lastBlock = await replicaDb.getLastBlock();
         expect(lastBlock).to.be.at.most(20,
@@ -146,19 +132,16 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
     });
 
     it('client reconnects and heals block gap after partition is lifted', async function () {
-        // Ensure partition is active
         await wsFaults.dbDown();
 
-        // Seed blocks during partition
         await seedSourceBlocks(21, 30);
         await server.poll();
         await sleep(3000);
 
-        // Lift the partition
         await wsFaults.dbUp();
 
-        // Client should reconnect (CLIENT_RECONNECT_DELAY=500ms in test config)
-        // Then detect gap via status event and trigger incremental catch-up
+        // Client reconnects (CLIENT_RECONNECT_DELAY=500ms in test config),
+        // then detects the gap via a status event and triggers catch-up.
         const recoveryMs = await waitForSyncRecovery(30, 60000);
         expect(recoveryMs).to.be.above(-1,
             'Client should reconnect and heal gap within 60s');
@@ -176,10 +159,6 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
     });
 });
 
-// -------------------------------------------------------------------------
-// CE-NET-02: High Latency on WebSocket Link
-// -------------------------------------------------------------------------
-
 describe('CE-NET-02: High Latency on WebSocket Link', function () {
 
     afterEach(async function () {
@@ -187,14 +166,13 @@ describe('CE-NET-02: High Latency on WebSocket Link', function () {
     });
 
     it('blocks still delivered despite 500ms WebSocket latency', async function () {
-        // Inject 500ms ± 100ms latency on the WebSocket link
+        // 500ms latency, 100ms jitter
         await wsFaults.addLatency(500, 100);
 
-        // Seed blocks into source
         await seedSourceBlocks(21, 35);
         await server.poll();
 
-        // Blocks arrive with ~500ms delay per message hop
+        // Generous timeout: blocks arrive with ~500ms delay per message hop
         const recoveryMs = await waitForSyncRecovery(35, 60000);
         expect(recoveryMs).to.be.above(-1,
             'All blocks should be delivered despite 500ms WebSocket latency');
@@ -212,10 +190,6 @@ describe('CE-NET-02: High Latency on WebSocket Link', function () {
     });
 });
 
-// -------------------------------------------------------------------------
-// CE-NET-03: Bandwidth Throttling
-// -------------------------------------------------------------------------
-
 describe('CE-NET-03: Bandwidth Throttling', function () {
 
     afterEach(async function () {
@@ -223,10 +197,9 @@ describe('CE-NET-03: Bandwidth Throttling', function () {
     });
 
     it('blocks still delivered despite 4KB/s bandwidth throttle on WebSocket', async function () {
-        // Throttle WebSocket to 4 KB/sec
+        // 4096 bytes/sec
         await wsFaults.limitBandwidth(4096);
 
-        // Seed blocks into source
         await seedSourceBlocks(21, 30);
         await server.poll();
 
@@ -241,7 +214,6 @@ describe('CE-NET-03: Bandwidth Throttling', function () {
         await wsFaults.limitBandwidth(4096);
         await wsFaults.reset();
 
-        // Seed a few blocks and measure sync time
         await seedSourceBlocks(31, 35);
         await server.poll();
 
@@ -255,10 +227,6 @@ describe('CE-NET-03: Bandwidth Throttling', function () {
     });
 });
 
-// -------------------------------------------------------------------------
-// CE-NET-04: Packet Slicing
-// -------------------------------------------------------------------------
-
 describe('CE-NET-04: Packet Slicing', function () {
 
     afterEach(async function () {
@@ -266,10 +234,9 @@ describe('CE-NET-04: Packet Slicing', function () {
     });
 
     it('WebSocket reassembly handles sliced packets without data corruption', async function () {
-        // Slice WebSocket data into 100-byte chunks with 50µs delay
+        // 100-byte average chunk size, 50µs delay between slices
         await wsFaults.sliceData(100, 50);
 
-        // Seed blocks into source and broadcast
         await seedSourceBlocks(21, 40);
         await server.poll();
 

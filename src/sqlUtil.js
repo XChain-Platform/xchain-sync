@@ -8,18 +8,12 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// Shared SQL-file helpers.
-//
-// Schema `.sql` files are split into individual statements on ';'. A ';' that
-// appears inside a `--` line comment (prose punctuation in a column/header
-// comment) must NOT be treated as a statement terminator; doing so truncates
-// the CREATE TABLE into a bogus standalone query and silently fails schema
-// creation. This is the exact bug xchain-indexer hit ("attests.sql's header
-// split its comment, crash-looping the indexer"); keep this in sync with
-// xchain-indexer/src/db.js#stripSqlLineComments.
-
-// Remove `--` line comments while respecting quoted strings/identifiers, so a
-// ';' inside a comment never reaches the statement splitter.
+// Schema `.sql` files are split into individual statements on ';', so a ';'
+// inside a `--` line comment (prose punctuation in a column or header comment)
+// must never reach the splitter: it truncates the CREATE TABLE into a bogus
+// standalone query and silently fails schema creation. xchain-indexer hit this
+// exactly once (a header comment split its own attests.sql, crash-looping the
+// indexer); keep in sync with xchain-indexer/src/db.js#stripSqlLineComments.
 function stripSqlLineComments(sql){
     let out = '';
     let quote = null;
@@ -44,7 +38,6 @@ function stripSqlLineComments(sql){
     return out;
 }
 
-// Strip line comments, then split into trimmed, non-empty statements.
 function splitSqlStatements(sql){
     return stripSqlLineComments(sql)
         .split(';')

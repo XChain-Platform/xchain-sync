@@ -384,7 +384,7 @@ describe('SnapshotBuilder', function(){
         // full (the client applies it with INSERT IGNORE). Mirrors the decoder events
         // fix above. The re-dump is PAGED by id cursor: events is append-only on an
         // AUTO_INCREMENT id PK, and the bundled `SELECT * FROM events` it used to take
-        // materialized the whole audit log on every catch-up ().
+        // materialized the whole audit log on every catch-up.
         it('indexer: re-dumps the events audit log in full on incremental, paged by id', async function(){
             let db = createMockDb();   // dbType defaults to indexer
             db.getLastBlock.resolves(100);
@@ -513,7 +513,7 @@ describe('SnapshotBuilder', function(){
 
         // The decoder pubkeys table's PK (address_id) is NOT monotonic w.r.t. insert
         // order (inserted at first-SPEND, address_id assigned at first-SEEN), so an
-        // address_id cursor would permanently skip late-inserted rows (#4413). pubkeys
+        // address_id cursor would permanently skip late-inserted rows. pubkeys
         // now carries a surrogate monotonic AUTO_INCREMENT `id` and must page by it.
         it('decoder: pages the pubkeys table by its surrogate monotonic id cursor', async function(){
             let db = createMockDb('decoder_db');
@@ -572,7 +572,7 @@ describe('SnapshotBuilder', function(){
             assert.ok(/ORDER BY tx_index ASC, address_id ASC/.test(q));
             assert.ok(!/LIMIT/.test(q),
                 'no LIMIT: the full table must ship in ONE statement-consistent response ' +
-                '(item #2285: cross-request pages tear under in-place soft-expires)');
+                '(cross-request pages tear under in-place soft-expires)');
             assert.ok(!/WHERE/.test(q), 'no cursor -> no predicate');
         });
 
@@ -745,7 +745,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(db.commitReadSnapshot.calledOnce);
             });
 
-            // : this per-table catch used to log 'Error reading table ...' and
+            // This per-table catch used to log 'Error reading table ...' and
             // continue, so a COUNT(*) lock-wait/timeout published syntactically valid JSON
             // with that table simply absent while still advertising block_height at the tip.
             // ClientApplier.applyFullSnapshot DELETEs every snapshot-eligible local table and
@@ -886,7 +886,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(db.commitReadSnapshot.calledOnce);
             });
 
-            // Finding 1323: a transient/operational error (deadlock 1213, lock-wait 1205,
+            // A transient/operational error (deadlock 1213, lock-wait 1205,
             // connection drop) must NOT be swallowed. Rows are fully fetched before any byte
             // is written, so swallowing it would ship a structurally-valid but silently
             // INCOMPLETE catch-up (the table's window vanishes yet the payload still parses).
@@ -921,7 +921,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
 
-            // Finding 1322: a catch-up window with zero actions (getFirstActionIndex null)
+            // A catch-up window with zero actions (getFirstActionIndex null)
             // that contains only a legacy-era cooldown maturity mints NO actions row, so the
             // credits action-scoped base query is empty. The matured-cooldown merge keys off
             // the maturity block, not action_index, and must still run so the backdated refund
@@ -1169,7 +1169,7 @@ describe('SnapshotBuilder', function(){
         });
     });
 
-    // : per-Database concurrency cap on the long-lived read-snapshot
+    // Per-Database concurrency cap on the long-lived read-snapshot
     // streams, so a bootstrap stampede can never pin every pool connection and
     // starve ServerPoller's live-broadcast reads.
     describe('snapshot concurrency cap', function(){
@@ -1197,7 +1197,7 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(builder._snapshotCap(db), 3);
         });
 
-        // : with no connectionPoolParams to read, the cap falls back to the
+        // With no connectionPoolParams to read, the cap falls back to the
         // same per-dbType sizing db.js uses (DB_POOL_SIZE_<DBTYPE> > DB_POOL_SIZE >
         // per-dbType default), so a decoder Database never inherits the indexer's cap.
         it('falls back to per-dbType pool sizing, then DB_POOL_SIZE env', function(){

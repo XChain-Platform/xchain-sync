@@ -20,12 +20,11 @@
 
 const crypto = require('crypto');
 
-// Constant-time equality for auth secrets. A plain `===`/`!==` on the key
-// leaks it byte-by-byte through response-time differences (the comparison
-// short-circuits at the first mismatching character). crypto.timingSafeEqual
-// requires equal-length buffers, so the length is guarded first; a length
-// mismatch is not itself the secret. Used by every Bearer-key check (REST
-// middleware here, plus the /halt/clear route and WS upgrade in api.js).
+// Constant-time equality for auth secrets: a plain `===` short-circuits at the
+// first mismatching character and leaks the key byte-by-byte through response
+// timing. timingSafeEqual needs equal-length buffers, so length is guarded
+// first, which is safe because a length mismatch is not itself the secret.
+// Used by every Bearer-key check, here and in api.js.
 function safeEqual(a, b){
     let ab = Buffer.from(String(a == null ? '' : a));
     let bb = Buffer.from(String(b == null ? '' : b));
@@ -33,13 +32,11 @@ function safeEqual(a, b){
     return crypto.timingSafeEqual(ab, bb);
 }
 
-// Create an API key authentication middleware.
-// When a key is configured, requests fail closed: they must include
-// "Authorization: Bearer <apiKey>" or they are rejected (401).
-// When apiKey is falsy the middleware passes requests through (open access;
-// single-host / regtest / managed deployments where no key is provisioned;
-// xchain-node injects none). api.js logs a startup warning in that mode, and
-// the destructive /halt/clear route refuses to run at all without a key.
+// With a key configured this fails closed: no "Authorization: Bearer <apiKey>"
+// header means 401. A falsy apiKey deliberately passes everything through, for
+// single-host, regtest and managed deployments that provision no key (xchain-node
+// injects none); api.js warns at startup in that mode and the destructive
+// /halt/clear route still refuses to run without a key.
 function createApiKeyMiddleware(apiKey){
     return function(req, res, next){
         if(!apiKey) return next();

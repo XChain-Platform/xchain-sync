@@ -73,7 +73,6 @@ async function seedDecoderBlocks(db, startBlock, endBlock, opts){
         let prevHash  = (i === startBlock) ? null : h('blockhash', i - 1);
         let txHash    = h('txhash', i);
 
-        // index_addresses
         await db.doQuery('INSERT IGNORE INTO index_addresses (address) VALUES (?)', [sourceAddr]);
         await db.doQuery('INSERT IGNORE INTO index_addresses (address) VALUES (?)', [destAddr]);
         let srcRows = await db.doQuery('SELECT id FROM index_addresses WHERE address = ?', [sourceAddr]);
@@ -81,7 +80,6 @@ async function seedDecoderBlocks(db, startBlock, endBlock, opts){
         let srcId = Number(srcRows[0].id);
         let dstId = Number(dstRows[0].id);
 
-        // index_transactions
         await db.doQuery('INSERT IGNORE INTO index_transactions (hash) VALUES (?)', [blockHash]);
         await db.doQuery('INSERT IGNORE INTO index_transactions (hash) VALUES (?)', [txHash]);
         let blkRows = await db.doQuery('SELECT id FROM index_transactions WHERE hash = ?', [blockHash]);
@@ -96,25 +94,22 @@ async function seedDecoderBlocks(db, startBlock, endBlock, opts){
             prevId = Number(prevRows[0].id);
         }
 
-        // blocks
         await db.doQuery(
             'INSERT INTO blocks (block_index, block_time, block_hash_id, previous_block_hash_id) VALUES (?, ?, ?, ?)',
             [i, blockTime, blkId, prevId]
         );
 
-        // transactions
         await db.doQuery(
             'INSERT INTO transactions (tx_index, tx_hash_id, block_index, source_id, destination_id, amount, fee) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [txIndex, txhId, i, srcId, dstId, 100000, 250]
         );
 
-        // transaction_outputs
         await db.doQuery(
             'INSERT INTO transaction_outputs (tx_index, vout, destination_id, amount) VALUES (?, ?, ?, ?)',
             [txIndex, 0, dstId, '0.001']
         );
 
-        // events (operational, not block-scoped; fine if it drifts in count)
+        // events is operational, not block-scoped; fine if it drifts in count.
         await db.doQuery(
             "INSERT INTO events (time, code, data) VALUES (FROM_UNIXTIME(?), ?, ?)",
             [blockTime, 'BLOCK_PARSED', JSON.stringify({ block_index: i })]

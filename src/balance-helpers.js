@@ -63,21 +63,17 @@ function minimalSupply(sumExpr, decimals) {
     return "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(" + sumExpr + ' AS CHAR)))';
 }
 
-// Recompute tokens.supply from the surviving credits/debits/escrows for every token
-// after a reorg rollback. Logical twin of xchain-indexer getTokenSupply:
+// Recompute tokens.supply from the surviving credits/debits/escrows after a reorg
+// rollback. Logical mirror of xchain-indexer getTokenSupply, so keep the two in step:
 // supply = (credits - debits) + escrows, summed at the token's OWN
-// DECIMAL(60, decimals) precision (NOT the fixed DECIMAL(65,18) used for balances -
-// a token whose amounts carry more precision than 18 would round differently, so
-// the token's own scale is required for byte-identity to the source's written
-// value). ClientRollback rebuilds `balances` on reorg but historically did NOT
-// recompute tokens.supply, so a surviving token row whose supply was mutated in
-// place by an orphaned MINT kept the inflated value until the next full snapshot;
-// the source indexer's own rollback recomputes it (updateTokens), so the replica
-// served an over-inflated supply in the meantime. A DECIMAL scale cannot be a bind
-// parameter, so we clamp each distinct precision to [0,18] and run one UPDATE per
-// precision (typically 1-2). A surviving token with no ledger rows resolves to '0'
-// via the LEFT JOIN, matching getTokenSupply's all-zero result. Cross-repo logical
-// mirror of getTokenSupply; keep in step with it (drift note in rollback-coverage).
+// DECIMAL(60, decimals) precision, NOT the fixed DECIMAL(65,18) used for balances,
+// because a token carrying more than 18 decimals would round differently and break
+// byte-identity with the source's written value. Without this, a surviving token whose
+// supply was mutated in place by an orphaned MINT kept the inflated value until the
+// next full snapshot, while the source's own rollback had already corrected it.
+// A DECIMAL scale cannot be a bind parameter, hence one UPDATE per distinct precision
+// clamped to [0,18] (typically 1 or 2). A token with no ledger rows resolves to '0'
+// through the LEFT JOIN, matching getTokenSupply's all-zero result.
 async function recomputeTokenSupplies(db) {
     let precisions = await db.doQuery('SELECT DISTINCT decimals FROM tokens');
     for (let row of (precisions || [])) {

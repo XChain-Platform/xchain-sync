@@ -29,10 +29,6 @@ const http = require('http');
 const TOXIPROXY_HOST = process.env.TOXIPROXY_HOST || '127.0.0.1';
 const TOXIPROXY_PORT = parseInt(process.env.TOXIPROXY_PORT || '8474', 10);
 
-// -------------------------------------------------------------------------
-// Proxy definitions
-// -------------------------------------------------------------------------
-
 const SOURCE_PROXY = {
     name:     'source_db_chaos',
     upstream: 'source-db-chaos:3306',
@@ -49,10 +45,7 @@ const REPLICA_PROXY = {
 const WS_PROXY_LISTEN = '0.0.0.0:33062';
 const WS_PROXY_NAME   = 'ws_chaos';
 
-// -------------------------------------------------------------------------
-// Low-level HTTP helper (no axios dependency)
-// -------------------------------------------------------------------------
-
+// Raw http module; no axios dependency for this helper.
 function request(method, path, body) {
     return new Promise((resolve, reject) => {
         const payload = body ? JSON.stringify(body) : null;
@@ -84,10 +77,6 @@ function request(method, path, body) {
         req.end();
     });
 }
-
-// -------------------------------------------------------------------------
-// Proxy management
-// -------------------------------------------------------------------------
 
 async function createProxy(def) {
     try {
@@ -129,10 +118,6 @@ async function resetAllProxies() {
     await resetProxy(REPLICA_PROXY.name);
 }
 
-// -------------------------------------------------------------------------
-// Toxic management
-// -------------------------------------------------------------------------
-
 async function addToxic(proxyName, toxic) {
     return request('POST', `/proxies/${proxyName}/toxics`, {
         name:       toxic.name || `${toxic.type}_${toxic.stream || 'downstream'}`,
@@ -163,10 +148,6 @@ async function removeAllToxics(proxyName) {
         }
     }
 }
-
-// -------------------------------------------------------------------------
-// Fault factory: creates a faults object bound to a specific proxy
-// -------------------------------------------------------------------------
 
 function createProxyFaults(proxyName) {
     return {
@@ -239,16 +220,8 @@ function createProxyFaults(proxyName) {
     };
 }
 
-// -------------------------------------------------------------------------
-// Pre-built fault instances for the two standard proxies
-// -------------------------------------------------------------------------
-
 const sourceFaults  = createProxyFaults(SOURCE_PROXY.name);
 const replicaFaults = createProxyFaults(REPLICA_PROXY.name);
-
-// -------------------------------------------------------------------------
-// WebSocket proxy, created on-demand for CE-NET tests
-// -------------------------------------------------------------------------
 
 async function createWsProxy(serverPort) {
     const hostIp = process.env.CHAOS_HOST_IP || '172.17.0.1';
@@ -267,18 +240,10 @@ async function deleteWsProxy() {
 
 const wsFaults = createProxyFaults(WS_PROXY_NAME);
 
-// -------------------------------------------------------------------------
-// Convenience: reset both DB proxies at once (used in afterEach hooks)
-// -------------------------------------------------------------------------
-
 async function resetBoth() {
     await resetProxy(SOURCE_PROXY.name);
     await resetProxy(REPLICA_PROXY.name);
 }
-
-// -------------------------------------------------------------------------
-// Health check: wait for toxiproxy to be ready
-// -------------------------------------------------------------------------
 
 async function waitForToxiproxy(timeoutMs = 15000) {
     const start = Date.now();

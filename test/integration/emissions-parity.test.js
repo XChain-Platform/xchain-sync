@@ -13,22 +13,17 @@
  *
  * Internal contract emissions (e.g. SLASH) deduct ledger state but mint no
  * on-wire action, so contract_emissions.action_index is NULL for them. The
- * consensus contract_hash (BlockHasher) counts those rows, scoping them by
- * block through the execution_index -> contract_executions -> actions chain, NOT
- * by action_index. The server therefore MUST stream them the same way; the old
- * getActionScopedRows() path joins on contract_emissions.action_index and its
- * INNER JOIN silently DROPS every NULL-action_index row, so a follower would
- * receive fewer emissions than the hash counted and HALT on a divergent
- * recompute.
+ * consensus contract_hash counts those rows by walking execution_index ->
+ * contract_executions -> actions rather than action_index, so the server must
+ * stream them the same way; the old getActionScopedRows() path joined on
+ * action_index directly and its INNER JOIN silently dropped every
+ * NULL-action_index row, starving a follower's recompute and halting it.
  *
- * This drill proves the fix at the SQL layer against a real MariaDB: seed a
- * block whose single contract execution emits one on-wire emission (action_index
- * set) and one internal SLASH (action_index NULL), then assert
- *   - getEmissionRowsForBlock()  returns BOTH (the streamed, hash-aligned set), and
- *   - getActionScopedRows()      returns only ONE (drops the SLASH). This is the bug.
+ * This drill seeds one execution with an on-wire emission and a NULL-index
+ * SLASH, then proves getEmissionRowsForBlock() returns both (the fix) while
+ * getActionScopedRows() returns only one (the bug it replaces).
  *
- * Venue: needs the integration MariaDB (docker-compose.e2e or a stack box); run
- * with `npm run test:integration`. It cannot run where no real DB is reachable.
+ * Requires the integration MariaDB; run via `npm run test:integration`.
  ********************************************************************/
 
 const assert   = require('assert');
@@ -94,8 +89,7 @@ describe('Integration: contract_emissions reorg-safe streaming (emissions fix) @
         assert.ok(slash, 'SLASH emission present in the streamed set');
         assert.strictEqual(slash.action_index, null, 'SLASH emission carries NULL action_index');
 
-        // The bug it fixes: the generic action-scoped INNER JOIN silently drops the NULL row,
-        // so a follower fed by this path would recompute a divergent contract_hash and halt.
+        // The bug this replaces (see header): the action-scoped INNER JOIN drops the NULL row.
         const actionScoped = await sourceDb.getActionScopedRows('contract_emissions', B);
         assert.strictEqual(actionScoped.length, 1,
             'action-scoped path drops the NULL-action_index SLASH row (the divergence bug)');

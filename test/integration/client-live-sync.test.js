@@ -110,7 +110,6 @@ describe('Integration: Client Live Sync', function() {
         await testDb.truncateAll(replicaDb);
     });
 
-    // Helper: wait for a condition with polling
     async function waitFor(fn, timeout = 10000) {
         let start = Date.now();
         while (Date.now() - start < timeout) {
@@ -124,7 +123,6 @@ describe('Integration: Client Live Sync', function() {
         it('applies a single block received via WS to replica', async function() {
             this.timeout(15000);
 
-            // Bootstrap replica with 5 blocks
             await fixtures.seedBlocks(sourceDb, 1, 5);
 
             let applier    = new ClientApplier(replicaDb, testDb.util);
@@ -137,23 +135,19 @@ describe('Integration: Client Live Sync', function() {
                 HASH_CONFIRM_TIMEOUT: 1000
             };
 
-            // Bootstrap first
             let clientSync = require('../../src/ClientSync');
             let cs = new clientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
             await cs._bootstrapFromSnapshot();
             cs.lastAppliedBlock = 5;
             cs.lastHashes = await replicaDb.getBlockHashRow(5);
 
-            // Connect WS
             cs._connectWebSockets();
             await new Promise(r => setTimeout(r, 500));
 
-            // Add block 6 to source and poll
             await fixtures.seedBlocks(sourceDb, 6, 6);
             poller.lastPolledBlock = 5;
             await poller._poll();
 
-            // Wait for replica to have block 6
             await waitFor(async () => {
                 let count = await testDb.getRowCount(replicaDb, 'blocks');
                 return count === 6;
@@ -188,7 +182,6 @@ describe('Integration: Client Live Sync', function() {
             cs._connectWebSockets();
             await new Promise(r => setTimeout(r, 500));
 
-            // Add blocks 6-10 and poll
             await fixtures.seedBlocks(sourceDb, 6, 10);
             poller.lastPolledBlock = 5;
             await poller._poll();
@@ -214,7 +207,8 @@ describe('Integration: Client Live Sync', function() {
 
             let applier = new ClientApplier(replicaDb, testDb.util);
 
-            // Build a block payload for block 5 (already exists)
+            // Block 5 already exists on the replica, so _buildBlockPayload may return
+            // nothing for it; fall back to a stub payload to exercise the no-op path.
             let payload = await poller._buildBlockPayload(5);
             if (!payload) {
                 poller.lastPolledBlock = 4;
@@ -222,10 +216,8 @@ describe('Integration: Client Live Sync', function() {
                 payload = { block_index: 5, data: {} };
             }
 
-            // Apply: should not throw
             await applier.applyBlock(payload);
 
-            // Count unchanged
             let count = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(count, 5);
         });

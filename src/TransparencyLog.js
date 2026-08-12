@@ -38,8 +38,7 @@ class TransparencyLog {
         this.readOnly  = readOnly === true;
     }
 
-    // Record a block's hashes in the transparency log
-    // Automatically commits a Merkle epoch when an epoch boundary is crossed
+    // Crossing an epoch boundary commits that epoch's Merkle root as a side effect.
     async recordBlock(block_index, block_time, ledger_hash, actions_hash, contract_hash){
         if(this.readOnly) return;
         let query = `INSERT IGNORE INTO sync_meta
@@ -47,7 +46,6 @@ class TransparencyLog {
             VALUES (?, ?, ?, ?, ?)`;
         await this.db.doQuery(query, [block_index, block_time, ledger_hash, actions_hash, contract_hash]);
 
-        // Check if we crossed an epoch boundary
         if (block_index > 0 && block_index % this.epochSize === 0) {
             let epoch = Math.floor(block_index / this.epochSize);
             await this.commitEpoch(epoch).catch(e =>
@@ -56,7 +54,6 @@ class TransparencyLog {
         }
     }
 
-    // Commit a Merkle epoch: build tree from epoch blocks and store root
     async commitEpoch(epoch) {
         if(this.readOnly) return;
         let startBlock = (epoch - 1) * this.epochSize + 1;
@@ -103,32 +100,27 @@ class TransparencyLog {
             ', root: ' + tree.root.substring(0, 16) + '...)');
     }
 
-    // Prune the transparency log on a server-side reorg to `block_index` (the new
-    // canonical tip + 1, so every block >= block_index was orphaned). The source's
-    // own sync_meta / merkle_epochs are sync-service-owned tables that nothing else
-    // rolls back (the indexer rolls back its data tables, not these), and
-    // recordBlock writes sync_meta with INSERT IGNORE on a UNIQUE block_index, so
-    // without this, re-added blocks keep their pre-reorg hashes (the new hashes
-    // silently dropped) and the node serves wrong Merkle proofs. Mirrors and
-    // completes the client's sync_meta prune in ClientRollback, on the source side.
+    // Prunes the log on a server-side reorg to `block_index` (the new canonical tip + 1,
+    // so every block at or above it was orphaned). sync_meta and merkle_epochs are
+    // sync-service-owned, and nothing else rolls them back: the indexer rolls back its
+    // data tables, not these. Since recordBlock writes sync_meta with INSERT IGNORE on a
+    // UNIQUE block_index, skipping this prune would leave re-added blocks carrying their
+    // pre-reorg hashes and the node serving wrong Merkle proofs. This is the source-side
+    // mirror of the client's sync_meta prune in ClientRollback.
     //
-    // Policy (operator decision): track the canonical chain. Capture every
-    // committed merkle_epoch the reorg invalidates as an append-only audit marker
-    // (old_root), delete those epochs so they re-commit from the canonical chain
-    // when the boundary is re-crossed (commitEpoch backfills new_root), and delete
-    // the orphaned sync_meta rows so recordBlock re-inserts fresh hashes.
+    // The policy is to track the canonical chain: capture every invalidated committed
+    // epoch as an append-only audit marker (old_root), delete those epochs so they
+    // re-commit from the canonical chain when the boundary is re-crossed (commitEpoch
+    // backfills new_root), and delete the orphaned sync_meta rows so recordBlock
+    // re-inserts fresh hashes.
     //
-    // Deliberately uses plain doQuery (no beginTransaction), like recordBlock and
-    // the rest of the poll loop. A transaction here would drive the shared
-    // db.transactionConnection; keeping the poll loop transactionless avoids any
-    // contention on it between concurrent writers (the snapshot-read path now uses
-    // its own dedicated connection via beginReadSnapshot, so it is no longer a
-    // party to that field). Instead the steps are ordered so a partial failure
-    // self-heals on the next poll's retry
-    // (the reorg branch leaves lastPolledBlock un-rewound until this completes), and
-    // every step is idempotent: the marker insert is guarded against duplicates and
-    // both DELETEs are range-deletes that no-op once the rows are gone. If any step
-    // throws (DB fault), it propagates so the poll loop retries the whole prune.
+    // Deliberately plain doQuery, no transaction, like the rest of the poll loop: a
+    // transaction here would drive the shared db.transactionConnection and contend with
+    // other writers. Instead the steps are ordered and individually idempotent (the
+    // marker insert is duplicate-guarded, both DELETEs are range-deletes that no-op once
+    // the rows are gone), so a partial failure self-heals on the next poll, which the
+    // reorg branch guarantees by leaving lastPolledBlock un-rewound until this completes.
+    // A DB fault propagates so the poll loop retries the whole prune.
     async pruneFrom(block_index){
         // A replicated log prunes at the source; the DELETEs arrive over replication.
         if(this.readOnly) return;

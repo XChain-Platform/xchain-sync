@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// : behind the co-located Apache reverse proxy, express resolved every
+// Behind a co-located reverse proxy, express resolved every
 // request to 127.0.0.1 because 'trust proxy' was never set, so the snapshot
 // rate limiters keyed one shared global bucket and a single caller could drain
 // every validator's snapshot budget. These tests drive real HTTP through the
@@ -181,7 +181,7 @@ describe('API rate-limit proxy trust security', function(){
             assert.strictEqual(app.get('trust proxy'), false);
         });
 
-        //  end to end, against the app the service actually serves:
+        // End to end, against the app the service actually serves:
         // exhausting one validator's snapshot budget must not 429 the next.
         it('does not let one client drain the snapshot budget of another', async function(){
             let app = await bootRealApi('true', { SNAPSHOT_RATE_FULL: '2' });
@@ -253,7 +253,7 @@ describe('API rate-limit proxy trust security', function(){
             assert.strictEqual(res.body.ip, CLIENT_A);
         });
 
-        // The actual defect in : without the seam both clients resolve to
+        // The actual defect: without the seam both clients resolve to
         // 127.0.0.1, share one bucket, and the first caller 429s the second.
         it('gives two different client addresses independent snapshot buckets', async function(){
             harness = await startHarness({ trustProxy: true, cfg: { SNAPSHOT_RATE_FULL: 2 } });

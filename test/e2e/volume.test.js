@@ -51,7 +51,6 @@ describe('E2E: Large Data Volume', function() {
         it('bootstraps large dataset within timeout', async function() {
             this.timeout(120000);
 
-            // Seed 500 blocks
             await fixtures.seedBlocks(sourceDb, 1, 500);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -71,7 +70,6 @@ describe('E2E: Large Data Volume', function() {
             let replicaCredits = await testDb.getRowCount(replicaDb, 'credits');
             assert.strictEqual(replicaCredits, sourceCredits);
 
-            // Should complete in reasonable time (under 90 seconds)
             assert.ok(elapsed < 90000, 'Bootstrap took too long: ' + elapsed + 'ms');
         });
     });
@@ -80,7 +78,6 @@ describe('E2E: Large Data Volume', function() {
         it('catches up large delta within timeout', async function() {
             this.timeout(120000);
 
-            // Bootstrap to block 100
             await fixtures.seedBlocks(sourceDb, 1, 100);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -90,7 +87,6 @@ describe('E2E: Large Data Volume', function() {
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 100);
 
-            // Add 200 blocks
             await fixtures.seedBlocks(sourceDb, 101, 300);
             // Seeded rows are servable only once the poller records them (100/cycle cap).
             await server.pollUntil(300);
@@ -108,10 +104,8 @@ describe('E2E: Large Data Volume', function() {
         it('syncs a block with 1000 actions', async function() {
             this.timeout(60000);
 
-            // Seed baseline blocks
             await fixtures.seedBlocks(sourceDb, 1, 10);
 
-            // Seed a large block
             await fixtures.seedLargeBlock(sourceDb, 11, 1000);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -122,7 +116,6 @@ describe('E2E: Large Data Volume', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 11);
 
-            // Verify all actions were synced
             let sourceActions  = await testDb.getRowCount(sourceDb, 'actions');
             let replicaActions = await testDb.getRowCount(replicaDb, 'actions');
             assert.strictEqual(replicaActions, sourceActions);
@@ -146,13 +139,11 @@ describe('E2E: Large Data Volume', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 10);
 
-            // Insert blocks at ~1 per 200ms
             for (let i = 11; i <= 110; i++) {
                 await fixtures.seedBlocks(sourceDb, i, i);
                 await new Promise(r => setTimeout(r, 200));
             }
 
-            // Wait for all blocks to sync
             await waitForReplicaBlock(replicaDb, 110, 30000);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 110);
@@ -176,17 +167,14 @@ describe('E2E: Large Data Volume', function() {
             );
             let elapsed = Date.now() - startTime;
 
-            // Decompress
             let decompressed = zlib.gunzipSync(res.data);
             let snapshot = JSON.parse(decompressed.toString());
 
-            // Verify structure
             assert.strictEqual(snapshot.block_height, 200);
             assert.ok(snapshot.tables, 'Snapshot should have tables');
             assert.ok(snapshot.tables.blocks, 'Snapshot should have blocks table');
             assert.strictEqual(snapshot.tables.blocks.length, 200);
 
-            // Verify row counts match
             let sourceCredits = await testDb.getRowCount(sourceDb, 'credits');
             assert.strictEqual(snapshot.tables.credits.length, sourceCredits);
 

@@ -12,14 +12,14 @@
 --
 --********************************************************************
 
--- Table used by xchain-sync to durably record a divergence HALT.
+-- Durable record of a divergence HALT.
 --
 -- When a client confirms a cross-source consensus-hash divergence (two honest
 -- sources committed different ledger/actions/contract hashes for the same
 -- block), it stops applying and records the halt here. On restart it re-reads
--- any uncleared halt and stays stopped — a halted validator must NEVER silently
--- resume onto a contested chain. An operator clears it explicitly after
--- investigating (cleared_at set), which lets the client resume.
+-- any uncleared halt and stays stopped, because a halted validator must NEVER
+-- silently resume onto a contested chain. Only an operator setting cleared_at,
+-- after investigating, lets the client resume.
 
 DROP TABLE IF EXISTS sync_halt;
 CREATE TABLE sync_halt (

@@ -20,8 +20,8 @@
  * string "[object Object]" on insert, so binary columns replicate corrupted on
  * both the snapshot and the live-broadcast paths.
  *
- * Fix: tag each Buffer column value with a reserved single-key sentinel
- * { "__xbin__": "<base64>" } at serialize time and restore it to a Buffer at
+ * So each Buffer column value is tagged with a reserved single-key sentinel
+ * { "__xbin__": "<base64>" } at serialize time and restored to a Buffer at
  * apply time. Encoding is driven by Buffer.isBuffer (the driver only returns a
  * Buffer for binary column types), so there are no encode-side false positives;
  * decoding only fires on the exact reserved-key shape. Row values are scalars,
@@ -37,9 +37,8 @@
 // Reserved single-key sentinel wrapping a base64-encoded binary column value.
 const BINARY_TAG = '__xbin__';
 
-// Shallow-encode one row's Buffer columns to the wire sentinel. Returns the
-// original row object unchanged when it carries no Buffers (avoids needless
-// allocation for the overwhelming majority of rows, which have none).
+// Returns the original row object unchanged when it carries no Buffers, which
+// avoids a copy for the overwhelming majority of rows.
 function encodeRow(row){
     if(!row || typeof row !== 'object') return row;
     let out = null;
@@ -52,7 +51,6 @@ function encodeRow(row){
     return out || row;
 }
 
-// Encode every row in a { table: [rows] } map (the live block payload's `data`).
 function encodeTables(tables){
     if(!tables || typeof tables !== 'object') return tables;
     let out = {};
@@ -63,10 +61,8 @@ function encodeTables(tables){
     return out;
 }
 
-// Decode one column value from the wire: a sentinel object -> Buffer, everything
-// else passthrough. The strict shape check (plain object, exactly one key, the
-// reserved key, string value) keeps a JSON-typed column from being misread as
-// binary.
+// The strict shape check (plain object, exactly one key, the reserved key, a
+// string value) keeps a JSON-typed column from being misread as binary.
 function decodeValue(v){
     if(v && typeof v === 'object' && !Array.isArray(v) && !Buffer.isBuffer(v)
         && typeof v[BINARY_TAG] === 'string'

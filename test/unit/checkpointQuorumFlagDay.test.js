@@ -9,12 +9,10 @@
  * General Public License v3.0 or later; see LICENSE.md.
  *
  **********************************************************************
- * Flag-day tripwire : VERIFY_CHECKPOINT_QUORUM's default must track
+ * Flag-day tripwire: VERIFY_CHECKPOINT_QUORUM's default must track
  * whether pinnedValidators.js actually carries a launch validator set.
  *
- * The agreed posture (claude/reports/archive/2026-07-18_xchain-sync-multi-source-
- * byzantine-design.md, and step 6 of claude/reports/launch/TRUST-MINIMIZATION-
- * ACTIVATION-RUNBOOK.md) is a COUPLED flip, in both directions:
+ * The agreed posture is a COUPLED flip, in both directions:
  *
  *   - while every pinned key is null the anchor has no out-of-band trust root, so
  *     a default of true would be inert while reading as "protected". Default OFF.
@@ -55,8 +53,7 @@ describe('checkpoint-quorum flag-day coupling @regression', function(){
             armed
                 ? 'pinnedValidators.js now carries a launch validator set, so the shipped default for ' +
                   'VERIFY_CHECKPOINT_QUORUM must flip ON in the SAME change (src/config.js): a replica ' +
-                  'that has a trust root available and does not use it is trusting its source. ' +
-                  'See TRUST-MINIMIZATION-ACTIVATION-RUNBOOK step 6.'
+                  'that has a trust root available and does not use it is trusting its source.'
                 : 'pinnedValidators.js is still all-null (INERT), so VERIFY_CHECKPOINT_QUORUM must ' +
                   'default OFF: a true-but-inert flag reads as protected while nothing is verified.');
     });

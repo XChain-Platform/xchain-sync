@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 // Byte-diff conformance/fuzz guard for the follower's independent getNetBalance
-// reimplementation . The indexer (SOURCE) renders each SMT balance leaf
+// reimplementation. The indexer (SOURCE) renders each SMT balance leaf
 // value via mathjs: util.bcstr(util.bcsub(cr, dr, 18)). The sync follower has an
 // independent reimplementation that renders the SAME net inside SQL
 // (balance-helpers.minimalDecimal over the DECIMAL(60,18) credit/debit sums).

@@ -8,12 +8,8 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// This used to be a stale FORK of the e2e fixtures: it fabricated the
-// consensus hashes (so VERIFY_RECOMPUTE could never run on fixture data),
-// rebuilt balances with DOUBLE-promoting SQL the applier no longer uses, and
-// had missed the ensureIndexAction dedup fix. The integration tier uses only
-// a subset of the e2e fixture API (seedBlocks / deleteBlocksFrom), so it now
-// re-exports the single maintained implementation, which commits REAL
-// computed block hashes (hash-consistent data) and rebuilds balances with the
-// shared src/balance-helpers.js SQL.
+// This module used to fork the e2e fixtures and drifted out of sync with them
+// (fabricated consensus hashes, stale balance SQL, a missed dedup fix). It now
+// re-exports the single maintained e2e implementation instead, so the
+// integration tier can't drift from it again.
 module.exports = require('../../e2e/helpers/fixtures');

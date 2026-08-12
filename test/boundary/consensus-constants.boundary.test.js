@@ -1,5 +1,4 @@
-//  doctrine test-coverage program: boundary coverage for
-// src/consensus-constants.js. A thin replica must agree with the source indexer
+// A thin replica must agree with the source indexer
 // on every value that gates block-hashed state; these are derived from the
 // canonical coin registry so they cannot drift. This exercises the resolver
 // edges: null/undefined coin, an unrecognized coin, and the frozen scalar

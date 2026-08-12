@@ -50,7 +50,6 @@ describe('E2E: Reorg Propagation', function() {
         it('propagates reorg and new blocks correctly', async function() {
             this.timeout(30000);
 
-            // Seed and sync to block 20
             await fixtures.seedBlocks(sourceDb, 1, 20);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -60,30 +59,24 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 20);
 
-            // Simulate reorg: delete blocks 18-20 from source
             await fixtures.deleteBlocksFrom(sourceDb, 18);
 
-            // Force a poll to detect the reorg
             await server.poll();
 
-            // Wait for client to process reorg
             await waitFor(async () => {
                 let block = await replicaDb.getLastBlock();
                 return block !== null && block <= 17;
             }, 10000);
 
-            // Verify old blocks removed from replica
             await assertBlockNotExists(replicaDb, 18);
             await assertBlockNotExists(replicaDb, 19);
             await assertBlockNotExists(replicaDb, 20);
 
-            // Add replacement blocks with different data
             await fixtures.seedBlocks(sourceDb, 18, 21, { creditAmount: '5555' });
             await server.poll();
 
             await waitForReplicaBlock(replicaDb, 21);
 
-            // Verify new data
             await assertBlockExists(replicaDb, 18);
             await assertBlockExists(replicaDb, 21);
 
@@ -93,7 +86,7 @@ describe('E2E: Reorg Propagation', function() {
             for (let row of newCredits) {
                 assert.strictEqual(row.amount, '5555');
             }
-            // Post-reorg parity: rolled-back replica must re-converge byte-identically
+            // Post-reorg parity: rolled-back replica must re-converge byte-identically.
             await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });
@@ -102,7 +95,6 @@ describe('E2E: Reorg Propagation', function() {
         it('recalculates balances correctly after reorg', async function() {
             this.timeout(30000);
 
-            // Seed blocks: 1-15 with credit 1000, blocks 16-20 with credit 5000
             await fixtures.seedBlocks(sourceDb, 1, 15, { creditAmount: '1000' });
             await fixtures.seedBlocks(sourceDb, 16, 20, { creditAmount: '5000' });
 
@@ -113,7 +105,7 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 20);
 
-            // Reorg: remove blocks 16-20 (which had 5000 credits)
+            // Removes the blocks that carried the 5000-credit range.
             await fixtures.deleteBlocksFrom(sourceDb, 16);
             await server.poll();
 
@@ -122,13 +114,11 @@ describe('E2E: Reorg Propagation', function() {
                 return block !== null && block <= 15;
             }, 10000);
 
-            // Add new blocks 16-18 with credit 3000
             await fixtures.seedBlocks(sourceDb, 16, 18, { creditAmount: '3000' });
             await server.poll();
 
             await waitForReplicaBlock(replicaDb, 18);
 
-            // Verify balances are consistent
             await assertBalancesConsistent(replicaDb);
             await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
@@ -147,7 +137,6 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 30);
 
-            // Deep reorg: delete blocks 21-30
             await fixtures.deleteBlocksFrom(sourceDb, 21);
             await server.poll();
 
@@ -156,7 +145,6 @@ describe('E2E: Reorg Propagation', function() {
                 return block !== null && block <= 20;
             }, 10000);
 
-            // Add new blocks 21-35
             await fixtures.seedBlocks(sourceDb, 21, 35, { creditAmount: '2222' });
             await server.poll();
 
@@ -180,7 +168,7 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 25);
 
-            // Reorg: remove blocks 23-25, do NOT add replacements
+            // No replacement blocks follow this reorg, unlike the other cases here.
             await fixtures.deleteBlocksFrom(sourceDb, 23);
             await server.poll();
 
@@ -236,7 +224,6 @@ describe('E2E: Reorg Propagation', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 23);
 
-            // Verify final data has second-reorg amounts
             let credits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index WHERE a.block_index >= 20"
             );

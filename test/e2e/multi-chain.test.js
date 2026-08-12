@@ -55,8 +55,8 @@ describe('E2E: Multi-Chain Synchronization', function() {
         await setup.resetDatabases();
     });
 
-    // Multi-chain server: serves two chains from the same source DB
-    // (using different block ranges to simulate independent chains)
+    // Serves two chains from the same source DB, using different block
+    // ranges to simulate independent chains.
     function startMultiChainServer() {
         let config = {
             WS_MAX_PER_IP: 20,
@@ -140,14 +140,12 @@ describe('E2E: Multi-Chain Synchronization', function() {
         it('bootstraps from shared source for both chains', async function() {
             this.timeout(30000);
 
-            // Seed source with 20 blocks
             await fixtures.seedBlocks(sourceDb, 1, 20);
 
             await startMultiChainServer();
 
             let serverUrl = 'http://127.0.0.1:' + SERVER_PORT;
 
-            // Bootstrap bitcoin client
             let btcClient = new ClientProcess(replicaDb, serverUrl, 'bitcoin', 'mainnet');
             await btcClient.bootstrap();
 
@@ -167,14 +165,12 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             let wsUrl = 'ws://127.0.0.1:' + SERVER_PORT;
 
-            // Subscribe to bitcoin/mainnet
             let btcMessages = [];
             let btcWs = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
             btcWs.on('message', (data) => {
                 btcMessages.push(JSON.parse(data.toString()));
             });
 
-            // Subscribe to litecoin/mainnet
             let ltcMessages = [];
             let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
             ltcWs.on('message', (data) => {
@@ -183,18 +179,15 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             await new Promise(r => setTimeout(r, 1000));
 
-            // Add blocks and poll only bitcoin
             await fixtures.seedBlocks(sourceDb, 6, 8);
             btcPoller.lastPolledBlock = 5;
             await btcPoller._poll();
 
             await new Promise(r => setTimeout(r, 1000));
 
-            // Bitcoin should have received block events
             let btcBlockEvents = btcMessages.filter(m => m.type === 'block');
             assert.ok(btcBlockEvents.length >= 3, 'Bitcoin should have received 3 block events, got ' + btcBlockEvents.length);
 
-            // Litecoin should NOT have received block events (only status at most)
             let ltcBlockEvents = ltcMessages.filter(m => m.type === 'block');
             assert.strictEqual(ltcBlockEvents.length, 0, 'Litecoin should not receive bitcoin block events');
 
@@ -220,14 +213,12 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             await new Promise(r => setTimeout(r, 500));
 
-            // Simulate bitcoin reorg
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             btcPoller.lastPolledBlock = 10;
             await btcPoller._poll();
 
             await new Promise(r => setTimeout(r, 1000));
 
-            // Litecoin should NOT receive reorg events
             let ltcReorgEvents = ltcMessages.filter(m => m.type === 'reorg');
             assert.strictEqual(ltcReorgEvents.length, 0, 'Litecoin should not receive bitcoin reorg');
 

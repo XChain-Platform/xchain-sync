@@ -74,7 +74,7 @@ describe('replicatedTables', function(){
         });
 
         it('includes dispensers in the completeness count set but NOT per-block-streamed', function(){
-            // #3835: the decoder soft-expires dispensers (UPDATE) and hard-purges
+            // The decoder soft-expires dispensers (UPDATE) and hard-purges
             // them (DELETE) off the block stream, so it is NOT per-block-streamed
             // (absent from blockScoped/txScoped/actionScoped/index). It IS listed in
             // `special` so it enters the /status completeness count: the drift the

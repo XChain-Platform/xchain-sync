@@ -34,31 +34,23 @@
  * permanently short by every matured refund: steady-state, hash-blind balance
  * divergence (the credit is in no per-block ledger hash at the maturity height).
  *
- * This selects those credits by MATURITY block (cooldown_end_block) so they can
- * be merged into the normal `credits` table payload; this is the exact FORWARD mirror
- * of ClientRollback's reverse delete (same join keys, same cooldown_end_block /
- * status='completed' predicate, GAS tick for the capability refund). They then
- * flow through the existing credits apply path (_insertRows + balance rebuild),
- * which is idempotent at the block/window boundary exactly as the normal
- * action-scoped credits are. Indexer dbType only.
+ * This selects those credits by MATURITY block (cooldown_end_block) so they can be
+ * merged into the normal `credits` payload. It is the exact FORWARD mirror of
+ * ClientRollback's reverse delete: same join keys, same cooldown_end_block and
+ * status='completed' predicate, GAS tick for the capability refund. They then flow
+ * through the existing credits apply path, idempotent at the block/window boundary
+ * exactly as normal action-scoped credits are. Indexer dbType only.
  *
  ********************************************************************/
 
 const { gasTickSymbol } = require('./consensus-constants');
 
-// Select the matured cooldown-refund credit rows whose maturity block
-// (cooldown_end_block) falls in the inclusive window [fromBlock, toBlock].
-// Returns raw `credits` rows (action_index, address_id, tick_id, amount),
-// deduped by their logical identity (action_index, address_id, tick_id); the
-// credits table has no unique key, so the dedup is explicit. The caller merges
-// these into the block / snapshot `credits` array (and dedups the union).
-//
-//   db        the source Database (indexer dbType only; callers must gate)
-//   fromBlock inclusive lower maturity-block bound
-//   toBlock   inclusive upper maturity-block bound (for a single live block,
-//             pass fromBlock === toBlock)
-//   conn      optional connection (so a snapshot's REPEATABLE READ view reads
-//             these at the same height as the rest of the payload)
+// Selects the matured refund credits whose cooldown_end_block falls in the
+// inclusive window [fromBlock, toBlock] and returns raw `credits` rows for the
+// caller to merge into the block or snapshot `credits` array. `db` must be an
+// indexer-dbType Database (callers gate that), and passing `conn` lets a
+// snapshot's REPEATABLE READ view read these at the same height as the rest of
+// its payload.
 async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
@@ -66,10 +58,9 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     let completedStatusId = await db.getStatusId('completed');
     if(completedStatusId === null || completedStatusId === undefined) return [];
 
-    // Dedup by the credit's logical identity (credits has no unique key). An
-    // unstake created AND matured inside the same incremental window can be
-    // reached both here and by the caller's action-scoped selection; the caller
-    // dedups the union on the same triple.
+    // Dedup on (action_index, address_id, tick_id) because `credits` has no unique
+    // key: an unstake created AND matured inside one incremental window is reached
+    // both here and by the caller's action-scoped selection.
     let acc = new Map();
     function add(rows){
         for(let r of (rows || [])){
@@ -78,10 +69,8 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
         }
     }
 
-    // Capability maturity refund: paid in GAS, keyed by the unstake's
-    // action_index. Forward mirror of ClientRollback's capability reverse delete
-    // (same join keys + cooldown_end_block/status predicate); the GAS tick is the
-    // frozen consensus constant, never a hub poll.
+    // Capability maturity refund: paid in GAS, keyed by the unstake's action_index.
+    // The GAS tick is the frozen consensus constant, never a hub poll.
     let gasTick = gasTickSymbol();
     if(gasTick){
         try {
@@ -98,8 +87,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
         }
     }
 
-    // Contract maturity refund: paid in the unstake's own tick. Forward mirror
-    // of ClientRollback's contract reverse delete.
+    // Contract maturity refund: paid in the unstake's own tick.
     try {
         let rows = await db.doQuery(
             "SELECT c.* FROM credits c " +

@@ -8,7 +8,6 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// Poll a condition function until it returns true or timeout expires
 async function waitFor(fn, timeout = 15000, interval = 100) {
     let start = Date.now();
     while (Date.now() - start < timeout) {
@@ -18,7 +17,6 @@ async function waitFor(fn, timeout = 15000, interval = 100) {
     throw new Error('waitFor timeout after ' + timeout + 'ms');
 }
 
-// Wait until replica DB reaches a given block height
 async function waitForReplicaBlock(replicaDb, expectedBlock, timeout = 15000) {
     await waitFor(async () => {
         let block = await replicaDb.getLastBlock();
@@ -26,7 +24,6 @@ async function waitForReplicaBlock(replicaDb, expectedBlock, timeout = 15000) {
     }, timeout);
 }
 
-// Wait until server status reports a given block height
 async function waitForServerStatus(axios, serverUrl, chain, network, expectedBlock, timeout = 15000) {
     await waitFor(async () => {
         try {
@@ -38,7 +35,6 @@ async function waitForServerStatus(axios, serverUrl, chain, network, expectedBlo
     }, timeout);
 }
 
-// Wait until a table has a given row count
 async function waitForTableCount(db, table, expectedCount, timeout = 15000) {
     await waitFor(async () => {
         let count = await db.getTableCount(table);

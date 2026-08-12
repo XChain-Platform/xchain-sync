@@ -112,7 +112,7 @@ describe('ClientSync', function(){
             assert.ok(warn.getCalls().some(c => /decoder replication has no hash-based rejection/.test(c.args[0])));
         });
 
-        it('indexer with 2+ sources emits no SINGLE-SOURCE warning, but DOES warn the checkpoint anchor is off ', function(){
+        it('indexer with 2+ sources emits no SINGLE-SOURCE warning, but DOES warn the checkpoint anchor is off', function(){
             let warn = sinon.stub(console, 'warn');
             sync._warnTrustPosture();
             // Cross-source quorum alone only outvotes a Byzantine minority; a
@@ -124,7 +124,7 @@ describe('ClientSync', function(){
                 'warns the checkpoint anchor is inactive');
         });
 
-        it('indexer with the checkpoint anchor active and a pinned set emits no trust warnings ', function(){
+        it('indexer with the checkpoint anchor active and a pinned set emits no trust warnings', function(){
             const ENVKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_MAINNET';
             process.env[ENVKEY] = JSON.stringify([{ pubkey: 'ab'.repeat(32), weight: '100', source: 'ab'.repeat(32) }]);
             let cfg = { ...config, VERIFY_CHECKPOINT_QUORUM: true };

@@ -13,7 +13,7 @@
 // gap the fake-db sanity check could not cover (real BIGINT id ordering, NULL
 // block_index exclusion, driver id typing, real sync_state persistence).
 //
-// Acceptance cases (claude/reports/2026-06-19_index-map-soft-parity-proposal.md):
+// Acceptance cases:
 //   1. faithful replica -> checksums match (and a NULL-block row on the source,
 //      a benign recovery/API pre-seed, does NOT break parity);
 //   2. equal row count + swapped identity (the INSERT IGNORE divergence) ->

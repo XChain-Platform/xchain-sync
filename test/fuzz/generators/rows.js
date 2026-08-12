@@ -23,7 +23,6 @@ const {
     textValue, addressString, tickString,
 } = require('./values');
 
-/** blocks table row */
 function blocksRow() {
     return fc.record({
         block_index: blockIndex(),
@@ -34,7 +33,6 @@ function blocksRow() {
     });
 }
 
-/** transactions table row */
 function transactionsRow() {
     return fc.record({
         tx_index: txIndex(),
@@ -44,7 +42,6 @@ function transactionsRow() {
     });
 }
 
-/** actions table row */
 function actionsRow() {
     return fc.record({
         action_index: actionIndex(),
@@ -56,7 +53,6 @@ function actionsRow() {
     });
 }
 
-/** credits table row */
 function creditsRow() {
     return fc.record({
         action_index: actionIndex(),
@@ -76,52 +72,42 @@ function debitsRow() {
     });
 }
 
-/** index_addresses row */
 function indexAddressRow() {
     return fc.record({ address: addressString() });
 }
 
-/** index_transactions row */
 function indexTransactionRow() {
     return fc.record({ hash: hashString() });
 }
 
-/** index_tickers row */
 function indexTickerRow() {
     return fc.record({ tick: tickString() });
 }
 
-/** index_actions row */
 function indexActionRow() {
     return fc.record({ action: fc.string({ minLength: 0, maxLength: 30 }) });
 }
 
-/** index_coins row */
 function indexCoinRow() {
     return fc.record({ coin: fc.string({ minLength: 0, maxLength: 50 }) });
 }
 
-/** index_memos row */
 function indexMemoRow() {
     return fc.record({ memo: textValue() });
 }
 
-/** index_pubkeys row */
 function indexPubkeyRow() {
     return fc.record({ pubkey: hashString() });
 }
 
-/** index_statuses row */
 function indexStatusRow() {
     return fc.record({ status: fc.string({ minLength: 0, maxLength: 50 }) });
 }
 
-/** index_mime_types row */
 function indexMimeTypeRow() {
     return fc.record({ type: fc.string({ minLength: 0, maxLength: 100 }) });
 }
 
-/** index_fiats row */
 function indexFiatRow() {
     return fc.record({
         code: fc.string({ minLength: 0, maxLength: 10 }),
@@ -150,12 +136,10 @@ function genericDataRow() {
     );
 }
 
-/** Array of rows from a given row arbitrary */
 function rowArray(rowArb, minLength, maxLength) {
     return fc.array(rowArb, { minLength: minLength || 0, maxLength: maxLength || 20 });
 }
 
-/** Mixed rows from various table types */
 function mixedRows() {
     return fc.oneof(
         rowArray(blocksRow(), 1, 5),

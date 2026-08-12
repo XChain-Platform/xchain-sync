@@ -14,7 +14,7 @@
 
 'use strict';
 
-// : a weightless row must never leave the follower's stake-weight
+// A weightless row must never leave the follower's stake-weight
 // producer either. stake_weighted_quorum fails closed on a missing weight, but
 // it only ever sees a weight the producer already resolved: coercing the missing
 // one to '0' leaves the source in the quorum's dedupe map carrying no stake, so
@@ -62,7 +62,7 @@ const MISSING = [
     { label: 'the literal null', weight: 'null' }
 ];
 
-describe('weightless stake-weight rows fail closed ', function(){
+describe('weightless stake-weight rows fail closed', function(){
 
     beforeEach(function(){ sinon.stub(console, 'warn'); });
     afterEach(function(){ sinon.restore(); });
