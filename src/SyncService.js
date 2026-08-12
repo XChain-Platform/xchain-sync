@@ -55,6 +55,20 @@ class SyncService {
         this.broadcaster    = null;
         this.snapshotBuilder = null;
         this.hashVerifier   = new HashVerifier();
+
+        // Startup readiness, false until start() has discovered chains and begun
+        // polling. api.js listens BEFORE start() runs and start() can sit in
+        // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
+        // getChains() is empty and /health's per-chain loop finds nothing to
+        // degrade on: the probe read healthy while nothing was syncing ().
+        this.ready = false;
+    }
+
+    // True once start() has completed. Kept separate from "has chains" so a
+    // discovered-but-legitimately-empty chain set (everything SYNC_EXCLUDEd)
+    // still reads healthy rather than degrading forever.
+    isReady(){
+        return this.ready;
     }
 
     async start(){
@@ -86,6 +100,10 @@ class SyncService {
 
         this._scheduleHubRepoll();
         this._startStateTreeMetric();
+
+        // Last statement in start(): everything a /health caller is entitled to
+        // assume is running is running by here.
+        this.ready = true;
     }
 
     async _waitForHub(){

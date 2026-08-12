@@ -368,45 +368,53 @@ class SnapshotBuilder {
             let tableOrder = await this._getOrderedTables(db, conn);
             let first = true;
             let totalRows = 0;
+            // NO per-table catch: any read error here fails the WHOLE snapshot. This loop
+            // used to log 'Error reading table X' and continue, which published
+            // syntactically valid JSON with that table simply absent (a COUNT(*)
+            // lock-wait/timeout on one large table was enough) while still advertising
+            // block_height at the tip. ClientApplier.applyFullSnapshot DELETEs every
+            // snapshot-eligible local table and re-inserts only the tables the payload
+            // carries, so a populated `actions`/`markets` reached the replica EMPTY and the
+            // replica then advanced to the advertised tip; a single-source deployment runs
+            // no post-apply content check to notice (ClientSync._bootstrapRotateSources
+            // cross-verifies only when sources.length > 1), so the divergence was permanent
+            // and silent. Failing loud instead: the outer catch disposes the writer, so the
+            // closing '}}' is never emitted, and the client's JSON.parse of the truncated
+            // download throws and retries. The legitimate `if(count === 0) continue;` below
+            // stands - a genuinely empty table is still omitted; only real errors abort.
+            // A client-disconnect abort already broke out of the loop before this change
+            // and still does, now via the same path.
             for(let table of tableOrder){
+                let count = await db.getTableCount(table, conn);
+                if(count === 0) continue;
+
+                if(!first) await writer.write(',');
+                first = false;
+                await writer.write('"' + table + '":[');
+
+                // One ordered streaming pass per table (no LIMIT/OFFSET repaging):
+                // most replicated tables are keyless with a non-unique first
+                // column, so offset paging by `ORDER BY 1` had no total order and
+                // could duplicate or skip a page-boundary tie (see
+                // db.streamTableRows). A single query execution reads each row
+                // exactly once; for-await gives row-at-a-time backpressure so a
+                // multi-million-row table never lands in the driver array.
+                let firstRow = true;
+                let rowStream = db.streamTableRows(table, conn);
                 try {
-                    let count = await db.getTableCount(table, conn);
-                    if(count === 0) continue;
-
-                    if(!first) await writer.write(',');
-                    first = false;
-                    await writer.write('"' + table + '":[');
-
-                    // One ordered streaming pass per table (no LIMIT/OFFSET repaging):
-                    // most replicated tables are keyless with a non-unique first
-                    // column, so offset paging by `ORDER BY 1` had no total order and
-                    // could duplicate or skip a page-boundary tie (see
-                    // db.streamTableRows). A single query execution reads each row
-                    // exactly once; for-await gives row-at-a-time backpressure so a
-                    // multi-million-row table never lands in the driver array.
-                    let firstRow = true;
-                    let rowStream = db.streamTableRows(table, conn);
-                    try {
-                        for await (let row of rowStream){
-                            if(!firstRow) await writer.write(',');
-                            firstRow = false;
-                            await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
-                            totalRows++;
-                        }
-                    } finally {
-                        // On a writer abort mid-table, stop the driver from buffering
-                        // the rest of the result set (no-op once the stream has ended).
-                        rowStream.destroy();
+                    for await (let row of rowStream){
+                        if(!firstRow) await writer.write(',');
+                        firstRow = false;
+                        await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+                        totalRows++;
                     }
-
-                    await writer.write(']');
-                } catch(e){
-                    // A client-disconnect abort must break out of the whole stream, not
-                    // be swallowed as a per-table read error (which would keep writing to
-                    // a dead stream and pinning the read view).
-                    if(e && e.aborted) throw e;
-                    console.error('Error reading table ' + table + ':', e);
+                } finally {
+                    // On a writer abort mid-table, stop the driver from buffering
+                    // the rest of the result set (no-op once the stream has ended).
+                    rowStream.destroy();
                 }
+
+                await writer.write(']');
             }
 
             // Release the read view only after the final page is read. The data
@@ -436,6 +444,14 @@ class SnapshotBuilder {
             // already released, and the response is gone, so return quietly rather
             // than surfacing a 500-shaped error to the (absent) caller.
             if(e && e.aborted) return;
+            // Tear the response down once the headers are out. writer.dispose()
+            // destroys the gzip stream, but pipe() does not propagate a destroy to
+            // its destination, so `res` would stay open with no further writes and
+            // the client would sit on it until SNAPSHOT download timeout (600s) -
+            // one stalled attempt per source, per retry. Destroying the socket makes
+            // the truncated transfer fail immediately so the bootstrap retry ladder
+            // moves. Headers-not-sent is left to the route, which answers 500.
+            if(res.headersSent && typeof res.destroy === 'function') res.destroy();
             throw e;
         }
     }
@@ -597,9 +613,10 @@ class SnapshotBuilder {
             //     committed" for every post-bootstrap epoch.
             //   - markets: derived OHLCV aggregate keyed by tick pair with no
             //     action_index. Without a full-dump here, a follower's markets table
-            //     freezes at bootstrap height. markets has NO ClientRollback drop;
-            //     it converges post-reorg via the full-dump UPSERT (ON DUPLICATE KEY
-            //     UPDATE) on the next snapshot.
+            //     freezes at bootstrap height. VALUE changes converge post-reorg via
+            //     this full-dump UPSERT (ON DUPLICATE KEY UPDATE); ROW REMOVAL cannot,
+            //     which is why ClientRollback mirrors both of the source's markets
+            //     deletes (orphaned-tick sweep and the pair-scoped IDX-2 delete).
             //   - attest_validator_stats: running per-validator aggregate counters
             //     with no action_index. Without a full-dump here, these counters
             //     freeze at bootstrap height. ClientRollback drops affected rows on
@@ -657,6 +674,20 @@ class SnapshotBuilder {
                        ((dbType === 'decoder' && decoderFullDump.has(table)) ||
                         (dbType === 'indexer' && indexerFullDump.has(table)))){
                         if(skipLookups) continue;
+                        first = await this._streamLookupPaged(writer, db, table, conn, first);
+                        continue;
+                    }
+
+                    // The indexer `events` log is the one indexerFullDump member that is
+                    // append-only on an AUTO_INCREMENT id yet absent from lookupSet: its
+                    // replication class is 'snapshot', not 'stream:index', so the branch
+                    // above cannot reach it and it fell to the bundled `SELECT *` below,
+                    // materializing the whole audit log per catch-up (). Page it
+                    // by the same id cursor, which emits a byte-identical "events":[...]
+                    // key, so no client, protocol, or schema change is implied. Unlike the
+                    // lookupSet tables it is NOT synced out of band, so it must still be
+                    // streamed under skipLookups rather than skipped.
+                    if(dbType === 'indexer' && table === 'events' && indexerFullDump.has(table)){
                         first = await this._streamLookupPaged(writer, db, table, conn, first);
                         continue;
                     }

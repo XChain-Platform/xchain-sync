@@ -127,6 +127,11 @@ class ServerPoller {
         // Count of consecutive _poll() failures so _updateStatus can surface
         // a stale-status signal to /health callers when the poller is wedged.
         this.pollErrorCount = 0;
+
+        // Throttle stamp for the action-scoped query-count metric (0 = never emitted,
+        // so the first block of a process publishes a baseline). See
+        // _reportActionScopedQueryMetric.
+        this._lastQueryMetricAt = 0;
     }
 
     async start(){
@@ -635,6 +640,37 @@ class ServerPoller {
             if(actionRows && actionRows.length > 0)
                 payload.data['actions'] = actionRows;
 
+            // Counters for the action-scoped query-count metric emitted after the loop.
+            // Read-only bookkeeping: nothing here reaches payload.data.
+            let scopedQueries = 0, scopedNonEmpty = 0, probeQueries = 0;
+            let scopedStartedAt = Date.now();
+
+            // Discover in ONE round-trip which action-scoped tables carry rows this block,
+            // then fetch only those (: the loop below otherwise queries all 86
+            // registry tables, empty ones included, and grows with every table added).
+            // Skipping a probe-absent table cannot change payload.data: the probe runs
+            // getActionScopedRows' own predicate, so its verdict IS that fetch's row count,
+            // and an empty fetch is already dropped by the length check below.
+            //
+            // scopedTables stays null on ANY probe failure, and on a db without the helper,
+            // which restores the query-every-table behaviour verbatim. Swallowing a
+            // transient fault here is safe precisely because the fallback re-issues the
+            // real fetches: a fault that persists throws from those instead, freezing the
+            // cursor rather than broadcasting an incomplete block.
+            let scopedTables = null;
+            if(typeof this.db.getNonEmptyActionScopedTables === 'function'){
+                try {
+                    probeQueries = 1;
+                    let probed = await this.db.getNonEmptyActionScopedTables(
+                        this.actionScopedTables.filter(t => t !== 'actions' && t !== 'contract_emissions'),
+                        block_index, conn);
+                    scopedTables = (probed && typeof probed.has === 'function') ? probed : null;
+                } catch(e){
+                    probeQueries = 0;
+                    scopedTables = null;
+                }
+            }
+
             for(let table of this.actionScopedTables){
                 if(table === 'actions') continue; // Already handled
                 // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
@@ -644,9 +680,12 @@ class ServerPoller {
                 // through the execution_index chain instead, matching BlockHasher exactly.
                 if(table === 'contract_emissions'){
                     try {
+                        scopedQueries++;
                         let rows = await this.db.getEmissionRowsForBlock(block_index, conn);
-                        if(rows && rows.length > 0)
+                        if(rows && rows.length > 0){
                             payload.data[table] = rows;
+                            scopedNonEmpty++;
+                        }
                     } catch(e){
                         // Skip a genuine schema gap; re-throw any transient fault so the
                         // block is retried rather than broadcast incomplete.
@@ -654,16 +693,25 @@ class ServerPoller {
                     }
                     continue;
                 }
+                // Probe said this table has no rows for this block, so getActionScopedRows
+                // would return [] and the length check below would drop it anyway.
+                if(scopedTables && !scopedTables.has(table)) continue;
                 try {
+                    scopedQueries++;
                     let rows = await this.db.getActionScopedRows(table, block_index, conn);
-                    if(rows && rows.length > 0)
+                    if(rows && rows.length > 0){
                         payload.data[table] = rows;
+                        scopedNonEmpty++;
+                    }
                 } catch(e){
                     // Skip a genuine schema gap; re-throw any transient fault so the
                     // block is retried rather than broadcast incomplete.
                     if(!isSchemaGapError(e)) throw e;
                 }
             }
+
+            this._reportActionScopedQueryMetric(scopedQueries, scopedNonEmpty,
+                                               Date.now() - scopedStartedAt, probeQueries);
 
             // Cooldown-maturity refund credits mint AT this block but carry the
             // unstake's earlier-block action_index (and no block_index), so the
@@ -896,6 +944,31 @@ class ServerPoller {
         }
 
         return payload;
+    }
+
+    // Emit a throttled [METRIC] line recording how many action-scoped round-trips a
+    // block cost and how many of them carried rows. probe_queries is 1 when the
+    // non-empty-table probe answered (so `queries` is content-shaped) and 0 when the
+    // build fell back to querying every registry table, which is what makes a silent
+    // regression to the old N+1 visible rather than merely slow (). Reads
+    // counters only, never payload.data, so the consensus hash is untouched. Interval is
+    // SYNC_QUERY_METRIC_INTERVAL_MS (default 15m, 0 disables), so this is one line per
+    // interval, not per block. Twin of SyncService's STATE_TREE_METRIC_INTERVAL_MS.
+    _reportActionScopedQueryMetric(queries, nonEmpty, elapsedMs, probeQueries){
+        let raw = parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10);
+        let intervalMs = Number.isFinite(raw) ? raw : (15 * 60 * 1000);
+        if(intervalMs === 0) return;   // explicitly disabled
+        let now = Date.now();
+        if(this._lastQueryMetricAt && (now - this._lastQueryMetricAt) < intervalMs) return;
+        this._lastQueryMetricAt = now;
+        console.log('[METRIC] ' + JSON.stringify({
+            metric: 'sync_action_scoped_queries_per_block', component: 'sync',
+            chain: this.chain, network: this.network, db_type: this.dbType,
+            candidate_tables: this.actionScopedTables ? this.actionScopedTables.length : 0,
+            queries: queries, probe_queries: probeQueries || 0,
+            non_empty_tables: nonEmpty, elapsed_ms: elapsedMs,
+            ts: now
+        }));
     }
 
     async _updateStatus(sourceBlockHeight){

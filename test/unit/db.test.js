@@ -1162,6 +1162,62 @@ describe('Database.getActionScopedRows()', function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 19-z. getNonEmptyActionScopedTables()
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Database.getNonEmptyActionScopedTables()', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('probes every existing candidate in ONE round-trip, with getActionScopedRows\' predicate', async function () {
+        sinon.stub(db, 'listExistingTables').resolves(new Set(['sends', 'credits', 'orders']));
+        sinon.stub(db, 'doQueryStrict').resolves([{ tbl: 'sends' }, { tbl: 'orders' }]);
+
+        let result = await db.getNonEmptyActionScopedTables(['sends', 'credits', 'orders'], 10);
+
+        assert.strictEqual(db.doQueryStrict.callCount, 1, 'one query, not one per table');
+        let [sql, args] = db.doQueryStrict.firstCall.args;
+        assert.strictEqual((sql.match(/UNION ALL/g) || []).length, 2, 'three branches, two joiners');
+        // The equivalence that makes skipping a table safe: same join, same block scope
+        // as getActionScopedRows, so "probe says empty" IS "that fetch returns []".
+        assert.strictEqual((sql.match(/INNER JOIN actions a ON \(a\.action_index = t\.action_index\)/g) || []).length, 3);
+        assert.strictEqual((sql.match(/WHERE a\.block_index = \? LIMIT 1/g) || []).length, 3);
+        assert.deepStrictEqual(args, [10, 10, 10]);
+        assert.deepStrictEqual([...result].sort(), ['orders', 'sends']);
+    });
+
+    it('drops candidates the source schema does not have (one missing table fails the whole UNION)', async function () {
+        sinon.stub(db, 'listExistingTables').resolves(new Set(['sends']));
+        sinon.stub(db, 'doQueryStrict').resolves([]);
+
+        await db.getNonEmptyActionScopedTables(['sends', 'bet_resolves'], 10);
+
+        let sql = db.doQueryStrict.firstCall.args[0];
+        assert.ok(sql.includes('`sends`'));
+        assert.ok(!sql.includes('bet_resolves'), 'a table the source lacks must not enter the UNION');
+    });
+
+    it('issues no query at all when no candidate exists', async function () {
+        sinon.stub(db, 'listExistingTables').resolves(new Set());
+        sinon.stub(db, 'doQueryStrict').resolves([]);
+
+        let result = await db.getNonEmptyActionScopedTables(['sends'], 10);
+
+        assert.strictEqual(db.doQueryStrict.callCount, 0);
+        assert.strictEqual(result.size, 0);
+    });
+
+    it('refuses an unsafe table identifier before it reaches the query string', async function () {
+        sinon.stub(db, 'listExistingTables').resolves(new Set(['sends']));
+        sinon.stub(db, 'doQueryStrict').resolves([]);
+
+        await assert.rejects(
+            () => db.getNonEmptyActionScopedTables(['sends`, (SELECT 1)'], 10),
+            /unsafe table identifier/);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 19-a. getEmissionRowsForBlock()
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Database.getEmissionRowsForBlock()', function () {

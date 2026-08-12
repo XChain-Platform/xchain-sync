@@ -200,6 +200,93 @@ describe('Integration: ServerPoller', function() {
         });
     });
 
+    // . The payload build used to issue one getActionScopedRows per registry
+    // table (86 today, growing with every replicated table added); it now asks
+    // getNonEmptyActionScopedTables once and fetches only what answers. payload.data
+    // feeds a consensus hash followers recompute, so the only acceptable evidence is
+    // byte-identity against a REAL database, not a mock: these run the same block
+    // through both paths on the same rows and compare the serialized payloads.
+    describe('_buildBlockPayload action-scoped probe ()', function() {
+        // Same build with the probe removed from the db object, which is the pre-fix
+        // query-every-table path verbatim.
+        // getNonEmptyActionScopedTables lives on TestDatabase's PROTOTYPE, so it is
+        // shadowed with an own `undefined` rather than deleted: a delete removes nothing
+        // and the comparison would silently be probe-against-probe, which passes while
+        // proving nothing.
+        async function buildUnprobed(blockIndex) {
+            sourceDb.getNonEmptyActionScopedTables = undefined;
+            try {
+                assert.strictEqual(typeof sourceDb.getNonEmptyActionScopedTables, 'undefined');
+                return await poller._buildBlockPayload(blockIndex);
+            } finally {
+                delete sourceDb.getNonEmptyActionScopedTables;
+            }
+        }
+
+        it('emits a byte-identical payload on a block that has rows', async function() {
+            await fixtures.seedBlocks(sourceDb, 1, 1);
+
+            let probed   = await poller._buildBlockPayload(1);
+            let unprobed = await buildUnprobed(1);
+
+            assert.ok(probed.data.credits && probed.data.credits.length === 1,
+                'the block must carry action-scoped rows, or this proves nothing');
+            assert.strictEqual(JSON.stringify(probed), JSON.stringify(unprobed));
+        });
+
+        it('emits a byte-identical payload on a block with no action-scoped rows', async function() {
+            await fixtures.seedBlocks(sourceDb, 1, 2);
+            await sourceDb.doQuery("DELETE FROM credits");
+
+            let probed   = await poller._buildBlockPayload(2);
+            let unprobed = await buildUnprobed(2);
+
+            assert.ok(!probed.data.credits, 'no action-scoped rows in this block');
+            assert.strictEqual(JSON.stringify(probed), JSON.stringify(unprobed));
+        });
+
+        it('cuts the per-table round-trips to the tables that actually have rows', async function() {
+            await fixtures.seedBlocks(sourceDb, 1, 1);
+            const spy = sinon.spy(sourceDb, 'getActionScopedRows');
+
+            await poller._buildBlockPayload(1);
+            const probedFetches = spy.getCalls().map(c => c.args[0]);
+            spy.resetHistory();
+
+            await buildUnprobed(1);
+            const unprobedFetches = spy.getCalls().map(c => c.args[0]);
+
+            assert.ok(unprobedFetches.length > 40,
+                'the unprobed path really does walk the whole registry (' + unprobedFetches.length + ')');
+            assert.ok(probedFetches.length < unprobedFetches.length,
+                'the probe must remove round-trips (' + probedFetches.length + ' vs ' + unprobedFetches.length + ')');
+            // Every table still fetched is one the unprobed path also fetched with rows.
+            for (const table of probedFetches)
+                assert.ok(unprobedFetches.includes(table), table + ' fetched by the probed path only');
+        });
+
+        it('agrees with the real fetch on which tables are empty', async function() {
+            await fixtures.seedBlocks(sourceDb, 1, 1);
+            const candidates = poller.actionScopedTables
+                .filter(t => t !== 'actions' && t !== 'contract_emissions');
+
+            const nonEmpty = await sourceDb.getNonEmptyActionScopedTables(candidates, 1);
+
+            // The safety property, checked table by table against the real database:
+            // probe membership must equal "getActionScopedRows returns rows".
+            for (const table of candidates) {
+                let rows = [];
+                try {
+                    rows = await sourceDb.getActionScopedRows(table, 1);
+                } catch (e) {
+                    continue;   // table absent from this schema; the probe skips it too
+                }
+                assert.strictEqual(nonEmpty.has(table), rows.length > 0,
+                    'probe disagrees with the real fetch on ' + table);
+            }
+        });
+    });
+
     describe('_updateStatus', function() {
         it('updates broadcaster status with real block data', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);

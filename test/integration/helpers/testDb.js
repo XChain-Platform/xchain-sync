@@ -117,6 +117,28 @@ class TestDatabase {
             WHERE tx.block_index = ?`, [block_index]);
     }
 
+    // Mirror of src/db.js getNonEmptyActionScopedTables(): one UNION-ALL round-trip
+    // naming the action-scoped tables that carry rows in this block, so ServerPoller's
+    // payload build queries content rather than the whole registry. The existence
+    // predicate must stay THIS class's getActionScopedRows predicate verbatim (the
+    // harness still block-scopes through the transactions join, which production moved
+    // off), because "probe says empty" has to mean "that fetch returns []" for the
+    // payload to come out byte-identical. Missing tables are filtered out first: one
+    // absent table would fail the whole UNION.
+    async getNonEmptyActionScopedTables(tables, block_index) {
+        const present = new Set(await getTables(this));
+        const candidates = tables.filter(t => /^[A-Za-z0-9_]+$/.test(t) && present.has(t));
+        if (candidates.length === 0) return new Set();
+        const branches = candidates.map(table =>
+            `(SELECT '${table}' AS tbl FROM \`${table}\` t
+                INNER JOIN actions a ON (a.action_index = t.action_index)
+                INNER JOIN transactions tx ON (tx.tx_index = a.tx_index)
+                WHERE tx.block_index = ? LIMIT 1)`);
+        const rows = await this.doQuery(branches.join(' UNION ALL '),
+                                        candidates.map(() => block_index));
+        return new Set(rows.map(r => r.tbl));
+    }
+
     // Mirror of src/db.js getEmissionRowsForBlock(): block-scopes contract_emissions
     // through execution_index -> contract_executions -> actions (NOT em.action_index),
     // so NULL-action_index internal emissions (e.g. SLASH) are included. These are the rows the

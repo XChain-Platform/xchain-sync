@@ -381,22 +381,25 @@ describe('SnapshotBuilder', function(){
         // 1054 on the missing column, and was swallowed; an incrementally-caught-up
         // follower froze its events table at bootstrap height (silent, since events is
         // replication:'snapshot' and outside the /status count). It must be re-dumped in
-        // full via the bundled path (the client applies it with INSERT IGNORE). Mirrors
-        // the decoder events fix above.
-        it('indexer: re-dumps the events audit log in full on incremental', async function(){
+        // full (the client applies it with INSERT IGNORE). Mirrors the decoder events
+        // fix above. The re-dump is PAGED by id cursor: events is append-only on an
+        // AUTO_INCREMENT id PK, and the bundled `SELECT * FROM events` it used to take
+        // materialized the whole audit log on every catch-up ().
+        it('indexer: re-dumps the events audit log in full on incremental, paged by id', async function(){
             let db = createMockDb();   // dbType defaults to indexer
             db.getLastBlock.resolves(100);
             db.getBlockHashRow.resolves({ ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             db.getFirstActionIndex.resolves(500);
+            let unbounded = 0;
             db.doQuery.callsFake(async (query) => {
                 if(query.includes('information_schema'))
                     return [{ table_name: 'events' }];
-                // events is a small aggregate (no id cursor), so it takes the bundled
-                // full-dump path. If the code instead tried the action_index branch the
-                // query would carry `WHERE action_index >=` and this would not match, so
-                // the table would come back empty and the assert would fail, exactly the
-                // frozen-at-bootstrap bug being guarded against.
-                if(/SELECT \* FROM `events`$/.test(query))
+                if(/SELECT \* FROM `events`$/.test(query)){ unbounded++; return []; }
+                // events takes the id-cursor pager, NOT the bundled full-dump and NOT the
+                // action_index branch (which would carry `WHERE action_index >=`, match
+                // nothing here, and leave the table empty: the frozen-at-bootstrap bug
+                // this case has always guarded). 2 rows < pageSize, so one page and stop.
+                if(/SELECT \* FROM `events` WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(query))
                     return [{ id: 1, event: 'REORG', data: 'x' }, { id: 2, event: 'REORG', data: 'y' }];
                 return [];
             });
@@ -414,6 +417,7 @@ describe('SnapshotBuilder', function(){
             let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
             assert.ok(parsed.tables.events, 'events audit log present in incremental snapshot');
             assert.strictEqual(parsed.tables.events.length, 2, 'all events rows re-dumped');
+            assert.strictEqual(unbounded, 0, 'the unbounded full-table events SELECT is never issued');
         });
 
         // skipLookups: a truncated/fast-chain replica syncs the append-only `.index`
@@ -725,17 +729,59 @@ describe('SnapshotBuilder', function(){
                 assert.strictEqual(out.tables.blocks[0].id, '1'); // BigInt → string
             });
 
-            it('skips zero-count tables and swallows a per-table read error', async function(){
+            it('skips zero-count tables without failing the snapshot', async function(){
                 let db = createMockDb();
                 db.getLastBlock.resolves(10);
                 db.getBlockHashRow.resolves(null);
                 db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'actions' }]);
-                db.getTableCount.withArgs('blocks').resolves(0);          // skipped (count 0)
-                db.getTableCount.withArgs('actions').rejects(new Error('boom')); // caught
+                db.getTableCount.withArgs('blocks').resolves(0);   // legitimately empty → omitted
+                db.getTableCount.withArgs('actions').resolves(1);
+                db.streamTableRows.callsFake(() => Readable.from([{ id: 1 }]));
                 let res = streamRes();
                 await run(() => builder.streamFullSnapshot(db, res), res);
-                assert.ok(console.error.getCalls().some(c => /Error reading table actions/.test(c.args[0])));
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.deepStrictEqual(Object.keys(out.tables), ['actions'],
+                    'a zero-row table is still omitted; only real read errors abort');
                 assert.ok(db.commitReadSnapshot.calledOnce);
+            });
+
+            // : this per-table catch used to log 'Error reading table ...' and
+            // continue, so a COUNT(*) lock-wait/timeout published syntactically valid JSON
+            // with that table simply absent while still advertising block_height at the tip.
+            // ClientApplier.applyFullSnapshot DELETEs every snapshot-eligible local table and
+            // re-inserts only what the payload carries, so a populated table reached the
+            // replica EMPTY and the replica advanced to the tip; a single-source deployment
+            // runs no post-apply content check to catch it. A partial snapshot must never be
+            // published, so the whole read now fails.
+            it('aborts the whole snapshot on a per-table read error rather than omitting the table', async function(){
+                let db = createMockDb();
+                db.getLastBlock.resolves(10);
+                db.getBlockHashRow.resolves(null);
+                db.doQuery.resolves([{ table_name: 'blocks' }, { table_name: 'actions' }]);
+                db.getTableCount.withArgs('blocks').resolves(1);
+                db.getTableCount.withArgs('actions').rejects(new Error('Lock wait timeout exceeded'));
+                db.streamTableRows.callsFake(() => Readable.from([{ id: 1 }]));
+                let res = streamRes();
+                await assert.rejects(() => builder.streamFullSnapshot(db, res),
+                    { message: 'Lock wait timeout exceeded' });
+                assert.strictEqual(db.commitReadSnapshot.called, false,
+                    'a partial snapshot must never be committed/closed');
+                assert.ok(db.rollbackReadSnapshot.calledOnce, 'the read view is released by rollback');
+                // The closing '}}' is never emitted, so the client's JSON.parse of the
+                // truncated download throws and the bootstrap retries instead of committing.
+                assert.ok(!/\}\}\s*$/.test(res.getCollectedData().toString('binary')));
+            });
+
+            it('still returns quietly on a client-disconnect abort (not treated as a read error)', async function(){
+                let db = createMockDb();
+                db.getLastBlock.resolves(10);
+                db.getBlockHashRow.resolves(null);
+                db.doQuery.resolves([{ table_name: 'blocks' }]);
+                db.getTableCount.withArgs('blocks').rejects(Object.assign(new Error('gone'), { aborted: true }));
+                let res = streamRes();
+                await builder.streamFullSnapshot(db, res); // returns, does not throw
+                assert.strictEqual(db.commitReadSnapshot.called, false);
+                assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
 
             it('rolls back and rethrows when the snapshot read throws', async function(){

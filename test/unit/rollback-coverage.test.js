@@ -473,6 +473,39 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
+    // IDX-2 pair-scoped markets parity (#4485). The dangling-tick sweep guarded above
+    // misses a market whose pair kept both ticks but lost its only order/trade to the
+    // reorg; the source deletes that row, and until #4485 the replica did not. markets
+    // rides the snapshot as an UPSERT-only full dump, so a row the replica keeps can
+    // never be removed by replication and xchain-explorer serves the stale zeroed OHLCV
+    // forever. Both sides must carry the same three statements: the survival probe over
+    // orders, the survival probe over order_matches, and the two-orientation delete. The
+    // source aliases its probe tables (o. / om.) and the replica does not, so the alias
+    // is optional in the regex; everything else must match text-for-text.
+    it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const IDX2_OPS = [
+            { name: 'surviving-orders probe (both orientations)',
+              re: /SELECT 1 FROM orders (?:o )?WHERE \((?:o\.)?give_tick_id=\? AND (?:o\.)?get_tick_id=\?\) OR \((?:o\.)?give_tick_id=\? AND (?:o\.)?get_tick_id=\?\) LIMIT 1/ },
+            { name: 'surviving-matches probe (both orientations)',
+              re: /SELECT 1 FROM order_matches (?:om )?WHERE \((?:om\.)?give_tick_id=\? AND (?:om\.)?get_tick_id=\?\) OR \((?:om\.)?give_tick_id=\? AND (?:om\.)?get_tick_id=\?\) LIMIT 1/ },
+            { name: 'two-orientation markets delete',
+              re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
+        ];
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            const norm = fs.readFileSync(p, 'utf8')
+                .replace(/[`"']/g, ' ')
+                .replace(/\s+\+\s+/g, ' ')
+                .replace(/\s+/g, ' ');
+            for(const op of IDX2_OPS){
+                assert.ok(op.re.test(norm), `${label} is missing the IDX-2 ${op.name}; source and replica must both drop a market whose pair kept no surviving order/match, or the replica serves a stale zeroed OHLCV row no snapshot can remove`);
+            }
+        }
+    });
+
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
     // above removes the refund credit on reorg, but the FORWARD path must stream that same
     // credit to followers in the first place, keyed by maturity block, since its backdated

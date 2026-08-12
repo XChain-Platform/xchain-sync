@@ -372,6 +372,22 @@ async function startApi(){
     // surfaces the per-database circuit state so monitoring can tell a healthy
     // replicator apart from one stalled on a database outage.
     app.get('/health', (req, res) => {
+        // Startup is not health. server.listen() runs before syncService.start(),
+        // and start() can wait on the hub for MAX_HUB_WAIT_MS (default 5 min); until
+        // it returns there are no chains, so the loop below has nothing to degrade on
+        // and the probe reported 'healthy' with zero pollers running ().
+        // Report 'starting' + 503 for that whole window instead.
+        if(typeof syncService.isReady === 'function' && !syncService.isReady()){
+            res.status(503);
+            return res.json({
+                status:       'starting',
+                mode:         cfg['SYNC_MODE'],
+                databases:    [],
+                hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
+                armed_map_fingerprint:  computeArmedMapFingerprint().fingerprint,
+                last_updated: new Date().toISOString()
+            });
+        }
         let chains = syncService.getChains();
         let databases = [];
         let degraded = false;

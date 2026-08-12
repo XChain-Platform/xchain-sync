@@ -628,8 +628,8 @@ async function buildStakesRoot(smt, chain, network, blockIndex, entries){
 // commit). chain = COIN, network = NETWORK. touchedKeys is an array of
 // { address, tick } strings the applied block event touched (credits/debits/
 // escrows, cooldown refunds already merged by the source). On the activation
-// boundary block the touched set is ignored and the balances tree is fully
-// initialized from pre-existing state.
+// boundary block, and on the escrow-leaf ARMING block, the touched set is ignored
+// and the balances tree is fully initialized from pre-existing state.
 //
 // stakes_root is rebuilt fresh each block from the BTC capability stake set
 // (gatherStakeEntries; EMPTY on non-BTC), so the returned state_root is fully
@@ -645,9 +645,21 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     // and application end to end, and the two twins' shadow columns are the §7
     // cross-twin comparison.
     const escShadow = SUB.isEscrowLockedLeafShadowActive(blockIndex, network, chain);
+    // The ARMING BLOCK full-builds too, byte-for-byte with the source twin's gate in
+    // xchain-indexer/src/stateCommitment.js (). The incremental branch below
+    // applies escrow leaves from journal rows stamped at THIS height only, while the
+    // arming replay deliberately writes no row for a key whose locked total is
+    // unchanged. After a §7 shadow window every still-unchanged live lock therefore has
+    // no arming-height row, and it is not in the prior committed root either, so it
+    // never enters the newly committed balances_root - while a snapshot-bootstrapped
+    // node rebuilds the same block from the full live escrow set and includes it. Both
+    // twins must take the full branch on this one block or the divergence simply moves
+    // from source-vs-snapshot to source-vs-follower.
+    const armingBlock = SUB.isEscrowLockedLeafActive(blockIndex, network, chain) &&
+                        !SUB.isEscrowLockedLeafActive(blockIndex - 1, network, chain);
     let shadowBalanceUpdates = null;
     let balancesRoot;
-    if(isActivationBlock){
+    if(isActivationBlock || armingBlock){
         balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
     } else {
         const prior = await db.getStateRootsRow(chain, network, blockIndex - 1);

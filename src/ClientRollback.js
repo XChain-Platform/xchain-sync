@@ -116,6 +116,49 @@ class ClientRollback {
         // Get the first action_index at or after the given block
         let firstActionIndex = await this.db.getFirstActionIndex(block_index);
 
+        // Truncation floor, read BEFORE the transaction opens (getSyncState may run its
+        // one-time CREATE TABLE, and DDL inside a transaction implicitly commits in
+        // MariaDB, which would break this rollback's atomicity). A truncated replica
+        // holds only [base..tip] of `orders`/`order_matches`, so the pair-scoped market
+        // sweep below cannot tell "no order ever existed" from "the order predates my
+        // floor"; it is skipped there rather than deleting a market the source keeps.
+        // Guarded on the method existing, mirroring ClientSync._persistBootstrapBase,
+        // so db instances without the durable store degrade to full-history behaviour.
+        let truncatedReplica = false;
+        if(this.db && typeof this.db.getSyncState === 'function'){
+            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'));
+            truncatedReplica = (base !== null && base !== undefined && parseInt(base, 10) > 0);
+        }
+
+        // Pairs whose orders/matches this rollback is about to orphan, collected BEFORE
+        // the dataTables delete removes those rows (mirror of the `markets` array the
+        // source builds in xchain-indexer/src/rollback.js). Consumed by the IDX-2 sweep
+        // further down. NULL tick ids (the native-coin side of a COINPay match) are
+        // dropped: markets is keyed on a real tick pair.
+        let affectedMarketPairs = [];
+        if(firstActionIndex !== null && !truncatedReplica){
+            try {
+                let rows = await this.db.doQuery(
+                    "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM orders " +
+                    "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL " +
+                    "UNION " +
+                    "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM order_matches " +
+                    "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL",
+                    [firstActionIndex, firstActionIndex]);
+                for(let row of (rows || [])){
+                    let t1 = Number(row.tick1_id), t2 = Number(row.tick2_id);
+                    if(!affectedMarketPairs.some(p => (p.tick1_id === t1 && p.tick2_id === t2) ||
+                                                     (p.tick1_id === t2 && p.tick2_id === t1)))
+                        affectedMarketPairs.push({ tick1_id: t1, tick2_id: t2 });
+                }
+            } catch(e){
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip:
+                // the sweep below then has nothing to do. Everything else (deadlock, lock-wait,
+                // connection drop) aborts here, before the transaction opens.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+            }
+        }
+
         await this.db.beginTransaction();
         try {
             // Delete from contract_emissions first (references contract_executions)
@@ -652,6 +695,42 @@ class ClientRollback {
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
+
+            // IDX-2 (mirror of xchain-indexer/src/rollback.js): the dangling-tick sweep
+            // above misses a market whose pair was FIRST traded only in the orphaned range
+            // while both its ticks survive (issued in earlier surviving blocks). The source
+            // deletes that markets row; the replica used to keep it, and no replication
+            // channel could remove it - markets rides the snapshot as an UPSERT full-dump
+            // (SnapshotBuilder indexerFullDump), which refreshes present rows and never
+            // deletes absent ones. The result was a stale, zeroed OHLCV row that
+            // xchain-explorer served forever, invisible to every guard (markets is unhashed,
+            // outside /status table counts, and _verifyTableCounts only reports remote >
+            // local). Scoped to the pairs this rollback orphaned, each dropped only when no
+            // surviving orders/order_matches row references either orientation - the same
+            // predicate the source applies.
+            try {
+                for(let pair of affectedMarketPairs){
+                    let survives = await this.db.doQuery(
+                        "SELECT 1 FROM orders WHERE (give_tick_id=? AND get_tick_id=?) " +
+                        "OR (give_tick_id=? AND get_tick_id=?) LIMIT 1",
+                        [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                    if(!survives || survives.length === 0){
+                        survives = await this.db.doQuery(
+                            "SELECT 1 FROM order_matches WHERE (give_tick_id=? AND get_tick_id=?) " +
+                            "OR (give_tick_id=? AND get_tick_id=?) LIMIT 1",
+                            [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                    }
+                    if(!survives || survives.length === 0){
+                        await this.db.doQuery(
+                            "DELETE FROM markets WHERE (tick1_id=? AND tick2_id=?) OR (tick1_id=? AND tick2_id=?)",
+                            [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                    }
+                }
+            } catch(e){
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+            }
             try {
                 await this.db.doQuery(
                     "DELETE FROM pubkeys WHERE address_id NOT IN (SELECT id FROM index_addresses)", []);
@@ -777,9 +856,9 @@ class ClientRollback {
             // catch. On reorg we therefore drop the rows whose most-recent touch is
             // in the orphaned range, so the replica never serves overcounted values
             // and let the next full-snapshot ride-along restore correct counts
-            // from the (now reorg-safe) source. Note: markets has NO ClientRollback
-            // drop; it converges via the full-dump UPSERT (ON DUPLICATE KEY UPDATE)
-            // path on the next snapshot, not this delete path.
+            // from the (now reorg-safe) source. Contrast markets: its VALUES converge
+            // via the full-dump UPSERT (ON DUPLICATE KEY UPDATE) on the next snapshot,
+            // so only its two source ROW deletes need mirroring here (above).
             // NOTE: between this DELETE and the next full snapshot, the replica
             // serves no attest_validator_stats rows for the affected validators;
             // this window is unbounded if full snapshots are infrequent. Acceptable

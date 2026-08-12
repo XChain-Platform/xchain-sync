@@ -1650,6 +1650,46 @@ class Database {
         return await this.doQuery(query, [block_index], conn);
     }
 
+    // Discover in ONE round-trip which action-scoped tables actually carry rows in a
+    // block, so the payload builder can fetch only those. Without it _buildBlockPayload
+    // issues getActionScopedRows once per table in the lifecycle registry (86 today),
+    // empty ones included, and that count rises with every replicated table added
+    // ().
+    //
+    // The existence predicate is getActionScopedRows' predicate verbatim (same INNER
+    // JOIN on action_index, same a.block_index = ?), so "absent from this Set" means
+    // exactly "getActionScopedRows would have returned zero rows". That equivalence is
+    // the whole safety argument: the payload feeds a consensus hash followers recompute,
+    // so a skip that is not provably empty would halt them.
+    //
+    // Candidates are filtered through listExistingTables first. A source legitimately
+    // predates a table family, and where the per-table loop absorbs that as a skippable
+    // schema gap (errno 1146), one missing table would fail the whole UNION. Callers
+    // still fall back to the full loop when this throws, so a probe fault costs
+    // round-trips, never rows.
+    //
+    // doQueryStrict, not doQuery: outside a transaction doQuery is fail-soft and returns
+    // [] on error, which here would read as "every table is empty" and silently empty the
+    // block.
+    async getNonEmptyActionScopedTables(tables, block_index, conn){
+        let present = await this.listExistingTables(conn);
+        let candidates = [];
+        for(let table of tables){
+            assertValidIdentifier(table);
+            if(present.has(table)) candidates.push(table);
+        }
+        if(candidates.length === 0) return new Set();
+        // Table name is safe to inline as a literal: assertValidIdentifier above admits
+        // only [A-Za-z0-9_].
+        let branches = candidates.map(table =>
+            "(SELECT '" + table + "' AS tbl FROM `" + table + "` t" +
+            " INNER JOIN actions a ON (a.action_index = t.action_index)" +
+            " WHERE a.block_index = ? LIMIT 1)");
+        let rows = await this.doQueryStrict(branches.join(' UNION ALL '),
+                                            candidates.map(() => block_index), conn);
+        return new Set(rows.map(r => r.tbl));
+    }
+
     // Get all contract_emissions rows for a block, including INTERNAL emissions whose
     // action_index IS NULL (e.g. a SLASH). The generic getActionScopedRows() above joins
     // on t.action_index, so its INNER JOIN drops NULL-action_index rows. The consensus

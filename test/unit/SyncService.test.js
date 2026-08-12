@@ -503,4 +503,55 @@ describe('SyncService', function(){
             assert.strictEqual(service._startClientMode.calledOnce, true);
         });
     });
+
+    // : api.js listens before start() runs, and start() can sit in
+    // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes). /health's per-chain loop
+    // has nothing to degrade on while getChains() is empty, so the probe reported
+    // 'healthy' with zero pollers running. isReady() is what /health gates on now.
+    describe('startup readiness (isReady)', function(){
+        it('is not ready before start()', function(){
+            assert.strictEqual(service.isReady(), false);
+        });
+
+        it('is still not ready while start() waits on the hub', async function(){
+            let release;
+            sinon.stub(service, '_waitForHub').returns(new Promise(res => { release = res; }));
+            sinon.stub(service, '_discoverChains').resolves([]);
+            sinon.stub(service, '_startServerMode').resolves();
+            sinon.stub(service, '_scheduleHubRepoll');
+
+            const started = service.start();
+            assert.strictEqual(service.isReady(), false, 'ready must stay false for the whole hub-wait window');
+            release();
+            await started;
+            assert.strictEqual(service.isReady(), true);
+        });
+
+        it('is ready after start() completes with a legitimately empty chain set', async function(){
+            sinon.stub(service, '_waitForHub').resolves();
+            sinon.stub(service, '_discoverChains').resolves([]);
+            sinon.stub(service, '_startServerMode').resolves();
+            sinon.stub(service, '_scheduleHubRepoll');
+
+            await service.start();
+            // Discovered-and-empty (everything SYNC_EXCLUDEd) is healthy, not starting:
+            // readiness is about startup completing, never about chain count.
+            assert.strictEqual(service.getChains().length, 0);
+            assert.strictEqual(service.isReady(), true);
+        });
+
+        // Wiring guard: the /health route is registered inside startApi()'s closure
+        // and is not reachable from a require. A readiness flag nothing gates on is
+        // exactly the defect this item is about.
+        it('gates GET /health on readiness before the per-chain loop', function(){
+            const fs   = require('fs');
+            const path = require('path');
+            const src  = fs.readFileSync(path.join(__dirname, '../../src/api.js'), 'utf8');
+            const route = src.slice(src.indexOf("app.get('/health'"), src.indexOf("app.get('/status'"));
+            assert.ok(/isReady\(\)/.test(route), '/health does not consult isReady()');
+            assert.ok(/status:\s+'starting'/.test(route), "/health does not report 'starting'");
+            assert.ok(route.indexOf('isReady()') < route.indexOf('syncService.getChains()'),
+                'the readiness gate must precede the per-chain loop it substitutes for');
+        });
+    });
 });
