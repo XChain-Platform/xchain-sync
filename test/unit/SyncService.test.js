@@ -222,6 +222,64 @@ describe('SyncService', function(){
             assert.strictEqual(startSync.callCount, 1);
         });
 
+        // : an unmatched SYNC_BOOTSTRAP_DEPTH_* key is not inert. It resolves to
+        // depth 0, the FULL-history snapshot branch, so a typo'd key silently starts the
+        // unbounded bootstrap it was set to prevent (measured on the 2026-08-10 DOGE
+        // reseed). Discovery must refuse it BEFORE any ClientSync is started.
+        function stubDiscoveryDb(){
+            sinon.stub(Database.prototype, 'createDatabase').resolves(true);
+            sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
+            sinon.stub(Database.prototype, 'replicateSchema').resolves();
+            sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+            sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
+            sinon.stub(Database.prototype, 'close').resolves();
+        }
+
+        it('client mode REFUSES a bootstrap-depth key naming no discovered chain, before starting any sync', async function(){
+            config.SYNC_MODE = 'client';
+            config.SYNC_BOOTSTRAP_DEPTH = { 'LTC:TESTNET': 50000 };
+            config.SYNC_BOOTSTRAP_DEPTH_ENV_KEYS = ['SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET'];
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]); // bitcoin:mainnet only
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            await assert.rejects(() => service._discoverChains(),
+                /SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET/);
+            assert.strictEqual(startSync.callCount, 0, 'no ClientSync started on a refused config');
+        });
+
+        it('client mode accepts a bootstrap-depth key whose chain the hub published under its full name', async function(){
+            config.SYNC_MODE = 'client';
+            config.SYNC_BOOTSTRAP_DEPTH = { 'BTC:MAINNET': 50000 };
+            config.SYNC_BOOTSTRAP_DEPTH_ENV_KEYS = ['SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET'];
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]); // coin: 'bitcoin'
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            let newChains = await service._discoverChains();
+            assert.strictEqual(newChains.length, 1);
+            assert.strictEqual(startSync.callCount, 1);
+        });
+
+        it('server mode ignores bootstrap-depth keys entirely (the var governs nothing there)', async function(){
+            config.SYNC_MODE = 'server';
+            config.SYNC_BOOTSTRAP_DEPTH = { 'LTC:TESTNET': 50000 };
+            config.SYNC_BOOTSTRAP_DEPTH_ENV_KEYS = ['SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET'];
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            sinon.stub(service, '_startPollerForChain');
+
+            let newChains = await service._discoverChains();
+            assert.strictEqual(newChains.length, 1);
+        });
+
         it('client mode (source reachable): replicates schema, verifies tables, starts a ClientSync', async function(){
             config.SYNC_MODE = 'client';
             service = new SyncService(config);

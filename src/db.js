@@ -46,6 +46,31 @@ function assertValidIdentifier(table){
         throw new Error('Refusing to query unsafe table identifier: ' + check.reason);
 }
 
+// A stake weight, as stake_weighted_quorum.bcnum accepts one (plain decimal string).
+// Kept identical to that predicate's pattern so this producer can never emit a row the
+// predicate then has to fail closed on. Twin of the indexer's requireStakeWeight.
+const STAKE_WEIGHT_NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+
+// Fail CLOSED on a weightless stake-weight row . The source-keyed weight
+// producer routes through here instead of resolving a missing weight to '0'. The '0'
+// looks harmless and is not: the source stays in the quorum's dedupe map carrying no
+// stake, so the denominator S shrinks while a signer keeps the full numerator, and a
+// smaller real stake clears 3*tally > 2*S. stake_weighted_quorum already rejects such
+// a row, but it never sees one - consumers re-map the set through
+// `String(v.weight != null ? v.weight : '0')`, laundering the missing weight into a
+// well-formed zero before the predicate runs. stakes.amount is NOT NULL and the
+// source-aggregate is HAVING-filtered, so a null here is a corrupt read, not a
+// stakeless source. The value is returned UNTRIMMED so the stakes_root leaves this
+// feeds keep hashing byte-for-byte what they did before. A legitimate '0' still passes.
+function requireStakeWeight(weight, label){
+    if(weight === null || weight === undefined)
+        throw new Error((label || 'stake weights') + ': missing validator weight would silently lower the stake-quorum denominator S');
+    let w = String(weight).trim();
+    if(w === '' || !STAKE_WEIGHT_NUMERIC.test(w))
+        throw new Error((label || 'stake weights') + ': nonnumeric validator weight "' + w.slice(0, 32) + '" would silently lower the stake-quorum denominator S');
+    return String(weight);
+}
+
 // Delay between attempts in the infinite DB-connection retry loops
 // (verifyDatabase / createDatabase). Named so the cadence lives in one place
 // and is not confused with the unrelated connectTimeout in the pool config.
@@ -1510,7 +1535,7 @@ class Database {
             let rows = (truncated ? raw.filter(r => Number(r._sr) <= maxSources) : raw).map(r => ({
                 pubkey: String(r.pubkey),
                 source: String(r.source),
-                weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+                weight: requireStakeWeight(r.weight, label)
             }));
             return { rows, truncated };
         }
@@ -1522,7 +1547,7 @@ class Database {
         let rows = raw.map(r => ({
             pubkey: String(r.pubkey),
             source: String(r.source),
-            weight: (r.weight === null || r.weight === undefined) ? '0' : String(r.weight)
+            weight: requireStakeWeight(r.weight, label)
         }));
         return { rows, truncated };
     }
@@ -1624,6 +1649,71 @@ class Database {
                     valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
         let { rows } = await this._applyStakeWeightCap({ sql, args }, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
         return rows;
+    }
+
+    // ── Advisory content-parity reads  ─────────────────────────────
+    //
+    // Every row of `table` inside a block window, reached through the SAME scope
+    // join the per-block stream uses, so what the checksum sees is exactly what
+    // replication was supposed to deliver. Bounds come from
+    // replicatedTables.contentParityPlan; the caller hashes the rows.
+    //
+    // doQueryStrict, not doQuery: outside a transaction doQuery is fail-soft and
+    // returns [] on error, and an empty result here is indistinguishable from
+    // "this table has no rows in the window", which would silently drop the table
+    // from the comparison on BOTH sides and read as parity. The caller catches per
+    // table and omits it explicitly (advisory), so a real fault stays visible as an
+    // omission rather than being laundered into a pass.
+    //
+    // No ORDER BY: the caller canonicalizes and SORTS the rows before hashing, so
+    // the digest is independent of storage order and collation on either side.
+    async getContentWindowRows(table, bound, fromBlock, toBlock, conn){
+        assertValidIdentifier(table);
+        let query;
+        if(bound === 'action'){
+            query = "SELECT t.* FROM `" + table + "` t" +
+                    " INNER JOIN actions a ON (a.action_index = t.action_index)" +
+                    " WHERE a.block_index BETWEEN ? AND ?";
+        } else if(bound === 'tx'){
+            query = "SELECT t.* FROM `" + table + "` t" +
+                    " INNER JOIN transactions tx ON (tx.tx_index = t.tx_index)" +
+                    " WHERE tx.block_index BETWEEN ? AND ?";
+        } else if(bound === 'emission'){
+            // contract_emissions carries a NULL action_index for internal emissions,
+            // which the generic INNER JOIN above would drop. Reach them through the
+            // execution_index chain, the same route ServerPoller streams them by.
+            query = "SELECT em.* FROM contract_emissions em" +
+                    " INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index)" +
+                    " INNER JOIN actions a ON (a.action_index = ce.action_index)" +
+                    " WHERE a.block_index BETWEEN ? AND ?";
+        } else {
+            // 'block': the two reorg-scoped lookups also land here, and their
+            // block_index is NULL for rows assigned outside a consensus block tx
+            // (recovery pre-seed, API read-path createAddress). Those are benign
+            // source-local drift, excluded exactly as computeIndexMapChecksum
+            // excludes them, so they can never raise a false alarm.
+            query = "SELECT * FROM `" + table + "` WHERE block_index IS NOT NULL AND block_index BETWEEN ? AND ?";
+        }
+        return await this.doQueryStrict(query, [fromBlock, toBlock], conn);
+    }
+
+    // The current highest `id` in an append-only lookup, or null when it is empty.
+    // The SOURCE publishes this ceiling and the follower reuses it verbatim, so
+    // both sides checksum the same id range even though the follower's own tail
+    // may lag or lead by rows the window then ignores.
+    async getMaxRowId(table, conn){
+        assertValidIdentifier(table);
+        let rows = await this.doQueryStrict("SELECT MAX(id) AS m FROM `" + table + "`", null, conn);
+        let m = rows && rows.length ? rows[0].m : null;
+        return (m === null || m === undefined) ? null : Number(m);
+    }
+
+    // Rows of an append-only lookup inside an id window (fromId, toId]. Same
+    // doQueryStrict / no-ORDER-BY reasoning as getContentWindowRows above.
+    async getContentIdWindowRows(table, fromId, toId, conn){
+        assertValidIdentifier(table);
+        return await this.doQueryStrict(
+            "SELECT * FROM `" + table + "` WHERE id > ? AND id <= ?", [fromId, toId], conn);
     }
 
     // Get all rows from a table for a given block (block_index-scoped tables).
@@ -1832,5 +1922,9 @@ class Database {
         }
     }
 }
+
+// Exposed for the unit suite (and the indexer-twin drift check): the weightless-row
+// guard is consensus-relevant, so it is tested directly, not only through a query.
+Database.requireStakeWeight = requireStakeWeight;
 
 module.exports = Database;

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - State-commitment roots get the catch-up-burst exemption, bootstrap resolver converges on signed-latest, ignoreTables derives from the registry, rollback logs real faults with context, parity guards escalate under required-siblings.
 
 ### Added
+- `TABLE_CONTENT_PARITY_CHECK` (default off): advisory per-table content checksums on `/status` that catch an equal-row-count content substitution in any replicated table, which no hash or row count could see .
 - Bootstrap-stampede perf scenario driving 5-25 concurrent snapshot downloads at one server, asserting the  semaphore sheds the excess with a retryable 503 while poll cycles and live block broadcast stay inside budget.
 - Armed the BTC-anchored activation copies at BTC 961000 and `STATE_COMMITMENT_ACTIVATION` per chain (same heights as the state-hash gates); ClientApplier/ServerPoller thread the coin through the state-commitment gate.
 - `stateHash.js` twin gains the flag-day-gated `token_supply` class (F-1 closure) and both state-hash gate maps are ARMED per chain; `BlockHasher`/`ClientSync` thread the coin gate parameter so the follower recompute matches the source across each activation height.

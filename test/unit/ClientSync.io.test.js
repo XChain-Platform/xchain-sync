@@ -24,6 +24,7 @@ const ClientSync = require('../../src/ClientSync');
 const { SCHEMA_VERSION } = require('../../src/schema-version');
 const Utility    = require('../../src/utility');
 const HashVerifier = require('../../src/HashVerifier');
+const realConfig = require('../../src/config');
 
 // ─── shared helpers ──────────────────────────────────────────────────────────
 
@@ -698,9 +699,43 @@ describe('ClientSync truncated catch-up', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
+    // : the two ends of this lookup disagreed. config.js keyed the map by the
+    // env-var spelling ('DOGE:TESTNET') while ClientSync asked by the hub's `cfg.coin`
+    // ('dogecoin'), so the documented key missed and depth fell through to 0, which is
+    // the FULL-snapshot branch. Drive the real getConfig() parse against the real
+    // constructor, in both directions, so a re-divergence cannot pass.
+    describe('depth-key resolution against the real config parse', function(){
+        const DEPTH_ENV = ['SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET'];
+        let saved = {};
+        beforeEach(function(){
+            for(let k of DEPTH_ENV){ saved[k] = process.env[k]; delete process.env[k]; }
+        });
+        afterEach(function(){
+            for(let k of DEPTH_ENV){
+                if(saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+            }
+        });
+
+        function depthFor(envKey){
+            process.env[envKey] = '50000';
+            let cfg = Object.assign(realConfig.getConfig(), { SYNC_SOURCES: 'http://src1:3006', MAX_ROLLBACK_DEPTH: 10 });
+            // 'dogecoin' is the form the hub publishes as cfg.coin and SyncService passes on
+            let s = new ClientSync('dogecoin', 'testnet', createMockDb(), createMockApplier(),
+                createMockRollback(), new HashVerifier(), cfg, new Utility());
+            return s._truncatedDepth;
+        }
+
+        it('the documented SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET reaches a hub-named "dogecoin" chain', function(){
+            assert.strictEqual(depthFor('SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET'), 50000);
+        });
+        it('the full-name SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET resolves to the same depth', function(){
+            assert.strictEqual(depthFor('SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET'), 50000);
+        });
+    });
+
     it('truncated chain pages lookups then fetches the block window with skip_lookups=1', async function(){
-        // makeSync builds ClientSync('bitcoin','mainnet'); depth keyed by uppercased chain:network.
-        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        // makeSync builds ClientSync('bitcoin','mainnet'); depth keyed '<TICKER>:<NETWORK>'.
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
         assert.ok(sync._truncatedDepth >= 1, 'chain is in truncated mode');
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
@@ -717,7 +752,7 @@ describe('ClientSync truncated catch-up', function(){
         // Regression: the skip_lookups snapshot is taken at the source tip T2 > the
         // paging high-water T1, so blocks (T1..T2] reference index_* rows not pulled
         // in the first page. The second _syncLookupTablesPaged must run after apply.
-        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
@@ -746,7 +781,7 @@ describe('ClientSync truncated catch-up', function(){
 
     it('decoder chain is truncated by the same depth and pages lookups + skip_lookups', async function(){
         // Depth is keyed by chain:network (not dbType), so it truncates the decoder too.
-        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }, { dbType: 'decoder' }));
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }, { dbType: 'decoder' }));
         assert.ok(sync._truncatedDepth >= 1, 'decoder picks up the chain depth (gate removed)');
         let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
@@ -775,7 +810,7 @@ describe('ClientSync: oversized catch-up fallback routes by truncation', functio
     it('truncated replica: size error routes to _bootstrapFromHeightRetry, NOT the full snapshot @regression', async function(){
         // The full snapshot of a SYNC_BOOTSTRAP_DEPTH chain is oversized by definition,
         // so falling back to it would crash-loop. Route to the bounded height bootstrap.
-        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BITCOIN:MAINNET': 50000 } }));
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
         assert.ok(sync._truncatedDepth >= 1, 'chain is truncated');
         sinon.stub(sync, '_syncLookupTablesPaged').resolves();
         let heightRetry = sinon.stub(sync, '_bootstrapFromHeightRetry').resolves();

@@ -18,6 +18,8 @@
  *
  ********************************************************************/
 
+const { coinTicker } = require('./consensus-constants');
+
 // Parse an integer from an env var, returning defaultVal when the value is
 // absent, empty, or non-numeric.  Unlike `parseInt(x) || default`, this
 // correctly preserves 0 as a valid value.
@@ -37,7 +39,88 @@ function parseIntMin1(val, defaultVal){
     return Math.max(1, parseIntSafe(val, defaultVal));
 }
 
+const BOOTSTRAP_DEPTH_PREFIX = 'SYNC_BOOTSTRAP_DEPTH_';
+
+// Canonical SYNC_BOOTSTRAP_DEPTH map key, '<TICKER>:<NETWORK>' uppercased.
+//
+// Both sides of this lookup MUST build the key through here. They did not: this
+// file keyed the env suffix verbatim ('DOGE:TESTNET') while ClientSync looked the
+// chain up by `cfg.coin`, which the hub publishes as the full lowercase name, so
+// the documented SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET produced 'DOGE:TESTNET' and the
+// lookup asked for 'DOGECOIN:TESTNET'. The miss was silent and fell through to
+// depth 0, which is the FULL-snapshot branch: the 2026-08-10 DOGE reseed began a
+// full-history bootstrap of a 67M-block chain and had to be killed by hand.
+// coinTicker folds ticker and full-name forms onto the ticker, so both
+// SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET and SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET now
+// resolve to the same chain.
+function bootstrapDepthKey(chain, network){
+    if(chain === undefined || chain === null) return null;
+    if(network === undefined || network === null) return null;
+    let ticker = coinTicker(String(chain));
+    if(ticker === undefined || ticker === null) return null;
+    return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
+}
+
+// Canonical key for a SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK> env name, or null when
+// the suffix has no CHAIN_NETWORK shape at all (e.g. SYNC_BOOTSTRAP_DEPTH_BADKEY).
+// An unrecognized chain still yields a key: it is a real key that matches no chain,
+// which is the assertBootstrapDepthChains case, not a parse failure.
+function bootstrapDepthEnvKey(envKey){
+    if(String(envKey).indexOf(BOOTSTRAP_DEPTH_PREFIX) !== 0) return null;
+    let rest = String(envKey).slice(BOOTSTRAP_DEPTH_PREFIX.length); // e.g. DOGE_TESTNET
+    let sep  = rest.lastIndexOf('_');
+    if(sep <= 0 || sep >= rest.length - 1) return null; // need CHAIN_NETWORK
+    return bootstrapDepthKey(rest.slice(0, sep), rest.slice(sep + 1));
+}
+
+// Every SYNC_BOOTSTRAP_DEPTH_* env name that names no discovered chain, each as
+// { envKey, resolved } (resolved is null when the name has no CHAIN_NETWORK shape).
+// `chains` is the discovered chain list: [{ coin, network }, ...].
+function unmatchedBootstrapDepthKeys(envKeys, chains){
+    let discovered = new Set();
+    for(let c of (chains || [])){
+        let key = bootstrapDepthKey((c.coin !== undefined) ? c.coin : c.chain, c.network);
+        if(key) discovered.add(key);
+    }
+    let unmatched = [];
+    for(let envKey of (envKeys || [])){
+        let resolved = bootstrapDepthEnvKey(envKey);
+        if(resolved === null || !discovered.has(resolved))
+            unmatched.push({ envKey: envKey, resolved: resolved });
+    }
+    return unmatched;
+}
+
+// REFUSE a depth key that matches no discovered chain instead of letting it default
+// to 0. Depth 0 is not a harmless "unset": it is the full-history snapshot branch,
+// the exact branch the operator set the key to avoid, and on a fast chain that means
+// an unbounded bootstrap nobody asked for. A typo'd or stale key is therefore a hard
+// startup failure, not a warning.
+function assertBootstrapDepthChains(config, chains){
+    let envKeys   = (config && config['SYNC_BOOTSTRAP_DEPTH_ENV_KEYS']) || [];
+    let unmatched = unmatchedBootstrapDepthKeys(envKeys, chains);
+    if(unmatched.length === 0) return;
+
+    let discovered = (chains || [])
+        .map(c => bootstrapDepthKey((c.coin !== undefined) ? c.coin : c.chain, c.network))
+        .filter(k => k);
+    let detail = unmatched
+        .map(u => u.envKey + (u.resolved ? ' (resolves to ' + u.resolved + ')' : ' (not CHAIN_NETWORK shaped)'))
+        .join(', ');
+    throw new Error(
+        'SYNC_BOOTSTRAP_DEPTH refers to no discovered chain: ' + detail +
+        '. Discovered chains: ' + (discovered.length ? [...new Set(discovered)].join(', ') : '(none)') +
+        '. Refusing to start: an unmatched depth key would silently fall back to depth 0, ' +
+        'which is the full-history snapshot branch.'
+    );
+}
+
 module.exports = {
+
+    bootstrapDepthKey,
+    bootstrapDepthEnvKey,
+    unmatchedBootstrapDepthKeys,
+    assertBootstrapDepthChains,
 
     getConfig: function(){
         let config = {};
@@ -97,19 +180,28 @@ module.exports = {
         //
         // A truncated replica CANNOT answer pre-base history and its aggregate
         // balances are recent-window only; it is acceptable ONLY for a non-consensus
-        // explorer mirror, never a trusted validator. Parsed into a map keyed by
-        // 'CHAIN:NETWORK' (uppercased); values clamped to >= 1.
+        // explorer mirror, never a trusted validator. Parsed into a map keyed
+        // '<TICKER>:<NETWORK>' by bootstrapDepthKey (so the ticker and full-name env
+        // spellings land on one key, and ClientSync's lookup by hub `cfg.coin`
+        // matches); values clamped to >= 1.
+        //
+        // The raw env names are carried alongside as SYNC_BOOTSTRAP_DEPTH_ENV_KEYS so
+        // assertBootstrapDepthChains can refuse a key that matches no discovered chain
+        // once discovery has run. Keys are recorded whatever their value: a key whose
+        // value is 0 or garbage is still an operator naming a chain, and naming a chain
+        // that does not exist is the misconfiguration worth failing on.
         let bootstrapDepth = {};
+        let bootstrapDepthEnvKeys = [];
         for(let envKey in process.env){
-            if(envKey.indexOf('SYNC_BOOTSTRAP_DEPTH_') !== 0) continue;
-            let rest = envKey.slice('SYNC_BOOTSTRAP_DEPTH_'.length); // e.g. DOGE_TESTNET
-            let sep = rest.lastIndexOf('_');
-            if(sep <= 0 || sep >= rest.length - 1) continue; // need CHAIN_NETWORK
-            let chainKey = rest.slice(0, sep) + ':' + rest.slice(sep + 1);
+            if(envKey.indexOf(BOOTSTRAP_DEPTH_PREFIX) !== 0) continue;
+            bootstrapDepthEnvKeys.push(envKey);
+            let chainKey = bootstrapDepthEnvKey(envKey);
+            if(chainKey === null) continue; // not CHAIN_NETWORK shaped
             let depth = parseIntSafe(process.env[envKey], 0);
-            if(depth >= 1) bootstrapDepth[chainKey.toUpperCase()] = depth;
+            if(depth >= 1) bootstrapDepth[chainKey] = depth;
         }
         config['SYNC_BOOTSTRAP_DEPTH'] = bootstrapDepth;
+        config['SYNC_BOOTSTRAP_DEPTH_ENV_KEYS'] = bootstrapDepthEnvKeys;
 
         // Client mode settings
         config['SYNC_SOURCES']   = process.env.SYNC_SOURCES || '';
@@ -252,6 +344,31 @@ module.exports = {
         // deterministic subset of index_addresses (an index on block_index is advisable
         // before enabling on a high-volume chain).
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
+
+        // TABLE_CONTENT_PARITY_CHECK : advisory per-table CONTENT parity over
+        // every replicated table the registry declares covered (src/tableLifecycle.js
+        // CONTENT_PARITY_*). Same posture as INDEX_MAP_PARITY_CHECK and for the same
+        // reason, one scope wider: the row counts published beside it prove only
+        // cardinality, so an equal-count content substitution in a table no consensus
+        // hash reads passed every check a follower ran. NEVER halts; a mismatch is
+        // logged and durably counted. Read on BOTH sides (a server publishes the
+        // checksums on /status, a client at the same height recomputes and compares).
+        // OFF by default: it reads a window of ~93 indexer tables per status poll.
+        config['TABLE_CONTENT_PARITY_CHECK'] = (process.env.TABLE_CONTENT_PARITY_CHECK || '').toLowerCase() === 'true';
+
+        // TABLE_CONTENT_PARITY_WINDOW: how many blocks (and, for the append-only
+        // lookups that carry no block column, how many ids) each content checksum
+        // spans. Server-side setting: the source publishes the window it used and a
+        // follower recomputes over THAT, so the two can never compare different spans
+        // and an operator only has to tune the source. Clamped to [1, 10000]: 0 or a
+        // negative would silently disable the check while it still reported passes,
+        // and an unbounded value would read a table's whole history every poll.
+        // Default 100, comfortably above the applied blocks between two verification
+        // passes, so a divergence has to be caught rather than aged out.
+        {
+            let raw = parseInt(process.env.TABLE_CONTENT_PARITY_WINDOW, 10);
+            config['TABLE_CONTENT_PARITY_WINDOW'] = Number.isFinite(raw) ? Math.min(10000, Math.max(1, raw)) : 100;
+        }
 
         // VERIFY_CHECKPOINT_QUORUM (SPV): anchor the replica's INDEPENDENTLY-recomputed
         // state_root to the federation quorum instead of trusting the source's claimed

@@ -96,16 +96,29 @@ describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
         assert.strictEqual(captured.args[4], '500', 'minStake coerced to string for the bind');
     });
 
-    it('maps rows to {pubkey, source, weight} and defaults a null weight to "0"', async function(){
+    it('maps rows to {pubkey, source, weight}', async function(){
         db.doQuery.callsFake(async () => ([
             { pubkey: 'AA', source: 'addr1', weight: '6000.00000000' },
-            { pubkey: 'BB', source: 'addr2', weight: null }
+            { pubkey: 'BB', source: 'addr2', weight: '0' }
         ]));
         let out = await db.getStakeWeightsByCapabilityAsOf('oracle_publish', 106, '500', 1000);
         assert.deepStrictEqual(out, [
             { pubkey: 'AA', source: 'addr1', weight: '6000.00000000' },
             { pubkey: 'BB', source: 'addr2', weight: '0' }
         ]);
+    });
+
+    it('REFUSES a null weight rather than defaulting it to "0" ', async function(){
+        // The old default was the defect: a coerced zero keeps the source in the
+        // quorum's dedupe map with no stake, so the denominator S shrinks and a
+        // smaller real stake clears the two-thirds bar. stakes.amount is NOT NULL
+        // and the aggregate is HAVING-filtered, so this can only be a corrupt read.
+        db.doQuery.callsFake(async () => ([
+            { pubkey: 'AA', source: 'addr1', weight: '6000.00000000' },
+            { pubkey: 'BB', source: 'addr2', weight: null }
+        ]));
+        await assert.rejects(() => db.getStakeWeightsByCapabilityAsOf('oracle_publish', 106, '500', 1000),
+            /denominator S/);
     });
 
     it('does not reference _stakeWeightsSql (keeps the drift-guarded twin untouched)', async function(){

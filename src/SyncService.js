@@ -31,6 +31,7 @@ const ClientApplier   = require('./ClientApplier');
 const ClientRollback  = require('./ClientRollback');
 const HashVerifier    = require('./HashVerifier');
 const stateCommitment = require('./stateCommitment');
+const { assertBootstrapDepthChains } = require('./config');
 const Utility         = require('./utility');
 
 class SyncService {
@@ -242,6 +243,18 @@ class SyncService {
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
             newChains.push({ key, db, config: cfg });
+        }
+
+        // REFUSE a SYNC_BOOTSTRAP_DEPTH_* key that names no chain the hub published,
+        // BEFORE any ClientSync starts. An unmatched key is not inert: the lookup falls
+        // through to depth 0, which is the full-history snapshot branch, so a typo'd or
+        // stale key silently starts exactly the unbounded bootstrap the key existed to
+        // prevent. Client mode only (the env var governs nothing on a server) and only
+        // on the first discovery pass, so a later hub re-poll cannot kill a process that
+        // already validated and is happily replicating.
+        if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
+            this._bootstrapDepthChecked = true;
+            assertBootstrapDepthChains(this.config, this.getChains());
         }
 
         // Start components for newly discovered chains.

@@ -163,6 +163,86 @@ function getReplicatedTables(dbType){
     return [...new Set(all)];
 }
 
+// The advisory content-parity plan for a dbType : the replicated tables
+// whose CONTENT (not merely their row count) a follower can prove against the
+// source, each paired with the bound its checksum window uses.
+//
+// Coverage is the per-block replicated set minus the two exclusion classes the
+// registry declares (src/tableLifecycle.js CONTENT_PARITY_*): the operator
+// carve-outs (markets, decoder dispensers) and the in-place mutated tables,
+// which the enforced state_hash already commits and which have no stable window
+// content. Derived from the same topology the stream and the row counts use, so
+// a table added to replication joins this check with no second list to update.
+//
+// bound values, consumed by BlockHasher.computeTableContentChecksums:
+//   'block'    the table carries block_index; window it directly
+//   'action'   action-scoped; window through the actions join, exactly as
+//              ServerPoller streams it (a.block_index, never a tx join)
+//   'tx'       decoder tx-scoped; window through the transactions join
+//   'emission' contract_emissions only: its action_index is NULL for internal
+//              emissions, so it windows through the execution_index chain,
+//              matching db.getEmissionRowsForBlock rather than the generic join
+//   'id'      inert append-only lookup with no block column; windowed by a
+//              source-published id ceiling instead of a block range
+function contentParityPlan(dbType){
+    let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
+    let t = getTopology(type);
+    let mutable = new Set(lifecycle.contentParityMutableTables());
+    let plan = [];
+    let add = (table, bound) => {
+        if(mutable.has(table)) return;                                   // committed by state_hash instead
+        if(lifecycle.contentParityCarveOut(table, type) !== null) return; // operator ruling
+        if(plan.some(p => p.table === table)) return;                    // topology buckets can overlap
+        plan.push({ table: table, bound: bound });
+    };
+    for(let table of (t.blockScoped || [])) add(table, 'block');
+    for(let table of (t.txScoped    || [])) add(table, 'tx');
+    for(let table of (t.actionScoped|| [])) add(table, table === 'contract_emissions' ? 'emission' : 'action');
+    for(let table of (t.index       || [])) add(table, lifecycle.contentParityLookupBound(table, type));
+    // `special` carries replicated-but-not-per-scope-extracted tables. sync_meta is
+    // block-keyed (one row per block); the decoder's dispensers is carved out above.
+    for(let table of (t.special     || [])) add(table, 'block');
+    return plan;
+}
+
+// Every replicated table that is NOT in the content-parity plan, mapped to the
+// reason it is out. Exists so the coverage guard can assert the complement is
+// exactly the two declared exclusion classes and nothing has silently fallen
+// through: a replicated table that is neither checked nor knowingly excluded is
+// the defect  was raised for.
+function contentParityExclusions(dbType){
+    let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
+    let mutable = new Set(lifecycle.contentParityMutableTables());
+    let out = {};
+    for(let table of getReplicatedTables(type)){
+        let carve = lifecycle.contentParityCarveOut(table, type);
+        if(carve !== null) out[table] = 'operator-carve-out: ' + carve;
+        else if(mutable.has(table)) out[table] = 'in-place mutated; committed by the enforced state_hash class instead';
+    }
+    return out;
+}
+
+// Per-block replicated tables that do NOT exist in a schema .
+//
+// `present` is the Set of local base-table names from db.listExistingTables().
+// Every apply path tolerates MariaDB errno 1146 so an older replica schema
+// cannot wedge on a table the source has gained; the cost of that tolerance is
+// that a schema gap degrades to SILENT partial replication (halted:false,
+// lag_blocks:0, whole tables never arriving). This is the one function that
+// names the gap: any table in the per-block replicated set that this schema
+// lacks is a table replication will skip without ever failing.
+//
+// Deliberately a superset signal. A table absent on BOTH the source and this
+// replica (source older than this build) is reported too, because from here the
+// two cases are indistinguishable and reporting the harmless one costs an
+// operator one migration check, while missing the real one costs silent data
+// loss. Returns null when the table listing itself is unavailable: "unknown"
+// must not read as "nothing missing".
+function missingReplicatedTables(present, dbType){
+    if(!present || typeof present.has !== 'function') return null;
+    return getReplicatedTables(dbType).filter(t => !present.has(t)).sort();
+}
+
 // The cursor column for id-ordered paging of an append-only lookup table
 // (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged). Almost
 // every lookup table has an AUTO_INCREMENT `id` PK and pages by it. The decoder
@@ -183,4 +263,7 @@ function lookupCursorColumn(table){
     return 'id';
 }
 
-module.exports = { getTopology, getReplicatedTables, lookupCursorColumn };
+module.exports = {
+    getTopology, getReplicatedTables, missingReplicatedTables, lookupCursorColumn,
+    contentParityPlan, contentParityExclusions
+};

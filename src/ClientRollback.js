@@ -383,16 +383,20 @@ class ClientRollback {
                 // earn-block (reward_block_index) survives the reorg (< block_index). amount is the
                 // frozen consensus reward constant per round, so INSERT IGNORE is value-stable and
                 // idempotent whether or not the source's forward DELETE reached this replica. Runs
-                // BEFORE the generic delete so the log rows still exist.
+                // BEFORE the generic delete so the log rows still exist. A loser whose
+                // MATERIALIZATION block (reward_derive_block_index, ) is itself inside the
+                // orphaned range is NOT restored: its earn-block survives, but a replay to
+                // reorg_block-1 never derived it, so restoring it would mint an orphan.
                 try {
                     await this.db.doQuery(
                         "INSERT IGNORE INTO validator_rewards " +
-                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index) " +
+                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index, derive_block_index) " +
                         "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
-                        "       d.amount, d.reward_block_index " +
+                        "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
                         "  FROM anchor_reward_reconcile_log d " +
-                        " WHERE d.block_index >= ? AND d.reward_block_index < ?",
-                        [block_index, block_index]
+                        " WHERE d.block_index >= ? AND d.reward_block_index < ? " +
+                        "   AND (d.reward_derive_block_index IS NULL OR d.reward_derive_block_index < ?)",
+                        [block_index, block_index, block_index]
                     );
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
@@ -648,6 +652,25 @@ class ClientRollback {
                     // (blocks/transactions/slash_events/state_tree_roots) half-deleted.
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
+            }
+
+            // validator_rewards MATERIALIZATION-block delete, mirror of
+            // xchain-indexer/src/rollback.js . The loop above scopes on block_index,
+            // which for a reward is its EARN block. The  BTC-side anchor/archive
+            // derivation earns at the checkpoint's SNAPSHOT_BLOCK but writes the row while
+            // processing a later BTC block, stamped derive_block_index, so a reorg into that
+            // gap orphans the block that minted the reward while leaving its earn-block below
+            // the delete's scope. The replica must drop exactly the rows the source drops or
+            // its COLLECT rail reads a different SUM(validator_rewards). NULL (every same-block
+            // writer) is never matched. Runs BEFORE the index-lookup deletes below, which
+            // require no surviving row to reference an id they remove.
+            try {
+                await this.db.doQuery('DELETE FROM validator_rewards WHERE derive_block_index >= ?', [block_index]);
+            } catch(e){
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip:
+                // such a replica holds no derived reward either. All other errors (deadlock,
+                // lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Roll back the index id lookups (index_addresses / index_tickers), mirroring

@@ -93,22 +93,27 @@ describe('Boundary: Rollback Scope', function(){
         );
         assert.strictEqual(actionDeletes.length, 0);
         // Block-scoped deletes still happen (blockTables + the index id tables,
-        // index_addresses / index_tickers, both pruned by block_index >=).
+        // index_addresses / index_tickers, both pruned by block_index >=), plus the
+        // validator_rewards materialization-block delete (derive_block_index, ),
+        // which this substring filter also matches.
         let blockDeletes = db.doQuery.getCalls().filter(c =>
             c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
-        assert.strictEqual(blockDeletes.length, rollback.blockTables.length + rollback.indexTables.length);
+        assert.strictEqual(blockDeletes.length,
+            rollback.blockTables.length + rollback.indexTables.length + 1);
     });
 
     it('rollback at non-existent block: still runs block deletes', async function(){
         db.getFirstActionIndex.resolves(null);
         await rollback.rollback(9999);
         // Block-scoped deletes execute (but DELETE WHERE block_index >= 9999 will match nothing).
-        // Count covers blockTables + the index id tables (index_addresses / index_tickers).
+        // Count covers blockTables + the index id tables (index_addresses / index_tickers)
+        // + the validator_rewards derive_block_index delete .
         let blockDeletes = db.doQuery.getCalls().filter(c =>
             c.args[0].includes('DELETE') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
         );
-        assert.strictEqual(blockDeletes.length, rollback.blockTables.length + rollback.indexTables.length);
+        assert.strictEqual(blockDeletes.length,
+            rollback.blockTables.length + rollback.indexTables.length + 1);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
 

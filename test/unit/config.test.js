@@ -20,7 +20,8 @@ describe('config', function(){
         'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
         'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'REPLICA_DB_READONLY', 'SYNC_EXCLUDE',
         'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
-        'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET'
+        'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET',
+        'SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET'
     ];
     let savedEnv = {};
 
@@ -182,6 +183,85 @@ describe('config', function(){
         it('ignores a malformed key with no CHAIN_NETWORK split', function(){
             process.env.SYNC_BOOTSTRAP_DEPTH_BADKEY = '500';
             assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, {});
+        });
+
+        // : the documented DOGE_TESTNET spelling produced 'DOGE:TESTNET' while
+        // ClientSync looked up the hub's `cfg.coin` ('dogecoin'), so the documented key
+        // never matched and the miss fell through to depth 0 (the FULL-snapshot branch).
+        // Both spellings must now land on the ticker key ClientSync asks for.
+        it('folds the full coin name onto the same ticker key as the ticker spelling', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET = '50000';
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH, { 'DOGE:TESTNET': 50000 });
+        });
+        it('resolves the documented DOGE_TESTNET key to the key ClientSync looks up', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '50000';
+            let cfg = config.getConfig();
+            // exactly what ClientSync computes from the hub-supplied chain identifier
+            assert.strictEqual(cfg.SYNC_BOOTSTRAP_DEPTH[config.bootstrapDepthKey('dogecoin', 'testnet')], 50000);
+        });
+        it('records every raw env key it saw, whatever the value', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '0';
+            process.env.SYNC_BOOTSTRAP_DEPTH_BADKEY = '500';
+            assert.deepStrictEqual(config.getConfig().SYNC_BOOTSTRAP_DEPTH_ENV_KEYS.sort(),
+                ['SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET']);
+        });
+    });
+
+    // : an unmatched depth key is NOT inert. The lookup falls through to 0,
+    // which is the full-history snapshot branch, so a key that names no discovered
+    // chain silently starts the unbounded bootstrap it was set to prevent.
+    describe('assertBootstrapDepthChains', function(){
+        const CHAINS = [
+            { coin: 'dogecoin', network: 'testnet', dbType: 'indexer' },
+            { coin: 'bitcoin',  network: 'mainnet', dbType: 'indexer' }
+        ];
+
+        it('accepts a key naming a discovered chain (ticker spelling)', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '50000';
+            config.assertBootstrapDepthChains(config.getConfig(), CHAINS);
+        });
+        it('accepts a key naming a discovered chain (full-name spelling)', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET = '50000';
+            config.assertBootstrapDepthChains(config.getConfig(), CHAINS);
+        });
+        it('accepts a config with no depth keys at all', function(){
+            config.assertBootstrapDepthChains(config.getConfig(), CHAINS);
+        });
+        it('REFUSES a key whose chain was never discovered', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET = '50000';
+            assert.throws(
+                () => config.assertBootstrapDepthChains(config.getConfig(), CHAINS),
+                /SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET.*LTC:TESTNET/s
+            );
+        });
+        it('REFUSES a key whose network was never discovered', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET = '50000';
+            assert.throws(
+                () => config.assertBootstrapDepthChains(config.getConfig(),
+                    [{ coin: 'dogecoin', network: 'mainnet', dbType: 'indexer' }]),
+                /SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET/
+            );
+        });
+        it('REFUSES an unknown coin rather than defaulting it to depth 0', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET = '50000';
+            assert.throws(
+                () => config.assertBootstrapDepthChains(config.getConfig(), CHAINS),
+                /SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET/
+            );
+        });
+        it('REFUSES a malformed key with no CHAIN_NETWORK split', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_BADKEY = '500';
+            assert.throws(
+                () => config.assertBootstrapDepthChains(config.getConfig(), CHAINS),
+                /SYNC_BOOTSTRAP_DEPTH_BADKEY.*not CHAIN_NETWORK shaped/s
+            );
+        });
+        it('REFUSES a depth-0 key naming no discovered chain (0 is the full-snapshot branch)', function(){
+            process.env.SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET = '0';
+            assert.throws(
+                () => config.assertBootstrapDepthChains(config.getConfig(), CHAINS),
+                /SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET/
+            );
         });
     });
 

@@ -34,6 +34,7 @@ const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
+const { bootstrapDepthKey } = require('./config');
 const checkpointVerifier = require('./checkpoint');
 const M = require('./merkle');
 const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
@@ -128,8 +129,12 @@ class ClientSync {
         // handling is indexer-specific, but the decoder (no synthetic chain hash, just
         // block_hash continuity) seeds the same way and its 2.4M-row index_transactions
         // is the same content-limit wall, so a depth-configured chain truncates both.
+        // Keyed through bootstrapDepthKey, NOT by `this.chain` directly: the hub hands
+        // this constructor the full lowercase name ('dogecoin') while the env key names
+        // the chain however the operator spelled it, so both sides must fold onto the
+        // ticker or the lookup misses and falls through to 0, the full-snapshot branch.
         let _depthMap = this.config['SYNC_BOOTSTRAP_DEPTH'] || {};
-        this._truncatedDepth = _depthMap[(this.chain + ':' + this.network).toUpperCase()] || 0;
+        this._truncatedDepth = _depthMap[bootstrapDepthKey(this.chain, this.network)] || 0;
 
         // Guard: a truncation depth must exceed MAX_ROLLBACK_DEPTH. The join floor
         // `base = tip - depth` is the deepest block the replica holds; a reorg that
@@ -301,6 +306,50 @@ class ClientSync {
         }
     }
 
+    // One-time startup WARN naming every per-block replicated table this replica's
+    // schema lacks .
+    //
+    // The errno-1146 tolerance in every apply path is correct and stays: an older
+    // replica schema must not wedge on a table the source has gained. What it costs
+    // is that the gap is SILENT. The replica keeps reporting halted:false and
+    // lag_blocks:0 while entire tables never arrive, `_verifyTableCounts` cannot see
+    // it (it only compares tables the source published a count for against local
+    // counts, and a source-side count for a table this replica lacks reads as a
+    // count shortfall at best), and the only trace is a repeating ER_NO_SUCH_TABLE
+    // stack per table per apply. That shape on mainnet is a data-completeness
+    // failure no monitor would catch: observed 2026-07-29/30 on regtest replicas,
+    // where the six BET tables logged ~480 error lines in 20 minutes under a green
+    // status endpoint.
+    //
+    // So: say it ONCE, loudly, by name, at startup, and publish the same list on
+    // /status (api.buildStatusRow) so a monitor alerts on the array rather than on
+    // log-scraped stack traces. Advisory only: never halts, never throws, and a
+    // failure to read the table listing leaves the list null (unknown), never [].
+    async _warnMissingTables(){
+        try {
+            let present = await this.db.listExistingTables();
+            let missing = replicatedTables.missingReplicatedTables(present, this.dbType);
+            this._missingTables = missing;
+            if(missing && missing.length){
+                console.warn('MISSING_REPLICATED_TABLES: ' + this.chain + '/' + this.network + '/' +
+                    this.dbType + ' replica schema is missing ' + missing.length +
+                    ' table(s) that this build replicates per block: ' + missing.join(', ') +
+                    '. Rows for these tables are SKIPPED (errno 1146 is tolerated so a schema gap ' +
+                    'cannot wedge the replica), so replication is partial while /status still ' +
+                    'reports halted:false. Migrate this replica to the source schema; the same ' +
+                    'list is published as /status missing_tables.');
+            }
+        } catch(e){
+            this._missingTables = null;
+            console.error('Missing-table check failed for ' + this.chain + '/' + this.network + '/' +
+                this.dbType + ' (advisory, continuing):', e.message);
+        }
+    }
+
+    // Per-block replicated tables absent from this replica's schema, or null when
+    // the check has not run / could not read the table listing.
+    getMissingTables(){ return this._missingTables === undefined ? null : this._missingTables; }
+
     // --- Multi-source Byzantine quorum helpers  ---
 
     // Stable comparison key for a source's committed hash tuple.
@@ -466,6 +515,14 @@ class ClientSync {
             throw new Error('Refusing to enter live-follow: replica still empty after bootstrap for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
+
+        // One loud, one-time signal for a schema gap that would otherwise replicate
+        // silently. Runs after bootstrap / catch-up (both of which apply the source
+        // schema, which CREATEs missing tables), so anything still absent here is a
+        // gap no automatic heal closed, on a replica that is about to enter
+        // live-follow reporting halted:false and lag_blocks:0 for tables that will
+        // never arrive.
+        await this._warnMissingTables();
 
         // Load last block hashes for continuity checking
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
@@ -1614,6 +1671,8 @@ class ClientSync {
                         ' (advisory, ignoring):', e.message);
                 }
             }
+
+            await this._verifyTableContentParity(source, blockHeight, remoteStatus);
             return verdict;
         } catch(e){
             console.error('Hash verification failed against ' + source + ':', e);
@@ -1633,6 +1692,82 @@ class ClientSync {
             let n = (cur != null && Number.isFinite(Number(cur))) ? Number(cur) + 1 : 1;
             await this.db.setSyncState(countKey, String(n));
             await this.db.setSyncState('index_map_mismatch_last_block:' + this.dbType, String(blockIndex));
+        } catch(e){
+            // advisory; swallow
+        }
+    }
+
+    // Advisory per-table CONTENT parity (NON-consensus; never halts, ).
+    //
+    // The index-map check proves the id->address map; this one proves the ROWS of
+    // every replicated table the registry declares covered. Without it the three
+    // block hashes covered the ledger/actions/contract projections, the state hashes
+    // covered the in-place mutation classes, and the row-count check covered
+    // cardinality only, so a substitution that kept the count equal in any other
+    // replicated table passed everything a follower ran (review xchain-platform #4486).
+    //
+    // Called from BOTH verification paths, and the decoder is the reason it is a
+    // method rather than an inline block: _verifyAgainstSource returns early for
+    // dbType 'decoder', whose tables have no synthetic hashes at all and so had no
+    // content commitment of any kind.
+    //
+    // Preconditions mirror the index-map check, for the same reasons: both sides
+    // opted in (the source published a non-null payload), and we are AT the source's
+    // published height so the window bounds agree. The source's window and per-lookup
+    // id ceilings are fed back into the local recompute, so the two sides read the
+    // same rows rather than each hashing its own tail. Row-count differences are
+    // SKIPPED inside compareTableContent (that is completeness, surfaced by the count
+    // check); only equal-count content divergence is reported, logged and durably
+    // counted, never halted on. Never throws: an advisory check must not be able to
+    // break the verification pass that carries it.
+    async _verifyTableContentParity(source, blockHeight, remoteStatus){
+        if(!this.config['TABLE_CONTENT_PARITY_CHECK']) return null;
+        if(!remoteStatus || !remoteStatus.table_content_parity) return null;
+        if(Number(remoteStatus.block_height) !== Number(blockHeight)) return null;
+        try {
+            let remoteParity = remoteStatus.table_content_parity;
+            let idBounds = {};
+            for(let table in (remoteParity.tables || {})){
+                let e = remoteParity.tables[table];
+                if(e && e.id_max !== undefined && e.id_max !== null) idBounds[table] = e.id_max;
+            }
+            let localParity = await this.blockHasher.computeTableContentChecksums(blockHeight, {
+                window:   remoteParity.window,
+                idBounds: idBounds
+            });
+            let res = this.hashVerifier.compareTableContent(blockHeight, localParity, remoteParity);
+            if(!res.match){
+                console.warn('TABLE_CONTENT_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                    ': ' + JSON.stringify(res.mismatches) +
+                    ' (advisory, NOT halting; replicated table content diverged at equal row count)');
+                await this._recordTableContentMismatch(blockHeight, res.mismatches);
+            } else {
+                console.log('Table-content parity passed against ' + source +
+                    ' (' + res.compared + ' tables compared, ' + res.skipped.length + ' skipped)');
+            }
+            return res;
+        } catch(e){
+            console.error('Table-content parity check errored at block ' + blockHeight +
+                ' (advisory, ignoring):', e.message);
+            return null;
+        }
+    }
+
+    // Durably count advisory table-content parity mismatches , the twin of
+    // _recordIndexMapMismatch above and never a consensus gate. Never throws. Also
+    // stores the diverging TABLE NAMES, because unlike the index-map counter this
+    // check spans ~93 tables and "which one" is the whole diagnostic; the list is
+    // capped so a pathological all-tables divergence cannot write an unbounded value.
+    async _recordTableContentMismatch(blockIndex, mismatches){
+        try {
+            if(!this.db || typeof this.db.setSyncState !== 'function') return;
+            let countKey = 'table_content_mismatch_count:' + this.dbType;
+            let cur = (typeof this.db.getSyncState === 'function') ? await this.db.getSyncState(countKey) : null;
+            let n = (cur != null && Number.isFinite(Number(cur))) ? Number(cur) + 1 : 1;
+            await this.db.setSyncState(countKey, String(n));
+            await this.db.setSyncState('table_content_mismatch_last_block:' + this.dbType, String(blockIndex));
+            let names = (mismatches || []).map(m => m.table).slice(0, 20).join(',');
+            await this.db.setSyncState('table_content_mismatch_last_tables:' + this.dbType, names);
         } catch(e){
             // advisory; swallow
         }
@@ -1692,6 +1827,12 @@ class ClientSync {
             } else if(remoteStatus.table_counts){
                 console.log('Table-count verification passed against ' + source);
             }
+
+            // Decoder content parity (advisory, ). The counts above are the
+            // ONLY other signal this DB has: no ledger/actions/contract hash, no state
+            // hash, so an equal-count content substitution in blocks, transactions,
+            // transaction_outputs or the lookups was invisible here.
+            await this._verifyTableContentParity(source, blockHeight, remoteStatus);
         } catch(e){
             console.error('Decoder completeness check failed against ' + source + ':', e);
         }

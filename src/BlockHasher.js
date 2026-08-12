@@ -45,6 +45,16 @@
 // Bumping it is a consensus break requiring a coordinated validator checkpoint re-baseline.
 const BLOCK_HASH_VERSION = 1;
 
+// Default block/row span of the advisory content-parity window  when the
+// caller passes none. Big enough that a periodic verification pass covers the blocks
+// applied since the last one, small enough that turning the check on never reads a
+// table's whole history. The SOURCE's value is the one that counts: it publishes the
+// window it used and the follower recomputes over that, so the two sides cannot
+// compare different spans.
+const DEFAULT_CONTENT_PARITY_WINDOW = 100;
+
+const replicatedTables = require('./replicatedTables');
+const lifecycle = require('./tableLifecycle');
 const { buildStateHashData } = require('./stateHash');
 const { gasTickSymbol } = require('./consensus-constants');
 const { canonicalizeHashAddress } = require('./protocolAddressRoles');
@@ -314,6 +324,104 @@ class BlockHasher {
         );
         let mapped = rows.map(r => ({ id: String(r.id), address: String(r.address) }));
         return this.util.getDataHash({ index_map: mapped });
+    }
+
+    // ADVISORY, NON-CONSENSUS . Same posture as computeIndexMapChecksum
+    // above: not a block hash, not in BLOCK_HASH_VERSION, no indexer twin. Its only
+    // conformance requirement is server-vs-client agreement, and both sides call
+    // THIS method over the bound the SOURCE published, so they agree by construction.
+    //
+    // Per-table content checksums over a bounded window, for every replicated table
+    // the registry declares content-parity-covered (src/tableLifecycle.js
+    // CONTENT_PARITY_*, resolved by replicatedTables.contentParityPlan). This is the
+    // only signal that catches an equal-COUNT content substitution in a table no
+    // consensus hash reads: the three block hashes cover the ledger/actions/contract
+    // projections, state_hash covers in-place mutations, the /status row counts cover
+    // cardinality, and everything else was uncommitted (review xchain-platform #4486).
+    //
+    // Shape (published on /status, consumed by ClientSync._verifyAgainstSource):
+    //   { window, block, tables: { <table>: { n, h, id_max? } } }
+    // Sparse by design: a table with no rows in the window is OMITTED rather than
+    // carried as an empty digest, which keeps the status payload small on a quiet
+    // chain and lets the verifier treat "present on one side only" as its own case.
+    //
+    // Bounding. Block-bounded tables use the window [uptoBlock - window + 1,
+    // uptoBlock] through their own scope join. Append-only lookups have no block
+    // column, so they use the id window (id_max - window, id_max]; a SOURCE publishes
+    // id_max and a follower MUST pass it back through opts.idBounds so both sides
+    // read the same range rather than each hashing its own tail.
+    //
+    // Fail-soft per table: a schema gap or a transient read drops that ONE table from
+    // the result (the verifier then skips it) instead of failing the whole advisory
+    // pass. Cost note, same as the index-map checksum: this reads a window of every
+    // covered table, so it is gated OFF by default (TABLE_CONTENT_PARITY_CHECK) and
+    // the window is operator-tunable.
+    async computeTableContentChecksums(uptoBlock, opts){
+        let o        = opts || {};
+        let dbType   = (this.db && this.db.dbType) === 'decoder' ? 'decoder' : 'indexer';
+        let window   = Number.isFinite(Number(o.window)) && Number(o.window) > 0 ? Math.floor(Number(o.window)) : DEFAULT_CONTENT_PARITY_WINDOW;
+        let idBounds = o.idBounds || {};
+        let fromBlock = Math.max(0, Number(uptoBlock) - window + 1);
+
+        // Ask ONCE which tables exist, so a replica whose schema predates a family
+        // skips it instead of raising (and logging) a missing-table error per table
+        // on every status poll (the  lesson from table_counts). A failed
+        // listing degrades to probing, never to "nothing exists".
+        let present = null;
+        try { present = await this.db.listExistingTables(); } catch(e){ /* fall back to probing */ }
+
+        let tables = {};
+        for(let step of replicatedTables.contentParityPlan(dbType)){
+            if(present && !present.has(step.table)) continue;
+            try {
+                let rows, idMax = null;
+                if(step.bound === 'id'){
+                    idMax = (idBounds[step.table] !== undefined && idBounds[step.table] !== null)
+                        ? Number(idBounds[step.table])
+                        : await this.db.getMaxRowId(step.table);
+                    if(idMax === null || !Number.isFinite(idMax)) continue;
+                    rows = await this.db.getContentIdWindowRows(step.table, Math.max(0, idMax - window), idMax);
+                } else {
+                    rows = await this.db.getContentWindowRows(step.table, step.bound, fromBlock, Number(uptoBlock));
+                }
+                if(!rows || rows.length === 0) continue;
+                tables[step.table] = { n: rows.length, h: this.contentDigest(step.table, rows) };
+                if(idMax !== null) tables[step.table].id_max = String(idMax);
+            } catch(e){
+                // Advisory: one unreadable table must not cost the other 92 their check.
+            }
+        }
+        return { window: window, block: Number(uptoBlock), tables: tables };
+    }
+
+    // Canonical content digest for one table's window of rows.
+    //
+    // Order-independent BY CONSTRUCTION: each row is reduced to a sorted-key JSON
+    // string and the strings are then sorted, so neither storage order nor column
+    // order nor a collation difference between source and follower can move the
+    // digest. That is deliberately unlike the consensus hashes, whose ORDER BY is
+    // part of the preimage: here a reordering is not a divergence, only differing
+    // CONTENT is.
+    //
+    // Values are stringified so a driver returning a BIGINT as a Number on one side
+    // and a BigInt on the other still agrees; Buffers go to hex and Dates to ISO so
+    // neither a binary column nor the local timezone can fork the digest. Columns the
+    // follower is not expected to match (the stripped surrogate id, generated
+    // columns) are dropped per the registry declaration.
+    contentDigest(table, rows){
+        let excluded = new Set(lifecycle.contentParityExcludedColumns(table));
+        let canon = rows.map(row => {
+            let out = {};
+            for(let key of Object.keys(row).filter(k => !excluded.has(k)).sort()){
+                let v = row[key];
+                if(v === null || v === undefined)      out[key] = null;
+                else if(Buffer.isBuffer(v))            out[key] = v.toString('hex');
+                else if(v instanceof Date)             out[key] = v.toISOString();
+                else                                   out[key] = String(v);
+            }
+            return JSON.stringify(out);
+        }).sort();
+        return this.util.getDataHash({ table: table, rows: canon });
     }
 }
 

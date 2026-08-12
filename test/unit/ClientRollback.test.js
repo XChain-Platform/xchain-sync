@@ -117,8 +117,11 @@ describe('ClientRollback', function(){
                 c.args[0].includes('DELETE FROM') && c.args[0].includes('block_index >=') && !c.args[0].includes('sync_meta')
             );
             // Block-scoped deletes cover both blockTables and the index id tables
-            // (index_addresses / index_tickers), which are also pruned by block_index >=.
-            assert.strictEqual(blockDeletes.length, rollback.blockTables.length + rollback.indexTables.length);
+            // (index_addresses / index_tickers), which are also pruned by block_index >=, plus
+            // the one validator_rewards delete keyed on derive_block_index , whose
+            // column name ends in the same substring this filter matches on.
+            assert.strictEqual(blockDeletes.length,
+                rollback.blockTables.length + rollback.indexTables.length + 1);
             for(let call of blockDeletes){
                 assert.deepStrictEqual(call.args[1], [100]);
             }
@@ -301,10 +304,32 @@ describe('ClientRollback', function(){
             // ORIGINAL earn-block SURVIVES the reorg (reward_block_index < reorg); byte-mirrors the source.
             assert.ok(/d\.block_index\s*>=\s*\?/.test(restore.args[0]));
             assert.ok(/d\.reward_block_index\s*<\s*\?/.test(restore.args[0]));
-            assert.deepStrictEqual(restore.args[1], [100, 100]);
+            // : a loser MATERIALIZED inside the orphaned range must stay deleted, or the
+            // replica restores an orphan the source (and a from-genesis replay) does not have.
+            assert.ok(/d\.reward_derive_block_index IS NULL OR d\.reward_derive_block_index\s*<\s*\?/.test(restore.args[0]),
+                'restore must also require the loser materialization block to survive the reorg');
+            assert.ok(/derive_block_index\)/.test(restore.args[0]),
+                'restore must carry derive_block_index back onto the restored row');
+            assert.deepStrictEqual(restore.args[1], [100, 100, 100]);
             let restoreIdx = calls.indexOf(restore);
             let deleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `validator_rewards`'));
             assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'reconcile restore must precede the validator_rewards delete');
+        });
+
+        //  / . An  derived anchor reward is EARNED at the checkpoint's
+        // snapshot_block but MATERIALIZED at a later BTC block, so the block_index loop above
+        // cannot reach it for a reorg landing between the two heights. The replica must drop
+        // exactly what the source drops or the two disagree on SUM(validator_rewards).
+        it('deletes validator_rewards by derive_block_index as well, mirroring the source ', async function(){
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let del = calls.find(c => /DELETE FROM validator_rewards WHERE derive_block_index\s*>=\s*\?/.test(c.args[0]));
+            assert.ok(del, 'expected a validator_rewards delete scoped on the materialization block');
+            assert.deepStrictEqual(del.args[1], [100]);
+            let delIdx   = calls.indexOf(del);
+            let indexIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `index_addresses`'));
+            assert.ok(indexIdx >= 0, 'expected the index_addresses rollback delete');
+            assert.ok(delIdx < indexIdx, 'the derive-block delete must precede the index-lookup deletes');
         });
 
         it('rolls back transaction on error and rethrows', async function(){

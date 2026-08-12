@@ -56,6 +56,55 @@ class HashVerifier {
         };
     }
 
+    // Advisory: compare local vs remote per-table content checksums (NON-consensus,
+    // ). Both sides are BlockHasher.computeTableContentChecksums results over
+    // the SAME window and the same published bounds.
+    //
+    // The comparison is deliberately gated on EQUAL ROW COUNTS, and that gate is what
+    // makes the signal trustworthy rather than noisy:
+    //
+    //   - counts differ  -> a completeness gap or a bound the two sides read a beat
+    //     apart (a source one block ahead has already inserted or deleted inside the
+    //     window). Reported as SKIPPED, never as a mismatch: incompleteness is what
+    //     the /status row-count check exists for, and the source having advanced is
+    //     not a defect at all.
+    //   - table on one side only -> same reasoning, skipped with its own reason so an
+    //     operator can tell "the source has rows here and we have none" from a
+    //     genuine content fork.
+    //   - counts equal, digests differ -> CONTENT DIVERGENCE. This is the case no
+    //     other check on the follower can see, and the only one reported.
+    //
+    // Returns { match, blockHeight, compared, mismatches: [...], skipped: [...] }.
+    // The caller logs + counts a mismatch and CONTINUES; it must never halt on this.
+    compareTableContent(blockHeight, local, remote){
+        let localTables  = (local  && local.tables)  || {};
+        let remoteTables = (remote && remote.tables) || {};
+        let mismatches = [], skipped = [], compared = 0;
+
+        for(let table of [...new Set([...Object.keys(localTables), ...Object.keys(remoteTables)])].sort()){
+            let l = localTables[table], r = remoteTables[table];
+            if(!l || !r){
+                skipped.push({ table: table, reason: l ? 'absent-on-source' : 'absent-locally' });
+                continue;
+            }
+            if(Number(l.n) !== Number(r.n)){
+                skipped.push({ table: table, reason: 'row-count-differs', local: Number(l.n), remote: Number(r.n) });
+                continue;
+            }
+            compared++;
+            if(l.h !== r.h)
+                mismatches.push({ table: table, rows: Number(l.n), local: l.h, remote: r.h });
+        }
+
+        return {
+            match:       mismatches.length === 0,
+            blockHeight: blockHeight,
+            compared:    compared,
+            mismatches:  mismatches,
+            skipped:     skipped
+        };
+    }
+
     // Verify hash chain continuity between a stored previous block and a new payload
     // prevHashes: { ledger_hash, actions_hash, contract_hash } from the client's last applied block
     // payload: incoming block event with hashes
