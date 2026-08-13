@@ -292,7 +292,8 @@ class SyncService {
         if(this.pollers.has(key)) return;
 
         let log    = (cfg.dbType === 'indexer')
-            ? new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], this.config['REPLICA_DB_READONLY'])
+            ? new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], this.config['REPLICA_DB_READONLY'],
+                                  this.config['SYNC_META_RETENTION_BLOCKS'])
             : null;
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);

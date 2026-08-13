@@ -32,10 +32,15 @@ class TransparencyLog {
     // outright or fork the log from its source. Read paths (proofs, pages, roots,
     // high-water mark, gap scan) are untouched, so the tier still serves
     // /transparency exactly like the origin does.
-    constructor(db, epochSize, readOnly) {
+    // retentionBlocks: OPT-IN sync_meta retention window, default OFF (0). See
+    // pruneSyncMeta for what a positive value gives up. A non-numeric or negative
+    // value is treated as off, never as "prune everything".
+    constructor(db, epochSize, readOnly, retentionBlocks) {
         this.db        = db;
         this.epochSize = epochSize || 100;
         this.readOnly  = readOnly === true;
+        let keep = parseInt(retentionBlocks, 10);
+        this.retentionBlocks = (Number.isFinite(keep) && keep > 0) ? keep : 0;
     }
 
     // Crossing an epoch boundary commits that epoch's Merkle root as a side effect.
@@ -51,7 +56,92 @@ class TransparencyLog {
             await this.commitEpoch(epoch).catch(e =>
                 console.error('Error committing Merkle epoch ' + epoch + ':', e)
             );
+            // Retention runs at epoch boundaries only (once per epochSize blocks) and
+            // AFTER the boundary commit, so the epoch that just closed is committed
+            // before anything is considered for pruning. Inert unless the operator set
+            // a window. A retention failure must never stall the poll loop: the sweep
+            // is idempotent and the next boundary retries it.
+            if (this.retentionBlocks > 0) {
+                await this.pruneSyncMeta().catch(e =>
+                    console.error('Error pruning sync_meta at epoch ' + epoch + ':', e)
+                );
+            }
         }
+    }
+
+    // OPT-IN retention for the per-block sync_meta rows (XC-1363). DEFAULT OFF: with
+    // SYNC_META_RETENTION_BLOCKS unset (or 0) this is a no-op and the log keeps full
+    // history, which stays the shipped behaviour. Mirrors the indexer's
+    // retention.pruneStateRoots (xchain-indexer/src/retention.js): a positive window
+    // means "keep the last N blocks", a zero/absent window means "keep everything".
+    //
+    // WHAT IS GIVEN UP: sync_meta holds the Merkle LEAVES, so a pruned block can no
+    // longer be served as an inclusion proof (getProof needs every leaf of the epoch
+    // to rebuild the tree). merkle_epochs is deliberately NOT pruned: the committed
+    // roots are tiny, one row per epochSize blocks, and keeping them preserves the
+    // published root chain (and the merkle_reorgs audit trail that references it)
+    // even for ranges whose leaves are gone.
+    //
+    // EPOCH-ALIGNED, COMMITTED-ONLY: the delete boundary is the end_block of a
+    // COMMITTED epoch, never an arbitrary height. Deleting part of an epoch would be
+    // worse than useless: getProof would rebuild that epoch's tree from the surviving
+    // subset and hand out a proof against a root that no longer matches the committed
+    // one (verified:false at best, a silently wrong path at worst). Aligning to a
+    // committed epoch boundary also guarantees no epoch is ever left half-pruned,
+    // because epoch ranges never straddle a boundary. The straddle guard below is the
+    // belt-and-braces check for a log whose MERKLE_EPOCH_SIZE was changed mid-life.
+    //
+    // Plain doQuery, no transaction, like pruneFrom: this runs from the poll loop and
+    // a transaction here would contend with other writers. The delete is an idempotent
+    // range-delete, so a fault just retries at the next epoch boundary.
+    async pruneSyncMeta(retentionBlocks) {
+        let keep = (retentionBlocks === undefined || retentionBlocks === null)
+            ? this.retentionBlocks
+            : parseInt(retentionBlocks, 10);
+        // No-op at zero (and at anything unparseable or negative): retention is off.
+        if (!Number.isFinite(keep) || keep <= 0) return { enabled: false, deleted: 0 };
+        // A replicated log prunes at the source; the DELETEs arrive over replication.
+        if (this.readOnly) return { enabled: true, skipped: true, reason: 'read_only', deleted: 0 };
+
+        let tip = await this.getHighWaterMark();
+        if (tip === null) return { enabled: true, skipped: false, deleted: 0, tip: null, cutoff: null };
+
+        // Blocks at or below cutoff are outside the retention window.
+        let cutoff = tip - keep;
+        if (cutoff < 1) return { enabled: true, skipped: false, deleted: 0, tip, cutoff: null };
+
+        // Highest committed epoch that lies wholly outside the window. Its end_block is
+        // the only safe delete boundary; if no epoch qualifies there is nothing to do.
+        let boundRows = await this.db.doQuery(
+            "SELECT MAX(end_block) AS eb FROM merkle_epochs WHERE end_block <= ?", [cutoff]
+        );
+        let boundary = (boundRows.length > 0 && boundRows[0].eb !== null && boundRows[0].eb !== undefined)
+            ? Number(boundRows[0].eb) : null;
+        if (boundary === null || boundary < 1)
+            return { enabled: true, skipped: false, deleted: 0, tip, cutoff, prunedThrough: null };
+
+        // Refuse to cut through a committed epoch. Impossible with a stable
+        // MERKLE_EPOCH_SIZE (ranges are disjoint and aligned), reachable only if the
+        // epoch size changed after epochs were already committed; pruning then would
+        // leave a committed epoch with a partial leaf set and unprovable proofs.
+        let straddling = await this.db.doQuery(
+            "SELECT COUNT(*) AS c FROM merkle_epochs WHERE start_block <= ? AND end_block > ?",
+            [boundary, boundary]
+        );
+        if (straddling.length > 0 && Number(straddling[0].c) > 0) {
+            console.error('sync_meta retention skipped: a committed epoch straddles block ' + boundary +
+                ' (MERKLE_EPOCH_SIZE likely changed after epochs were committed); refusing a partial prune');
+            return { enabled: true, skipped: true, reason: 'straddling_epoch', deleted: 0, tip, cutoff };
+        }
+
+        let result = await this.db.doQuery(
+            "DELETE FROM sync_meta WHERE block_index <= ?", [boundary]
+        );
+        let deleted = (result && result.affectedRows) ? Number(result.affectedRows) : 0;
+        if (deleted > 0)
+            console.log('sync_meta retention: pruned ' + deleted + ' row(s) at or below block ' + boundary +
+                ' (tip ' + tip + ', window ' + keep + ' blocks); inclusion proofs below that block are no longer serveable');
+        return { enabled: true, skipped: false, deleted, tip, cutoff, prunedThrough: boundary };
     }
 
     async commitEpoch(epoch) {
@@ -176,7 +266,20 @@ class TransparencyLog {
             [epochData.start_block, epochData.end_block]
         );
 
+        // No leaves on hand for a committed epoch. Normal for an epoch whose rows were
+        // dropped by the retention window (pruneSyncMeta), where the honest answer is
+        // "not available here"; the API turns this into a 404.
         if (rows.length === 0) return null;
+
+        // A committed epoch whose surviving leaf count disagrees with the count the root
+        // was built from cannot produce a valid proof: the rebuilt tree hashes to a
+        // different root. Retention only ever deletes whole epochs, so this fires on a
+        // hand-run DELETE or a mid-life MERKLE_EPOCH_SIZE change, and refusing beats
+        // handing out a proof that does not verify. leaf_count is absent on very old
+        // rows, in which case the check is skipped.
+        if (epochData.leaf_count !== undefined && epochData.leaf_count !== null &&
+            rows.length !== Number(epochData.leaf_count))
+            return { error: 'epoch leaves incomplete' };
 
         let leafIndex = -1;
         let leaves = [];

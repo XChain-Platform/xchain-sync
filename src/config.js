@@ -229,6 +229,13 @@ module.exports = {
         // Merkle tree epoch size (blocks per epoch)
         config['MERKLE_EPOCH_SIZE'] = parseInt(process.env.MERKLE_EPOCH_SIZE) || 100;
 
+        // Transparency-log retention window, in blocks. DEFAULT OFF (0): the log keeps
+        // full history, so every historical inclusion proof stays serveable. A positive
+        // value lets TransparencyLog.pruneSyncMeta drop sync_meta rows older than the
+        // window at epoch boundaries, trading old proofs for bounded table growth.
+        // Committed Merkle roots (merkle_epochs) are kept either way.
+        config['SYNC_META_RETENTION_BLOCKS'] = parseIntMin0(process.env.SYNC_META_RETENTION_BLOCKS, 0);
+
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 

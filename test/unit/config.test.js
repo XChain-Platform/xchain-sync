@@ -19,6 +19,7 @@ describe('config', function(){
         'SNAPSHOT_RATE_FULL', 'SNAPSHOT_RATE_INCR', 'SYNC_SOURCES',
         'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
         'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'REPLICA_DB_READONLY', 'SYNC_EXCLUDE',
+        'SYNC_META_RETENTION_BLOCKS',
         'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
         'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET',
         'SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET'
@@ -284,6 +285,25 @@ describe('config', function(){
             for(let value of ['false', '0', '']){
                 process.env.REPLICA_DB_READONLY = value;
                 assert.strictEqual(config.getConfig().REPLICA_DB_READONLY, false, 'value: ' + value);
+            }
+        });
+    });
+
+    // Transparency-log retention is opt-in and default-off: unset means keep full
+    // history, so every historical inclusion proof stays serveable. A garbage value
+    // must read as off, never as an accidental prune window.
+    describe('SYNC_META_RETENTION_BLOCKS', function(){
+        it('defaults to 0 (retention disabled) when unset', function(){
+            assert.strictEqual(config.getConfig().SYNC_META_RETENTION_BLOCKS, 0);
+        });
+        it('reads a positive window', function(){
+            process.env.SYNC_META_RETENTION_BLOCKS = '50000';
+            assert.strictEqual(config.getConfig().SYNC_META_RETENTION_BLOCKS, 50000);
+        });
+        it('is 0 for a non-numeric, empty or negative value', function(){
+            for(let value of ['', 'lots', '-1']){
+                process.env.SYNC_META_RETENTION_BLOCKS = value;
+                assert.strictEqual(config.getConfig().SYNC_META_RETENTION_BLOCKS, 0, 'value: ' + value);
             }
         });
     });
