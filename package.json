@@ -34,6 +34,7 @@
     "ci": "mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit && npm run ci:security",
     "ci:security": "mocha --timeout 10000 --recursive 'test/security/**/*.test.js' --exit",
     "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
+    "coverage:check": "c8 --check-coverage --lines 89 --statements 89 --branches 84.5 --functions 88.5 --reporter=text-summary --include 'src/**/*.js' mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "test:smoke": "mocha --timeout 15000 --recursive 'test/smoke/**/*.test.js'",
     "test:integration": "mocha --timeout 30000 --recursive 'test/integration/**/*.test.js'",
     "test:integration:parity": "mocha --timeout 30000 --exit test/integration/index-map-parity.test.js test/integration/index-map-parity-http.test.js",
