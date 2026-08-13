@@ -1,2 +1,29 @@
+# Repos the sync suite needs checked out BESIDE it on the CI venue.
+#
+# Declaring a sibling here is what makes its cross-repo guards actually run. An
+# UNdeclared sibling is not a neutral omission: every guard written against it
+# resolves with existsSync, calls this.skip(), and the gate still prints PASS,
+# so the run reports green having exercised none of them. Measured 2026-08-12,
+# that gap was 8 guards (a venue carrying only documentation + indexer ran 1709
+# passing / 12 pending where a full local checkout runs 1717 / 4). See
+# test/unit/sibling-coverage.test.js, which reports the surface this file leaves
+# uncovered; the same gap applies to a sibling that is declared but missing.
+#
+# ci-dispatch.sh ships each of these at its origin/master (falling back to local
+# HEAD) and REFUSES the push if one is not a checkout beside this repo, so a
+# declared sibling can never be silently absent.
+
+# Consensus-primitive conformance and the state-commitment reference.
 xchain-documentation
+# Rollback coverage, the block-hash and protocol-address twins, and the
+# validator-set parity (XCHAIN_INDEXER_SQL_PATH covers only the schema half).
 xchain-indexer
+# Vendored coins-registry byte-identity: BTC/LTC/DOGE/index/consensus_pin.
+xchain-hub
+# Generated-column parity against the decoder schema (XCHAIN_DECODER_SQL_PATH
+# points straight at it when CI stages the schema repo).
+xchain-decoder
+# state_subtree_activation.js byte-identity in its client-liveness carrier.
+xchain-sdk
+# state_subtree_activation.js byte-identity in its escrow-leaf refusal carrier.
+xchain-explorer
