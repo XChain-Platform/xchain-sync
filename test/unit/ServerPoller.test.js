@@ -92,7 +92,12 @@ describe('ServerPoller', function(){
             // point: four families' open-remaining logic then exists once, on the
             // source, instead of having to agree across the twins.
             assert.ok(poller.blockScopedTables.includes('escrow_leaf_journal'));
-            assert.strictEqual(poller.blockScopedTables.length, 10);
+            // Pre-rotation signing keys journaled by the DELEGATE v1 materialization sweep
+            // (#4366). Replicated because the follower reaches the mutated (surviving)
+            // contract_stakes row through it, in both directions: forward via updatedRows,
+            // backward via the ClientRollback key restore.
+            assert.ok(poller.blockScopedTables.includes('contract_delegation_rotations'));
+            assert.strictEqual(poller.blockScopedTables.length, 11);
         });
 
         it('has action-scoped tables', function(){

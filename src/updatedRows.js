@@ -41,6 +41,10 @@
  *     and stakes / unstakes (capability SLASH), found via the per-row slash
  *     debit logs (contract_slash_debits / capability_slash_debits), which are
  *     themselves block-streamed and carry block_index.
+ *   - signing_pubkey_id rotation on a surviving contract_stakes row, applied when a
+ *     DELEGATE v1 delegation matures (CONTRACT_DELEGATION_MATERIALIZE) and found via
+ *     the contract_delegation_rotations journal, which is block-streamed and carries
+ *     block_index. Forward twin of ClientRollback's reverse key restore.
  *   - request_status flip on a surviving v0 attests / xcalls request row, stamped
  *     with resolved_block = the resolving block.
  *   - cooldown-maturity status_id flip on surviving unstakes / contract_unstakes
@@ -86,6 +90,12 @@ const SLASH_SPECS = [
     { table: 'stakes',            debits: 'capability_slash_debits', target: 'stakes'            },
     { table: 'unstakes',          debits: 'capability_slash_debits', target: 'unstakes'          }
 ];
+
+// Stake-ledger tables the DELEGATE v1 materialization sweep rewrites signing_pubkey_id on
+// (CONTRACT_DELEGATION_MATERIALIZE). Each rewrite is journaled in contract_delegation_rotations
+// with the table it landed on, exactly as the slash debits are, so both directions (this
+// forward carry and ClientRollback's reverse restore) key the same way.
+const ROTATION_TABLES = ['contract_stakes', 'contract_unstakes'];
 
 // v0 request rows whose request_status went terminal in this window (resolved_block stamp).
 const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
@@ -167,6 +177,25 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ?",
                 [spec.target, from, to], conn);
             add(spec.table, rows);
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table may not exist on older source schemas; skip.
+        }
+    }
+
+    // 2b. DELEGATE v1 signing-key rotations materialized onto surviving contract_stakes rows.
+    //     Same shape as the slash class: the mutated row's action_index is below the window
+    //     (the STAKE happened earlier), so only its journal entry pins the change to a block.
+    //     Without this the follower keeps the pre-rotation key and hands contracts a different
+    //     staker set than the source (and slashes a key the source no longer carries).
+    for(let rotTbl of ROTATION_TABLES){
+        try {
+            let rows = await db.doQuery(
+                "SELECT t.* FROM `" + rotTbl + "` t " +
+                "JOIN `contract_delegation_rotations` r ON r.stake_action_index = t.action_index " +
+                "WHERE r.target_table = ? AND r.block_index BETWEEN ? AND ?",
+                [rotTbl, from, to], conn);
+            add(rotTbl, rows);
         } catch(e){
             if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table may not exist on older source schemas; skip.
@@ -312,4 +341,4 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     return out;
 }
 
-module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES, BET_STATUS_SPECS };
+module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, ROTATION_TABLES, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES, BET_STATUS_SPECS };

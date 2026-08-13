@@ -340,6 +340,41 @@ class ClientRollback {
                     }
                 }
 
+                // contract_delegation_rotations restore: an orphaned DELEGATE v1 materialization
+                // rewrote contract_stakes.signing_pubkey_id IN PLACE on surviving rows (the
+                // source journals each rewrite's pre-rotation key). Same gap as the slash
+                // restore above: the action-scoped delete drops orphaned-range rows but never
+                // re-streams the surviving mutated row, so the replica would keep the rotated
+                // key while the source reverts to the original, and the key on that row is what
+                // the VM stake snapshot, the UNSTAKE aggregate and the SLASH deduction all read.
+                // Mirror the source restore (xchain-indexer rollback.js): copy back the EARLIEST
+                // orphaned rotation's `prev_signing_pubkey_id` per row, tiebreaking a same-block
+                // pair on delegation_action_index (replay-stable) and NEVER on the
+                // AUTO_INCREMENT `id`. Pure id copy, byte-identical to the source.
+                for(let rotTbl of ['contract_stakes', 'contract_unstakes']){
+                    try {
+                        await this.db.doQuery(
+                            "UPDATE " + rotTbl + " t " +
+                            "JOIN contract_delegation_rotations r ON r.stake_action_index = t.action_index " +
+                            "SET t.signing_pubkey_id = r.prev_signing_pubkey_id " +
+                            "WHERE r.target_table = ? AND r.block_index >= ? " +
+                            "AND NOT EXISTS (" +
+                            "  SELECT 1 FROM contract_delegation_rotations e " +
+                            "  WHERE e.target_table = r.target_table " +
+                            "    AND e.stake_action_index = r.stake_action_index " +
+                            "    AND e.block_index >= ? " +
+                            "    AND (e.block_index < r.block_index " +
+                            "         OR (e.block_index = r.block_index " +
+                            "             AND e.delegation_action_index < r.delegation_action_index)))",
+                            [rotTbl, block_index, block_index]
+                        );
+                    } catch(e){
+                        // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                        // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    }
+                }
+
                 // capability_slash_debits restore (WI-2 bump 2): the capability-stake twin
                 // of the contract restore above. An orphaned SLASH burned stakes/unstakes.amount
                 // IN PLACE on surviving rows; copy back the EARLIEST orphaned debit's verbatim

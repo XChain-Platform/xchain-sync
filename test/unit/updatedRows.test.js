@@ -50,11 +50,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         // No query should reference deactivation_block (delay unknown, so skip).
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
-        // The slash + request_status + poll-finalize + cooldown-status + bet-status
-        // + anchor_invalid + tokens-supply classes still run, none of which depend on
-        // the activation delay (4 slash + 2 request + 1 poll + 2 cooldown-status
-        // + 2 bet-status + 1 anchor + 1 tokens = 13).
-        assert.strictEqual(db.calls.length, 13);
+        // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
+        // + bet-status + anchor_invalid + tokens-supply classes still run, none of which
+        // depend on the activation delay (4 slash + 2 rotation + 2 request + 1 poll
+        // + 2 cooldown-status + 2 bet-status + 1 anchor + 1 tokens = 15).
+        assert.strictEqual(db.calls.length, 15);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -85,6 +85,27 @@ describe('updatedRows.collectUpdatedRows', function(){
         // request_status keyed on resolved_block window (50..50).
         let aq = db.calls.find(c => c.sql.indexOf('FROM `attests` WHERE version = 0') !== -1);
         assert.deepStrictEqual(aq.args, [50, 50]);
+    });
+
+    it('carries a DELEGATE v1 signing-key rotation on surviving stake AND cooldown rows', async function(){
+        // The rotated row's action_index is below the window (the STAKE happened earlier), so
+        // only its contract_delegation_rotations entry pins the change to this block. Without
+        // this class the follower keeps the pre-rotation key and hands contracts a different
+        // staker set than the source, and its Pass-2 slash lookup misses the cooldown-locked
+        // tokens the source can still debit (#4366).
+        let db = fakeDb([
+            { match: 'JOIN `contract_delegation_rotations`', rows: [{ action_index: 31, signing_pubkey_id: 77 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 60, 60, 6);
+        assert.ok(out.contract_stakes && out.contract_stakes.length === 1);
+        assert.strictEqual(out.contract_stakes[0].signing_pubkey_id, 77);
+        assert.ok(out.contract_unstakes && out.contract_unstakes.length === 1);
+        let queries = db.calls.filter(c => c.sql.indexOf('JOIN `contract_delegation_rotations`') !== -1);
+        assert.strictEqual(queries.length, 2, 'one per rotated stake-ledger table');
+        assert.deepStrictEqual(queries.map(q => q.args), [
+            ['contract_stakes', 60, 60],
+            ['contract_unstakes', 60, 60]
+        ], 'scoped by target_table and keyed on the journal row block window');
     });
 
     it('dedups a row reached by two classes (deactivated AND slashed) by action_index', async function(){

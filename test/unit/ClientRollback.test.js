@@ -42,12 +42,16 @@ describe('ClientRollback', function(){
     });
 
     describe('table lists', function(){
-        it('has 11 block-scoped tables', function(){
-            assert.strictEqual(rollback.blockTables.length, 11);
+        it('has 12 block-scoped tables', function(){
+            assert.strictEqual(rollback.blockTables.length, 12);
             assert.ok(rollback.blockTables.includes('blocks'));
             assert.ok(rollback.blockTables.includes('transactions'));
             assert.ok(rollback.blockTables.includes('slash_events'));
             assert.ok(rollback.blockTables.includes('contract_slash_debits'));
+            // Pre-rotation signing keys for the DELEGATE v1 materialization sweep (#4366),
+            // block-scoped for the same reason as the slash-debit log: the reorg restore
+            // reads it before the generic delete drops the orphaned rows.
+            assert.ok(rollback.blockTables.includes('contract_delegation_rotations'));
             // RB-ANCHOR: pre-image log of reconcile-deleted validator_rewards losers.
             assert.ok(rollback.blockTables.includes('anchor_reward_reconcile_log'));
             // WI-2 bump 2 capability-stake equivocation slashing (committed 8e95482).
@@ -291,6 +295,32 @@ describe('ClientRollback', function(){
                 assert.ok(!/e\.id\s*<\s*d\.id/.test(sql),
                     'restore must NOT tiebreak on the non-deterministic AUTO_INCREMENT id');
             }
+        });
+
+        it('replays the delegation-rotation key restore into contract_stakes (block_index-keyed, before deletes)', async function(){
+            // Forward twin: updatedRows carries a materialized DELEGATE v1 rotation to the
+            // replica. On a reorg the replica must copy prev_signing_pubkey_id back exactly as
+            // the source does, or it keeps a key the source has reverted and hands contracts a
+            // different staker set (#4366).
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let restores = calls.filter(c =>
+                /UPDATE contract_(?:un)?stakes/.test(c.args[0]) &&
+                c.args[0].includes('contract_delegation_rotations') &&
+                c.args[0].includes('SET t.signing_pubkey_id = r.prev_signing_pubkey_id'));
+            assert.strictEqual(restores.length, 2,
+                'both stake-ledger tables rotate, so both must restore (cooldown rows are slashable)');
+            let restore = restores[0];
+            assert.deepStrictEqual(restore.args[1], ['contract_stakes', 100, 100]);
+            assert.deepStrictEqual(restores[1].args[1], ['contract_unstakes', 100, 100]);
+            assert.ok(/e\.delegation_action_index\s*<\s*r\.delegation_action_index/.test(restore.args[0]),
+                'restore must tiebreak on delegation_action_index (replay-stable), byte-matching the source');
+            assert.ok(!/e\.id\s*<\s*r\.id/.test(restore.args[0]),
+                'restore must NOT tiebreak on the non-deterministic AUTO_INCREMENT id');
+            let restoreIdx = calls.indexOf(restore);
+            let deleteIdx  = calls.findIndex(c => c.args[0].includes('DELETE FROM `contract_stakes`'));
+            assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx,
+                'key restore must precede the contract_stakes delete');
         });
 
         it('replays the anchor reconcile-log restore into validator_rewards (block_index-keyed, before deletes) (RB-ANCHOR)', async function(){
