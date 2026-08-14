@@ -11,6 +11,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const { getReplicatedTables } = require('../../../src/replicatedTables');
+const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/tableLifecycle');
 const BlockHasher = require('../../../src/BlockHasher');
 const testDbModule = require('./testDb');
 
@@ -21,10 +22,26 @@ const testDbModule = require('./testDb');
 // Excluding id there also avoids path-dependence: a fresh bootstrap DOES
 // copy source ids verbatim, so comparing them would make the oracle's
 // verdict depend on which sync path populated the table.
-const COLUMN_EXCLUSIONS = {
+//
+// The rest is NOT restated here. src/tableLifecycle.js already declares which
+// columns the two sides may legitimately disagree on, and this oracle drifted
+// from it: `blocks.id` is the local surrogate ClientApplier strips before
+// insert (localSurrogateIdTables), so once a reorg renumbers the source the
+// replica is permanently offset, by design and permanently. Comparing it
+// turned that into a byte-identity failure in which every other column
+// matched, which is a false alarm from an oracle that had a stricter opinion
+// than the protocol.
+const HARNESS_EXCLUSIONS = {
     sync_meta: ['id', 'logged_at'],
     balances: ['id'],
 };
+
+const COLUMN_EXCLUSIONS = {};
+for (let [table, cols] of Object.entries(CONTENT_PARITY_EXCLUDED_COLUMNS))
+    COLUMN_EXCLUSIONS[table] = cols.slice();
+for (let [table, cols] of Object.entries(HARNESS_EXCLUSIONS)) {
+    COLUMN_EXCLUSIONS[table] = [...new Set((COLUMN_EXCLUSIONS[table] || []).concat(cols))];
+}
 
 // Tables compared with SUBSET semantics: every replica row must exist
 // byte-identical on the source, but the replica may legitimately hold fewer

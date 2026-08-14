@@ -93,6 +93,20 @@ class TestDatabase {
         throw lastErr;
     }
 
+    // M-17 strict read, the same alias test/integration/helpers/testDb.js already
+    // carries. Production's doQuery collapses a NON-transactional query error into
+    // [], so the sub-tree derivations read through doQueryStrict; this harness's
+    // doQuery already throws on every error, so strict is the contract it has
+    // always offered and the alias just lets those derivations resolve here.
+    // Without it the state-commitment conformance suite dies on
+    // `db.doQueryStrict is not a function`, which is a missing stand-in method
+    // reported as if the read itself were broken. The integration harness was
+    // given this and the e2e one was not, which is why the same suite passes at
+    // one tier and fails at the other.
+    async doQueryStrict(query, args, conn) {
+        return await this.doQuery(query, args, conn);
+    }
+
     // Committed-state read, bypassing transactionConnection. The client under
     // test applies blocks inside a transaction ON THIS OBJECT; a wait/assert
     // poll issued through doQuery rides that same connection and interleaves
