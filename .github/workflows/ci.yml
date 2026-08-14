@@ -86,6 +86,14 @@ jobs:
             git clone --quiet --depth 1 --branch "$SIBLINGS_REF" "$url" "$repo" 2>/dev/null \
               || git clone --quiet --depth 1 "$url" "$repo"
             echo "sibling $repo @ $(git -C "$repo" rev-parse --abbrev-ref HEAD) $(git -C "$repo" rev-parse --short HEAD)"
+            # Two guards require the indexer's modules, not just its files, so a
+            # source-only checkout fails on the sibling's own dependencies
+            # (Cannot find module 'mathjs'). Runtime deps only, never fatal.
+            if [ -f "$repo/package.json" ]; then
+              ( cd "$repo" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+                || ( cd "$repo" && npm install --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+                || echo "sibling $repo: dependency install failed, guards needing its modules will say so"
+            fi
           done
 
       - name: Use Node.js 22
