@@ -26,6 +26,7 @@ const sinon        = require('sinon');
 const http         = require('http');
 const express      = require('express');
 const cors         = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const setup        = require('./helpers/setup');
 const testDb       = require('./helpers/testDb');
 const fixtures     = require('./helpers/fixtures');
@@ -111,7 +112,7 @@ describe('Integration: index-map parity over HTTP (e2e)', function() {
 
         // Real HTTP server publishing the shipped checksum on /status.
         let app = express();
-        app.use(cors({ origin: '*', methods: ['GET'] }));
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
         app.get('/status/:dbType/:chain/:network', makeStatusHandler(sourceDb, util, SERVER_CFG));
         await new Promise(r => { server = http.createServer(app).listen(PORT, r); });
 

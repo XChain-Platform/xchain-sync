@@ -41,6 +41,7 @@ const assert    = require('assert');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const WebSocket = require('ws');
 const sinon     = require('sinon');
 
@@ -78,7 +79,7 @@ const util = new Utility();
 // test exercises the real ClientSync._reconcileDispensers fetch path).
 function buildServer(sourceDb, broadcaster, snapshotBuilder){
     let app = express();
-    app.use(cors({ origin: '*', methods: ['GET'] }));
+    app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
     let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
 

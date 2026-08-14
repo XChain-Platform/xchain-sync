@@ -13,6 +13,7 @@ const sinon     = require('sinon');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const WebSocket = require('ws');
 const setup     = require('./helpers/setup');
 const testDb    = require('./helpers/testDb');
@@ -74,7 +75,7 @@ describe('Integration: Full Lifecycle', function() {
         let snapshotBuilder = new SnapshotBuilder(testDb.util);
 
         let app = express();
-        app.use(cors({ origin: '*', methods: ['GET'] }));
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
         app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
             await snapshotBuilder.streamFullSnapshot(sourceDb, res);

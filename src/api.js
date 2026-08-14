@@ -224,8 +224,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                 try {
                     row.index_map_checksum = await new BlockHasher(db, statusUtil).computeIndexMapChecksum(polledBlock);
                 } catch(e){
-                    console.error('[API] index_map_checksum compute failed for ' + chain + '/' + network +
-                        ' at block ' + polledBlock + ' (advisory, returning null):', e.message);
+                    console.error('[API] index_map_checksum compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
                 }
             }
         }
@@ -244,8 +243,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                 row.table_content_parity = await new BlockHasher(db, statusUtil)
                     .computeTableContentChecksums(polledBlock, { window: cfg['TABLE_CONTENT_PARITY_WINDOW'] });
             } catch(e){
-                console.error('[API] table_content_parity compute failed for ' + chain + '/' + network +
-                    ' at block ' + polledBlock + ' (advisory, returning null):', e.message);
+                console.error('[API] table_content_parity compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
             }
         }
         // Expose per-subscriber applied-block lag so operators can see a
@@ -944,7 +942,7 @@ async function startApi(){
             if(!result) return res.status(404).json({ error: 'Block not found', code: 'NOT_FOUND' });
             res.json(result);
         } catch(e){
-            console.error('[API error] /transparency/.../proof/' + block_index + ':', e);
+            console.error('[API error] /transparency/.../proof/%s:', block_index, e);
             res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
     });

@@ -13,6 +13,7 @@ const sinon    = require('sinon');
 const http     = require('http');
 const express  = require('express');
 const cors     = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const WebSocket = require('ws');
 const Utility  = require('../../src/utility');
 const { splitSqlStatements } = require('../../src/sqlUtil');
@@ -94,7 +95,7 @@ describe('Smoke: Client Mode', function() {
 
         snapshotBuilder = new SnapshotBuilder(util);
         let app = express();
-        app.use(cors({ origin: '*', methods: ['GET'] }));
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
         app.get('/schema/:dbType/:chain/:network', async (req, res) => {
             let tables = await sourceDb.doQuery(

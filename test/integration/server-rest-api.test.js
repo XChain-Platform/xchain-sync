@@ -14,6 +14,7 @@ const http     = require('http');
 const zlib     = require('zlib');
 const express  = require('express');
 const cors     = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const axios    = require('axios');
 const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
@@ -60,7 +61,7 @@ describe('Integration: REST API', function() {
         // resolved every caller to one IP, which happened before this fix.
         let app = express();
         app.set('trust proxy', trustProxyHops(false)); // matches production default: no reverse proxy trusted
-        app.use(cors({ origin: '*', methods: ['GET'] }));
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
         // Same limiter instances startApi() builds and mounts, not a
         // re-declaration of their windows/limits/keying. TRANSPARENCY_RATE_LIMIT

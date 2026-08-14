@@ -1741,8 +1741,7 @@ class ClientSync {
             }
             return res;
         } catch(e){
-            console.error('Table-content parity check errored at block ' + blockHeight +
-                ' (advisory, ignoring):', e.message);
+            console.error('Table-content parity check errored at block %s (advisory, ignoring):', blockHeight, e.message);
             return null;
         }
     }
@@ -2396,15 +2395,14 @@ class ClientSync {
                 break;
             } catch(e){
                 if(attempt < attempts){
-                    console.error('Recompute verification errored at block ' +
-                        (event && event.block_index) + ' (attempt ' + attempt + '/' + attempts +
-                        ', retrying):', e);
+                    console.error('Recompute verification errored at block %s (attempt %s/%s, retrying):',
+                        (event && event.block_index), attempt, attempts, e);
                     await this.util.sleep(1000 * attempt);
                     continue;
                 }
                 if(opts.failClosed) throw e;
-                console.error('Recompute verification errored at block ' +
-                    (event && event.block_index) + ' (NOT halting on a recompute error):', e);
+                console.error('Recompute verification errored at block %s (NOT halting on a recompute error):',
+                    (event && event.block_index), e);
                 return null;
             }
         }
@@ -2649,7 +2647,7 @@ class ClientSync {
                 await this._verifyCheckpointQuorum();
             }
         } catch(e){
-            console.error('Error applying block ' + event.block_index + ':', e);
+            console.error('Error applying block %s:', event.block_index, e);
             // Heal a schema gap but don't re-apply the block inline: the
             // skipped block leaves a gap that the next status event's gap
             // detection closes via incremental catch-up, post-heal.
@@ -2954,8 +2952,8 @@ class ClientSync {
             // fork with halted:false on /status (the decoder track has no recompute net to
             // self-halt). Record a durable halt via the same contract used for consensus
             // divergence and let the operator investigate/clear, rather than wedging silently.
-            console.error('Reorg rollback failed for ' + this.chain + '/' + this.network +
-                ' (' + this.dbType + ') rewinding to block ' + event.block_index + ':', e);
+            console.error('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
+                this.chain, this.network, this.dbType, event.block_index, e);
             await this._haltOnDivergence(event.block_index,
                 [{ field: 'reorg_rollback_failed', error: String(e && e.message ? e.message : e) }],
                 this.sources.slice(0, 1), 'reorg-rollback-failed');

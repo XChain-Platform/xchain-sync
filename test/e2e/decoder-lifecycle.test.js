@@ -40,6 +40,7 @@ const assert    = require('assert');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const WebSocket = require('ws');
 const axios     = require('axios');
 const sinon     = require('sinon');
@@ -80,7 +81,7 @@ const util = new Utility();
 // so the test exercises actual Phase 3 code paths.
 function buildServer(sourceDb, broadcaster, snapshotBuilder){
     let app = express();
-    app.use(cors({ origin: '*', methods: ['GET'] }));
+    app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
     let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
 

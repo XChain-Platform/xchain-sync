@@ -231,7 +231,7 @@ class ClientApplier {
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying block ' + payload.block_index + ':', e);
+            console.error('Error applying block %s:', payload.block_index, e);
             throw e;
         }
     }

@@ -13,6 +13,7 @@ const sinon     = require('sinon');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
+const { parseCorsOrigin } = require('../../src/corsOrigin');
 const axios     = require('axios');
 const zlib      = require('zlib');
 const WebSocket = require('ws');
@@ -103,7 +104,7 @@ describe('Smoke: Server Mode', function() {
         snapshotBuilder = new SnapshotBuilder(util);
 
         let app = express();
-        app.use(cors({ origin: '*', methods: ['GET'] }));
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
 
         app.get('/status', async (req, res) => {
             let lastBlock = await db.getLastBlock();
