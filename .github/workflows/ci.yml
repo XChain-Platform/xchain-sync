@@ -19,7 +19,7 @@ on:
 
 jobs:
   ci:
-    uses: XChain-Platform/.github/.github/workflows/ci-reusable.yml@e2d578827928e79ec71c9b6afc4595025dc025fe # pin: XChain-Platform/.github @ master 2026-08-13; bump deliberately
+    uses: XChain-Platform/.github/.github/workflows/ci-reusable.yml@ece256eede852d0cb0da5f8d3bec02051085c4de # pin: XChain-Platform/.github @ master 2026-08-14; bump deliberately
     # Override the Node version for a repo if ever needed:
     # with:
     #   node-version: "20"
@@ -65,24 +65,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # xchain-indexer and xchain-decoder are still PRIVATE pre-launch, so the
-      # default GITHUB_TOKEN cannot read them, so each uses a read-only deploy key
-      # scoped to that one repo (a deploy key can only be registered on a single
-      # repo, hence two). When the repos flip public at launch, the ssh-key
-      # lines can simply be dropped.
-      - name: Check out the canonical indexer schema
-        uses: actions/checkout@v4
-        with:
-          repository: XChain-Platform/xchain-indexer
-          ssh-key: ${{ secrets.XCHAIN_INDEXER_DEPLOY_KEY }}
-          path: .xchain-indexer
-
-      - name: Check out the canonical decoder schema
-        uses: actions/checkout@v4
-        with:
-          repository: XChain-Platform/xchain-decoder
-          ssh-key: ${{ secrets.XCHAIN_DECODER_DEPLOY_KEY }}
-          path: .xchain-decoder
+      # Siblings go BESIDE the checkout, not inside it. The schema seeding only
+      # ever needed a path, so `.xchain-indexer` worked for it; the cross-repo
+      # guards below resolve `../<repo>` the way a developer checkout is laid out,
+      # and four of them failed on a run that had the sibling all along, just in
+      # the wrong place. `git clone` because actions/checkout refuses a path
+      # outside the workspace. Both repos are public now, so the two read-only
+      # deploy keys this used to need are gone. Roster = .ci-siblings, the same
+      # declaration the e2e venue reads.
+      - name: Check out declared sibling repositories
+        env:
+          SIBLINGS_REF: ${{ github.ref == 'refs/heads/master' && 'master' || 'develop' }}
+        run: |
+          set -euo pipefail
+          repos=$(sed 's/#.*//' .ci-siblings | tr -d '\r' | awk 'NF')
+          cd "$GITHUB_WORKSPACE/.."
+          for repo in $repos; do
+            rm -rf "$repo"
+            url="https://github.com/${{ github.repository_owner }}/$repo.git"
+            git clone --quiet --depth 1 --branch "$SIBLINGS_REF" "$url" "$repo" 2>/dev/null \
+              || git clone --quiet --depth 1 "$url" "$repo"
+            echo "sibling $repo @ $(git -C "$repo" rev-parse --abbrev-ref HEAD) $(git -C "$repo" rev-parse --short HEAD)"
+          done
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -107,15 +111,15 @@ jobs:
       # checked out for the e2e tier.
       - name: Run cross-repo consensus drift guards against the checked-out indexer
         env:
-          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
-          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
+          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
         run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js
 
       - name: Run the e2e tier
         env:
-          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
-          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/.xchain-decoder/src/sql
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
+          XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
         run: npm run test:e2e:ci
 
       # Integration tier (DB-backed; previously un-run in CI because it lives in the
@@ -135,7 +139,7 @@ jobs:
           TEST_DB_PORT: "23306"
           TEST_DB_USER: root
           TEST_DB_PASS: test
-          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/.xchain-indexer/src/sql
+          XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
         run: npm run test:integration:ci
 
   # Cross-repo drift guards: this repo vendors the canonical
