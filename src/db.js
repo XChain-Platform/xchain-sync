@@ -205,15 +205,22 @@ class Database {
         let dir  = path.join(__dirname, 'sql');
         let files = fs.readdirSync(dir);
         let db    = await this.getConnection();
+        // One summary line instead of a per-table pair; the error path below still
+        // names the table, so a failure stays attributable.
+        console.log('Verifying database and tables...');
+        let checked = 0;
+        let created = 0;
         for(let file of files){
             if(file.indexOf('.sql') !== -1){
                 let table = file.substring(0, file.indexOf('.sql'));
                 if(this.dbType !== 'indexer' && table !== 'sync_halt') continue;
-                console.log('Verifying ' + table + ' table exists...');
+                checked++;
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
-                    if(results.length === 0)
+                    if(results.length === 0){
                         await this._createTableFromFile(file);
+                        created++;
+                    }
                 } catch(e){
                     this.util.throwError('Error verifying ' + table + ' table: ' + e);
                     return false;
@@ -221,6 +228,7 @@ class Database {
             }
         }
         await db.release();
+        console.log('Database and tables verified (' + checked + ' tables, ' + created + ' created).');
         return true;
     }
 
@@ -229,9 +237,7 @@ class Database {
     async _createTableFromFile(file){
         let dir     = path.join(__dirname, 'sql');
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
-        let table   = file.substring(0, file.indexOf('.sql'));
         let queries = splitSqlStatements(data);
-        console.log('Creating ' + table + ' table and indexes...');
         for(let query of queries){
             await this.doQuery(query);
         }

@@ -132,16 +132,24 @@ describe('balance-helpers @money @regression', function () {
             assert.deepStrictEqual(updateArgs.sort(), [[0], [8]]);
         });
 
-        it('computes (credits - debits) + escrows at the token\'s OWN DECIMAL(60,decimals)', async function () {
+        // XC-1459: rows are summed EXACTLY (DECIMAL(60,18)) and the TOTAL is rounded once
+        // to the token's own scale. Per-ROW rounding agreed with the source indexer only
+        // while every stored amount already sat on the token's grid; the exact-ledger
+        // flag-day lets a fee amount be finer than the tick, and per-row rounding then
+        // inflates a rebuilt supply by up to one unit per row.
+        it('sums (credits - debits) + escrows at the EXACT scale and rounds ONCE at the token scale', async function () {
             const db = precisionDb([{ decimals: 8 }]);
             await recomputeTokenSupplies(db);
             const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
             assert.ok(/FROM credits/i.test(sql) && /FROM debits/i.test(sql) && /FROM escrows/i.test(sql),
                 'unions credits + debits + escrows (escrows folds into supply, unlike balances)');
-            assert.ok(/\+ CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM credits/i.test(sql) ||
-                      /SELECT tick_id, CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM credits/i.test(sql), 'credit is positive');
-            assert.ok(/- ?CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM debits/i.test(sql), 'debit is negative');
-            assert.ok(/CAST\(amount AS DECIMAL\(60,8\)\) AS amt FROM escrows/i.test(sql), 'escrow is positive');
+            assert.ok(/SELECT tick_id, ?CAST\(amount AS DECIMAL\(60,18\)\) AS amt FROM credits/i.test(sql), 'credit is positive');
+            assert.ok(/- ?CAST\(amount AS DECIMAL\(60,18\)\) AS amt FROM debits/i.test(sql), 'debit is negative');
+            assert.ok(/CAST\(amount AS DECIMAL\(60,18\)\) AS amt FROM escrows/i.test(sql), 'escrow is positive');
+            assert.ok(/CAST\(SUM\(amt\) AS DECIMAL\(60,8\)\)/i.test(sql),
+                'the TOTAL is rounded once at the token scale, so it stays byte-identical to the source supply');
+            assert.ok(!/CAST\(amount AS DECIMAL\(60,8\)\)/i.test(sql),
+                'must NOT round each ROW to the token scale (that is the XC-1459 overcharge shape)');
             assert.ok(!/DECIMAL\(65,18\)/i.test(sql), 'must NOT use the fixed 65,18 scale (byte-identity needs the token scale)');
             assert.ok(/GROUP BY tick_id/i.test(sql));
         });
@@ -158,8 +166,8 @@ describe('balance-helpers @money @regression', function () {
             const db = precisionDb([{ decimals: 8 }]);
             await recomputeTokenSupplies(db);
             const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
-            assert.ok(/TRIM\(TRAILING '\.' FROM TRIM\(TRAILING '0' FROM CAST\(SUM\(amt\) AS CHAR\)\)\)/i.test(sql),
-                'divisible: trim trailing zeros then the bare dot');
+            assert.ok(/TRIM\(TRAILING '\.' FROM TRIM\(TRAILING '0' FROM CAST\(CAST\(SUM\(amt\) AS DECIMAL\(60,8\)\) AS CHAR\)\)\)/i.test(sql),
+                'divisible: round the total once, then trim trailing zeros and the bare dot');
         });
 
         it('renders an integer (no zero-trim) for a non-divisible token (decimals=0)', async function () {
@@ -168,7 +176,7 @@ describe('balance-helpers @money @regression', function () {
             const sql = db.queries.find(q => /^UPDATE tokens/i.test(q));
             // decimals=0: CAST AS CHAR has no '.', so the trailing-zero trim would eat
             // integer zeros ('100' -> '1'); it must emit the integer verbatim.
-            assert.ok(/CAST\(SUM\(amt\) AS CHAR\) AS supply/i.test(sql));
+            assert.ok(/CAST\(CAST\(SUM\(amt\) AS DECIMAL\(60,0\)\) AS CHAR\) AS supply/i.test(sql));
             assert.ok(!/TRIM\(TRAILING '0'/i.test(sql), 'no zero-trim on an integer supply');
         });
 
