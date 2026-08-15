@@ -286,9 +286,12 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
             SUB.STATE_SUBTREE_ACTIVATION.contract_state_root, KEY), false);
         assert.strictEqual(Object.prototype.hasOwnProperty.call(
             SUB.ESCROW_LOCKED_LEAF_ACTIVATION, KEY), false);
-        // The real armed chain must still be armed: restoring must not have wiped it.
+        // The real armed chains must still be armed: restoring must not have
+        // wiped them. BTC:testnet joined the set 2026-08-03 (SPV Stage A armed
+        // the contract-state slot at 146500); a new arming lands here too, so
+        // this pin moves with the real map on purpose.
         assert.deepStrictEqual(SUB.STATE_SUBTREE_ACTIVATION.contract_state_root,
-                               { 'BTC:regtest': 10000 },
+                               { 'BTC:regtest': 10000, 'BTC:testnet': 146500 },
                                'the real armed set was not restored intact');
         for(const map of [SUB.STATE_SUBTREE_ACTIVATION.contract_state_root, SUB.ESCROW_LOCKED_LEAF_ACTIVATION])
             for(const k of Object.keys(map))
