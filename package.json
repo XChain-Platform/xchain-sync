@@ -59,7 +59,7 @@
     "test:boundary": "mocha --timeout 5000 --recursive 'test/boundary/**/*.boundary.test.js'"
   },
   "overrides": {
-    "brace-expansion": "^5.0.8",
+    "brace-expansion": "^5.0.9",
     "minimatch": "^10.2.5",
     "decimal.js": "10.4.3",
     "serialize-javascript": "^7.0.5",
@@ -68,7 +68,7 @@
     "fast-uri": "^3.1.5",
     "ip-address": "^10.3.1",
     "ajv": "^8.18.0",
-    "js-yaml": "^4.3.0",
+    "js-yaml": "^4.3.1",
     "form-data": "^4.0.6"
   },
   "engines": {
