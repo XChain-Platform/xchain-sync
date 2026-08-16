@@ -168,6 +168,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: XChain-Platform/xchain-hub
+          ref: ${{ github.ref == 'refs/heads/master' && 'master' || 'develop' }}
           ssh-key: ${{ secrets.XCHAIN_HUB_DEPLOY_KEY }}
           path: xchain-hub
 
