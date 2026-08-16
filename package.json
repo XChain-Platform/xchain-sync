@@ -56,7 +56,8 @@
     "test:mutate": "npx stryker run test/mutation/stryker.config.json",
     "test:mutate:quick": "npx stryker run test/mutation/stryker.quick.config.json",
     "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental",
-    "test:boundary": "mocha --timeout 5000 --recursive 'test/boundary/**/*.boundary.test.js'"
+    "test:boundary": "mocha --timeout 5000 --recursive 'test/boundary/**/*.boundary.test.js'",
+    "ci:full": "bash bin/ci-full.sh"
   },
   "overrides": {
     "brace-expansion": "^5.0.9",
