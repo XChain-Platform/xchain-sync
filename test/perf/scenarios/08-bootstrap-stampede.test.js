@@ -51,6 +51,7 @@ const { bootEnvironment, teardownEnvironment, resetAll,
 const ReportGenerator = require('../setup/report-generator');
 const SnapshotBuilder = require('../../../src/SnapshotBuilder');
 const poolSizing      = require('../../../src/poolSizing');
+const { waitFor }     = require('../../e2e/helpers/waitFor');
 
 // Explicit agent: the whole test rests on N requests being in flight AT ONCE.
 // Whatever the ambient default maxSockets is, this pins it above the largest
@@ -249,9 +250,16 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
         await Promise.all([...stampede, liveLoop]);
         const stampedeMs = Date.now() - startedAt;
 
-        // Give the broadcaster a moment to flush the last frames before judging
-        // what the follower missed.
-        await new Promise(r => setTimeout(r, 1500));
+        // Drain the frames the follower is still owed, bounded, instead of guessing
+        // a flush window. A frame that arrives late is then judged by the
+        // broadcast-gap budget below rather than silently counted as a miss; on
+        // timeout the completeness assertion reports exactly what never arrived.
+        try {
+            await waitFor(() => {
+                const seen = new Set(received.map(r => r.blockIndex));
+                return liveBlocks.every(h => seen.has(h));
+            }, 15000, 100);
+        } catch (e) { /* reported by the completeness assertion below */ }
         try { follower.close(); } catch (e) { /* already closed */ }
 
         const accepted = snapshotResults.filter(r => r.status === 200);

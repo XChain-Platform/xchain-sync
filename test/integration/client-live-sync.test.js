@@ -143,7 +143,9 @@ describe('Integration: Client Live Sync', function() {
             cs.lastHashes = await replicaDb.getBlockHashRow(5);
 
             cs._connectWebSockets();
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the socket to OPEN: the poll below broadcasts block 6 once, so a
+            // subscription still handshaking would never see it.
+            await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);
 
             await fixtures.seedBlocks(sourceDb, 6, 6);
             poller.lastPolledBlock = 5;
@@ -181,7 +183,8 @@ describe('Integration: Client Live Sync', function() {
             cs.lastAppliedBlock = 5;
             cs.lastHashes = await replicaDb.getBlockHashRow(5);
             cs._connectWebSockets();
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the socket to OPEN: blocks 6-10 are broadcast once each.
+            await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);
 
             await fixtures.seedBlocks(sourceDb, 6, 10);
             poller.lastPolledBlock = 5;

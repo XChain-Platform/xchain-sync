@@ -127,7 +127,9 @@ describe('E2E: API Correctness', function() {
                 messages.push(JSON.parse(data.toString()));
             });
 
-            await new Promise(r => setTimeout(r, 1000));
+            // Poll the socket to OPEN. Each block is broadcast exactly once, so a
+            // subscription still handshaking when the poll fires misses the events.
+            await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
 
             await fixtures.seedBlocks(sourceDb, 6, 10);
 
@@ -178,7 +180,9 @@ describe('E2E: API Correctness', function() {
             ws.on('message', (data) => {
                 messages.push(JSON.parse(data.toString()));
             });
-            await new Promise(r => setTimeout(r, 1000));
+            // Poll the socket to OPEN. The reorg is broadcast exactly once, so a
+            // subscription still handshaking when the poll fires misses it.
+            await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
 
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             await server.poll();
