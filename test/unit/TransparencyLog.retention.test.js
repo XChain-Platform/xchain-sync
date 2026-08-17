@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// Opt-in sync_meta retention (XC-1363). The default posture is UNCHANGED: with no
+// Opt-in sync_meta retention. The default posture is UNCHANGED: with no
 // SYNC_META_RETENTION_BLOCKS the log keeps full history and pruneSyncMeta deletes
 // nothing, so every historical inclusion proof stays serveable. When an operator
 // does arm a window, the prune must land on a COMMITTED epoch boundary, because a

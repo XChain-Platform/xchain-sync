@@ -69,7 +69,7 @@ function minimalSupply(sumExpr, decimals) {
 //
 // Each ledger row is summed at the EXACT ledger scale (DECIMAL(60,18)) and the TOTAL
 // is rounded ONCE to the token's own decimals, mirroring the indexer's exact-ledger
-// rule (XC-1459, xchain-indexer/src/ledger_amount_precision_activation.js). The
+// rule (xchain-indexer/src/ledger_amount_precision_activation.js). The
 // former shape cast each ROW to DECIMAL(60,d) first, which agreed with the indexer
 // only while every stored amount already sat on the token's grid; once the indexer
 // stores fee amounts finer than the tick (0.5 XCHAIN against a decimals=0 gas tick),

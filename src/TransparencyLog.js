@@ -69,7 +69,7 @@ class TransparencyLog {
         }
     }
 
-    // OPT-IN retention for the per-block sync_meta rows (XC-1363). DEFAULT OFF: with
+    // OPT-IN retention for the per-block sync_meta rows. DEFAULT OFF: with
     // SYNC_META_RETENTION_BLOCKS unset (or 0) this is a no-op and the log keeps full
     // history, which stays the shipped behaviour. Mirrors the indexer's
     // retention.pruneStateRoots (xchain-indexer/src/retention.js): a positive window
