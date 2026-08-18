@@ -1,7 +1,7 @@
 {
   "name": "xchain-sync",
   "description": "Database replication service for the XChain Platform: syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
