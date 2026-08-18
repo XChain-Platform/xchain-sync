@@ -225,6 +225,21 @@ describe('Advisory table-content parity', function(){
                                   hasherFor({}).contentDigest('blocks', [{ id: 41, block_index: 100, block_hash: 'bb' }]));
         });
 
+        it('the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm', function(){
+            // ServerPoller builds the streamed sync_meta row by hand from the block
+            // hashes and omits id/logged_at, so the follower auto-assigns its own id
+            // and stamps its own insert wall-clock on EVERY live-applied block. Left
+            // in the preimage those two columns guarantee a mismatch at equal counts.
+            let source  = [{ id: 7,  block_index: 100, block_time: 1700, ledger_hash: 'aa', actions_hash: 'bb', contract_hash: 'cc', logged_at: '2026-08-16T00:00:00Z' }];
+            let replica = [{ id: 41, block_index: 100, block_time: 1700, ledger_hash: 'aa', actions_hash: 'bb', contract_hash: 'cc', logged_at: '2026-08-16T09:31:02Z' }];
+            assert.strictEqual(hasherFor({}).contentDigest('sync_meta', source),
+                               hasherFor({}).contentDigest('sync_meta', replica));
+            // ...but the replicated hash columns still have to match.
+            let forged = [Object.assign({}, replica[0], { ledger_hash: 'zz' })];
+            assert.notStrictEqual(hasherFor({}).contentDigest('sync_meta', source),
+                                  hasherFor({}).contentDigest('sync_meta', forged));
+        });
+
         it('the generated contract_state.state_key_bin column is excluded', function(){
             // The applier never names a generated column; the database computes it.
             let a = [{ block_index: 5, state_key: 'k', state_key_bin: 'k',     value: '1' }];

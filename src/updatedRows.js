@@ -75,7 +75,7 @@
  *
  ********************************************************************/
 
-const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('./stateHash');
 
 // Tables carrying the deactivation_block stamp (value-threshold detection).
 const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];
@@ -277,16 +277,25 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     //    fails CRC, the parent is stamped 'invalid_archive' in place. Chunking spans
     //    blocks by design, so the parent's action_index is in an earlier block and the
     //    action-scoped stream carries the chunk row but not the parent's flipped status.
-    //    The self-join keyed on the completing chunk's block_index mirrors
-    //    ClientRollback's reverse 'unverified' reset predicate. Table may not exist on
-    //    schemas without ANCHOR support.
+    //    The self-join keyed on the completing chunk's height mirrors ClientRollback's
+    //    reverse 'unverified' reset predicate. Table may not exist on schemas without
+    //    ANCHOR support.
+    //    HEIGHT KEY: `block_index_doge` (shared ARCHIVE_CHUNK_HEIGHT_COL), the DOGE
+    //    block the completing chunk landed in. This class used to key on
+    //    `c.block_index`, which a v2 continuation row NEVER populates (it carries the
+    //    CHECKPOINTED height and only anchor.js `_parseCheckpoint` assigns it), so
+    //    `NULL BETWEEN from AND to` was never true and the class shipped ZERO rows: a
+    //    follower never received the stamped parent at all. UN-GATED, unlike the
+    //    state-hash twin of this class: shipping the row is not a hash preimage, and
+    //    this fix must be live BEFORE the state-hash flag day or the follower halts on
+    //    a parent row it was never sent.
     try {
         let anchorRows = await db.doQuery(
             "SELECT DISTINCT p.* FROM anchor_actions p " +
             "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
             "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
             "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND c.block_index BETWEEN ? AND ?",
+            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
             [from, to], conn);
         add('anchor_actions', anchorRows);
     } catch(e){

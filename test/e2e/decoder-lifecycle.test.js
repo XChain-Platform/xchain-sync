@@ -434,7 +434,9 @@ describe('E2E: Decoder DB Lifecycle', function() {
             client = makeClient();
             await client.bootstrap();
             await client.connectLive();
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the client's socket to OPEN before seeding: blocks broadcast
+            // while the handshake is still in flight are never re-sent.
+            await waitFor(() => client.sync.wsConns[0] && client.sync.wsConns[0].readyState === WebSocket.OPEN, 10000);
 
             await decoderFixtures.seedDecoderBlocks(sourceDb, 6, 8);
 
@@ -464,7 +466,8 @@ describe('E2E: Decoder DB Lifecycle', function() {
             ws.on('message', (data) => {
                 try { messages.push(JSON.parse(data.toString())); } catch(e){}
             });
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the socket to OPEN: block 3 is broadcast exactly once.
+            await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
 
             await decoderFixtures.seedDecoderBlocks(sourceDb, 3, 3);
 

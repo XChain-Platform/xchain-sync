@@ -145,7 +145,9 @@ describe('Integration: Full Lifecycle', function() {
             assert.strictEqual(replicaBlocks, 10);
 
             cs._connectWebSockets();
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the socket to OPEN: blocks 11-15 are broadcast once each, so a
+            // subscription still handshaking would never see them.
+            await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);
 
             await fixtures.seedBlocks(sourceDb, 11, 15);
             poller.lastPolledBlock = 10;

@@ -635,8 +635,16 @@ describe('Rollback coverage guard @regression', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8'));
-        assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND c\.block_index BETWEEN \? AND \?/.test(ur),
-            'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL');
+        assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND ARCHIVE_CHUNK_HEIGHT_COL BETWEEN \? AND \?/.test(ur),
+            'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
+            'scoped by the shared ARCHIVE_CHUNK_HEIGHT_COL');
+        // The completing chunk's height key is the shared constant, never a literal
+        // `c.block_index`: that column is NULL on every v2 continuation row, so the
+        // class shipped ZERO rows and a follower never received the stamped parent.
+        assertLocal.strictEqual(sh.ARCHIVE_CHUNK_HEIGHT_COL, 'c.block_index_doge',
+            'ARCHIVE_CHUNK_HEIGHT_COL must be c.block_index_doge (block_index is NULL on v2 chunks)');
+        assertLocal.ok(!/AND c\.block_index BETWEEN/.test(ur),
+            'updatedRows.js must not regress to the never-populated c.block_index key');
         // Twin-parity: the indexer stateHash.js copy (when the sibling checkout exists)
         // must carry the identical constant, or the two repos disagree on the parent set.
         const indexerPath = indexerFile('src/stateHash.js');

@@ -199,9 +199,10 @@ describe('Integration: WebSocket Broadcasting', function() {
                 // Broadcast to bitcoin only
                 broadcaster.broadcast('bitcoin', 'mainnet', { type: 'block', block_index: 99 });
 
-                await waitForMessages(btcConn.messages, 1);
-                // btc got initial status; filter for block
-                await new Promise(resolve => setTimeout(resolve, 200));
+                // btc gets two frames: the initial status on connect plus the block
+                // broadcast above. Waiting for both is the real post-condition; a
+                // fixed settle here just guesses at delivery latency.
+                await waitForMessages(btcConn.messages, 2);
 
                 let btcBlock = btcConn.messages.find(m => m.type === 'block');
                 assert.ok(btcBlock);

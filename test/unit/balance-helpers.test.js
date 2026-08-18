@@ -132,11 +132,10 @@ describe('balance-helpers @money @regression', function () {
             assert.deepStrictEqual(updateArgs.sort(), [[0], [8]]);
         });
 
-        // XC-1459: rows are summed EXACTLY (DECIMAL(60,18)) and the TOTAL is rounded once
-        // to the token's own scale. Per-ROW rounding agreed with the source indexer only
-        // while every stored amount already sat on the token's grid; the exact-ledger
-        // flag-day lets a fee amount be finer than the tick, and per-row rounding then
-        // inflates a rebuilt supply by up to one unit per row.
+        // Rows are summed EXACTLY (DECIMAL(60,18)) and the TOTAL is rounded once
+        // to the token's own scale: per-ROW rounding agreed with the indexer only
+        // while every amount sat on the token's grid, and inflates supply once
+        // fee amounts go finer than the tick.
         it('sums (credits - debits) + escrows at the EXACT scale and rounds ONCE at the token scale', async function () {
             const db = precisionDb([{ decimals: 8 }]);
             await recomputeTokenSupplies(db);
@@ -149,7 +148,7 @@ describe('balance-helpers @money @regression', function () {
             assert.ok(/CAST\(SUM\(amt\) AS DECIMAL\(60,8\)\)/i.test(sql),
                 'the TOTAL is rounded once at the token scale, so it stays byte-identical to the source supply');
             assert.ok(!/CAST\(amount AS DECIMAL\(60,8\)\)/i.test(sql),
-                'must NOT round each ROW to the token scale (that is the XC-1459 overcharge shape)');
+                'must NOT round each ROW to the token scale (the per-row rounding overcharge shape)');
             assert.ok(!/DECIMAL\(65,18\)/i.test(sql), 'must NOT use the fixed 65,18 scale (byte-identity needs the token scale)');
             assert.ok(/GROUP BY tick_id/i.test(sql));
         });

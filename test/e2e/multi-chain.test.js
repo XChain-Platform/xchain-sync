@@ -178,13 +178,16 @@ describe('E2E: Multi-Chain Synchronization', function() {
                 ltcMessages.push(JSON.parse(data.toString()));
             });
 
-            await new Promise(r => setTimeout(r, 1000));
+            // Poll both sockets to OPEN: the poll below broadcasts each block once,
+            // so a subscription still handshaking misses the events outright.
+            await waitFor(() => btcWs.readyState === WebSocket.OPEN && ltcWs.readyState === WebSocket.OPEN, 10000);
 
             await fixtures.seedBlocks(sourceDb, 6, 8);
             btcPoller.lastPolledBlock = 5;
             await btcPoller._poll();
 
-            await new Promise(r => setTimeout(r, 1000));
+            // Wait on the delivery this test is about, not on a fixed window.
+            await waitFor(() => btcMessages.filter(m => m.type === 'block').length >= 3, 10000);
 
             let btcBlockEvents = btcMessages.filter(m => m.type === 'block');
             assert.ok(btcBlockEvents.length >= 3, 'Bitcoin should have received 3 block events, got ' + btcBlockEvents.length);
@@ -212,7 +215,9 @@ describe('E2E: Multi-Chain Synchronization', function() {
                 ltcMessages.push(JSON.parse(data.toString()));
             });
 
-            await new Promise(r => setTimeout(r, 500));
+            // Poll the socket to OPEN, so the isolation check below cannot pass
+            // merely because litecoin was not subscribed yet.
+            await waitFor(() => ltcWs.readyState === WebSocket.OPEN, 10000);
 
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             btcPoller.lastPolledBlock = 10;
