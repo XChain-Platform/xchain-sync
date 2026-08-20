@@ -45,6 +45,8 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
+const { waitForClientDisconnect } = require('../e2e/helpers/waitFor');
+
 const {
     bootstrapDatabases,
     teardownDatabases,
@@ -119,11 +121,20 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
         // sever/restore the WebSocket link rather than a database connection.
         await wsFaults.dbDown();
 
+        // Assert the first half of this test's claim rather than assuming it:
+        // the client must OBSERVE the link go away. Waiting on the close event
+        // also fixes the window the second half needs - once the socket is gone,
+        // the blocks broadcast below have no path to this client, so "no blocks
+        // arrived" is a consequence of the partition and not of a guessed
+        // duration. A partition that failed to sever leaves the socket OPEN and
+        // this throws instead of sleeping past the problem.
+        await waitForClientDisconnect(client);
+
         await seedSourceBlocks(21, 30);
         await server.poll();
 
-        // Wait for client to detect disconnect (ping timeout ~30s or close event)
-        await sleep(5000);
+        expect(client.isConnected()).to.equal(false,
+            'Client must still be partitioned when the blocks are broadcast');
 
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const lastBlock = await replicaDb.getLastBlock();

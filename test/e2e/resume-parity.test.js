@@ -28,7 +28,7 @@ const fixtures = require('./helpers/fixtures');
 const testDb   = require('./helpers/testDb');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
-const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
+const { waitFor, waitForReplicaBlock, waitForClientEvents } = require('./helpers/waitFor');
 const { assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29500;
@@ -264,10 +264,15 @@ describe('E2E: Disconnect/Resume Parity', function() {
             // …and FURTHER blocks must be refused on BOTH paths (the June
             // half-enforced-halt regression: replicas kept advancing via
             // catch-up while "halted").
+            let seenBlocks = client.getEventsHandled('block');
             await fixtures.seedBlocks(sourceDb, 12, 14);
             await server.poll();                          // live path
             await client.incrementalCatchUp(11).catch(() => {}); // catch-up path
-            await new Promise(r => setTimeout(r, 1500));
+            // The refusal is only proven once the halted client has actually
+            // handled the three live blocks. Waiting on the events instead of a
+            // duration means a client that never received them fails here rather
+            // than reporting its silence as a successful refusal.
+            await waitForClientEvents(client, 'block', seenBlocks + 3, 15000);
             let replicaTip = await replicaDb.getLastBlock();
             assert.ok(replicaTip <= 11,
                 'halted replica must not advance past the divergence (tip=' + replicaTip + ')');

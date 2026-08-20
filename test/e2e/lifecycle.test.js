@@ -15,7 +15,7 @@ const testDb        = require('./helpers/testDb');
 const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
-const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
+const { waitFor, waitForReplicaBlock, waitForClientEvents } = require('./helpers/waitFor');
 const { assertReplicaByteIdentical, assertBlockExists, assertBalancesConsistent, assertHashesMatch } = require('./helpers/assertions');
 
 const SERVER_PORT = 29100;
@@ -137,7 +137,14 @@ describe('E2E: Full Lifecycle', function() {
 
             await waitForReplicaBlock(replicaDb, 10);
 
-            await new Promise(r => setTimeout(r, 3000));
+            // "Idle" has to mean the client kept hearing from an idle server, not
+            // that three seconds passed. Wait for four status heartbeats to be
+            // fully handled: each one is a chance for the client to re-apply or
+            // spuriously catch up, and the counter only advances once that
+            // decision has settled. A sleep passed identically when the live
+            // socket had silently dropped, which is the opposite of stable.
+            const seenStatus = client.getEventsHandled('status');
+            await waitForClientEvents(client, 'status', seenStatus + 4, 10000);
 
             let replicaBlock = await replicaDb.getLastBlock();
             assert.strictEqual(replicaBlock, 10);

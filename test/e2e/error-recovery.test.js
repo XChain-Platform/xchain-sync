@@ -15,7 +15,7 @@ const testDb        = require('./helpers/testDb');
 const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
-const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
+const { waitFor, waitForReplicaBlock, waitForClientDisconnect } = require('./helpers/waitFor');
 const { assertBlockExists, assertBalancesConsistent, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29400;
@@ -66,7 +66,10 @@ describe('E2E: Error Handling & Recovery', function() {
 
             await fixtures.seedBlocks(sourceDb, 11, 15);
 
-            await new Promise(r => setTimeout(r, 1000));
+            // This test is about reconnect, so the client must first have SEEN
+            // the server go away; bringing it back before the close is observed
+            // would let the test pass without the reconnect path ever running.
+            await waitForClientDisconnect(client);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();

@@ -8,6 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
+const WebSocket      = require('ws');
 const ClientSync     = require('../../../src/ClientSync');
 const ClientApplier  = require('../../../src/ClientApplier');
 const ClientRollback = require('../../../src/ClientRollback');
@@ -51,6 +52,28 @@ class ClientProcess {
             this.applier, this.rollbacker, this.verifier,
             this.config, testDb.util
         );
+
+        // Observability seam for tests that would otherwise sleep a guessed
+        // duration. Counts WS events this client has FINISHED handling, per type,
+        // so a test can wait for "the client has actually decided about N server
+        // events" instead of "2 seconds have passed" - which proves nothing when
+        // the live connection never came up. The counter is bumped in a finally,
+        // after the real handler settles, so it can never run ahead of the
+        // decision it stands for, and a handler that throws (the WS chain logs
+        // and continues) still counts as handled. ClientSync's serialized event
+        // chain calls this._handleEvent, so an own-property override on the
+        // instance wraps it without touching the production class.
+        this.eventsHandled = { block: 0, status: 0, reorg: 0, total: 0 };
+        let handleEvent = this.sync._handleEvent.bind(this.sync);
+        this.sync._handleEvent = async (event, sourceIndex) => {
+            try {
+                return await handleEvent(event, sourceIndex);
+            } finally {
+                let type = event && event.type;
+                if (this.eventsHandled[type] !== undefined) this.eventsHandled[type]++;
+                this.eventsHandled.total++;
+            }
+        };
     }
 
     // Bootstrap from server snapshot (blocking)
@@ -118,6 +141,19 @@ class ClientProcess {
 
     getLastAppliedBlock() {
         return this.sync.lastAppliedBlock;
+    }
+
+    // Count of WS events fully handled, for one type or across all types.
+    getEventsHandled(type) {
+        return type ? (this.eventsHandled[type] || 0) : this.eventsHandled.total;
+    }
+
+    // True only while the live socket to this source is OPEN. A severed link
+    // leaves the closed socket in place until the reconnect timer swaps in a
+    // CONNECTING one, so neither state reads as connected.
+    isConnected(sourceIndex = 0) {
+        let ws = this.sync.wsConns[sourceIndex];
+        return !!ws && ws.readyState === WebSocket.OPEN;
     }
 
     async incrementalCatchUp(sinceBlock) {

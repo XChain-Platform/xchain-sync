@@ -17,6 +17,7 @@ const { bootEnvironment, teardownEnvironment, resetAll,
         createServer, createGenerator, SERVER_PORT } = require('../setup/perf-setup');
 const MetricsCollector = require('../setup/metrics-collector');
 const ReportGenerator  = require('../setup/report-generator');
+const { drainUntil }   = require('../../e2e/helpers/waitFor');
 
 const BLOCK_COUNT = parseInt(process.env.PERF_BLOCK_COUNT || '50');
 
@@ -101,8 +102,17 @@ describe('04 Subscriber Scaling', function () {
         }
         const broadcastMs = collector.endOperation('broadcastAll');
 
-        // Wait for subscribers to receive messages (allow up to 2s)
-        await new Promise(r => setTimeout(r, 2000));
+        // Drain to the terminal state instead of a fixed 2s: every subscriber has
+        // either received every block or been dropped under backpressure, and
+        // nothing more will arrive for it. Bounded by the same 2s budget, and it
+        // reports rather than throws, because a shortfall is exactly the number
+        // this scenario measures (the per-count assertions below still fail on a
+        // genuine delivery break). One knock-on: the collector's window now ends
+        // when delivery settles instead of always 2s later, so 04's blk/s is no
+        // longer padded by a constant idle tail and will read higher than
+        // pre-change reports.
+        await drainUntil(() => subscribers.every((ws, i) =>
+            receivedBlocks.get(i).size >= BLOCK_COUNT || ws.readyState !== WebSocket.OPEN), 2000);
 
         collector.stop();
         const stats = collector.getStats();

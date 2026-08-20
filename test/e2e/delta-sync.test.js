@@ -15,7 +15,7 @@ const testDb        = require('./helpers/testDb');
 const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
-const { waitForReplicaBlock } = require('./helpers/waitFor');
+const { waitForReplicaBlock, waitForClientEvents } = require('./helpers/waitFor');
 const { assertBlockExists, assertBlockNotExists, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29200;
@@ -148,8 +148,16 @@ describe('E2E: Delta Synchronization', function() {
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
 
+            // The redundant catch-up this test guards against would fire from
+            // the status handler, so wait for three server heartbeats to be
+            // FULLY handled rather than for a duration in which they probably
+            // arrived. The counter advances only after each handler settles, so
+            // reaching three means the client had three real chances to
+            // re-apply and took none. The old sleep also passed when the live
+            // socket never connected at all.
+            const seenStatus = client.getEventsHandled('status');
             await client.connectLive();
-            await new Promise(r => setTimeout(r, 2000));
+            await waitForClientEvents(client, 'status', seenStatus + 3, 10000);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 20);
