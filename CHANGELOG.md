@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.10.0] - 2026-08-18
 
+### Changed
+- The escrow locked-balance leaf is armed on testnet from genesis, keeping the client's activation constant level with the fleet; mainnet is unchanged.
+
 ### Fixed
 - The `invalid_archive` replication class keys on the populated chunk height, matching the indexer's repair of the same class (activation-gated).
 - Code-review round fixes across the sync client (3 files).
