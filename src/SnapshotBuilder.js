@@ -718,6 +718,42 @@ class SnapshotBuilder {
                         } else if(indexerFullDump.has(table)){
                             if(skipLookups && lookupSet.has(table)) continue;
                             rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
+                        } else if(table === 'contract_emissions'){
+                            // contract_emissions.action_index is NULL for INTERNAL emissions
+                            // (SLASH and friends, which move ledger state without minting an
+                            // on-wire action), so the generic `action_index >= ?` branch below
+                            // silently drops every one of them from a catch-up window. The
+                            // consensus contract_hash counts them (BlockHasher reaches them
+                            // through the execution_index chain), and interior blocks arrive
+                            // with their committed hashes verbatim, so nothing halts: the
+                            // follower just carries a short table and any later recompute of an
+                            // interior block diverges. Reach them the same way the live stream
+                            // does (db.getEmissionRowsForBlock), widened from one block to the
+                            // catch-up window.
+                            //
+                            // Block-scoped, not action-scoped, so it is correct with a null
+                            // firstActionIndex too, and it names the four protocol columns
+                            // rather than `em.*`: the AUTO_INCREMENT id is local to each node
+                            // (the live stream never carries it, so the follower's sequence is
+                            // already offset from the source's), and shipping the source's id
+                            // into a plain INSERT is the ER_DUP_ENTRY freeze that
+                            // ClientApplier.localSurrogateIdTables documents.
+                            try {
+                                rows = await db.doQuery(
+                                    "SELECT em.execution_index, em.emitted_action, em.action_index, em.position " +
+                                    "FROM `contract_emissions` em " +
+                                    "INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index) " +
+                                    "INNER JOIN actions a ON (a.action_index = ce.action_index) " +
+                                    "WHERE a.block_index >= ? " +
+                                    "ORDER BY em.execution_index ASC, em.position ASC",
+                                    [sinceBlock], conn);
+                            } catch(e){
+                                // Same rule as the generic branch: swallow ONLY a genuine
+                                // schema gap on an older source (1146 missing table / 1054
+                                // missing column), propagate anything transient.
+                                if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+                                continue;
+                            }
                         } else if(firstActionIndex !== null){
                             try {
                                 rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);

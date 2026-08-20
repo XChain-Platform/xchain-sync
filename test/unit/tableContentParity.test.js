@@ -240,6 +240,25 @@ describe('Advisory table-content parity', function(){
                                   hasherFor({}).contentDigest('sync_meta', forged));
         });
 
+        it('the node-local contract_emissions.id column is excluded, so it cannot false-alarm', function(){
+            // db.getEmissionRowsForBlock streams only the four protocol columns
+            // ("not em.*, which would carry the AUTO_INCREMENT id"), so the follower
+            // assigns its own id on every live-applied block while the parity read is
+            // a SELECT em.*. Left in the preimage that guarantees a mismatch at equal
+            // counts on exactly the table the check is meant to police.
+            let source  = [{ id: 7,  execution_index: 900, emitted_action: 'SLASH', action_index: null, position: 0 }];
+            let replica = [{ id: 41, execution_index: 900, emitted_action: 'SLASH', action_index: null, position: 0 }];
+            assert.strictEqual(hasherFor({}).contentDigest('contract_emissions', source),
+                               hasherFor({}).contentDigest('contract_emissions', replica));
+            // ...but a difference in any replicated column still has to diverge.
+            for(let col of ['execution_index', 'emitted_action', 'action_index', 'position']){
+                let forged = [Object.assign({}, replica[0], { [col]: 'forged' })];
+                assert.notStrictEqual(hasherFor({}).contentDigest('contract_emissions', source),
+                                      hasherFor({}).contentDigest('contract_emissions', forged),
+                                      col + ' must stay in the preimage');
+            }
+        });
+
         it('the generated contract_state.state_key_bin column is excluded', function(){
             // The applier never names a generated column; the database computes it.
             let a = [{ block_index: 5, state_key: 'k', state_key_bin: 'k',     value: '1' }];

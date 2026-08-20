@@ -392,7 +392,12 @@ function extraSubRootColumn(extraSubRoots, slotName){
 async function reservedSubRootCandidates(db, chain, network, blockIndex){
     if(!SUB.isSubtreeActive('contract_state_root', blockIndex, network, chain)) return null;
     const smt = new PersistentSMT(new DbNodeStore(db));
-    return { contract_state_root: await CST.resolveContractStateRoot(db, smt, chain, network, blockIndex) };
+    // `shadow` is passed EXPLICITLY false, byte-for-byte with the indexer twin's
+    // call site. It reads as a falsy ternary either way today, so this is not a
+    // live divergence; it is closed because a future three-state `shadow` that
+    // told undefined from false would fork the follower's contract_state_root
+    // candidate here with nothing in either twin's tests to catch it.
+    return { contract_state_root: await CST.resolveContractStateRoot(db, smt, chain, network, blockIndex, false) };
 }
 
 // Shadow-compute window (spec §7 step 1): the WOULD-BE sub-roots at a height where
@@ -454,36 +459,21 @@ async function getNetBalance(db, address, tick){
 // (db.getBlockLeafRows mirrors BlockHasher's SELECTs), in the frozen cross-kind
 // total order: all ledger (credits, debits, escrows), then actions, then the six
 // contract sub-tables. Null fields coerce to '' (matching actionsLeaf's tx_index).
-function _c(x){ return (x == null) ? '' : x; }
+//
+// The ordering itself lives in merkle.blockMerkleLeaves (the twin-guarded module,
+// pinned byte-identical across the repos) so the explorer proof server locates a
+// row's leaf index with byte-identical logic; this just hashes the assembled
+// vector, exactly as the indexer twin does. It was hand-copied inline here, which
+// left the one consensus-critical ordering the twin guard does NOT cover: an edit
+// to blockMerkleLeaves reached the indexer through its call and this copy only if
+// someone remembered, with merkle.js's own twin-identity check still green.
 
 // `network`/`coin` drive the state_key collation flag-day
 // (state_key_collation_activation.js) inside getBlockLeafRows, mirroring
 // BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
 async function computeBlockMerkleRoot(db, blockIndex, network, coin){
     const rows = await db.getBlockLeafRows(blockIndex, undefined, network, coin);
-    const leaves = [];
-    for(const kind of ['credit', 'debit', 'escrow']){
-        const arr = rows.ledger[kind + 's'] || [];   // credits / debits / escrows
-        for(const r of arr)
-            leaves.push(M.ledgerLeaf({ kind, action_index: r.action_index,
-                address: _c(r.address), tick: _c(r.tick), amount: r.amount }));
-    }
-    for(const r of (rows.actions || []))
-        leaves.push(M.actionsLeaf({ action_index: r.action_index, tx_index: r.tx_index, action: _c(r.action) }));
-    const C = rows.contracts;
-    for(const r of (C.contracts || []))
-        leaves.push(M.contractLeaf('contracts', [r.action_index, _c(r.source_address), _c(r.code_hash), _c(r.status)]));
-    for(const r of (C.state || []))
-        leaves.push(M.contractLeaf('state', [r.contract_index, _c(r.state_key), _c(r.state_value)]));
-    for(const r of (C.executions || []))
-        leaves.push(M.contractLeaf('executions', [r.action_index, r.contract_index, _c(r.caller_address), _c(r.gas_used), _c(r.status), _c(r.emitted_count)]));
-    for(const r of (C.emissions || []))
-        leaves.push(M.contractLeaf('emissions', [r.execution_index, _c(r.emitted_action), r.action_index, r.position]));
-    for(const r of (C.deposits || []))
-        leaves.push(M.contractLeaf('deposits', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
-    for(const r of (C.withdrawals || []))
-        leaves.push(M.contractLeaf('withdrawals', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
-    return M.toHex(M.blockMerkleRoot(leaves));
+    return M.toHex(M.blockMerkleRoot(M.blockMerkleLeaves(rows)));
 }
 
 // ---- Full balances-tree initialization (flag-day cutover + snapshot seed) ----
@@ -658,11 +648,27 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
                         !SUB.isEscrowLockedLeafActive(blockIndex - 1, network, chain);
     let shadowBalanceUpdates = null;
     let balancesRoot;
-    if(isActivationBlock || armingBlock){
+    // Read the prior row BEFORE the gate, because a MISSING one is a third
+    // full-build trigger, matching the source twin's `!prior.length`. A follower
+    // reaches this with no block-1 row after a snapshot bootstrap, a rollback that
+    // took the row below this height, or a resume over a data gap. Threading from
+    // EMPTY_ROOT_HEX there commits a balances_root covering only THIS block's
+    // touched keys, which is the fork the indexer twin's own comment says not to
+    // substitute; buildFullBalancesRoot derives the root from the whole current
+    // net-balance set, so at this point in the apply it yields the root the
+    // incremental thread would have produced. Self-healing instead of a false halt.
+    // balances_root is NOT NULL in state_tree_roots, so the row test and the source's
+    // row-count test select the same blocks.
+    const prior = isActivationBlock ? null : await db.getStateRootsRow(chain, network, blockIndex - 1);
+    const noPriorRoot = !(prior && prior.balances_root);
+    if(isActivationBlock || armingBlock || noPriorRoot){
+        if(!isActivationBlock && !armingBlock)
+            console.warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
+                ' block ' + (blockIndex - 1) + '; full-recomputing balances_root for block ' + blockIndex +
+                ' instead of threading from the empty root (snapshot-bootstrap or activation rolled below this height)');
         balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
     } else {
-        const prior = await db.getStateRootsRow(chain, network, blockIndex - 1);
-        let root = (prior && prior.balances_root) ? prior.balances_root : EMPTY_ROOT_HEX;
+        let root = prior.balances_root;
         if(escShadow) shadowBalanceUpdates = [];
         for(const entry of (touchedKeys || [])){
             const address = entry.address, tick = entry.tick;

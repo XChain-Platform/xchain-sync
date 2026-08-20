@@ -870,6 +870,66 @@ describe('SnapshotBuilder', function(){
                 assert.ok(!('sends' in out.tables), 'action-scoped table skipped when firstActionIndex is null');
             });
 
+            // contract_emissions.action_index is NULL for INTERNAL emissions (SLASH), so
+            // the generic `action_index >= ?` cursor drops them from a catch-up window
+            // while the consensus contract_hash counts them via the execution_index
+            // chain. The follower then carries a short table and only an advisory parity
+            // log says so. Reach them the way the live stream does, by block.
+            it('indexer: scopes contract_emissions by block through the execution_index chain, not the action_index cursor @regression', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(500);
+                let emissionSql = null, emissionArgs = null;
+                db.doQuery.callsFake(async (sql, args) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'contract_emissions' }];
+                    if(/contract_emissions/.test(sql)){
+                        emissionSql = sql; emissionArgs = args;
+                        // The internal emission the action_index cursor would have dropped.
+                        return [{ execution_index: 900, emitted_action: 'SLASH', action_index: null, position: 0 }];
+                    }
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.deepStrictEqual(out.tables.contract_emissions,
+                    [{ execution_index: 900, emitted_action: 'SLASH', action_index: null, position: 0 }],
+                    'the NULL-action internal emission must ride the catch-up payload');
+                assert.ok(/contract_executions ce ON \(ce\.action_index = em\.execution_index\)/.test(emissionSql),
+                    'must reach the rows through the execution_index chain');
+                assert.ok(/a\.block_index >= \?/.test(emissionSql), 'must be block-scoped');
+                assert.ok(!/WHERE action_index >= /.test(emissionSql),
+                    'must not use the generic action_index cursor, which drops NULL-action rows');
+                assert.deepStrictEqual(emissionArgs, [3], 'bound to sinceBlock, not firstActionIndex');
+                // The AUTO_INCREMENT id is local to each node (the live stream never
+                // carries it), so shipping the source's would collide on a plain INSERT.
+                assert.ok(!/em\.\*/.test(emissionSql) && !/em\.id/.test(emissionSql),
+                    'must name the four protocol columns, never em.* (which carries the local id)');
+            });
+
+            // Same branch with a quiet window: block scoping makes it independent of
+            // firstActionIndex, which the generic cursor branch is not.
+            it('indexer: still ships internal emissions when firstActionIndex is null @regression', async function(){
+                let db = createMockDb();
+                db.dbType = 'indexer';
+                db.getLastBlock.resolves(100);
+                db.getBlockHashRow.resolves(null);
+                db.getFirstActionIndex.resolves(null);
+                db.doQuery.callsFake(async (sql) => {
+                    if(/information_schema/.test(sql)) return [{ table_name: 'contract_emissions' }];
+                    if(/contract_emissions/.test(sql))
+                        return [{ execution_index: 900, emitted_action: 'SLASH', action_index: null, position: 0 }];
+                    return [];
+                });
+                let res = streamRes();
+                await run(() => builder.streamIncrementalSnapshot(db, 3, res), res);
+                let out = JSON.parse(zlib.gunzipSync(res.getCollectedData()).toString());
+                assert.ok(out.tables.contract_emissions && out.tables.contract_emissions.length === 1,
+                    'a quiet action window must not silence the emission branch');
+            });
+
             it('swallows a per-table SCHEMA-GAP read error (errno 1146) during incremental', async function(){
                 let db = createMockDb();
                 db.dbType = 'indexer';
