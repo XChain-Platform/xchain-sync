@@ -9,9 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The escrow locked-balance leaf is armed on testnet from genesis, keeping the client's activation constant level with the fleet; mainnet is unchanged.
+- The contract state sub-root is armed from genesis on every testnet, matching the indexer twin; mainnet is unchanged.
+- The runtime image is pinned rather than floating.
 
 ### Fixed
 - The `invalid_archive` replication class keys on the populated chunk height, matching the indexer's repair of the same class (activation-gated).
+- Anchor and archive validator rewards materialized at an earlier earn block now ride the forward stream, and the winner-reconcile delete is mirrored, so a live follower actually receives a derived reward.
+- A poll's finalization stamp reaches followers, and a rollback re-opens the poll with its callback stamp and timelock re-fire cleared.
+- Infra-only sync mode is refused at construction when the client verification stack is on, instead of halting durably on the first filtered live block.
+- Table-count verification detects replica-ahead drift, which previously hid un-replicated forward deletes.
+- Orphan-stat reporting no longer materializes the node store in memory.
+- Internal contract emissions ship in incremental snapshots, with their local id excluded from the content digest.
+- SIGTERM drains in-flight work instead of dropping it.
 - Code-review round fixes across the sync client (3 files).
 
 ### Security
