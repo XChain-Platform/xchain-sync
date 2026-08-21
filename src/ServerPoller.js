@@ -33,6 +33,7 @@ const replicatedTables = require('./replicatedTables');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
+const { collectDerivedAnchorRewards } = require('./derivedRewards');
 const { activationDelayBlocks, coinTicker } = require('./consensus-constants');
 const { isStateCommitmentActive } = require('./state_commitment_activation');
 const { SCHEMA_VERSION } = require('./schema-version');
@@ -751,6 +752,32 @@ class ServerPoller {
                     let existing = payload.data['validator_rewards'] || [];
                     let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
                     for(let r of redriven){
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        if(!seen.has(k)){ seen.add(k); existing.push(r); }
+                    }
+                    payload.data['validator_rewards'] = existing;
+                }
+            } catch(e){
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
+            }
+
+            // Derived anchor/archive validator rewards: the BTC-side derivation writes the
+            // row while processing THIS block but stamps block_index = the checkpoint's
+            // SNAPSHOT_BLOCK E (< this block), so getBlockScopedRows never carries it.
+            // Select by derive_block_index (= this block, the materialization point), the
+            // forward twin of ClientRollback's derive_block_index >= B delete, and merge
+            // deduped on the UNIQUE identity exactly like the redriven rows above. The
+            // reconcile that collapses the round to its winner runs in the same block on the
+            // source, so only survivors are read here; the losers' pre-images ride the
+            // anchor_reward_reconcile_log rows this payload already carries.
+            try {
+                let derived = await collectDerivedAnchorRewards(this.db, block_index, block_index, conn);
+                if(derived.length > 0){
+                    let existing = payload.data['validator_rewards'] || [];
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    for(let r of derived){
                         let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
                         if(!seen.has(k)){ seen.add(k); existing.push(r); }
                     }

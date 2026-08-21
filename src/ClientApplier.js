@@ -205,6 +205,11 @@ class ClientApplier {
                 // this UPSERT every forward in-place mutation is silently dropped.
                 if(payload.updated_rows)
                     await this._applyUpdatedRows(payload.updated_rows);
+                // Mirror the anchor-reward winner collapse: the source DELETEd the
+                // loser validator_rewards rows this block's reconcile-log rows pre-image
+                // (rows from EARLIER blocks the action-scoped delete never reaches).
+                if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
+                    await this._mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
                 // Re-derive tokens.escrow_action_index when this block moved any
                 // offer/status (the gate is replica-derived, not wire-carried).
                 await this._maybeRederiveEscrow(data);
@@ -481,6 +486,12 @@ class ClientApplier {
                 // window can't reach them), and the escrow gate is re-derived locally.
                 if(snapshotData.updated_rows)
                     await this._applyUpdatedRows(snapshotData.updated_rows);
+                // Mirror the anchor-reward winner collapses the catch-up window carried
+                // (reconcile-log rows at/above since_block pre-image the rows the source
+                // DELETEd); a replica that held the losers at since_block converges.
+                if(snapshotData.tables.anchor_reward_reconcile_log && snapshotData.tables.anchor_reward_reconcile_log.length
+                        && snapshotData.since_block != null)
+                    await this._mirrorAnchorRewardReconcile('d.block_index >= ?', [snapshotData.since_block]);
                 await this._maybeRederiveEscrow(snapshotData.tables);
                 if(snapshotData.tables.credits || snapshotData.tables.debits)
                     await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
@@ -648,6 +659,37 @@ class ClientApplier {
                     }
                 }
             }
+        }
+    }
+
+    // Mirror the source's anchor-reward winner collapse (xchain-indexer db.js
+    // reconcileAnchorRewardWinner): the source pre-images every loser validator_rewards
+    // row into anchor_reward_reconcile_log, then DELETEs it. The log rows replicate
+    // (stream:block / mirror) but the DELETE never did, so a replica that held a loser
+    // (bootstrap snapshot, or the pre-flag-day ANCHOR write) kept it forever, strictly
+    // AHEAD of the source and invisible to the source-ahead-only count check. The log
+    // row carries the loser's full UNIQUE identity (source_id, signing_pubkey_id,
+    // reward_type, round_reference), so this is a keyed delete with no winner predicate
+    // to reproduce; rows the source still holds (winners) never match a pre-image.
+    // Runs AFTER the insert loop (the log rows of this apply are in place) and INSIDE
+    // the apply transaction. The reverse twin is ClientRollback's RB-ANCHOR restore,
+    // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`
+    // / `scopeArgs` bound the log rows to the window this apply carried
+    // (d.block_index = B live; d.block_index >= since on an incremental catch-up).
+    async _mirrorAnchorRewardReconcile(scopeSql, scopeArgs){
+        try {
+            await this.db.doQuery(
+                "DELETE vr FROM validator_rewards vr " +
+                "JOIN anchor_reward_reconcile_log d " +
+                "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
+                " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
+                "WHERE " + scopeSql,
+                scopeArgs);
+        } catch(e){
+            // Schema-gap errors (log table / columns absent on an older replica) are safe
+            // to skip: such a replica received no log rows either. Anything else must
+            // abort the apply so the block is retried, never applied half-mirrored.
+            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
         }
     }
 

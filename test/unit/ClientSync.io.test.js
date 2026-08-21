@@ -1595,15 +1595,18 @@ describe('ClientSync: _connectWebSocket', function(){
     });
 
     it('uses ?sync_mode=infra-only query string when SYNC_MODE env is set', function(){
-        let { sync } = makeSyncWS();
+        // The mode is resolved ONCE in the constructor (which refuses infra-only while
+        // any halting VERIFY_* gate is on), so the env must be set before construction
+        // and the gates explicitly off for the client to build at all.
         let envKey = 'SYNC_MODE_BITCOIN';
         process.env[envKey] = 'infra-only';
 
         try {
+            let { sync } = makeSyncWS({ VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false, VERIFY_STATE_COMMITMENT: false });
             sync._connectWebSocket('http://src1:3006', 0);
             let logCalls = console.log.getCalls().map(c => c.args[0]);
-            assert.ok(logCalls.some(m => m && m.indexOf('infra-only') !== -1),
-                'infra-only mode must be in the log output');
+            assert.ok(logCalls.some(m => m && m.indexOf('?sync_mode=infra-only') !== -1),
+                'infra-only mode must be in the subscribe URL');
         } finally {
             delete process.env[envKey];
         }

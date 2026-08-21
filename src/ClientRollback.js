@@ -248,8 +248,33 @@ class ClientRollback {
                         "total_voters = NULL, quorum_met = NULL, min_voters_met = NULL, " +
                         "fail_reason = NULL, decided_early = NULL, effective_close_block = NULL, " +
                         "finalized_action_index = NULL, resolved_block = NULL, " +
-                        "deposit_resolved = NULL, callback_execute_action_index = NULL " +
+                        "deposit_resolved = NULL, callback_execute_action_index = NULL, " +
+                        "callback_due_block = NULL " +
                         "WHERE poll_status IN ('finalized', 'failed_quorum') AND resolved_block >= ?",
+                        [block_index]
+                    );
+                } catch(e){
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    // callback_due_block rides the single mirrored statement (source-text parity),
+                    // so a replica whose schema predates it skips the WHOLE re-open; accepted
+                    // because the schema reconcile (db.js) adds source columns before rows stream.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+
+                // polls timelock: a DEFERRED binding-callback fire whose due block is
+                // orphaned while the finalization itself survives (resolved_block below
+                // the reorg point, callback_due_block at/above it). The injected EXECUTE
+                // is deleted generically with the orphaned range; re-NULL the fired marker
+                // so the source's sweep re-fires deterministically when the due block
+                // replays and the re-carried updated_rows row upserts cleanly. The stamped
+                // callback_due_block itself is derived state (resolved_block + delay) from
+                // a surviving v2, so it stays. Mirrors xchain-indexer/src/rollback.js.
+                try {
+                    await this.db.doQuery(
+                        "UPDATE polls SET callback_execute_action_index = NULL " +
+                        "WHERE poll_status IN ('finalized', 'failed_quorum') " +
+                        "AND callback_due_block >= ? AND callback_execute_action_index IS NOT NULL",
                         [block_index]
                     );
                 } catch(e){

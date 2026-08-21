@@ -104,7 +104,11 @@ const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
 // flips a surviving polls row (created at the v0 block, below the window) from
 // 'open' to 'finalized'/'failed_quorum' IN PLACE, stamping resolved_block; the
 // action-scoped stream carries the v2's poll_results rows but not this summary
-// flip. Forward twin of ClientRollback's polls re-open reset (same key).
+// flip. Forward twin of ClientRollback's polls re-open reset (same key). The class
+// carries a SECOND key as well: a DEFERRED binding-callback fire (callback_delay_blocks
+// > 0) stamps callback_execute_action_index IN PLACE at the due block D = F + delay,
+// which is above the finalize window, so keying on resolved_block alone dropped that
+// stamp on every follower (forward twin of ClientRollback's timelock re-fire reset).
 const POLL_FINALIZE_TABLES = ['polls'];
 
 // Surviving unstake rows whose status_id was flipped to 'completed' in place when their
@@ -219,13 +223,18 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
 
     // 3b. VOTE poll finalization flip on surviving polls rows. Keyed on
     //     resolved_block (stamped by the finalize sweep), which captures both the
-    //     end_block close and the early-decide path. No version predicate: polls
-    //     has one row shape (the v0 create), unlike attests/xcalls.
+    //     end_block close and the early-decide path, OR on callback_due_block with a
+    //     fired stamp: the deferred binding-callback sweep UPDATEs the surviving row's
+    //     callback_execute_action_index at the due block (resolved_block + delay),
+    //     above the finalize window, so the first key alone never carried it. One
+    //     scan, SELECT * so the follower's upsert refreshes the whole row. No version
+    //     predicate: polls has one row shape (the v0 create), unlike attests/xcalls.
     for(let table of POLL_FINALIZE_TABLES){
         try {
             let rows = await db.doQuery(
-                "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ?",
-                [from, to], conn);
+                "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ? " +
+                "OR (callback_due_block BETWEEN ? AND ? AND callback_execute_action_index IS NOT NULL)",
+                [from, to, from, to], conn);
             add(table, rows);
         } catch(e){
             if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;

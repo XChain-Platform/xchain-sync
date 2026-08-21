@@ -32,6 +32,7 @@ const zlib        = require('zlib');
 const validation  = require('./validation');
 const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
+const tableLifecycle = require('./tableLifecycle');
 const { SCHEMA_VERSION } = require('./schema-version');
 const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
 const { bootstrapDepthKey } = require('./config');
@@ -86,6 +87,35 @@ class ClientSync {
             console.error('the replica will silently follow the forked chain. Use only for');
             console.error('throwaway read-only mirrors whose state nothing downstream trusts.');
             console.error('================================================================');
+        }
+
+        // Per-chain subscribe mode: 'full' (default) or 'infra-only' (SYNC_MODE_<CHAIN>,
+        // e.g. SYNC_MODE_DOGE=infra-only). Resolved ONCE here: the server filters an
+        // infra-only subscriber's live blocks down to ServerPoller.infraTables (stakes,
+        // delegations, validator_rewards, prices, reward_claims + index tables), so the
+        // replica is deliberately incomplete and the apply-time VERIFY_* gates, which
+        // recompute consensus hashes / the state_hash / the SMT roots over the replica's
+        // rows, cannot pass: the first filtered block would trip a DURABLE
+        // local-recompute-divergence halt mislabelling a configured mode as corruption.
+        // Refuse to start in that combination and name the remedy, rather than silently
+        // weakening gates the repo declares UNSAFE to turn off (operator decision
+        // 2026-06-12): the all-gates-off posture stays an explicit operator choice.
+        let modeKey    = 'SYNC_MODE_' + String(this.chain).toUpperCase();
+        this._syncMode = process.env[modeKey] || this.config[modeKey] || 'full';
+        if(this.dbType === 'indexer' && this._syncMode === 'infra-only'){
+            let haltingGates = [];
+            if(this.config['VERIFY_RECOMPUTE'])                  haltingGates.push('VERIFY_RECOMPUTE');
+            if(this.config['VERIFY_STATE_HASH'] !== false)       haltingGates.push('VERIFY_STATE_HASH');
+            if(this.config['VERIFY_STATE_COMMITMENT'] !== false) haltingGates.push('VERIFY_STATE_COMMITMENT');
+            if(haltingGates.length){
+                throw new Error(modeKey + '=infra-only on ' + this.chain + '/' + this.network + '/indexer ' +
+                    'cannot run with halting verification enabled (' + haltingGates.join(', ') + '): the ' +
+                    'source filters infra-only live blocks to the infrastructure tables, so the apply-time ' +
+                    'recompute over the withheld rows would durably halt the replica on its first filtered ' +
+                    'block. Either unset ' + modeKey + ' (full replica) or, for a throwaway infra mirror whose ' +
+                    'state nothing downstream trusts, set ' + haltingGates.map(g => g + '=false').join(' ') +
+                    ' explicitly (DECLARED UNSAFE for consensus-relevant replicas).');
+            }
         }
 
         this.sources    = this.config['SYNC_SOURCES'].split(',').map(s => s.trim()).filter(s => s);
@@ -1620,12 +1650,25 @@ class ClientSync {
             // the source has rows in that we do not. A shortfall is logged as a
             // health signal for operators: it does NOT reject the block, since a
             // passing hash check is still a valid consensus result.
-            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts);
-            if(countMismatches.length){
+            // At the same height, exact-parity tables are also checked for the
+            // replica-AHEAD direction (an un-replicated source-side forward DELETE
+            // leaves extra local rows the shortfall check cannot see); reported under
+            // its own tag so operators can tell it from ordinary lag.
+            let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts, undefined,
+                { remoteHeight: remoteStatus.block_height, localHeight: blockHeight });
+            let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
+            let ahead      = countMismatches.filter(m => m.reason === 'replica-ahead');
+            if(shortfalls.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
                     '; follower may be missing replicated rows:');
-                console.error(JSON.stringify(countMismatches));
-            } else if(remoteStatus.table_counts){
+                console.error(JSON.stringify(shortfalls));
+            }
+            if(ahead.length){
+                console.error('TABLE_COUNT_REPLICA_AHEAD at block ' + blockHeight + ' against ' + source +
+                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+                console.error(JSON.stringify(ahead));
+            }
+            if(!countMismatches.length && remoteStatus.table_counts){
                 console.log('Table-count verification passed against ' + source);
             }
 
@@ -1834,13 +1877,25 @@ class ClientSync {
     // Compare the source's published per-table row counts against this replica's
     // own counts. Returns an array of { table, sourceCount, localCount, delta } for
     // every table the source has MORE rows in than the follower (a shortfall that
-    // indicates missing replicated data). Followers legitimately holding extra local
-    // rows are ignored: only source-ahead deltas signal incomplete replication.
+    // indicates missing replicated data). Followers holding extra local rows are
+    // ignored by default (decoder dispensers hard-purge, truncated windows, height
+    // skew between the /status read and the local count), EXCEPT when the caller
+    // passes `opts.remoteHeight` / `opts.localHeight` and they are equal: then, for
+    // the tables whose registry class asserts exact row-set parity (indexer
+    // stream:* with replicaRollback 'mirror'), a replica-AHEAD delta is reported too,
+    // tagged reason 'replica-ahead' (delta negative). That is the shape an
+    // un-replicated source-side forward DELETE leaves (the anchor-reward winner
+    // collapse on validator_rewards was invisible here for exactly this reason,
+    // #5610); it is advisory and never halts.
     // Best-effort: a table that can't be counted locally (absent in this replica's
     // schema) is reported as a full shortfall rather than silently skipped.
-    async _verifyTableCounts(remoteCounts, excludeTables){
+    async _verifyTableCounts(remoteCounts, excludeTables, opts){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
+        let remoteHeight = opts && Number(opts.remoteHeight);
+        let localHeight  = opts && Number(opts.localHeight);
+        let sameHeight   = Number.isFinite(remoteHeight) && Number.isFinite(localHeight) && remoteHeight === localHeight;
+        let exactParity  = (sameHeight && this.dbType === 'indexer') ? this._exactParityTables() : null;
         for(let table of Object.keys(remoteCounts)){
             // Callers can exclude a table whose drift is expected between convergence
             // passes (e.g. `dispensers` between replace-table reconciles) so a known,
@@ -1878,8 +1933,23 @@ class ClientSync {
             if(!Number.isFinite(local)) local = 0;
             if(remote > local)
                 mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
+            else if(local > remote && exactParity && exactParity.has(table))
+                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local, reason: 'replica-ahead' });
         }
         return mismatches;
+    }
+
+    // Indexer tables whose registry class asserts exact row-set parity with the
+    // source: streamed forward (stream:*) and mirrored on rollback. Derived from
+    // tableLifecycle so there is no second hand-maintained list; snapshot / local /
+    // hub-mirror / follower-derived / lookup classes (where extra local rows can be
+    // legitimate) are excluded by construction.
+    _exactParityTables(){
+        if(!this._exactParityTableSet){
+            this._exactParityTableSet = new Set(tableLifecycle.tablesWhere(t =>
+                t.owner === 'indexer' && /^stream:/.test(t.replication) && t.replicaRollback === 'mirror'));
+        }
+        return this._exactParityTableSet;
     }
 
     // Re-fetch the decoder `dispensers` table in full and replace the local copy.
@@ -1963,10 +2033,10 @@ class ClientSync {
     }
 
     _connectWebSocket(source, sourceIndex){
-        // Per-chain sync mode preference: 'full' (default) or 'infra-only'
-        // Set via env: SYNC_MODE_BTC, SYNC_MODE_LTC, SYNC_MODE_DOGE (e.g., SYNC_MODE_DOGE=infra-only)
-        let envKey   = 'SYNC_MODE_' + String(this.chain).toUpperCase();
-        let syncMode = process.env[envKey] || this.config[envKey] || 'full';
+        // Per-chain sync mode preference: 'full' (default) or 'infra-only', resolved
+        // once in the constructor (SYNC_MODE_<CHAIN>), which also refuses the
+        // infra-only + halting-verification combination before any connect.
+        let syncMode = this._syncMode || 'full';
         let modeQs   = (syncMode === 'infra-only') ? '?sync_mode=infra-only' : '';
         let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.dbType + '/' + this.chain + '/' + this.network + modeQs;
         console.log('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');

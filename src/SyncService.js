@@ -104,6 +104,52 @@ class SyncService {
         this.ready = true;
     }
 
+    // Stop every background loop this service owns and release its DB pools.
+    // Called from the process SIGTERM/SIGINT drain (src/shutdown.js): start()
+    // fans work out into pollers, client syncs and two intervals, none of which
+    // the entry point can reach, so the fan-in belongs here beside the fan-out.
+    //
+    // ready goes false FIRST so /health reports the service as not-ready for the
+    // whole drain window; the poll loops below only check their flag between
+    // iterations and a replica answering healthy while it stops replicating is
+    // exactly what a rolling upgrade must not see.
+    //
+    // Idempotent, and every step is best-effort: one refusing pool must not
+    // strand the rest, because the caller's hard-exit timer is the only other
+    // thing standing between a stuck drain and a lingering container.
+    async stop(){
+        this.ready = false;
+
+        for(let poller of this.pollers.values()){
+            try { if(typeof poller.stop === 'function') poller.stop(); }
+            catch(e){ console.warn('SyncService.stop: poller stop failed:', e && e.message ? e.message : e); }
+        }
+
+        for(let sync of this.clientSyncs.values()){
+            try { if(typeof sync.stop === 'function') sync.stop(); }
+            catch(e){ console.warn('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e); }
+        }
+
+        // Both are unref'd, so they cannot hold the loop open on their own, but a
+        // hub re-poll firing mid-drain would create fresh pools and DB handles
+        // behind the close below.
+        if(this._hubRepollTimer){ clearInterval(this._hubRepollTimer); this._hubRepollTimer = null; }
+        if(this._stateTreeMetricTimer){ clearInterval(this._stateTreeMetricTimer); this._stateTreeMetricTimer = null; }
+
+        // Pools close LAST: a poller mid-iteration above still needs its connection
+        // to finish or roll back the statement it is on.
+        let closed = new Set();
+        for(let { db } of this.databases.values()){
+            if(!db || typeof db.close !== 'function' || closed.has(db)) continue;
+            closed.add(db);
+            try { await db.close(); }
+            catch(e){ console.warn('SyncService.stop: database close failed:', e && e.message ? e.message : e); }
+        }
+
+        console.log('SyncService stopped (' + this.pollers.size + ' poller(s), '
+            + this.clientSyncs.size + ' client sync(s), ' + closed.size + ' pool(s) closed).');
+    }
+
     async _waitForHub(){
         let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
         if(maxWaitMs === undefined || maxWaitMs === null)
@@ -334,7 +380,10 @@ class SyncService {
     }
 
     _scheduleHubRepoll(){
-        setInterval(async () => {
+        if(this._hubRepollTimer) return;
+        // Handle retained so stop() can clear it: a re-poll that fires during the
+        // drain discovers chains and builds fresh DB pools behind the close.
+        this._hubRepollTimer = setInterval(async () => {
             try {
                 let newChains = await this._discoverChains();
                 if(newChains.length > 0)
@@ -343,6 +392,7 @@ class SyncService {
                 console.error('Hub re-poll error:', e);
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
+        if(this._hubRepollTimer.unref) this._hubRepollTimer.unref();
     }
 
     // Periodically emit a read-only orphan-count metric for each replicated indexer DB's
@@ -377,6 +427,9 @@ class SyncService {
                             chain: cfg.coin, network: cfg.network,
                             total_nodes: stats.totalNodes, reachable_nodes: stats.reachableNodes,
                             orphan_count: stats.orphanCount, reachability_skipped: stats.reachabilitySkipped,
+                            // Publish the truncation flag or the line reads as a full-store figure:
+                            // when the mark stops at the cap, orphan_count is an UPPER bound.
+                            reachability_estimated: stats.reachabilityEstimated === true,
                             ts: Date.now()
                         }));
                     } catch(err) {

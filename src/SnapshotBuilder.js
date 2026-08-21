@@ -28,6 +28,7 @@ const tableLifecycle = require('./tableLifecycle');
 const { collectUpdatedRows } = require('./updatedRows');
 const { collectMaturedCooldownCredits } = require('./cooldownCredits');
 const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
+const { collectDerivedAnchorRewards } = require('./derivedRewards');
 const { activationDelayBlocks } = require('./consensus-constants');
 const poolSizing = require('./poolSizing');
 
@@ -833,6 +834,26 @@ class SnapshotBuilder {
                             // missing column on an older source). A transient/operational
                             // error must abort the stream, not silently drop the redriven
                             // rewards from the catch-up payload (mirrors ClientRollback).
+                            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+                        }
+                        // Derived anchor/archive rewards: materialized (derive_block_index)
+                        // inside [sinceBlock, lastBlock] but stamped block_index = the
+                        // checkpoint's SNAPSHOT_BLOCK E below the cursor, so the block_index
+                        // >= sinceBlock scope above misses them unless the gap already spans
+                        // back to E. Same merge + dedup; the forward twin of ClientRollback's
+                        // derive_block_index >= B reverse delete.
+                        try {
+                            let derived = await collectDerivedAnchorRewards(db, sinceBlock, lastBlock, conn);
+                            if(derived.length > 0){
+                                rows = rows || [];
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                for(let r of derived){
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    if(!seen.has(k)){ seen.add(k); rows.push(r); }
+                                }
+                            }
+                        } catch(e){
+                            // Same gate as above: only a genuine schema gap is skipped.
                             if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                         }
                     }

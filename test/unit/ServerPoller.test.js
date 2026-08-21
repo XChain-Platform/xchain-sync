@@ -490,6 +490,21 @@ describe('ServerPoller', function(){
                 'live block payload must carry schema_version');
         });
 
+        it('merges derived anchor/archive rewards (block_index = earn-block E, derive_block_index = this block) into validator_rewards', async function(){
+            // The BTC-side derivation mints the row while processing block 961700 but stamps
+            // block_index = SNAPSHOT_BLOCK 961500, so getBlockScopedRows(961700) never sees it
+            // and a continuously-live follower never received it (#5605).
+            db.getBlockHashRow.resolves({ block_index: 961700, block_time: 1700000000, ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+            let derived = { id: 9, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 961500,
+                amount: '1.00000000', block_index: 961500, derive_block_index: 961700 };
+            db.doQuery.withArgs(sinon.match(/vr\.derive_block_index BETWEEN \? AND \?/)).resolves([derived]);
+            let payload = await poller._buildBlockPayload(961700);
+            assert.ok(payload.data.validator_rewards, 'derived reward must ride the validator_rewards payload');
+            assert.deepStrictEqual(payload.data.validator_rewards, [derived]);
+            let q = db.doQuery.getCalls().find(c => /vr\.derive_block_index BETWEEN \? AND \?/.test(c.args[0]));
+            assert.deepStrictEqual(q.args[1], [961700, 961700], 'keyed on THIS block as the materialization window');
+        });
+
         it('streams contract_emissions via getEmissionRowsForBlock, not getActionScopedRows', async function(){
             db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
