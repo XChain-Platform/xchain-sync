@@ -37,6 +37,7 @@ const SyncService = require('./SyncService');
 const Utility     = require('./utility');
 const BlockHasher = require('./BlockHasher');
 const { createApiKeyMiddleware, safeEqual } = require('./middleware');
+const { createShutdown, createSyncDrain } = require('./shutdown');
 const { getReplicatedTables, missingReplicatedTables } = require('./replicatedTables');
 
 // Stateless helper for the advisory index-map parity checksum published on
@@ -1089,24 +1090,27 @@ async function startApi(){
         clearInterval(pingInterval);
     });
 
-    // Periodic status broadcasts (server mode), once per (chain, network, dbType)
+    // Periodic status broadcasts (server mode), once per (chain, network, dbType).
+    // Handles are collected so the shutdown drain can clear them: both reach into
+    // the broadcaster that SyncService.stop() tears down.
+    const backgroundTimers = [];
     if(cfg['SYNC_MODE'] === 'server'){
-        setInterval(() => {
+        backgroundTimers.push(setInterval(() => {
             let broadcaster = syncService.getBroadcaster();
             if(!broadcaster) return;
             let chains = syncService.getChains();
             for(let { coin, network, dbType } of chains){
                 broadcaster.broadcastStatus(coin, network, dbType);
             }
-        }, cfg['WS_STATUS_INTERVAL']);
+        }, cfg['WS_STATUS_INTERVAL']));
 
         // Stale validator-heartbeat eviction, run every 30 seconds.
         // Removes entries whose last_seen exceeds VALIDATOR_HEARTBEAT_TTL so the map
         // does not accumulate dead entries after validators disconnect.
-        setInterval(() => {
+        backgroundTimers.push(setInterval(() => {
             let broadcaster = syncService.getBroadcaster();
             if(broadcaster) broadcaster.evictStaleValidators(cfg['VALIDATOR_HEARTBEAT_TTL']);
-        }, 30000);
+        }, 30000));
     }
 
     server.listen(cfg['SYNC_API_PORT'], () => {
@@ -1117,6 +1121,23 @@ async function startApi(){
         console.error('Fatal SyncService error:', error);
         process.exit(1);
     });
+
+    // Graceful shutdown. node is PID 1 in the image, so `docker stop` delivers
+    // SIGTERM to this process; before this handler existed the default action
+    // killed the poll/apply loops wherever they stood, which on a replica means an
+    // aborted apply transaction on every routine restart. The handler is bounded by
+    // its own hard-exit timer (src/shutdown.js): installing it removes node's
+    // default terminate, so a hung drain must still end the process.
+    const shutdown = createShutdown({
+        drain: createSyncDrain({
+            syncService: syncService,
+            server:      server,
+            wss:         wss,
+            timers:      backgroundTimers
+        })
+    });
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
 // Only boot when this file IS the process entry point (`npm run api`, the

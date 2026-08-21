@@ -54,6 +54,12 @@ const ClientApplier    = require('../../src/ClientApplier');
 const ClientRollback   = require('../../src/ClientRollback');
 const HashVerifier     = require('../../src/HashVerifier');
 const Utility          = require('../../src/utility');
+// Proxy-trust and rate-limiter wiring comes from the real api.js rather than a
+// parallel copy: how req.ip resolves and which limiter guards which route are
+// production decisions, and a harness that re-declares them cannot notice when
+// production drifts. api.js guards its env check and listen() behind
+// require.main === module, so requiring it here opens no port.
+const { trustProxyHops, createRateLimiters } = require('../../src/api');
 
 const decoderFixtures = require('./helpers/decoderFixtures');
 const { waitFor }     = require('./helpers/waitFor');
@@ -70,18 +76,45 @@ const SOURCE_DB_NAME  = 'xchain_e2e_decoder_source';
 const REPLICA_DB_NAME = 'xchain_e2e_decoder_replica';
 
 const SERVER_PORT = 29250;
+
+// Two genuine client addresses and one a caller can only have typed itself.
+const CLIENT_A = '198.51.100.7';
+const CLIENT_B = '198.51.100.8';
+const SPOOFED  = '203.0.113.66';
+
 const CHAIN       = 'bitcoin';
 const NETWORK     = 'regtest';
 const DB_TYPE     = 'decoder';
 
 const util = new Utility();
 
+// Default server config for this suite. TRANSPARENCY_RATE_LIMIT is widened well
+// past the production default of 10/min because waitFor() polls on a 100ms
+// cadence and would 429 its own wait loop; the limiter code path is still the
+// real one, only the threshold is loosened.
+const SERVER_CONFIG = {
+    WS_MAX_PER_IP:           20,
+    WS_BACKPRESSURE_LIMIT:   50,
+    TRUST_PROXY:             false,
+    BLOCK_POLL_INTERVAL:     200,
+    SNAPSHOT_RATE_FULL:      100,
+    SNAPSHOT_RATE_INCR:      100,
+    TRANSPARENCY_RATE_LIMIT: 100000
+};
+
 // Build the mini HTTP+WS server that mirrors src/api.js for decoder
 // surface. Reuses real BlockBroadcaster + SnapshotBuilder + ServerPoller
 // so the test exercises actual Phase 3 code paths.
-function buildServer(sourceDb, broadcaster, snapshotBuilder){
+function buildServer(sourceDb, broadcaster, snapshotBuilder, cfg){
     let app = express();
+    // Must precede the limiters, which read req.ip: same ordering requirement
+    // startApi() has.
+    app.set('trust proxy', trustProxyHops(cfg['TRUST_PROXY']));
     app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
+
+    // The limiter instances startApi() mounts, on the routes it guards.
+    let limiters = createRateLimiters(cfg);
+    app.use(limiters.backstopLimiter);
 
     let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
 
@@ -131,7 +164,7 @@ function buildServer(sourceDb, broadcaster, snapshotBuilder){
         }
     });
 
-    app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
+    app.get('/snapshot/:dbType/:chain/:network', limiters.fullSnapshotLimiter, async (req, res) => {
         try {
             await snapshotBuilder.streamFullSnapshot(sourceDb, res);
         } catch(e){
@@ -139,7 +172,7 @@ function buildServer(sourceDb, broadcaster, snapshotBuilder){
         }
     });
 
-    app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
+    app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', limiters.incrSnapshotLimiter, async (req, res) => {
         let since = parseInt(req.params.blockHeight);
         if(isNaN(since) || since < 0) return res.status(400).json({ error: 'Invalid blockHeight' });
         try {
@@ -150,7 +183,7 @@ function buildServer(sourceDb, broadcaster, snapshotBuilder){
     });
 
     // Transparency is indexer-only; decoder requests must return 400.
-    app.get('/transparency/:dbType/:chain/:network/roots', (req, res) => {
+    app.get('/transparency/:dbType/:chain/:network/roots', limiters.transparencyLimiter, (req, res) => {
         if(req.params.dbType !== 'indexer')
             return res.status(400).json({ error: 'Transparency log is indexer-only' });
         res.json({ entries: [] });
@@ -237,13 +270,17 @@ describe('E2E: Decoder DB Lifecycle', function() {
         await decoderFixtures.truncateAll(replicaDb);
     });
 
-    async function startServer(){
-        broadcaster     = new BlockBroadcaster({ WS_MAX_PER_IP: 20, WS_BACKPRESSURE_LIMIT: 50, TRUST_PROXY: false });
-        snapshotBuilder = new SnapshotBuilder(util);
-        poller          = new ServerPoller(CHAIN, NETWORK, sourceDb, broadcaster, null,
-            { BLOCK_POLL_INTERVAL: 200 }, util);
+    async function startServer(overrides){
+        // One config object for the broadcaster, the poller and the app, so a
+        // test that flips TRUST_PROXY moves both budget surfaces at once, the
+        // way a deployment does.
+        let cfg = Object.assign({}, SERVER_CONFIG, overrides);
 
-        server = buildServer(sourceDb, broadcaster, snapshotBuilder);
+        broadcaster     = new BlockBroadcaster(cfg);
+        snapshotBuilder = new SnapshotBuilder(util);
+        poller          = new ServerPoller(CHAIN, NETWORK, sourceDb, broadcaster, null, cfg, util);
+
+        server = buildServer(sourceDb, broadcaster, snapshotBuilder, cfg);
         await new Promise(r => server.listen(SERVER_PORT, r));
 
         // Drive the poller manually; match the indexer e2e harness pattern.
@@ -317,6 +354,49 @@ describe('E2E: Decoder DB Lifecycle', function() {
                 assert.strictEqual(e.response.status, 400);
                 assert.match(e.response.data.error, /indexer-only/i);
             }
+        });
+    });
+
+    // Regression coverage for the two seams this harness shares with src/api.js.
+    // A hand-rolled app with no 'trust proxy' setting resolves every request to
+    // the proxy loopback address, so all callers share one snapshot bucket and
+    // the first to arrive can 429 the rest; nothing else in this file would
+    // notice that, because the routes answer identically either way.
+    describe('Proxy-trust rate-limit wiring', function() {
+
+        async function snapshotHit(forwardedFor){
+            return axios.get('http://127.0.0.1:' + SERVER_PORT + '/snapshot/decoder/' + CHAIN + '/' + NETWORK, {
+                headers: { 'x-forwarded-for': forwardedFor },
+                validateStatus: () => true
+            });
+        }
+
+        // The limiter charges its bucket before the handler runs, but an empty
+        // source answers 404, so seed blocks and let 200 mean served.
+        beforeEach(async function(){
+            this.timeout(15000);
+            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 3);
+        });
+
+        it('gives distinct forwarded clients independent snapshot budgets', async function(){
+            this.timeout(20000);
+            await startServer({ TRUST_PROXY: true, SNAPSHOT_RATE_FULL: 2 });
+
+            assert.strictEqual((await snapshotHit(CLIENT_A)).status, 200);
+            assert.strictEqual((await snapshotHit(CLIENT_A)).status, 200);
+            assert.strictEqual((await snapshotHit(CLIENT_A)).status, 429, 'the client should have exhausted its own budget');
+            assert.strictEqual((await snapshotHit(CLIENT_B)).status, 200,
+                'a distinct client was refused, so one shared bucket is serving every caller');
+        });
+
+        it('stops at the one address the proxy vouched for, so a forged prefix buys no budget', async function(){
+            this.timeout(20000);
+            await startServer({ TRUST_PROXY: true, SNAPSHOT_RATE_FULL: 2 });
+
+            assert.strictEqual((await snapshotHit(CLIENT_A)).status, 200);
+            assert.strictEqual((await snapshotHit(SPOOFED + ', ' + CLIENT_A)).status, 200);
+            assert.strictEqual((await snapshotHit('203.0.113.1, 203.0.113.2, ' + CLIENT_A)).status, 429,
+                'entries left of the proxy-appended address were believed and minted a fresh bucket');
         });
     });
 

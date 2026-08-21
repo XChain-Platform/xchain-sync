@@ -50,6 +50,29 @@ if ($target === false
     exit("Not found\n");
 }
 
+// A hand-placed real latest.tgz beats this resolver on the archive route: the
+// sibling .htaccess rewrites latest.tgz only when no real file by that name
+// exists, so Apache streams the drop and the consumer sees no redirect. The
+// signature route must then describe THAT file and must never fall through to
+// the newest timestamped archive below. Handing the drop's bytes another
+// archive's .sig makes the consumer report tampering on data nobody tampered
+// with, and its unsigned-bootstrap opt-out cannot rescue it, because that
+// opt-out covers an ABSENT signature and this one is present, merely wrong. So
+// serve the drop's own sibling .sig (reached only when latest.php is called
+// directly; Apache serves a real one itself), else 404 so the consumer takes
+// its documented no-signature-published path.
+if ($type === 'sig' && is_file($target . '/latest.tgz')) {
+    $manual_sig = $target . '/latest.tgz.sig';
+    if (!is_file($manual_sig)) {
+        http_response_code(404);
+        header('Content-Type: text/plain');
+        exit("No signature published\n");
+    }
+    header('Content-Type: text/plain');
+    readfile($manual_sig);
+    exit;
+}
+
 // Candidate archives: *.tar.gz and *.tgz, excluding the latest.* aliases.
 $files = array_merge(
     glob($target . '/*.tar.gz') ?: [],
@@ -81,7 +104,9 @@ usort($files, function ($a, $b) {
 // aborts to a full resync, even while a good signed archive sits right
 // alongside. So skip unsigned archives and pick the newest signed one; if none
 // is signed, there is nothing installable to advertise -> 404. The tgz and sig
-// endpoints resolve the same archive, so they can never drift apart.
+// endpoints resolve the same archive here, and the hand-placed-drop guard above
+// keeps that true on the one route that bypasses this resolver, so they can
+// never drift apart.
 $newest = null;
 foreach ($files as $f) {
     if (is_file($f . '.sig')) { $newest = $f; break; }

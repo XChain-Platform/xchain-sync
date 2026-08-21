@@ -46,6 +46,8 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
+const { waitForClientDisconnect } = require('../e2e/helpers/waitFor');
+
 const {
     bootstrapDatabases,
     teardownDatabases,
@@ -114,7 +116,11 @@ describe('CE-SYNC-01: Server Crash → Reconnect → Gap Healing', function () {
         // Direct connection: the normal (server-fronted) seed path is down.
         await seedSourceDirect(21, 30);
 
-        await sleep(3000);
+        // The crash only exercises reconnect once the client has SEEN the socket
+        // close; restarting before that would let the test pass without the
+        // reconnect path ever running. Wait for the close itself, not for a
+        // duration long enough that it has probably happened.
+        await waitForClientDisconnect(client);
 
         // Restart on the same port so the client's reconnect logic applies.
         server = createServer(SERVER_PORT);

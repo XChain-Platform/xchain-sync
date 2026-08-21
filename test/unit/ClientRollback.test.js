@@ -238,6 +238,29 @@ describe('ClientRollback', function(){
             assert.deepStrictEqual(xcallReset.args[1], [100]); // block_index
         });
 
+        it('replays BOTH polls resets: the re-open (callback_due_block re-NULLed) and the timelock re-fire reset', async function(){
+            // Source twin: xchain-indexer/src/rollback.js polls re-open + timelock reset.
+            // Omitting callback_due_block from the replica's re-open, with no
+            // timelock reset at all (#5607), leaves a reorged replica holding a stale
+            // F+delay stamp / an orphaned EXECUTE's action_index the source cleared.
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let reopen = calls.find(c => c.args[0].includes("UPDATE polls SET poll_status = 'open'"));
+            assert.ok(reopen, 'expected the polls re-open reset');
+            assert.ok(reopen.args[0].includes('callback_execute_action_index = NULL, callback_due_block = NULL'),
+                're-open must re-NULL callback_due_block like the source');
+            assert.ok(reopen.args[0].includes("WHERE poll_status IN ('finalized', 'failed_quorum') AND resolved_block >= ?"));
+            assert.deepStrictEqual(reopen.args[1], [100]);
+            let timelock = calls.find(c => c.args[0].includes('UPDATE polls SET callback_execute_action_index = NULL'));
+            assert.ok(timelock, 'expected the polls timelock re-fire reset');
+            assert.ok(timelock.args[0].includes('AND callback_due_block >= ? AND callback_execute_action_index IS NOT NULL'));
+            assert.ok(!timelock.args[0].includes('callback_due_block = NULL'), 'the surviving finalization keeps its derived due block');
+            assert.deepStrictEqual(timelock.args[1], [100]);
+            // Both are in-place resets on surviving rows and precede the action-scoped deletes.
+            let tokenDeleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `tokens`'));
+            assert.ok(calls.indexOf(reopen) < tokenDeleteIdx && calls.indexOf(timelock) < tokenDeleteIdx);
+        });
+
         it('runs the in-place resets before the action-scoped deletes', async function(){
             await rollback.rollback(100);
             let calls = db.doQuery.getCalls();

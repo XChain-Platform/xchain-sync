@@ -44,6 +44,8 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
+const { waitForServerPollFailures } = require('../e2e/helpers/waitFor');
+
 const {
     bootstrapDatabases,
     teardownDatabases,
@@ -116,8 +118,12 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
     it('server process remains alive while source DB is completely down', async function () {
         await sourceFaults.dbDown();
 
-        // Wait long enough for the server to attempt several poll cycles
-        await sleep(5000);
+        // Wait for the outage to be FELT rather than for a duration to elapse:
+        // three poll cycles that actually failed against the severed source. If
+        // the fault never reached the poller the counter never moves and this
+        // throws, instead of a sleep that would report a healthy server as proof
+        // of outage survival.
+        await waitForServerPollFailures(server, 3, 30000);
 
         const alive = await isServerAlive(server.getUrl());
         expect(alive).to.equal(true, 'Server must stay alive during source DB outage');

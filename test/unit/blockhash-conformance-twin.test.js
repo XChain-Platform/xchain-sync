@@ -170,6 +170,45 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         }
     });
 
+    // THIRD copy of the same gathering set, and the one nothing pinned. The indexer
+    // needs no third copy (its getBlockLeafRows replays the getBlockHashes stash), but
+    // this repo hand-maintains one in db.getBlockLeafRows to rebuild block_merkle_root
+    // on the follower. A one-sided edit to a column set, JOIN, COLLATE or ORDER BY
+    // there forks the recomputed root at the next block with the pairwise check above
+    // still green, and the follower's root is served by api.js and trusted by the
+    // published light client.
+    //
+    // Deliberately NOT routed through loadPair()/requireSibling(): both files are in
+    // THIS repo, and gating on the xchain-indexer checkout would let the case skip
+    // green exactly where the gap it closes lives. computeBlockHashes carries one
+    // EXTRA trailing literal, the previous-block-hash chaining query, which has no
+    // counterpart in the leaf-row gathering; everything before it must match pairwise.
+    it('getBlockLeafRows gathers the same consensus SQL as BlockHasher, in order', function(){
+        const dbSrc = fs.readFileSync(syncFile('src/db.js'), 'utf8');
+        const bhSrc = fs.readFileSync(syncFile('src/BlockHasher.js'), 'utf8');
+        const leafSql = sqlLiterals(stripComments(extractFunction(dbSrc,
+            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db.js')));
+        const hashSql = sqlLiterals(stripComments(extractFunction(bhSrc,
+            /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js')));
+        assert.ok(leafSql.length >= 12,
+            'expected the 12 gathering fragments in getBlockLeafRows (the contract_state query is ' +
+            'spliced into three by the stateKeyCollate flag-day concatenation), found ' + leafSql.length +
+            '; if the gathering set changed, mirror it in BlockHasher and update this count');
+        assert.strictEqual(hashSql.length, leafSql.length + 1,
+            'computeBlockHashes must carry exactly the getBlockLeafRows fragments plus the trailing ' +
+            'previous-block-hash chaining query; counts are ' + hashSql.length + ' vs ' + leafSql.length +
+            ', so a query was added or removed on one side and the recomputed roots have diverged');
+        for(let i = 0; i < leafSql.length; i++){
+            assert.strictEqual(leafSql[i], hashSql[i],
+                'consensus SQL #' + (i + 1) + ' drifted between db.getBlockLeafRows and ' +
+                'BlockHasher.computeBlockHashes; these SELECTs are block_merkle_root preimage inputs ' +
+                'and MUST stay byte-identical (modulo whitespace)');
+        }
+        assert.ok(/FROM blocks b/.test(hashSql[hashSql.length - 1]),
+            'the extra computeBlockHashes literal must be the previous-block-hash chaining query; ' +
+            'if it is a gathering SELECT instead, getBlockLeafRows is missing one');
+    });
+
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){
         const pair = loadPair(this, 'src/BlockHasher.js', 'src/db.js');
         if(!pair) return;

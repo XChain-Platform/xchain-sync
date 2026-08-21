@@ -209,25 +209,40 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             let wsUrl = 'ws://127.0.0.1:' + SERVER_PORT;
 
+            // Subscribe bitcoin too. The reorg it DOES receive is the positive
+            // counterpart that dates the isolation check: both sockets are fed
+            // from the same broadcast pass, so once bitcoin has the reorg event
+            // any leak to litecoin would already have been written. That turns
+            // the "litecoin got nothing" claim into an observation rather than a
+            // one-second guess, and fails loudly if the reorg never broadcast at
+            // all (which is how the fixed sleep could pass vacuously). Same
+            // shape as 7.2 above.
+            let btcMessages = [];
+            let btcWs = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
+            btcWs.on('message', (data) => {
+                btcMessages.push(JSON.parse(data.toString()));
+            });
+
             let ltcMessages = [];
             let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
             ltcWs.on('message', (data) => {
                 ltcMessages.push(JSON.parse(data.toString()));
             });
 
-            // Poll the socket to OPEN, so the isolation check below cannot pass
+            // Poll the sockets to OPEN, so the isolation check below cannot pass
             // merely because litecoin was not subscribed yet.
-            await waitFor(() => ltcWs.readyState === WebSocket.OPEN, 10000);
+            await waitFor(() => btcWs.readyState === WebSocket.OPEN && ltcWs.readyState === WebSocket.OPEN, 10000);
 
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             btcPoller.lastPolledBlock = 10;
             await btcPoller._poll();
 
-            await new Promise(r => setTimeout(r, 1000));
+            await waitFor(() => btcMessages.filter(m => m.type === 'reorg').length >= 1, 10000);
 
             let ltcReorgEvents = ltcMessages.filter(m => m.type === 'reorg');
             assert.strictEqual(ltcReorgEvents.length, 0, 'Litecoin should not receive bitcoin reorg');
 
+            btcWs.close();
             ltcWs.close();
         });
     });

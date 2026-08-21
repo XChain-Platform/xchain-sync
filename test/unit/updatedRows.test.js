@@ -87,6 +87,23 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.deepStrictEqual(aq.args, [50, 50]);
     });
 
+    it('keys the VOTE poll class on resolved_block OR a fired deferred-callback due block (one scan)', async function(){
+        // A binding poll with callback_delay_blocks > 0 finalizes at F (resolved_block = F)
+        // and fires at D = F + delay, where the sweep UPDATEs callback_execute_action_index
+        // IN PLACE on the surviving row. At block D resolved_block is below the window, so
+        // keying on resolved_block alone never carried the fire stamp (#5606).
+        let db = fakeDb([
+            { match: 'FROM `polls` WHERE', rows: [{ action_index: 41, resolved_block: 60, callback_due_block: 70, callback_execute_action_index: 905 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 70, 70, 6);
+        assert.ok(out.polls && out.polls.length === 1);
+        assert.strictEqual(out.polls[0].callback_execute_action_index, 905);
+        let pq = db.calls.filter(c => c.sql.indexOf('FROM `polls` WHERE') !== -1);
+        assert.strictEqual(pq.length, 1, 'both keys ride ONE polls scan');
+        assert.match(pq[0].sql, /WHERE resolved_block BETWEEN \? AND \? OR \(callback_due_block BETWEEN \? AND \? AND callback_execute_action_index IS NOT NULL\)/);
+        assert.deepStrictEqual(pq[0].args, [70, 70, 70, 70]);
+    });
+
     it('carries a DELEGATE v1 signing-key rotation on surviving stake AND cooldown rows', async function(){
         // The rotated row's action_index is below the window (the STAKE happened earlier), so
         // only its contract_delegation_rotations entry pins the change to this block. Without

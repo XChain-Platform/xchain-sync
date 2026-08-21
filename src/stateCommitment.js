@@ -83,9 +83,17 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 // M-17: every read and write in this file uses doQueryStrict. doQuery collapses
 // a NON-transactional query error into [], and inside a transaction the two are
 // identical, so this changes nothing on the block path. It changes the paths
-// that run WITHOUT a transaction (seedSnapshotRoots on the follower, and the
-// bin/ harnesses), where a fail-soft [] is not an error signal but a meaningful
-// and WRONG answer:
+// that run WITHOUT a transaction, where a fail-soft [] is not an error signal
+// but a meaningful and WRONG answer.
+//
+// Which callers those are is deliberately NOT the criterion, because the answer
+// drifts. seedSnapshotRoots is the case in point: both production callers
+// (ClientApplier.applyFullSnapshot / applyIncrementalSnapshot) happen to hold a
+// transaction, so its reads rethrow today by inheritance rather than by design,
+// while the integration harnesses already call it untransacted. The posture is
+// "must not DEPEND on a caller-held transaction", which is why the db.js helpers
+// this file delegates to are strict too (getBlockLeafRows, _applyStakeWeightCap,
+// and the getStatusId behind the stake readers). The failure shapes:
 //
 //   DbNodeStore.get -> [] is "this subtree is empty", so _descend keeps
 //     building against a truncated tree and emits a root that looks perfectly
@@ -257,6 +265,23 @@ const EMPTY_CONSTANTS = (function(){
 // reachability the moment one does, which is a reporting bug now and a
 // correctness trap for any future sweep that trusts these numbers.
 //
+// Marks by a BATCHED FRONTIER WALK and never materializes the node table. Heap
+// holds one hash per seen node plus the current batch, so it tracks the
+// REACHABLE set rather than the whole store, and only reachable rows are read at
+// all. Each frontier level resolves in one indexed `WHERE node_hash IN (...)`
+// against uq_node_hash, capping round trips at ceil(maxNodes / batchSize); every
+// one of those takes and releases its own pooled connection, so nothing is held
+// across the walk. Mark semantics are unchanged from the in-memory DFS this
+// replaced: a hash counts as reachable only when the store actually returned a
+// row for it, EMPTY constants are skipped, and each hash is expanded once.
+//
+// Past maxNodes seen hashes the walk stops instead of growing without bound and
+// sets reachabilityEstimated, which makes reachableNodes a LOWER bound and
+// orphanCount an UPPER bound. totalNodes is the COUNT(*), a snapshot separate
+// from the walk, so a concurrent insert can move the two apart by a few rows.
+// This function is observability only and never feeds a consensus hash, so both
+// that skew and a truncated estimate are acceptable here.
+//
 // Deliberately does NOT delete. A safe reclaiming sweep must serialize against
 // block-root insertion: a content-addressed node orphaned by a reorg is commonly
 // re-created by the new canonical chain (INSERT IGNORE is a no-op, the row keeps
@@ -268,52 +293,18 @@ const EMPTY_CONSTANTS = (function(){
 //
 // `query(sql, args)` MUST run on a POOLED (non-transaction) connection so this
 // never shares the caller's block-processing/apply transaction. Returns
-// { totalNodes, reachableNodes, orphanCount, reachabilitySkipped }.
+// { totalNodes, reachableNodes, orphanCount, reachabilitySkipped }, plus
+// reachabilityEstimated: true when the walk stopped at the cap.
 async function reportOrphanStats(query, chain, network, opts){
     opts = opts || {};
-    const maxNodes = opts.maxNodes || parseInt(process.env.STATE_TREE_METRIC_MAX_NODES, 10) || 2000000;
+    const maxNodes  = opts.maxNodes  || parseInt(process.env.STATE_TREE_METRIC_MAX_NODES, 10) || 2000000;
+    // One placeholder per hash, so the batch must stay well inside max_allowed_packet
+    // and the server's prepared-statement placeholder ceiling; 1000 CHAR(64) hashes is
+    // ~66KB of SQL text and one uq_node_hash range scan.
+    const batchSize = opts.batchSize || 1000;
     const cnt = await query('SELECT COUNT(*) AS c FROM state_tree_nodes', []);
     const totalNodes = cnt.length ? Number(cnt[0].c) : 0;
     if(totalNodes === 0) return { totalNodes: 0, reachableNodes: 0, orphanCount: 0, reachabilitySkipped: false };
-    // Above the in-memory mark ceiling, do not go silent. Load a bounded, deterministic
-    // sample (ORDER BY node_hash LIMIT maxNodes) and mark reachability WITHIN that sample
-    // from the same retained root set, so a rough orphan ratio and growth stay observable
-    // without an unbounded in-memory mark. Reported as an estimate (reachabilityEstimated)
-    // scoped to sampledNodes; this whole function is observability only and never feeds a
-    // consensus hash, so a sampled figure is safe here.
-    if(totalNodes > maxNodes){
-        const sampleRows = await query('SELECT node_hash, left_hash, right_hash FROM state_tree_nodes ORDER BY node_hash LIMIT ?', [maxNodes]);
-        const sampleNodes = new Map();
-        for(const r of sampleRows) sampleNodes.set(r.node_hash, { l: r.left_hash, r: r.right_hash });
-        const sampleRootRows = await query(
-            'SELECT DISTINCT balances_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
-            'UNION SELECT DISTINCT stakes_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
-            'UNION SELECT DISTINCT contract_state_root AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root IS NOT NULL',
-            [chain, network, chain, network, chain, network]);
-        const sampleVisited = new Set();
-        const sampleStack = [];
-        for(const rr of sampleRootRows){
-            const root = rr.r;
-            if(root && !EMPTY_CONSTANTS.has(root) && sampleNodes.has(root)) sampleStack.push(root);
-        }
-        while(sampleStack.length){
-            const h = sampleStack.pop();
-            if(sampleVisited.has(h)) continue;
-            sampleVisited.add(h);
-            const row = sampleNodes.get(h);
-            if(!row) continue;
-            for(const child of [row.l, row.r]){
-                if(child && !EMPTY_CONSTANTS.has(child) && !sampleVisited.has(child) && sampleNodes.has(child)) sampleStack.push(child);
-            }
-        }
-        const sampledNodes = sampleNodes.size;
-        const sampledReachable = sampleVisited.size;
-        return { totalNodes, reachableNodes: sampledReachable, orphanCount: sampledNodes - sampledReachable, reachabilitySkipped: false, reachabilityEstimated: true, sampledNodes };
-    }
-
-    const rows = await query('SELECT node_hash, left_hash, right_hash FROM state_tree_nodes', []);
-    const nodes = new Map();
-    for(const r of rows) nodes.set(r.node_hash, { l: r.left_hash, r: r.right_hash });
 
     const rootRows = await query(
         'SELECT DISTINCT balances_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
@@ -321,26 +312,37 @@ async function reportOrphanStats(query, chain, network, opts){
         'UNION SELECT DISTINCT contract_state_root AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root IS NOT NULL',
         [chain, network, chain, network, chain, network]);
 
-    // Iterative DFS from every retained root; only push hashes that actually have a
-    // row (EMPTY constants and absent children are skipped). visited == reachable set.
-    const visited = new Set();
-    const stack = [];
+    // `seen` holds every hash queued or resolved and doubles as the dedupe guard, so
+    // no hash is queried or expanded twice; reachableNodes counts only hashes the
+    // store returned a row for, which is what the old in-memory `nodes.has(...)`
+    // guards enforced. A queued hash with no row is simply never counted, which is
+    // the normal case for the value leaf under a depth-255 node (leaves are not rows,
+    // SPV spec §4.1): seen therefore runs to reachable + reachable leaves, still O(1)
+    // per node and still what maxNodes is bounding, since seen IS the heap.
+    const seen = new Set();
+    let frontier = [];
     for(const rr of rootRows){
         const root = rr.r;
-        if(root && !EMPTY_CONSTANTS.has(root) && nodes.has(root)) stack.push(root);
+        if(root && !EMPTY_CONSTANTS.has(root) && !seen.has(root)){ seen.add(root); frontier.push(root); }
     }
-    while(stack.length){
-        const h = stack.pop();
-        if(visited.has(h)) continue;
-        visited.add(h);
-        const row = nodes.get(h);
-        if(!row) continue;
-        for(const child of [row.l, row.r]){
-            if(child && !EMPTY_CONSTANTS.has(child) && !visited.has(child) && nodes.has(child)) stack.push(child);
+    let reachableNodes = 0;
+    let truncated = false;
+    while(frontier.length){
+        if(seen.size > maxNodes){ truncated = true; break; }
+        const batch = frontier.splice(0, batchSize);
+        const rows = await query(
+            'SELECT node_hash, left_hash, right_hash FROM state_tree_nodes WHERE node_hash IN (' +
+            batch.map(() => '?').join(',') + ')', batch);
+        for(const row of rows){
+            reachableNodes++;
+            for(const child of [row.left_hash, row.right_hash]){
+                if(child && !EMPTY_CONSTANTS.has(child) && !seen.has(child)){ seen.add(child); frontier.push(child); }
+            }
         }
     }
-    const reachableNodes = visited.size;
-    return { totalNodes: nodes.size, reachableNodes, orphanCount: nodes.size - reachableNodes, reachabilitySkipped: false };
+    const stats = { totalNodes, reachableNodes, orphanCount: totalNodes - reachableNodes, reachabilitySkipped: false };
+    if(truncated) stats.reachabilityEstimated = true;
+    return stats;
 }
 
 // Assemble the top-level state_root from the two v1 sub-roots plus any RESERVED
@@ -392,7 +394,12 @@ function extraSubRootColumn(extraSubRoots, slotName){
 async function reservedSubRootCandidates(db, chain, network, blockIndex){
     if(!SUB.isSubtreeActive('contract_state_root', blockIndex, network, chain)) return null;
     const smt = new PersistentSMT(new DbNodeStore(db));
-    return { contract_state_root: await CST.resolveContractStateRoot(db, smt, chain, network, blockIndex) };
+    // `shadow` is passed EXPLICITLY false, byte-for-byte with the indexer twin's
+    // call site. It reads as a falsy ternary either way today, so this is not a
+    // live divergence; it is closed because a future three-state `shadow` that
+    // told undefined from false would fork the follower's contract_state_root
+    // candidate here with nothing in either twin's tests to catch it.
+    return { contract_state_root: await CST.resolveContractStateRoot(db, smt, chain, network, blockIndex, false) };
 }
 
 // Shadow-compute window (spec §7 step 1): the WOULD-BE sub-roots at a height where
@@ -454,36 +461,21 @@ async function getNetBalance(db, address, tick){
 // (db.getBlockLeafRows mirrors BlockHasher's SELECTs), in the frozen cross-kind
 // total order: all ledger (credits, debits, escrows), then actions, then the six
 // contract sub-tables. Null fields coerce to '' (matching actionsLeaf's tx_index).
-function _c(x){ return (x == null) ? '' : x; }
+//
+// The ordering itself lives in merkle.blockMerkleLeaves (the twin-guarded module,
+// pinned byte-identical across the repos) so the explorer proof server locates a
+// row's leaf index with byte-identical logic; this just hashes the assembled
+// vector, exactly as the indexer twin does. It was hand-copied inline here, which
+// left the one consensus-critical ordering the twin guard does NOT cover: an edit
+// to blockMerkleLeaves reached the indexer through its call and this copy only if
+// someone remembered, with merkle.js's own twin-identity check still green.
 
 // `network`/`coin` drive the state_key collation flag-day
 // (state_key_collation_activation.js) inside getBlockLeafRows, mirroring
 // BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
 async function computeBlockMerkleRoot(db, blockIndex, network, coin){
     const rows = await db.getBlockLeafRows(blockIndex, undefined, network, coin);
-    const leaves = [];
-    for(const kind of ['credit', 'debit', 'escrow']){
-        const arr = rows.ledger[kind + 's'] || [];   // credits / debits / escrows
-        for(const r of arr)
-            leaves.push(M.ledgerLeaf({ kind, action_index: r.action_index,
-                address: _c(r.address), tick: _c(r.tick), amount: r.amount }));
-    }
-    for(const r of (rows.actions || []))
-        leaves.push(M.actionsLeaf({ action_index: r.action_index, tx_index: r.tx_index, action: _c(r.action) }));
-    const C = rows.contracts;
-    for(const r of (C.contracts || []))
-        leaves.push(M.contractLeaf('contracts', [r.action_index, _c(r.source_address), _c(r.code_hash), _c(r.status)]));
-    for(const r of (C.state || []))
-        leaves.push(M.contractLeaf('state', [r.contract_index, _c(r.state_key), _c(r.state_value)]));
-    for(const r of (C.executions || []))
-        leaves.push(M.contractLeaf('executions', [r.action_index, r.contract_index, _c(r.caller_address), _c(r.gas_used), _c(r.status), _c(r.emitted_count)]));
-    for(const r of (C.emissions || []))
-        leaves.push(M.contractLeaf('emissions', [r.execution_index, _c(r.emitted_action), r.action_index, r.position]));
-    for(const r of (C.deposits || []))
-        leaves.push(M.contractLeaf('deposits', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
-    for(const r of (C.withdrawals || []))
-        leaves.push(M.contractLeaf('withdrawals', [r.action_index, r.contract_index, _c(r.source_address), _c(r.tick), r.amount, _c(r.status)]));
-    return M.toHex(M.blockMerkleRoot(leaves));
+    return M.toHex(M.blockMerkleRoot(M.blockMerkleLeaves(rows)));
 }
 
 // ---- Full balances-tree initialization (flag-day cutover + snapshot seed) ----
@@ -658,11 +650,27 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
                         !SUB.isEscrowLockedLeafActive(blockIndex - 1, network, chain);
     let shadowBalanceUpdates = null;
     let balancesRoot;
-    if(isActivationBlock || armingBlock){
+    // Read the prior row BEFORE the gate, because a MISSING one is a third
+    // full-build trigger, matching the source twin's `!prior.length`. A follower
+    // reaches this with no block-1 row after a snapshot bootstrap, a rollback that
+    // took the row below this height, or a resume over a data gap. Threading from
+    // EMPTY_ROOT_HEX there commits a balances_root covering only THIS block's
+    // touched keys, which is the fork the indexer twin's own comment says not to
+    // substitute; buildFullBalancesRoot derives the root from the whole current
+    // net-balance set, so at this point in the apply it yields the root the
+    // incremental thread would have produced. Self-healing instead of a false halt.
+    // balances_root is NOT NULL in state_tree_roots, so the row test and the source's
+    // row-count test select the same blocks.
+    const prior = isActivationBlock ? null : await db.getStateRootsRow(chain, network, blockIndex - 1);
+    const noPriorRoot = !(prior && prior.balances_root);
+    if(isActivationBlock || armingBlock || noPriorRoot){
+        if(!isActivationBlock && !armingBlock)
+            console.warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
+                ' block ' + (blockIndex - 1) + '; full-recomputing balances_root for block ' + blockIndex +
+                ' instead of threading from the empty root (snapshot-bootstrap or activation rolled below this height)');
         balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
     } else {
-        const prior = await db.getStateRootsRow(chain, network, blockIndex - 1);
-        let root = (prior && prior.balances_root) ? prior.balances_root : EMPTY_ROOT_HEX;
+        let root = prior.balances_root;
         if(escShadow) shadowBalanceUpdates = [];
         for(const entry of (touchedKeys || [])){
             const address = entry.address, tick = entry.tick;

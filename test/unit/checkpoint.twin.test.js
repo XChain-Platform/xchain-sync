@@ -19,7 +19,41 @@
 
 const assert = require('assert');
 const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
 const checkpoint = require('../../src/checkpoint');
+
+// Sibling resolution + hard-fail policy: same conventions as
+// blockhash-conformance-twin.test.js. Skip when the SDK checkout is absent,
+// throw where XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip impossible.
+const SYNC_SRC = path.resolve(__dirname, '..', '..', 'src');
+const SDK_SRC  = path.resolve(__dirname, '..', '..', '..', 'xchain-sdk', 'src');
+const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
+// The four files this suite's header declares twins of the SDK copies.
+const TWINS = ['checkpoint.js', 'stake_weighted_quorum.js', 'equivocation_header.js',
+    'checkpoint_commitment_activation.js'];
+
+// Cut unquoted // comments (tracking ' " ` quote state per line) so the two
+// sides compare on CODE. The prose is independently worded in both copies and
+// always has been; it is the code that has to stay lockstep.
+function stripComments(src){
+    return src.split('\n').map(line => {
+        let q = null;
+        for(let i = 0; i < line.length; i++){
+            const ch = line[i];
+            if(q){ if(ch === q && line[i-1] !== '\\') q = null; continue; }
+            if(ch === "'" || ch === '"' || ch === '`'){ q = ch; continue; }
+            if(ch === '/' && line[i+1] === '/') return line.slice(0, i);
+        }
+        return line;
+    }).join('\n');
+}
+
+// Code-only form: block comments out, blank lines out, indentation collapsed.
+function codeOnly(src){
+    return stripComments(src.replace(/\/\*[\s\S]*?\*\//g, ''))
+        .split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+}
 
 // Raw 32-byte Ed25519 pubkey + a signer, matching the federation's key encoding.
 function makeSigner(){
@@ -133,5 +167,32 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
         // (matching the SDK/explorer copies) must still count it.
         cp.validator_signatures = [{ pubkey: s2.pubkeyHex, sig: '00'.repeat(64) }].concat(cp.validator_signatures);
         assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, true);
+    });
+
+    // The cases above sign and verify through sync's OWN copy, so they catch a
+    // behaviour divergence only where a golden vector happens to cover it. Two
+    // one-sided SDK edits still rode that channel unnoticed (AML #5402): a
+    // backtracking URL-trim replaced with a loop, and commitmentMissing added to
+    // module.exports. Neither touched canonicalCheckpoint, so nothing here went
+    // red. This compares the whole file, code only, against the sibling.
+    for(const file of TWINS) it('src/' + file + ' is code-identical to the xchain-sdk copy (comments excepted)', function(){
+        const theirs = path.join(SDK_SRC, file);
+        if(!fs.existsSync(theirs)){
+            if(SIBLING_REQUIRED)
+                throw new Error('checkpoint twin guard cannot run: sibling missing at ' + theirs
+                    + ' (check out xchain-sdk, or unset XCHAIN_REQUIRE_SIBLINGS to accept the gap)');
+            this.skip();
+            return;
+        }
+        const mine = codeOnly(fs.readFileSync(path.join(SYNC_SRC, file), 'utf8'));
+        const sdk  = codeOnly(fs.readFileSync(theirs, 'utf8'));
+        if(mine === sdk) return;
+        const a = mine.split('\n'), b = sdk.split('\n');
+        let at = 0;
+        while(at < a.length && at < b.length && a[at] === b[at]) at++;
+        assert.fail('src/' + file + ' has drifted from the xchain-sdk twin at code line ' + (at + 1)
+            + '\n  sync: ' + JSON.stringify(a[at])
+            + '\n  sdk : ' + JSON.stringify(b[at])
+            + '\nPort the edit to BOTH copies; this set carries one of the six XCHECKPOINT canonical builders.');
     });
 });

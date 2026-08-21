@@ -44,6 +44,8 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
+const { waitForClientEvents } = require('../e2e/helpers/waitFor');
+
 const {
     bootstrapDatabases,
     teardownDatabases,
@@ -110,14 +112,23 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
     it('client process stays alive while replica DB is down', async function () {
         await replicaFaults.dbDown();
 
+        // Baseline before anything is broadcast, so the wait below counts only
+        // the five blocks this step produces.
+        const seenBlocks = client.getEventsHandled('block');
+
         await seedSourceBlocks(11, 15);
         await server.poll();
 
-        // Wait for blocks to be broadcast (client receives but can't commit)
-        await sleep(5000);
+        // The claim is "the client received these blocks and could not commit
+        // them", so wait for the receipt itself: five more block events fully
+        // handled. The counter advances only after each event's handler settles,
+        // so reaching it proves the client processed 11-15 and declined to
+        // advance. A sleep here proved nothing - a client whose socket never
+        // came up would sit at block 10 too and pass.
+        await waitForClientEvents(client, 'block', seenBlocks + 5, 30000);
 
-        // Verified indirectly: block height staying at 10 means the client
-        // is still connected and receiving, just unable to write, not crashed.
+        expect(client.isConnected()).to.equal(true,
+            'Client must still be connected to the server with only the replica DB down');
         expect(client.getLastAppliedBlock()).to.be.at.most(10,
             'Client should not have advanced beyond block 10 with replica DB down');
     });

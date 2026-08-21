@@ -26,6 +26,10 @@ RewriteRule ^(.+)/latest\.tgz$ latest.php?dir=$1&type=tgz [L,QSA]
 
 # Detached Ed25519 signature for the SAME newest archive (xchain-node verifies
 # this against the pinned public key). Resolved alongside latest.tgz so the
-# archive and its signature can never drift to different versions.
+# archive and its signature can never drift to different versions. The !-f pair
+# is what makes that need enforcing: a hand-placed real latest.tgz with no real
+# .sig beside it is served by Apache while its signature falls through to the
+# resolver, so latest.php guards that case and 404s rather than answering with a
+# different archive's signature.
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^(.+)/latest\.tgz\.sig$ latest.php?dir=$1&type=sig [L,QSA]

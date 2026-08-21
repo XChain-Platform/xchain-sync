@@ -703,6 +703,44 @@ describe('ClientSync', function(){
         });
     });
 
+    describe('constructor: SYNC_MODE_<CHAIN>=infra-only vs the halting verification gates', function(){
+        // The server filters infra-only live blocks down to the infra tables, so the
+        // apply-time recompute over the withheld rows cannot pass and the first filtered
+        // block would trip a DURABLE local-recompute-divergence halt (#5608). Resolve the
+        // mode once and refuse to start instead, naming the remedy.
+        afterEach(function(){ delete process.env.SYNC_MODE_BITCOIN; });
+
+        it('throws at construction when infra-only is combined with default-on gates (indexer), naming them', function(){
+            process.env.SYNC_MODE_BITCOIN = 'infra-only';
+            let cfg = Object.assign({}, config, { VERIFY_RECOMPUTE: true }); // STATE_HASH / STATE_COMMITMENT default on (undefined !== false)
+            assert.throws(() => new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, cfg, util),
+                /SYNC_MODE_BITCOIN=infra-only .*VERIFY_RECOMPUTE, VERIFY_STATE_HASH, VERIFY_STATE_COMMITMENT.*VERIFY_RECOMPUTE=false VERIFY_STATE_HASH=false VERIFY_STATE_COMMITMENT=false/);
+        });
+
+        it('names only the gates still on', function(){
+            process.env.SYNC_MODE_BITCOIN = 'infra-only';
+            let cfg = Object.assign({}, config, { VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false }); // commitment still on
+            assert.throws(() => new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, cfg, util),
+                /\(VERIFY_STATE_COMMITMENT\)/);
+        });
+
+        it('constructs in infra-only when all three gates are explicitly false, and carries the mode to the subscribe URL', function(){
+            process.env.SYNC_MODE_BITCOIN = 'infra-only';
+            let cfg = Object.assign({}, config, { VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false, VERIFY_STATE_COMMITMENT: false });
+            let s = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, cfg, util);
+            assert.strictEqual(s._syncMode, 'infra-only');
+        });
+
+        it('full mode (default) never consults the gates; a decoder replica ignores infra-only (no infra tables)', function(){
+            let s = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, Object.assign({}, config, { VERIFY_RECOMPUTE: true }), util);
+            assert.strictEqual(s._syncMode, 'full');
+            process.env.SYNC_MODE_BITCOIN = 'infra-only';
+            let ddb = Object.assign(createMockDb(), { dbType: 'decoder' });
+            let d = new ClientSync('bitcoin', 'mainnet', ddb, applier, rollback, hashVerifier, Object.assign({}, config, { VERIFY_RECOMPUTE: true }), util);
+            assert.strictEqual(d._syncMode, 'infra-only');
+        });
+    });
+
     describe('stop', function(){
         it('sets running to false', function(){
             sync.running = true;
@@ -764,9 +802,35 @@ describe('ClientSync', function(){
 
         it('returns no mismatches when the follower is complete (local >= source)', async function(){
             db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, deposits: 12 })[t];
-            // A follower legitimately ahead on a table is not flagged.
+            // Without a same-height gate a follower ahead on a table is not flagged: the
+            // /status counts and the local count can straddle a block (ordinary skew).
             let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 4999, deposits: 12 });
             assert.strictEqual(mismatches.length, 0);
+        });
+
+        it('at the same height, reports a replica-AHEAD delta on exact-parity tables as reason replica-ahead', async function(){
+            // An un-replicated source-side forward DELETE (the anchor-reward winner
+            // collapse on validator_rewards) leaves the replica strictly ahead; the
+            // shortfall-only check was structurally blind to it (#5610).
+            db.getTableCount = async (t) => ({ validator_rewards: 12, actions: 5000 })[t];
+            let mismatches = await sync._verifyTableCounts({ validator_rewards: 10, actions: 5000 }, undefined,
+                { remoteHeight: 900, localHeight: 900 });
+            assert.strictEqual(mismatches.length, 1);
+            assert.deepStrictEqual(mismatches[0], { table: 'validator_rewards', sourceCount: 10, localCount: 12, delta: -2, reason: 'replica-ahead' });
+        });
+
+        it('replica-ahead is gated on equal heights and on the registry exact-parity class', async function(){
+            db.getTableCount = async (t) => ({ validator_rewards: 12, events: 50, markets: 9 })[t];
+            // Height skew: no replica-ahead report (ordinary lag between the status read and the local count).
+            let skew = await sync._verifyTableCounts({ validator_rewards: 10 }, undefined, { remoteHeight: 899, localHeight: 900 });
+            assert.strictEqual(skew.length, 0);
+            // Same height, but events (snapshot class) and markets (snapshot/special) may legitimately differ.
+            let classed = await sync._verifyTableCounts({ events: 40, markets: 8 }, undefined, { remoteHeight: 900, localHeight: 900 });
+            assert.strictEqual(classed.length, 0);
+            // Shortfalls keep their shape and stay reported regardless of the gate.
+            db.getTableCount = async () => 3;
+            let short = await sync._verifyTableCounts({ validator_rewards: 5 }, undefined, { remoteHeight: 900, localHeight: 900 });
+            assert.deepStrictEqual(short, [{ table: 'validator_rewards', sourceCount: 5, localCount: 3, delta: 2 }]);
         });
 
         it('treats absent/invalid table_counts as nothing to check (older source builds)', async function(){

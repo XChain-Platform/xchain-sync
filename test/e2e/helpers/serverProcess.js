@@ -62,6 +62,14 @@ class ServerProcess {
         this.snapshotBuilder = null;
         this.pollInterval = null;
         this.statusInterval = null;
+
+        // Poll-cycle census. The background loop swallows poll errors (a real
+        // server keeps polling through a source-DB outage), which leaves a chaos
+        // test no way to know the outage was actually felt except by guessing a
+        // duration. Counting settled cycles and failures turns "wait 5s and hope
+        // several cycles ran" into a condition a test can wait ON.
+        this.pollCycles   = 0;
+        this.pollFailures = 0;
     }
 
     async start() {
@@ -304,8 +312,8 @@ class ServerProcess {
         this.pollInterval = setInterval(() => {
             if (this._pollInFlight) return;
             this._pollInFlight = (async () => {
-                try { await this.poller._poll(); } catch (e) {}
-                finally { this._pollInFlight = null; }
+                try { await this.poller._poll(); } catch (e) { this.pollFailures++; }
+                finally { this.pollCycles++; this._pollInFlight = null; }
             })();
         }, this.config.BLOCK_POLL_INTERVAL);
 
@@ -349,8 +357,10 @@ class ServerProcess {
     async poll() {
         while (this._pollInFlight) await this._pollInFlight;
         this._pollInFlight = (async () => {
-            try { await this.poller._poll(); }
-            finally { this._pollInFlight = null; }
+            // Counted like a background cycle, but the error still propagates: a
+            // manual poll is a test's own step and must fail it, not be swallowed.
+            try { await this.poller._poll(); } catch (e) { this.pollFailures++; throw e; }
+            finally { this.pollCycles++; this._pollInFlight = null; }
         })();
         await this._pollInFlight;
     }

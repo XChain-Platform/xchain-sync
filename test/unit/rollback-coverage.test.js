@@ -586,6 +586,31 @@ describe('Rollback coverage guard @regression', function(){
             'rollback.js re-arm must reset applied_block=NULL alongside applied=0 and source_id=NULL');
     });
 
+    // Forward parity for DERIVED anchor/archive validator rewards: the BTC-side derivation
+    // stamps block_index = SNAPSHOT_BLOCK E with derive_block_index = the minting block B,
+    // and ClientRollback's reverse delete already keys on derive_block_index >= B. The
+    // forward channels must key on the same column (derivedRewards.js) and BOTH forward
+    // channels must invoke it, or a continuously-live follower never receives a derived
+    // reward (#5605). The source's winner-collapse DELETE must be mirrored forward from the
+    // replicated reconcile-log pre-images, the twin of the RB-ANCHOR restore.
+    it('forward derived-reward selection mirrors the derive_block_index rollback key, and the reconcile DELETE is mirrored (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/derivedRewards.js'), 'utf8'));
+        assert.ok(/vr\.derive_block_index BETWEEN \? AND \?/.test(fwd), 'derivedRewards.js must key on derive_block_index (the materialization window)');
+        assert.ok(/vr\.block_index < vr\.derive_block_index/.test(fwd), 'derivedRewards.js must restrict to backdated rows (earn-block below the materialization block)');
+        const rbSync = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientRollback.js'), 'utf8'));
+        assert.ok(/DELETE FROM validator_rewards WHERE derive_block_index >= \?/.test(rbSync), 'ClientRollback.js must keep the derive_block_index reverse delete the forward collector twins');
+        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+            const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
+            assert.ok(/collectDerivedAnchorRewards\s*\(/.test(src),
+                `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
+        }
+        const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientApplier.js'), 'utf8'));
+        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(applier),
+            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore)');
+    });
+
     // Bespoke-logic parity: anchor invalid_archive to unverified reset. When the final v2
     // chunk of a chunked archive batch is orphaned by a reorg, the parent v1 (in a surviving
     // earlier block) was stamped 'invalid_archive' IN PLACE by that chunk's apply; deleting
@@ -667,10 +692,12 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        // The FULL re-open column list is pinned, not a prefix: a prefix match let the
+        // replica drop callback_due_block = NULL (and miss the timelock reset entirely)
+        // while this guard stayed green (#5607).
         const POLL_OPS = [
-            { name: 'summary re-open',        re: /UPDATE polls SET poll_status = open , winning_option = NULL/ },
-            { name: 'finalize-stamp clear',   re: /finalized_action_index = NULL, resolved_block = NULL/ },
-            { name: 'terminal-status + resolved_block key', re: /WHERE poll_status IN \( finalized , failed_quorum \) AND resolved_block >= \?/ },
+            { name: 'summary re-open (full column list)', re: /UPDATE polls SET poll_status = open , winning_option = NULL, total_weight = NULL, total_voters = NULL, quorum_met = NULL, min_voters_met = NULL, fail_reason = NULL, decided_early = NULL, effective_close_block = NULL, finalized_action_index = NULL, resolved_block = NULL, deposit_resolved = NULL, callback_execute_action_index = NULL, callback_due_block = NULL WHERE poll_status IN \( finalized , failed_quorum \) AND resolved_block >= \?/ },
+            { name: 'timelock re-fire reset (orphaned due block, surviving finalization)', re: /UPDATE polls SET callback_execute_action_index = NULL WHERE poll_status IN \( finalized , failed_quorum \) AND callback_due_block >= \? AND callback_execute_action_index IS NOT NULL/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
             const src = norm(fs.readFileSync(p, 'utf8'));
@@ -693,6 +720,10 @@ describe('Rollback coverage guard @regression', function(){
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
+        // Second key: the deferred binding-callback fire stamp lands at the due block
+        // (above the finalize window), the forward twin of the timelock re-fire reset.
+        assert.ok(/OR \(callback_due_block BETWEEN \? AND \? AND callback_execute_action_index IS NOT NULL\)/.test(src),
+            'updatedRows.js must also select polls by callback_due_block with a fired stamp (the deferred callback fire is an in-place UPDATE at the due block)');
     });
 
     // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from

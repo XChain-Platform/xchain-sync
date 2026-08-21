@@ -106,6 +106,17 @@ HUB_PORT=10000
 # MAX_HUB_WAIT_MS=300000
 ```
 
+Per-chain subscribe mode (client, indexer replicas only): `SYNC_MODE_<CHAIN>=infra-only`
+(e.g. `SYNC_MODE_DOGECOIN=infra-only`) subscribes with `?sync_mode=infra-only`, and the
+source then filters that chain's live blocks down to the infrastructure tables (stakes,
+delegations, validator_rewards, prices, reward_claims plus the index tables). Such a
+replica is deliberately incomplete, so it cannot run the apply-time verification gates
+(`VERIFY_RECOMPUTE`, `VERIFY_STATE_HASH`, `VERIFY_STATE_COMMITMENT`, all default on):
+the client refuses to start in that combination and names the gates to set to `false`
+explicitly. Turning them off is DECLARED UNSAFE for any consensus-relevant replica; use
+infra-only only for a throwaway infrastructure mirror whose state nothing downstream
+trusts. Unset the variable for a full (verified) replica.
+
 Start the service:
 
 ```bash

@@ -106,13 +106,17 @@ class Database {
             idleTimeout:        60000,
             insertIdAsNumber:   true,
             bigIntAsNumber:     true,
-            // Return DATETIME columns as MariaDB-format strings rather than
-            // JS Dates. JSON.stringify would otherwise emit Date as ISO
+            // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
+            // than JS Dates. JSON.stringify would otherwise emit Date as ISO
             // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
-            // on re-insert. Affects the decoder DATETIME column events.time
-            // (decoder dispensers.expiration is now a BIGINT unix timestamp,
-            // replicated as a number via bigIntAsNumber); indexer schemas use
-            // INTEGER timestamps, so this is a no-op there.
+            // on re-insert, and BlockHasher.contentDigest / the wire codec would
+            // see a timezone-dependent value. GLOBAL on purpose: it covers every
+            // replicated DATETIME column on BOTH dbTypes, today decoder events.time
+            // and indexer events.time + events.witness_time (indexer `events` rides
+            // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
+            // drop it per dbType; test/unit/replicatedDatetimeColumns.test.js pins
+            // the inventory and this flag. (dispensers.expiration is a BIGINT unix
+            // timestamp, replicated as a number via bigIntAsNumber.)
             dateStrings:        true,
             minDelayValidation: 3000,
             queryTimeout:       poolParams.queryTimeout
@@ -1254,6 +1258,14 @@ class Database {
     // `network`/`coin` drive the state_key collation flag-day
     // (state_key_collation_activation.js), mirroring BlockHasher; omitted ->
     // legacy folding collation (pre-activation behavior).
+    //
+    // Every SELECT below is doQueryStrict, never doQuery (M-17). These rows ARE the
+    // block_merkle_root leaf set, so a swallowed non-transactional error returning []
+    // is not an error signal, it is a wrong answer: the caller hashes a truncated
+    // leaf set into a valid-looking root and persists it. Whether a transaction
+    // happens to be open is the CALLER's business and must not decide it; strict here
+    // is identical to doQuery inside a transaction and inside an explicit conn, and
+    // differs only on the path where the difference matters.
     async getBlockLeafRows(block_index, conn, network, coin){
         let q;
         let ledger = { credits: [], debits: [], escrows: [] };
@@ -1264,7 +1276,7 @@ class Database {
                 LEFT  JOIN index_tickers   t1 ON (t1.id=c.tick_id)
              WHERE a.block_index=?
              ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
-        ledger.credits = await this.doQuery(q, [block_index], conn);
+        ledger.credits = await this.doQueryStrict(q, [block_index], conn);
         q = `SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount
              FROM debits d
                 INNER JOIN actions        a  ON (a.action_index=d.action_index)
@@ -1272,7 +1284,7 @@ class Database {
                 LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
              WHERE a.block_index=?
              ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
-        ledger.debits = await this.doQuery(q, [block_index], conn);
+        ledger.debits = await this.doQueryStrict(q, [block_index], conn);
         q = `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount
              FROM escrows e
                 INNER JOIN actions        a  ON (a.action_index=e.action_index)
@@ -1280,7 +1292,7 @@ class Database {
                 LEFT  JOIN index_tickers   t1 ON (t1.id=e.tick_id)
              WHERE a.block_index=?
              ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
-        ledger.escrows = await this.doQuery(q, [block_index], conn);
+        ledger.escrows = await this.doQueryStrict(q, [block_index], conn);
         // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
         // to their chain-independent role token, byte-for-byte mirror of BlockHasher
         // and the indexer's getBlockHashes. block_merkle_root covers the same ledger
@@ -1296,7 +1308,7 @@ class Database {
                 LEFT JOIN index_actions ia ON (ia.id=a.action_id)
              WHERE a.block_index=?
              ORDER BY a.action_index ASC`;
-        let actions = await this.doQuery(q, [block_index], conn);
+        let actions = await this.doQueryStrict(q, [block_index], conn);
         let contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
         q = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
              FROM contracts c
@@ -1305,7 +1317,7 @@ class Database {
                 LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
              WHERE a.block_index=?
              ORDER BY c.action_index ASC`;
-        contracts.contracts = await this.doQuery(q, [block_index], conn);
+        contracts.contracts = await this.doQueryStrict(q, [block_index], conn);
         // contract state (latest value per key written in this block).
         // state_key collation is flag-day gated, mirroring BlockHasher and the
         // indexer's getBlockHashes: legacy folding (utf8_general_ci) below the
@@ -1319,7 +1331,7 @@ class Database {
                     WHERE block_index=? GROUP BY contract_index, state_key` + stateKeyCollate + `
                 ) latest ON cs.id = latest.max_id
              ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
-        contracts.state = await this.doQuery(q, [block_index], conn);
+        contracts.state = await this.doQueryStrict(q, [block_index], conn);
         q = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
              FROM contract_executions ce
                 INNER JOIN actions a ON (a.action_index=ce.action_index)
@@ -1327,7 +1339,7 @@ class Database {
                 LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
              WHERE a.block_index=?
              ORDER BY ce.action_index ASC`;
-        contracts.executions = await this.doQuery(q, [block_index], conn);
+        contracts.executions = await this.doQueryStrict(q, [block_index], conn);
         // emissions (join through executions to get block scope)
         q = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
              FROM contract_emissions em
@@ -1335,7 +1347,7 @@ class Database {
                 INNER JOIN actions a ON (a.action_index=ce.action_index)
              WHERE a.block_index=?
              ORDER BY em.execution_index ASC, em.position ASC`;
-        contracts.emissions = await this.doQuery(q, [block_index], conn);
+        contracts.emissions = await this.doQueryStrict(q, [block_index], conn);
         q = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
              FROM deposits d
                 INNER JOIN actions a ON (a.action_index=d.action_index)
@@ -1344,7 +1356,7 @@ class Database {
                 LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
              WHERE a.block_index=?
              ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts.deposits = await this.doQuery(q, [block_index], conn);
+        contracts.deposits = await this.doQueryStrict(q, [block_index], conn);
         q = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
              FROM withdrawals w
                 INNER JOIN actions a ON (a.action_index=w.action_index)
@@ -1353,7 +1365,7 @@ class Database {
                 LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
              WHERE a.block_index=?
              ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts.withdrawals = await this.doQuery(q, [block_index], conn);
+        contracts.withdrawals = await this.doQueryStrict(q, [block_index], conn);
         return { ledger, actions, contracts };
     }
 
@@ -1403,8 +1415,14 @@ class Database {
     // id resolves consistently against the replica's own *.status_id values. Used by
     // ClientRollback's cooldown-maturity reversal mirror. Returns null if the status is absent
     // (e.g. 'completed' never created because no cooldown has matured); the caller then skips.
-    async getStatusId(status){
-        let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status]);
+    // `opts` is forwarded to doQuery, so a consensus-input caller can pass
+    // { rethrow: true }. It matters because a swallowed non-transactional error here
+    // returns null, and the stake readers below turn a null status id into an EMPTY
+    // stake set over a populated stakes table: an M-17 wrong answer, not an error
+    // signal. Operational callers (rollback, cooldown credits, stateHash) keep the
+    // fail-soft default deliberately.
+    async getStatusId(status, opts){
+        let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status], undefined, opts);
         return rows.length > 0 ? Number(rows[0].id) : null;
     }
 
@@ -1513,7 +1531,13 @@ class Database {
             let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
             let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
             let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys);
-            let raw = await this.doQuery(capped.sql, capped.args);
+            // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
+            // stakes_root, and the SPV checkpoint forward-follow
+            // (ClientSync._oraclePublishSetAt) reads it with NO transaction open, so a
+            // swallowed error here would commit an empty stake set over a populated
+            // stakes table. Only the execution wrapper changes; the SQL builders stay
+            // byte-mirrored to the indexer.
+            let raw = await this.doQueryStrict(capped.sql, capped.args);
             let truncated = raw.some(r => Number(r._sr) > maxSources);
             if(truncated)
                 console.warn(label + ' saw more than ' + maxSources + ' distinct staking sources at block ' + blockIndex + ' - stakes_root snapshot truncated; stake-weighted quorum fails closed. Raise STAKE_WEIGHT_MAX_SOURCES (coordinated flag-day upgrade) if the federation has grown.');
@@ -1525,7 +1549,7 @@ class Database {
             return { rows, truncated };
         }
         let query = `${inner.sql} ORDER BY source, pubkey LIMIT ?`;
-        let raw = await this.doQuery(query, [...inner.args, limit]);
+        let raw = await this.doQueryStrict(query, [...inner.args, limit]);
         let truncated = raw.length >= limit;
         if(truncated)
             console.warn(label + ' hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
@@ -1544,7 +1568,8 @@ class Database {
     // VALIDATOR_QUERY_LIMIT. Same ORDER BY + cap as the source so the selected set
     // is identical even on truncation.
     async getStakeWeightsByCapability(capability, blockIndex, minStake, limit, coin, network){
-        let valid_id = await this.getStatusId('valid');
+        // rethrow: a null here would silently return the empty stake set (M-17).
+        let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         let sw = this._stakeWeightsSql(valid_id, blockIndex, String(minStake));
         let { rows } = await this._applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
@@ -1571,7 +1596,9 @@ class Database {
     // in order at S. _stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
     // NOT reused/modified here so the drift guard and the consensus query stay untouched.
     async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit, coin, network){
-        let valid_id = await this.getStatusId('valid');
+        // rethrow for the same M-17 reason, and this is the caller that runs with NO
+        // transaction open (ClientSync._oraclePublishSetAt).
+        let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         // Membership exclusion is identical to _stakeWeightsSql: a key slashed at
         // block > S has cse.block_index > S, so NOT EXISTS is TRUE and the key is
