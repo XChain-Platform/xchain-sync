@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Replica freshness is read from every replication connection, so a multi-source replica is no longer mistaken for a primary and reported as up to date.
+
 ## [0.10.0] - 2026-08-18
 
 ### Changed

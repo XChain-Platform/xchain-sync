@@ -848,7 +848,11 @@ describe('Database.getReplicaStatus()', function () {
     });
 
     it('falls back to the pre-10.5 SLAVE spelling', async function () {
+        // A server knowing only the oldest spelling: no `SHOW ALL SLAVES STATUS`
+        // (MariaDB-only) and no `SHOW REPLICA STATUS` (pre-8.0.22), so both are
+        // rejected to exercise the tail of the fallback chain.
         let stub = sinon.stub(db, 'doQueryStrict');
+        stub.withArgs('SHOW ALL SLAVES STATUS').rejects(new Error('You have an error in your SQL syntax'));
         stub.withArgs('SHOW REPLICA STATUS').rejects(new Error('You have an error in your SQL syntax'));
         stub.withArgs('SHOW SLAVE STATUS').resolves([{
             Slave_IO_Running: 'Yes', Slave_SQL_Running: 'Yes', Seconds_Behind_Master: 7

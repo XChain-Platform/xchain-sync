@@ -87,6 +87,11 @@ class Database {
         this.util   = util;
         this.dbType = dbType || 'indexer';  // 'indexer' (default) or 'decoder'
 
+        // Name of the replication connection carrying the served schemas. Unset
+        // reduces across every connection, worst-case; naming one measures that
+        // stream alone so an unrelated lagging connection cannot drag the reading.
+        this.replicaConnectionName = (process.env.SYNC_REPLICA_CONNECTION || '').trim();
+
         // Connection pool parameters.
         // Sizing is per dbType (see poolSizing.js): the indexer pool absorbs
         // ServerPoller's ~113-query-per-block fan-out plus concurrent snapshot
@@ -1058,34 +1063,70 @@ class Database {
     // primary/co-located source (empty result set), null when the read itself was
     // refused (missing REPLICATION CLIENT grant), which callers must treat as stale.
     async getReplicaStatus(conn){
+        // Multi-source first: `SHOW REPLICA STATUS` reports only the UNNAMED
+        // connection, so a replica whose connections are all named answers it with
+        // zero rows, which is indistinguishable from a primary. Fall back for MySQL.
         let rows;
-        try {
-            rows = await this.doQueryStrict("SHOW REPLICA STATUS", null, conn);
-        } catch (error){
-            // Pre-10.5 servers only know the SLAVE spelling; anything else is a
-            // genuine failure and falls through to the unknown result below.
-            try {
-                rows = await this.doQueryStrict("SHOW SLAVE STATUS", null, conn);
-            } catch (fallbackError){
-                if(!this._replicaStatusWarned){
-                    this._replicaStatusWarned = true;
-                    this.util.logError('Cannot read replication status (needs REPLICATION CLIENT):', fallbackError);
+        let attempts = ['SHOW ALL SLAVES STATUS', 'SHOW REPLICA STATUS', 'SHOW SLAVE STATUS'];
+        let lastError = null;
+        for (const sql of attempts){
+            try { rows = await this.doQueryStrict(sql, null, conn); lastError = null; break; }
+            catch (error){ lastError = error; }
+        }
+        if(lastError){
+            if(!this._replicaStatusWarned){
+                this._replicaStatusWarned = true;
+                // Name both spellings: MariaDB 10.5 split the privilege, where
+                // REPLICATION CLIENT aliases BINLOG MONITOR and does not cover
+                // slave status.
+                this.util.logError('Cannot read replication status (needs SLAVE MONITOR on MariaDB, ' +
+                    'REPLICATION CLIENT on MySQL):', lastError);
+            }
+            return { isReplica: null, running: null, secondsBehind: null };
+        }
+        // No connections at all: a primary, or a server whose databases are fed by
+        // the sync protocol rather than native replication. Fresh by this probe; the
+        // client-side staleness window covers that path.
+        if(!rows || rows.length === 0)
+            return { isReplica: false, running: null, secondsBehind: null };
+
+        const readRow = (row) => {
+            const io     = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
+            const sql    = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
+            const behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
+            return {
+                name:    row.Connection_name != null ? String(row.Connection_name) : '',
+                running: io === 'Yes' && sql === 'Yes',
+                // NULL here means the SQL thread is not applying at all, never "0 behind".
+                secondsBehind: behind == null ? null : Number(behind)
+            };
+        };
+        let parsed = rows.map(readRow);
+
+        // A named-but-absent connection is an assertion that no longer matches the
+        // server, not an absence of replication: fail closed rather than silently
+        // measuring a different stream.
+        const wanted = this.replicaConnectionName;
+        if(wanted){
+            const hit = parsed.find(p => p.name === wanted);
+            if(!hit){
+                if(!this._replicaConnectionMissingWarned){
+                    this._replicaConnectionMissingWarned = true;
+                    this.util.logError('Configured replica connection "' + wanted + '" is not present on this server; ' +
+                        'saw [' + parsed.map(p => p.name || '(unnamed)').join(', ') + ']. Reporting unknown.', null);
                 }
                 return { isReplica: null, running: null, secondsBehind: null };
             }
+            return { isReplica: true, running: hit.running, secondsBehind: hit.secondsBehind };
         }
-        if(!rows || rows.length === 0)
-            return { isReplica: false, running: null, secondsBehind: null };
-        let row = rows[0];
-        let io  = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
-        let sql = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
-        let behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
-        return {
-            isReplica: true,
-            running: io === 'Yes' && sql === 'Yes',
-            // NULL here means the SQL thread is not applying at all, never "0 behind".
-            secondsBehind: behind == null ? null : Number(behind)
-        };
+
+        // Reduce across every connection, worst-case: served data is only as fresh as
+        // its laggiest stream, and one stopped SQL thread makes the server stale.
+        const running = parsed.every(p => p.running);
+        const anyUnknown = parsed.some(p => p.secondsBehind == null);
+        const secondsBehind = anyUnknown ? null
+            : parsed.reduce((max, p) => Math.max(max, p.secondsBehind), 0);
+        return { isReplica: true, running, secondsBehind };
     }
 
     // Get block hash data for a given block_index.
