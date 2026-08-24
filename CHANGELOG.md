@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The bundled consensus pin is verified at API boot, so a host carrying a drifted coin registry halts instead of serving from it.
+- The hub-served coin consensus hashes are cross-checked against the local registry, logging a mismatch as a transport-integrity signal.
+
 ### Fixed
 - Replica freshness is read from every replication connection, so a multi-source replica is no longer mistaken for a primary and reported as up to date.
 
