@@ -253,6 +253,11 @@ class ClientSync {
         // operator clears it. null = healthy.
         this._halted = null; // { blockIndex, reason, mismatches, sources, at }
 
+        // Throttle stamp for the periodic replica-completeness sweep against the
+        // primary source (see _maybeVerifyCompleteness). 0 = never swept, so the
+        // first equal-height status tick of a process runs one baseline sweep.
+        this._lastCompletenessSweepAt = 0;
+
         // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
         // testnet, which mints blocks at ~10/sec and is tens of millions of
         // blocks high) the replica perpetually trails the live tip, so every
@@ -1939,6 +1944,68 @@ class ClientSync {
         return mismatches;
     }
 
+    // Periodic replica-completeness sweep against the PRIMARY source: the row-count
+    // comparison is the only check that sees a follower short rows the consensus hashes
+    // structurally cannot cover, since those hashes describe the source's computation
+    // rather than what landed downstream. The bootstrap caller iterates sources[1..], so
+    // a single-source replica reaches it from nowhere else; this hangs off the status
+    // tick and covers both dbTypes.
+    //
+    // EQUAL HEIGHTS ONLY: while behind, the source legitimately holds more rows in every
+    // streamed table, and a shortfall reported on ordinary lag trains operators to ignore
+    // the one signal this exists to give them.
+    //
+    // Advisory, never halts (a hash-verified block is still a valid consensus result, the
+    // bootstrap caller's posture) and best-effort, so an unreachable source logs and
+    // returns rather than disturbing live following.
+    async _maybeVerifyCompleteness(source, remoteHeight){
+        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
+        if(!interval || !source) return;
+        if(this._halted) return;                        // nothing to verify onto
+        if(this.lastAppliedBlock === null) return;       // pre-bootstrap
+        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return;
+        let now = Date.now();
+        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return;
+        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
+        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
+        // a second tick run one concurrently against the same source.
+        this._lastCompletenessSweepAt = now;
+        try {
+            if(this.dbType === 'decoder'){
+                // Delegate: the decoder variant carries the truncation exclusions its
+                // counts need. dispensers converges only on a reconcile cycle, so it is
+                // excluded here or every sweep reports drift.
+                await this._verifyDecoderCompleteness(source, this.lastAppliedBlock, new Set(['dispensers']));
+                return;
+            }
+            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+            let response = await axios.get(url, { timeout: 10000 });
+            let remoteStatus = response.data;
+            // Re-check the height against the status we just fetched: the tick that
+            // triggered this may be seconds old and the source may have advanced.
+            if(remoteStatus.block_height != null &&
+               Number(remoteStatus.block_height) !== Number(this.lastAppliedBlock)) return;
+            let mismatches = await this._verifyTableCounts(remoteStatus.table_counts, undefined,
+                { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
+            let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
+            let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
+            if(shortfalls.length){
+                console.error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+                    '; follower may be missing replicated rows:');
+                console.error(JSON.stringify(shortfalls));
+            }
+            if(ahead.length){
+                console.error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
+                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+                console.error(JSON.stringify(ahead));
+            }
+            if(!mismatches.length && remoteStatus.table_counts)
+                console.log('Table-count verification passed against ' + source);
+        } catch(e){
+            console.error('Periodic completeness sweep failed against ' + source + ':', e.message || e);
+        }
+    }
+
     // Indexer tables whose registry class asserts exact row-set parity with the
     // source: streamed forward (stream:*) and mirrored on rollback. Derived from
     // tableLifecycle so there is no second hand-maintained list; snapshot / local /
@@ -2162,6 +2229,10 @@ class ClientSync {
                 this._logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
+            // Periodic replica-completeness sweep (throttled, equal-heights only). The
+            // status tick is the one recurring signal a live client gets from its own
+            // primary source, which is exactly the source the sweep could not reach.
+            await this._maybeVerifyCompleteness(this.sources[sourceIndex], event.block_height);
         }
     }
 
