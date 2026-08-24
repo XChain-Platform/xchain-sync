@@ -795,34 +795,29 @@ class ServerPoller {
         // The client uses INSERT IGNORE so duplicates are harmless.
         for(let table of this.indexTables){
             try {
-                // index_transactions: collect referenced IDs
+                // index_transactions: every `*_hash_id` this block's own rows carry, DERIVED
+                // from the column suffix rather than listed. The generic `*_id` scan below
+                // skips this table, so a hash column absent here reaches a follower as a
+                // permanently dangling reference: its blocks row is correct, its LEFT JOIN
+                // (getBlockHashRow, and the explorer's identical join) resolves that hash to
+                // NULL for every block above the last snapshot, which is the only thing that
+                // re-dumps this table in full. One rule for both dbTypes, so a hash column
+                // added later cannot re-open the gap.
                 if(table === 'index_transactions'){
                     let ids = [];
-                    if(this.dbType === 'decoder'){
-                        // Decoder: block_hash_id + previous_block_hash_id from blocks, tx_hash_id from txns
-                        if(payload.data['blocks']){
-                            for(let b of payload.data['blocks']){
-                                if(b.block_hash_id) ids.push(b.block_hash_id);
-                                if(b.previous_block_hash_id) ids.push(b.previous_block_hash_id);
-                            }
+                    let collectHashIds = (row) => {
+                        for(let col in row){
+                            if(col.length > 8 && col.slice(-8) === '_hash_id' && row[col] != null)
+                                ids.push(row[col]);
                         }
-                        if(payload.data['transactions']){
-                            for(let tx of payload.data['transactions'])
-                                if(tx.tx_hash_id) ids.push(tx.tx_hash_id);
-                        }
-                    } else {
-                        // Indexer: ledger/actions/contract hash IDs + tx_hash_id
-                        if(payload.data['blocks']){
-                            let block = payload.data['blocks'][0];
-                            if(block){
-                                ids = [block.ledger_hash_id, block.actions_hash_id, block.contract_hash_id].filter(id => id != null);
-                            }
-                        }
-                        if(payload.data['transactions']){
-                            for(let tx of payload.data['transactions'])
-                                if(tx.tx_hash_id) ids.push(tx.tx_hash_id);
-                        }
-                    }
+                    };
+                    // Decoder: blocks carry block_hash_id + previous_block_hash_id.
+                    // Indexer: blocks carry ledger/actions/contract/state hash ids.
+                    // Both: transactions carry tx_hash_id.
+                    if(payload.data['blocks'])
+                        for(let b of payload.data['blocks']) collectHashIds(b);
+                    if(payload.data['transactions'])
+                        for(let tx of payload.data['transactions']) collectHashIds(tx);
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];
                         let rows = await this.db.doQuery("SELECT * FROM index_transactions WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique, conn);
