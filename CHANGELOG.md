@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Replica freshness is read from every replication connection, so a multi-source replica is no longer mistaken for a primary and reported as up to date.
+- Validator rewards are keyed on their full unique identity, which now includes the snapshot-block qualifier that distinguishes two archive rewards sharing a reissued batch sequence number. Without it a replicated collapse deleted the other snapshot's winner, a reorg restore re-inserted a different row than the one removed, and the block, catch-up and snapshot payloads each dropped one of the two rewards as a duplicate. Requires the matching indexer schema migration.
 
 ## [0.10.0] - 2026-08-18
 

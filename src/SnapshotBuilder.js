@@ -823,9 +823,13 @@ class SnapshotBuilder {
                             let redriven = await collectRedrivenValidatorRewards(db, sinceBlock, lastBlock, conn);
                             if(redriven.length > 0){
                                 rows = rows || [];
-                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                // round_qualifier is part of the reward's UNIQUE identity, so
+                                // it is part of this dedup key. Without it a snapshot would
+                                // bootstrap a replica missing one of two distinct archive
+                                // rewards that share a reissued MATCH_BATCH_SEQ.
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                                 for(let r of redriven){
-                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                                     if(!seen.has(k)){ seen.add(k); rows.push(r); }
                                 }
                             }
@@ -846,9 +850,12 @@ class SnapshotBuilder {
                             let derived = await collectDerivedAnchorRewards(db, sinceBlock, lastBlock, conn);
                             if(derived.length > 0){
                                 rows = rows || [];
-                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                // Qualifier-scoped like the redriven merge above; this is the
+                                // derived-anchor channel, where the two colliding archive
+                                // rewards actually arrive.
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                                 for(let r of derived){
-                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                                     if(!seen.has(k)){ seen.add(k); rows.push(r); }
                                 }
                             }

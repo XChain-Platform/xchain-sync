@@ -100,7 +100,7 @@ class ClientApplier {
             // full-dump re-send on an incremental catch-up idempotent.
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
-            // reward_type, round_reference). The recovery-redriven collector
+            // reward_type, round_reference, round_qualifier). The recovery-redriven collector
             // (recoveryRewards.js) can re-inject a backdated survivor row via BOTH the
             // live per-block and incremental-snapshot channels when their windows overlap;
             // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
@@ -669,8 +669,14 @@ class ClientApplier {
     // (bootstrap snapshot, or the pre-flag-day ANCHOR write) kept it forever, strictly
     // AHEAD of the source and invisible to the source-ahead-only count check. The log
     // row carries the loser's full UNIQUE identity (source_id, signing_pubkey_id,
-    // reward_type, round_reference), so this is a keyed delete with no winner predicate
-    // to reproduce; rows the source still holds (winners) never match a pre-image.
+    // reward_type, round_reference, round_qualifier), so this is a keyed delete with no
+    // winner predicate to reproduce; rows the source still holds (winners) never match a
+    // pre-image. The qualifier is load-bearing, not decorative: for 'anchor_archive' the
+    // round_reference is MATCH_BATCH_SEQ, a dense hub counter a wipe-and-replay rebase
+    // reissues, so two distinct archive rewards can share one. Joined on the four older
+    // columns alone, this DELETE would match the OTHER snapshot's row and a follower would
+    // delete a winner the source still holds - a replica strictly BEHIND the source, which
+    // the source-ahead-only count check cannot see.
     // Runs AFTER the insert loop (the log rows of this apply are in place) and INSIDE
     // the apply transaction. The reverse twin is ClientRollback's RB-ANCHOR restore,
     // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`
@@ -683,6 +689,7 @@ class ClientApplier {
                 "JOIN anchor_reward_reconcile_log d " +
                 "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
                 " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
+                " AND d.round_qualifier <=> vr.round_qualifier " +
                 "WHERE " + scopeSql,
                 scopeArgs);
         } catch(e){

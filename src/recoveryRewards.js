@@ -41,7 +41,7 @@
 // inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)
 // is BELOW that window, so the normal block-scoped channels missed them. Returns raw
 // rows for the caller to merge into the `validator_rewards` array, deduped on the UNIQUE
-// identity (source_id, signing_pubkey_id, reward_type, round_reference). `db` must be an
+// identity (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier). `db` must be an
 // indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
 // REPEATABLE READ view read these at the same height as the rest of its payload.
 async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
@@ -79,7 +79,10 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
             [from, to], conn);
         for(let r of (rows || [])){
             if(r && r.source_id != null && r.signing_pubkey_id != null)
-                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference, r);
+                // The reward's UNIQUE identity includes round_qualifier, so the dedup key does
+                // too - two rows that differ only there are two rewards, not a duplicate.
+                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' +
+                        r.round_reference + ':' + r.round_qualifier, r);
         }
     } catch(e){
         // recovery_pending_rewards / applied_block may not exist on a non-recovery stack

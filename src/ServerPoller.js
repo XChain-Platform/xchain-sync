@@ -750,9 +750,13 @@ class ServerPoller {
                 let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index, conn);
                 if(redriven.length > 0){
                     let existing = payload.data['validator_rewards'] || [];
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    // round_qualifier is part of the UNIQUE identity, so it is part of this
+                    // dedup key: two rows that differ only there are two distinct rewards
+                    // (an archive round_reference is a hub counter a rebase reissues), and
+                    // keying without it would silently drop the second from the payload.
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                     for(let r of redriven){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                         if(!seen.has(k)){ seen.add(k); existing.push(r); }
                     }
                     payload.data['validator_rewards'] = existing;
@@ -776,9 +780,13 @@ class ServerPoller {
                 let derived = await collectDerivedAnchorRewards(this.db, block_index, block_index, conn);
                 if(derived.length > 0){
                     let existing = payload.data['validator_rewards'] || [];
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    // Qualifier-scoped for the same reason as the redriven merge above, and
+                    // this is the channel where it actually bites: the derived-anchor rows
+                    // are exactly the ones two distinct archive anchors sharing a reissued
+                    // MATCH_BATCH_SEQ arrive on.
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                     for(let r of derived){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                         if(!seen.has(k)){ seen.add(k); existing.push(r); }
                     }
                     payload.data['validator_rewards'] = existing;

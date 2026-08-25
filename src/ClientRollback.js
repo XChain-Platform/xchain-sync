@@ -448,10 +448,15 @@ class ClientRollback {
                 // reorg_block-1 never derived it, so restoring it would mint an orphan.
                 try {
                     await this.db.doQuery(
+                        // round_qualifier is part of the reward's UNIQUE identity (snapshot_block
+                        // for the archive leg, whose round_reference is a hub counter a rebase
+                        // reissues), so the pre-image restores it too: without it the loser comes
+                        // back under qualifier 0, which is a different row from the one the
+                        // mirrored collapse deleted.
                         "INSERT IGNORE INTO validator_rewards " +
-                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index, derive_block_index) " +
+                        "(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index) " +
                         "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
-                        "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
+                        "       d.round_qualifier, d.amount, d.reward_block_index, d.reward_derive_block_index " +
                         "  FROM anchor_reward_reconcile_log d " +
                         " WHERE d.block_index >= ? AND d.reward_block_index < ? " +
                         "   AND (d.reward_derive_block_index IS NULL OR d.reward_derive_block_index < ?)",
