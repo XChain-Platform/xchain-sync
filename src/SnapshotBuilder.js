@@ -51,24 +51,30 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 // F-5 pins both directions against the registry.
 //
 // Why the registry-derived members are excluded:
-//  - icons, price_snapshots, pending_hub_pushes ('local'): operator-local
+//  - icons, pending_hub_pushes, cross_chain_call_rejections ('local'): operator-local
 //    fetch/push bookkeeping that legitimately diverges between nodes.
 //  - recovery_pending_rewards ('local'): restore-time scratch staging for archived
 //    validator rewards (xchain-indexer F1a id-determinism fix). Recovery-local, drained
 //    into validator_rewards by the reindex apply hook, and never consensus-hashed. It
 //    must not ride snapshots (a follower has no recovery in progress, so its count
 //    legitimately differs).
-//  - Hub-mirrored tables ('hub-mirror': oracle_prices, capability_snapshots,
-//    cross_chain_calls, cross_chain_matches, state_checkpoints): pushed/retracted by
+//  - Hub-mirrored tables: every registry entry with replication 'hub-mirror', which
+//    tableLifecycle.js defines and this comment only reads (today oracle_prices,
+//    price_snapshots, capability_snapshots, cross_chain_calls, cross_chain_matches,
+//    state_checkpoints, anchor_reward_attestations). They are pushed/retracted by
 //    hub_db_sync out-of-band with block apply, so they vary by WS arrival timing and
-//    must not appear in consensus snapshots. These are NEVER replicated by xchain-sync
+//    must not appear in consensus snapshots. price_snapshots is the one to notice: it
+//    is quorum-class hashed (its registry entry's hashed.classes) and feeds
+//    getOracleDataForVM (see the reference_block reorg delete in ClientRollback), so a
+//    node without it is short consensus-relevant state, not merely bookkeeping.
+//    These are NEVER replicated by xchain-sync
 //    (excluded from the per-block stream, the incremental catch-up, AND these
 //    snapshots). A serving node does not converge them via sync: the explorer serves
 //    the consensus-relevant ones (state_checkpoints, capability_snapshots,
 //    cross_chain_matches) from the MANDATORY co-located hub DB on the same server,
 //    with no local-mirror fallback (it fails loud if the hub DB is absent).
 //    IMPORTANT: a follower node that lacks a co-located hub DB (hub-less validator)
-//    will have these five tables empty. This is by design and not a replication gap:
+//    will have these hub-mirrored tables empty. This is by design and not a replication gap:
 //    these rows are hub-driven state that the node must receive from its OWN hub
 //    subscription (hub_db_sync), not from the sync snapshot stream. A hub-less
 //    validator cannot serve hub-dependent API surfaces correctly; provision a hub

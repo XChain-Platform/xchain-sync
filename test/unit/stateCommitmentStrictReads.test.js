@@ -67,6 +67,14 @@ describe('M-17: state-commitment input reads fail closed outside a transaction',
             /transient/);
     });
 
+    it('getStateRootsRow throws rather than reporting "no prior root" on a DB fault', async function () {
+        // computeFollowerRoots calls this with NO conn (stateCommitment.js, the
+        // prior-block read). Fail-soft [] becomes null, which the follower reads as
+        // "no prior state_tree_roots row" and answers with a silent full rebuild
+        // instead of the halt a real fault deserves.
+        await assert.rejects(() => db.getStateRootsRow('BTC', 'regtest', 100), /transient/);
+    });
+
     it('getStatusId keeps the fail-soft default for its operational callers', async function () {
         assert.strictEqual(await db.getStatusId('completed'), null,
             'rollback / cooldown-credit callers must not start throwing');

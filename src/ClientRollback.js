@@ -113,7 +113,15 @@ class ClientRollback {
         let timer = this.util.startTimer();
         console.log('Starting indexer rollback to block ' + block_index + '...');
 
-        let firstActionIndex = await this.db.getFirstActionIndex(block_index);
+        // rethrow, not the fail-soft default: this read runs BEFORE beginTransaction, where
+        // doQuery logs a query error and returns [], so a deadlock/lock-wait/connection drop
+        // arrives as firstActionIndex === null - indistinguishable from "no actions in range".
+        // Every action-scoped delete below is gated on that null while the blockTables and
+        // indexTables sweeps run unconditionally and commit, so the swallowed fault would
+        // commit a PARTIAL ledger rollback. Throwing here aborts before any delete and lets
+        // ClientSync's reorg-rollback-failed catch record the durable halt. The source twin
+        // carries the same note (xchain-indexer/src/rollback.js).
+        let firstActionIndex = await this.db.getFirstActionIndex(block_index, null, { rethrow: true });
 
         // Truncation floor, read BEFORE the transaction opens (getSyncState may run its
         // one-time CREATE TABLE, and DDL inside a transaction implicitly commits in
@@ -137,13 +145,18 @@ class ClientRollback {
         let affectedMarketPairs = [];
         if(firstActionIndex !== null && !truncatedReplica){
             try {
+                // rethrow, not the fail-soft default: this read is also pre-transaction, where
+                // doQuery returns [] on a query error, so the errno guard in the catch below
+                // could never see the deadlock/lock-wait/connection drop it claims to escalate
+                // - the sweep would just find zero pairs and silently leave the `markets` rows
+                // this reorg orphaned, which no downstream guard detects.
                 let rows = await this.db.doQuery(
                     "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM orders " +
                     "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL " +
                     "UNION " +
                     "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM order_matches " +
                     "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL",
-                    [firstActionIndex, firstActionIndex]);
+                    [firstActionIndex, firstActionIndex], null, { rethrow: true });
                 for(let row of (rows || [])){
                     let t1 = Number(row.tick1_id), t2 = Number(row.tick2_id);
                     if(!affectedMarketPairs.some(p => (p.tick1_id === t1 && p.tick2_id === t2) ||

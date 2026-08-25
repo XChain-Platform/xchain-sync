@@ -1046,9 +1046,13 @@ class Database {
         return await this.doQuery(query, args, conn, { rethrow: true });
     }
 
-    async getLastBlock(conn){
+    // `opts` is forwarded to doQuery, so a cursor caller that must not mistake an
+    // unreadable tip for an empty replica can pass { rethrow: true } (M-17). The
+    // default stays fail-soft for the /status readers, where a partial answer beats
+    // a 500.
+    async getLastBlock(conn, opts){
         let query = "SELECT MAX(block_index) AS block_index FROM blocks";
-        let rows  = await this.doQuery(query, null, conn);
+        let rows  = await this.doQuery(query, null, conn, opts);
         if(rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
@@ -1237,7 +1241,11 @@ class Database {
         return res ? res.affectedRows : 0;
     }
 
-    async getBlockHashRow(block_index, conn){
+    // `opts` is forwarded to doQuery, so a caller whose NULL answer suppresses a guard
+    // can pass { rethrow: true }: outside a transaction doQuery turns a query error into
+    // [], which reads here as "this block was never applied" (M-17). The default stays
+    // fail-soft for the /status readers.
+    async getBlockHashRow(block_index, conn, opts){
         let query;
         if(this.dbType === 'decoder'){
             query = `SELECT
@@ -1266,7 +1274,7 @@ class Database {
                 WHERE
                     b.block_index=?`;
         }
-        let rows = await this.doQuery(query, [block_index], conn);
+        let rows = await this.doQuery(query, [block_index], conn, opts);
         if(rows.length > 0)
             return rows[0];
         return null;
@@ -1276,8 +1284,15 @@ class Database {
     // { balances_root, stakes_root, state_root, block_merkle_root } or null. Used by
     // the follower's incremental SMT (reads block-1's balances_root) and by
     // ServerPoller to attach the committed roots to the outgoing block payload.
+    //
+    // STRICT (M-17): this is a consensus-input read for computeFollowerRoots, which
+    // calls it with no conn. Fail-soft doQuery answers [] on a non-transactional
+    // query fault, which this method turns into null and the follower reads as "no
+    // prior row" - a wrong answer, not an error signal, sending it into a silent
+    // full rebuild instead of a halt. ServerPoller always passes a conn, and doQuery
+    // returns conn.query() before its own catch, so this is a no-op for that caller.
     async getStateRootsRow(chain, network, block_index, conn){
-        let rows = await this.doQuery(
+        let rows = await this.doQueryStrict(
             `SELECT balances_root, stakes_root, state_root, block_merkle_root
              FROM state_tree_roots
              WHERE chain=? AND network=? AND block_index=? LIMIT 1`,
@@ -1444,9 +1459,13 @@ class Database {
         return await this.doQuery(query, [startBlock, endBlock]);
     }
 
-    async getFirstActionIndex(block_index, conn){
+    // `opts` is forwarded to doQuery, so a caller whose NULL answer gates a destructive
+    // branch can pass { rethrow: true }. It matters because outside a transaction doQuery
+    // collapses a query error into [], which reads here as "no actions in range" (M-17).
+    // The default stays fail-soft for SnapshotBuilder, which only sizes a window with it.
+    async getFirstActionIndex(block_index, conn, opts){
         let query = `SELECT action_index FROM actions a WHERE a.block_index >= ? ORDER BY a.action_index ASC LIMIT 1`;
-        let rows  = await this.doQuery(query, [block_index], conn);
+        let rows  = await this.doQuery(query, [block_index], conn, opts);
         if(rows.length > 0)
             return Number(rows[0].action_index);
         return null;

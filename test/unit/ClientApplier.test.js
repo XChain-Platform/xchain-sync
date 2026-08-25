@@ -73,6 +73,24 @@ describe('ClientApplier', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
+        // A fail-soft read answers "block absent" for a DB blip too, and that answer
+        // re-INSERTs the block's credits/debits/escrows (plain INSERT) and rebuilds
+        // balances over the duplicates.
+        it('reads the duplicate guard fail-CLOSED (opts.rethrow)', async function(){
+            await applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+            assert.deepStrictEqual(db.getBlockHashRow.firstCall.args[2], { rethrow: true });
+        });
+
+        it('never opens a transaction when the duplicate guard read faults', async function(){
+            let err = new Error('deadlock found'); err.errno = 1213;
+            db.getBlockHashRow.rejects(err);
+            await assert.rejects(
+                () => applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } }),
+                /deadlock found/
+            );
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
         it('applies block in a transaction', async function(){
             let payload = {
                 block_index: 5,

@@ -91,6 +91,50 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.getFirstActionIndex.firstCall.args[0], 100);
         });
 
+        // The pre-transaction reads gate every action-scoped delete while the
+        // blockTables/indexTables sweeps run unconditionally and commit, so a
+        // swallowed fault here commits a PARTIAL ledger rollback.
+        it('reads the first action index fail-CLOSED (opts.rethrow)', async function(){
+            await rollback.rollback(100);
+            assert.deepStrictEqual(db.getFirstActionIndex.firstCall.args[2], { rethrow: true });
+        });
+
+        it('aborts before the transaction when the first-action read faults', async function(){
+            let err = new Error('lock wait timeout'); err.errno = 1205;
+            db.getFirstActionIndex.rejects(err);
+            await assert.rejects(() => rollback.rollback(100), /lock wait timeout/);
+            assert.strictEqual(db.beginTransaction.called, false);
+            assert.strictEqual(db.commitTransaction.called, false);
+        });
+
+        it('reads the affected market pairs fail-CLOSED (opts.rethrow)', async function(){
+            await rollback.rollback(100);
+            let pairRead = db.doQuery.getCalls().find(c =>
+                typeof c.args[0] === 'string' && c.args[0].includes('FROM order_matches'));
+            assert.ok(pairRead, 'the pre-transaction market-pair read was issued');
+            assert.deepStrictEqual(pairRead.args[3], { rethrow: true });
+        });
+
+        it('aborts before the transaction when the market-pair read faults', async function(){
+            // The errno guard on that read claims to escalate everything but a schema
+            // gap; with a fail-soft read it never saw one.
+            let err = new Error('deadlock found'); err.errno = 1213;
+            db.doQuery.withArgs(sinon.match(/FROM order_matches/)).rejects(err);
+            await assert.rejects(() => rollback.rollback(100), /deadlock found/);
+            assert.strictEqual(db.beginTransaction.called, false);
+        });
+
+        it('still skips the market sweep on a schema gap (errno 1146)', async function(){
+            let err = new Error('table missing'); err.errno = 1146;
+            db.doQuery.withArgs(sinon.match(/FROM order_matches/)).rejects(err);
+            await rollback.rollback(100);
+            assert.strictEqual(db.commitTransaction.calledOnce, true);
+            let pairScopedDeletes = db.doQuery.getCalls().filter(c =>
+                typeof c.args[0] === 'string' &&
+                c.args[0].includes('DELETE FROM markets') && c.args[0].includes('tick1_id=?'));
+            assert.strictEqual(pairScopedDeletes.length, 0);
+        });
+
         it('deletes contract_emissions first', async function(){
             await rollback.rollback(100);
             let firstDelete = db.doQuery.getCalls().find(c => c.args[0].includes('DELETE'));

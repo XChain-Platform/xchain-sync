@@ -83,7 +83,13 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         }
     } catch(e){
         // recovery_pending_rewards / applied_block may not exist on a non-recovery stack
-        // or an older source schema; skip silently (no recovery in progress => nothing).
+        // or an older source schema; skip silently ONLY on a genuine schema gap (1146
+        // missing table / 1054 unknown column). Anything else is transient/operational
+        // and must surface: both callers wrap this in the isSchemaGapError gate that
+        // freezes the block cursor / aborts the snapshot stream, and swallowing here
+        // makes those gates dead code and ships the block short its backdated rows.
+        // Mirrors derivedRewards.js on the same rail.
+        if(!(e && typeof e.errno === 'number' && (e.errno === 1146 || e.errno === 1054))) throw e;
     }
 
     return Array.from(acc.values());

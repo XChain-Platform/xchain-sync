@@ -983,6 +983,33 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
         assert.ok(url.indexOf('/since/1') !== -1, 'since=1 when dbTip is null');
     });
 
+    // A fail-soft tip read answers null for a DB blip too, and null is what an EMPTY
+    // replica answers, so the resume cursor would collapse to since/1 and re-request
+    // the whole history into the plain-INSERT ledger tables.
+    it('reads the resume cursor fail-CLOSED (opts.rethrow)', async function(){
+        ({ sync, db, applier } = makeSync());
+        db.getLastBlock.resolves(10);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 15, tables: {} })) });
+
+        await sync._runIncrementalCatchUp();
+
+        assert.deepStrictEqual(db.getLastBlock.firstCall.args[1], { rethrow: true });
+    });
+
+    it('aborts the pass (no request, no apply) when the tip read faults', async function(){
+        ({ sync, db, applier } = makeSync());
+        let err = new Error('server has gone away'); err.errno = 2006;
+        db.getLastBlock.rejects(err);
+        sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 15, tables: {} })) });
+
+        // Caught by the pass's own catch: it must NOT reject out of the in-flight
+        // runner, whose callers (WS event handlers) have no catch of their own.
+        await sync._runIncrementalCatchUp();
+
+        assert.strictEqual(axios.get.called, false, 'no snapshot window requested');
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+    });
+
     it('happy path: dbTip=10 → sinceBlock=11', async function(){
         ({ sync, db, applier } = makeSync());
         db.getLastBlock.resolves(10);
@@ -2033,6 +2060,91 @@ describe('ClientSync: small branches', function(){
 
         assert.ok(sync._haltOnDivergence.calledOnce, '_haltOnDivergence must be called on hash mismatch');
         assert.strictEqual(applier.applyBlock.called, false, 'must not apply contested blocks');
+    });
+
+    // uuid:4b95ddef. The apply-time state-commitment check is the only control that
+    // writes a sync_halt marker for a replica/source root divergence. Gating it on the
+    // WIRE carrying balances_root lets a source with no state_tree_roots row at an
+    // ACTIVE height (failed compute, re-seed, or a hostile peer) serve nulls and skip
+    // the whole check silently. The replica decides activation locally:
+    // ClientApplier sets _lastComputedRoots only under isStateCommitmentActive and
+    // clears it at applyBlock entry, so a non-null value plus a null wire root is a
+    // locally-decidable contract violation, not "nothing to check".
+    describe('_applyBlockEvent: state-commitment roots withheld at an active height', function(){
+
+        function makeCommitSync(){
+            let made = makeSync({ VERIFY_STATE_COMMITMENT: true, VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false });
+            made.sync.lastAppliedBlock = 100;
+            // The replica's OWN flag-day map says the commitment is live at this height.
+            made.applier._lastComputedRoots = {
+                balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
+            };
+            sinon.stub(made.sync, '_haltOnDivergence').resolves();
+            return made;
+        }
+
+        it('HALTS with state-commitment-missing when the source omits balances_root', async function(){
+            let { sync } = makeCommitSync();
+
+            await sync._applyBlockEvent({
+                type: 'block', block_index: 101,
+                balances_root: null, block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
+            });
+
+            assert.ok(sync._haltOnDivergence.calledOnce, 'a withheld balances_root must halt');
+            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-missing');
+            assert.deepStrictEqual(sync._haltOnDivergence.firstCall.args[1].map(m => m.field), ['balances_root']);
+            assert.strictEqual(sync.lastAppliedBlock, 100, 'a halted block must not advance the tip');
+        });
+
+        it('HALTS when only block_merkle_root is withheld (a correct balances_root is not a pass)', async function(){
+            let { sync } = makeCommitSync();
+
+            await sync._applyBlockEvent({
+                type: 'block', block_index: 101,
+                balances_root: 'b'.repeat(64), block_merkle_root: null, state_root: 's'.repeat(64)
+            });
+
+            assert.ok(sync._haltOnDivergence.calledOnce, 'a withheld block_merkle_root must halt');
+            assert.deepStrictEqual(sync._haltOnDivergence.firstCall.args[1].map(m => m.field), ['block_merkle_root']);
+        });
+
+        it('does NOT halt on a null state_root: ServerPoller nulls it for catch-up-burst blocks', async function(){
+            let { sync } = makeCommitSync();
+
+            await sync._applyBlockEvent({
+                type: 'block', block_index: 101,
+                balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: null
+            });
+
+            assert.strictEqual(sync._haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
+            assert.strictEqual(sync.lastAppliedBlock, 101, 'the block still applies');
+        });
+
+        it('does NOT halt when the replica itself says the commitment is not active', async function(){
+            let { sync, applier } = makeCommitSync();
+            applier._lastComputedRoots = null;   // pre-flag-day, or a skipped/duplicate apply
+
+            await sync._applyBlockEvent({
+                type: 'block', block_index: 101,
+                balances_root: null, block_merkle_root: null, state_root: null
+            });
+
+            assert.strictEqual(sync._haltOnDivergence.called, false, 'pre-flag-day nulls stay a skip');
+            assert.strictEqual(sync.lastAppliedBlock, 101);
+        });
+
+        it('still halts with state-commitment-divergence on a root MISMATCH', async function(){
+            let { sync } = makeCommitSync();
+
+            await sync._applyBlockEvent({
+                type: 'block', block_index: 101,
+                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
+            });
+
+            assert.ok(sync._haltOnDivergence.calledOnce);
+            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+        });
     });
 
     it('_applyBlockEvent sets lastHashes to {block_hash} for decoder dbType', async function(){

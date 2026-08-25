@@ -52,10 +52,13 @@
  *     oracle_prices,                  of band with block apply, so they cannot ride the
  *     capability_snapshots,           per-block stream. xchain-sync NEVER replicates them
  *     state_checkpoints,              on any channel, snapshots included. A serving node
- *     price_snapshots                 does not fall back to a local mirror either: the
- *                                     explorer reads the consensus-relevant ones from the
+ *     price_snapshots,                does not fall back to a local mirror either: the
+ *     anchor_reward_attestations      explorer reads the consensus-relevant ones from the
  *                                     MANDATORY co-located hub DB and fails loud without
- *                                     it, rather than serving stale local rows.
+ *                                     it, rather than serving stale local rows. The set is
+ *                                     every tableLifecycle entry with replication
+ *                                     'hub-mirror'; that registry is the authority and
+ *                                     this column is a reading aid.
  *   - icons                           replication 'local': never leaves the node, on any
  *                                     channel, and is not a snapshot ride-along.
  *
@@ -76,7 +79,10 @@ const lifecycle = require('./tableLifecycle');
 // its own, much smaller lifecycle (see the scope notes above).
 const TOPOLOGY = {
 
-    // Decoder schema: 9 tables, much smaller surface area than indexer.
+    // Decoder schema: a much smaller surface area than indexer, and the one
+    // topology still declared by hand. test/unit/decoderTableClassification.test.js
+    // enumerates xchain-decoder/src/sql and fails on any table classified neither
+    // here nor in its DECODER_EXCLUDED set, so the count is proven, not counted.
     // mempool_transactions is intentionally excluded, being non-deterministic
     // across nodes.
     decoder: {

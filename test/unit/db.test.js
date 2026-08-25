@@ -812,6 +812,26 @@ describe('Database.getLastBlock()', function () {
         let result = await db.getLastBlock();
         assert.strictEqual(result, null);
     });
+
+    it('swallows a query error and returns null by default (fail-soft preserved)', async function () {
+        let conn = fakeConn();
+        conn.query.rejects(new Error('tip read blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        assert.strictEqual(await db.getLastBlock(), null);
+    });
+
+    it('PROPAGATES a query error with opts.rethrow (fail-closed resume cursor)', async function () {
+        // A null tip is also what a genuinely empty replica returns, and the catch-up
+        // resume cursor turns that into sinceBlock=1 (re-request the whole history).
+        // opts must reach doQuery so an unreadable tip aborts instead.
+        let conn = fakeConn();
+        conn.query.rejects(new Error('tip read blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(
+            () => db.getLastBlock(null, { rethrow: true }),
+            /tip read blip/
+        );
+    });
 });
 
 // getLastBlock above reads the SERVED database, so on a node fronting a native
@@ -993,6 +1013,31 @@ describe('Database.getBlockHashRow()', function () {
         await db.close();
     });
 
+    it('swallows a query error and returns null by default (fail-soft preserved)', async function () {
+        silenceConsole();
+        let db = makeDb('indexer');
+        let conn = fakeConn();
+        conn.query.rejects(new Error('hash row blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        assert.strictEqual(await db.getBlockHashRow(100), null);
+        await db.close();
+    });
+
+    it('PROPAGATES a query error with opts.rethrow (fail-closed duplicate guard)', async function () {
+        // ClientApplier's already-applied guard reads null as "never applied" and
+        // re-INSERTs the block's ledger rows, so opts must reach doQuery.
+        silenceConsole();
+        let db = makeDb('indexer');
+        let conn = fakeConn();
+        conn.query.rejects(new Error('hash row blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(
+            () => db.getBlockHashRow(100, null, { rethrow: true }),
+            /hash row blip/
+        );
+        await db.close();
+    });
+
     it('decoder: returns row with block_hash only', async function () {
         silenceConsole();
         let db = makeDb('decoder');
@@ -1060,6 +1105,26 @@ describe('Database.getFirstActionIndex()', function () {
         sinon.stub(db, 'doQuery').resolves([]);
         let result = await db.getFirstActionIndex(100);
         assert.strictEqual(result, null);
+    });
+
+    it('swallows a query error and returns null by default (fail-soft preserved)', async function () {
+        let conn = fakeConn();
+        conn.query.rejects(new Error('actions read blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        assert.strictEqual(await db.getFirstActionIndex(100), null);
+    });
+
+    it('PROPAGATES a query error with opts.rethrow (fail-closed rollback gate)', async function () {
+        // ClientRollback gates every action-scoped delete on this value while the
+        // block/index sweeps run unconditionally, so a swallowed fault would commit a
+        // PARTIAL ledger rollback. opts must reach doQuery for that to fail closed.
+        let conn = fakeConn();
+        conn.query.rejects(new Error('actions read blip'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(
+            () => db.getFirstActionIndex(100, null, { rethrow: true }),
+            /actions read blip/
+        );
     });
 });
 

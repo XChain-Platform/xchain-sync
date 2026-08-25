@@ -969,6 +969,10 @@ class ClientSync {
             // on the replica and clobber the snapshot's DELETE+reload mid-flight.
             await this._withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
             this.lastAppliedBlock = snapshotData.block_height;
+            // Pair lastHashes with the height just set (see _refreshTipHashes). A full
+            // snapshot carries its own lookups, so no re-page ordering applies here;
+            // this path is the oversized-catch-up fallback as well as start()'s.
+            await this._refreshTipHashes();
 
             // A full-history snapshot reseeds complete state and correct SMT roots,
             // so any prior truncation join floor (set by an earlier _bootstrapFromHeight,
@@ -1188,6 +1192,11 @@ class ClientSync {
         //     <SYNC-LOOKUP-REPAGE> keep aligned with _runIncrementalCatchUp.
         await this._syncLookupTablesPaged(source);
 
+        // Pair lastHashes with the height set above (see _refreshTipHashes). start()
+        // re-reads it anyway, but this path is also the oversized-catch-up fallback,
+        // reached with live-follow already running.
+        await this._refreshTipHashes();
+
         // 4. Verify the TERMINAL block (folds tip-1's committed hash, which is
         //    present in [base..tip]). The join block `base` is intentionally NOT
         //    recomputed here (no base-1 predecessor); _verifyRecompute skips it.
@@ -1326,6 +1335,29 @@ class ClientSync {
         }
     }
 
+    // Re-read lastHashes for the tip a snapshot apply just advanced us to.
+    //
+    // lastAppliedBlock and lastHashes are a PAIR and must describe the same block:
+    // _handleBlock's fork-at-head guards treat a re-delivery at blockIndex ===
+    // lastAppliedBlock whose hashes differ from lastHashes as a lost 1-block reorg.
+    // start(), _applyBlockEvent and _handleReorg all keep the pair in step; the three
+    // snapshot-apply paths advanced only the height, leaving lastHashes on the
+    // PRE-catch-up tip. The next delivery of the new tip (a second source serving the
+    // same height, or a WS reconnect replaying it) then compared an honest block
+    // against the wrong block's hashes and always mismatched, so the one log line that
+    // means "a reorg event was lost" became routine noise plus a redundant catch-up
+    // that 404s at since = tip+1.
+    //
+    // Call it AFTER any lookup re-page: until those index_* rows land, getBlockHashRow
+    // resolves NULL through a LEFT JOIN miss. A null row is not stored - lastHashes is
+    // left on the older block rather than nulled, because verifyChainContinuity treats
+    // a null prevHashes as "nothing to chain to" and would stop detecting gaps.
+    async _refreshTipHashes(){
+        if(typeof this.lastAppliedBlock !== 'number') return;
+        let hashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+        if(hashes !== null) this.lastHashes = hashes;
+    }
+
     // Incremental catch-up.
     //
     // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
@@ -1407,11 +1439,25 @@ class ClientSync {
 
         // Resume from the committed tip + 1 (the server's since/ bound is inclusive),
         // re-read here so a lagging in-memory cursor can never re-request applied rows.
-        let dbTip = await this.db.getLastBlock();
-        let sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
-
-        console.log('Incremental catch-up from block ' + sinceBlock + '...');
+        // Declared outside the try because the catch reports on sinceBlock.
+        let dbTip = null;
+        let sinceBlock = 0;
         try {
+            // rethrow, not the fail-soft default: this read runs outside a transaction, where
+            // doQuery logs a query error and returns [], so a transient fault would read as
+            // dbTip === null - the same answer a genuinely empty replica gives - and collapse
+            // sinceBlock to 1, re-requesting the WHOLE history into ledger tables that take a
+            // plain INSERT (credits/debits/escrows are in neither ignoreTables nor
+            // upsertFullDumpTables). Read INSIDE the try so the catch below aborts this pass
+            // and the next status/gap trigger retries, rather than rejecting out of the
+            // _catchUpInFlight runner into the WS event handlers, which do not catch.
+            // Sitting inside the try also routes a tip-read schema fault (1146/1054) into
+            // the catch's _healSchemaIfStale and its one debounce-bounded retry, an edge
+            // the read could not reach while it sat outside.
+            dbTip = await this.db.getLastBlock(null, { rethrow: true });
+            sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
+
+            console.log('Incremental catch-up from block ' + sinceBlock + '...');
             // Truncated/fast chains: sync the append-only lookup tables by id cursor
             // first (only NEW rows, since the replica's MAX(id) is the cursor), then
             // fetch the block window with skip_lookups=1. Without this the bundled
@@ -1458,6 +1504,11 @@ class ClientSync {
             if(skipLookups){
                 await this._syncLookupTablesPaged(source);
             }
+
+            // The height above moved; bring lastHashes to the same block before any
+            // live event can read the pair (see _refreshTipHashes). After the re-page,
+            // so the hash row resolves non-NULL.
+            await this._refreshTipHashes();
 
             // Verify the catch-up range. The live path recomputes every applied
             // block's consensus hashes, but a catch-up jumps a range in one
@@ -2726,9 +2777,11 @@ class ClientSync {
             // just-applied replica state). Verifies balances_root + block_merkle_root +
             // state_root; state_root folds the BTC-only stakes_root (now recomputed by the
             // follower, see stateCommitment.gatherStakeEntries), so a stakes divergence
-            // surfaces as a state_root mismatch. A NULL event.balances_root (block before
-            // the flag-day) or a null _lastComputedRoots (block skipped/duplicate this
-            // apply, already verified when first applied) is skipped, never a divergence.
+            // surfaces as a state_root mismatch. A null _lastComputedRoots (block before
+            // the flag-day per the replica's OWN map, or a skipped/duplicate apply already
+            // verified when first applied) is skipped, never a divergence; a NULL
+            // event.balances_root while _lastComputedRoots is set is the opposite, a
+            // withheld commitment, and halts (see the fail-closed block below).
             // Skip on a truncated replica: buildFullBalancesRoot sums the full credits/debits
             // history, which a truncated base does not retain, so its recomputed root cannot
             // match the source's full-history root and would false-halt every block. The
@@ -2736,8 +2789,31 @@ class ClientSync {
             // can see the replica is not running the apply-time commitment check.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
                     && !this.isTruncated()
-                    && event.balances_root != null && this.applier._lastComputedRoots){
+                    && this.applier._lastComputedRoots){
                 let computed   = this.applier._lastComputedRoots;
+                // Fail closed on WITHHELD roots (uuid:4b95ddef). Reaching here means the
+                // replica's OWN bundled flag-day map says the commitment is live at this
+                // height: ClientApplier.applyBlock sets _lastComputedRoots solely under
+                // isStateCommitmentActive and clears it at entry, so it is never stale.
+                // state_tree_roots.balances_root and .block_merkle_root are NOT NULL
+                // columns, so a null on the wire means the source served no roots row at
+                // an ACTIVE height. Reading that as "nothing to check" let a failed,
+                // re-seeded, or hostile source skip the one control that writes a
+                // sync_halt marker. Same posture as checkpoint.js commitmentMissing().
+                // state_root stays exempt: ServerPoller deliberately NULLs it for
+                // catch-up-burst blocks (viewTip > B), where the follower would otherwise
+                // recompute it over tip-state stakes and halt on a value the source never
+                // committed at B. VERIFY_STATE_COMMITMENT=false is the operator override.
+                let missing = [];
+                if(event.balances_root == null)
+                    missing.push({ field: 'balances_root', a: null, b: computed.balances_root });
+                if(event.block_merkle_root == null)
+                    missing.push({ field: 'block_merkle_root', a: null, b: computed.block_merkle_root });
+                if(missing.length){
+                    await this._haltOnDivergence(event.block_index, missing,
+                        this.sources.slice(0, 1), 'state-commitment-missing');
+                    return; // halted: do not advance lastAppliedBlock
+                }
                 let mismatches = [];
                 if(computed.balances_root !== event.balances_root)
                     mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
@@ -2826,7 +2902,26 @@ class ClientSync {
                 this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
             return;
         }
-        if(!cp || cp.state_root == null) return;                 // pre-commitment: nothing to anchor
+        if(!cp) return;
+        // A ROOTLESS checkpoint. Below the commitment flag-day that is normal and there
+        // is nothing to anchor. At or above it the federation never signs one, so a
+        // rootless row served there is stale, forged, or a source withholding the
+        // anchorable material (uuid:c9dfc3d9). Deciding that on the WIRE's missing
+        // state_root alone also returned before the seq-regression and freshness guards
+        // below, leaving no trace at all. Decide it on the replica's OWN bundled
+        // flag-day map instead, via the same predicate checkpoint.verifyCheckpoint
+        // fail-closes on, and make the active-height case visible. Still a return and
+        // never a halt: absence is not proof of forgery, matching the freshness guard's
+        // documented advisory stance a few lines down.
+        if(checkpointVerifier.commitmentMissing(cp)){
+            console.warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
+                this.chain + '/' + this.network + ' at block ' + cp.block_index +
+                ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
+                '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
+                'source may be withholding anchorable checkpoints, not anchoring this cycle');
+            return;
+        }
+        if(cp.state_root == null) return;                        // pre-commitment: nothing to anchor
         if(typeof cp.block_index !== 'number') return;           // malformed: no height to anchor
         // Reject a checkpoint_seq regression: a genuine federation sequence only advances,
         // so a lower seq than one already anchored means the source rewound (withholding

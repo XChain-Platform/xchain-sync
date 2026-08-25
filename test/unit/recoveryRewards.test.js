@@ -94,9 +94,30 @@ describe('collectRedrivenValidatorRewards', function(){
         assert.strictEqual(out.length, 2);
     });
 
-    it('swallows a query error (non-recovery stack / old schema) and returns []', async function(){
-        let db = { doQuery: async () => { throw new Error('no such table: recovery_pending_rewards'); } };
-        let out = await collectRedrivenValidatorRewards(db, 150, 150);
-        assert.deepStrictEqual(out, []);
+    it('swallows ONLY a schema gap (1146/1054); a transient fault propagates so the block is retried', async function(){
+        // Regression: a bare catch here made both callers' isSchemaGapError gates dead
+        // code (ServerPoller freezes the cursor, SnapshotBuilder aborts the stream), so a
+        // deadlock/lock-wait/connection drop shipped the block short its backdated rows
+        // with no consensus-hash signal. Mirrors derivedRewards on the same rail.
+        let missingTable = Object.assign(new Error("Table 'recovery_pending_rewards' doesn't exist"), { errno: 1146 });
+        assert.deepStrictEqual(await collectRedrivenValidatorRewards(
+            { doQuery: async () => { throw missingTable; } }, 150, 150), []);
+
+        let missingColumn = Object.assign(new Error('Unknown column applied_block'), { errno: 1054 });
+        assert.deepStrictEqual(await collectRedrivenValidatorRewards(
+            { doQuery: async () => { throw missingColumn; } }, 150, 150), []);
+
+        let transient = Object.assign(new Error('Lock wait timeout exceeded'), { errno: 1205 });
+        await assert.rejects(() => collectRedrivenValidatorRewards(
+            { doQuery: async () => { throw transient; } }, 150, 150), /Lock wait/);
+
+        let deadlock = Object.assign(new Error('Deadlock found when trying to get lock'), { errno: 1213 });
+        await assert.rejects(() => collectRedrivenValidatorRewards(
+            { doQuery: async () => { throw deadlock; } }, 150, 150), /Deadlock/);
+
+        // An errno-less fault is not a schema gap either: both callers' gates classify it
+        // as fatal (isSchemaGapError is false), so it must reach them rather than be eaten.
+        await assert.rejects(() => collectRedrivenValidatorRewards(
+            { doQuery: async () => { throw new Error('socket hang up'); } }, 150, 150), /socket hang up/);
     });
 });

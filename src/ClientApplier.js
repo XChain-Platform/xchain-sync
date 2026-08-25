@@ -175,7 +175,14 @@ class ClientApplier {
                 ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
         }
 
-        let existing = await this.db.getBlockHashRow(payload.block_index);
+        // rethrow, not the fail-soft default: this guard runs before beginTransaction, where
+        // doQuery turns a query error into [], so a transient fault would read as "block not
+        // applied yet" and re-run _insertRows for a block already in the replica - credits,
+        // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
+        // upsertFullDumpTables), and _rebuildBalancesTouchedBy would then run over the
+        // duplicated rows. Let the error propagate: _applyBlockEvent's catch logs it and
+        // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
+        let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             console.log('Block ' + payload.block_index + ' already exists, skipping');
             return;

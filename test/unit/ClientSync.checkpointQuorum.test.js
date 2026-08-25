@@ -139,13 +139,57 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         assert.strictEqual(db.doQuery.called, false, 'cannot compare a height not yet recomputed');
     });
 
-    it('skips a pre-commitment checkpoint (null state_root)', async function(){
+    // uuid:c9dfc3d9. Deciding "pre-commitment" from the WIRE's missing state_root alone
+    // lets a rootless checkpoint served AT an active height return before the
+    // seq-regression and freshness guards below without a trace. The replica
+    // bundles the flag-day map (checkpoint_commitment_activation.js) and the verifier
+    // already fail-closes on the same predicate, so the activation question is decided
+    // locally. Regtest's threshold is 0, so every checkpoint here is commitment-active.
+    it('WARNS on a rootless checkpoint at a commitment-ACTIVE height (does not anchor, does not halt)', async function(){
         const s = makeSigner(); pin(s);
-        const cp = signedCheckpoint(s); cp.state_root = null;
+        const warn = sinon.stub(console, 'warn');
+        const cp = signedCheckpoint(s);
+        cp.state_root = null; cp.block_merkle_root = null;     // withheld / forged: the hub never signs this
         getStub.resolves({ data: cp });
+
         await sync._verifyCheckpointQuorum();
-        assert.strictEqual(sync.isHalted(), false);
-        assert.strictEqual(db.doQuery.called, false);
+
+        assert.ok(warn.getCalls().some(c => /ROOTLESS checkpoint/.test(c.args[0])),
+            'a rootless checkpoint past the flag-day must be surfaced, not silently dropped');
+        assert.strictEqual(sync.isHalted(), false, 'absence is not proof of forgery: advisory, never a halt');
+        assert.strictEqual(db.doQuery.called, false, 'must not anchor on an unverifiable checkpoint');
+    });
+
+    it('skips a genuinely pre-commitment checkpoint SILENTLY (snapshot below the flag-day)', async function(){
+        // mainnet's checkpoint-commitment flag-day is snapshot_block 961000; below it a
+        // rootless checkpoint is the normal legacy shape and must not warn.
+        const s = makeSigner();
+        process.env['CHECKPOINT_VALIDATORS_BTC_MAINNET'] =
+            JSON.stringify([{ pubkey: s.pubkeyHex, weight: '100', source: s.pubkeyHex }]);
+        try {
+            const warn    = sinon.stub(console, 'warn');
+            const mainDb  = createMockDb();
+            const mainSync = new ClientSync('BTC', 'mainnet', mainDb,
+                { applyBlock: sinon.stub().resolves() }, { rollback: sinon.stub().resolves() },
+                new HashVerifier(),
+                { SYNC_SOURCES: 'http://a:3006', VERIFY_CHECKPOINT_QUORUM: true, CHECKPOINT_VERIFY_INTERVAL: 1 },
+                new Utility());
+            mainSync.lastAppliedBlock = 100;
+
+            const cp = signedCheckpoint(s);
+            cp.network = 'mainnet'; cp.snapshot_block = 900000;
+            cp.state_root = null; cp.block_merkle_root = null;
+            getStub.resolves({ data: cp });
+
+            await mainSync._verifyCheckpointQuorum();
+
+            assert.strictEqual(warn.getCalls().some(c => /ROOTLESS checkpoint/.test(c.args[0])), false,
+                'below the flag-day a rootless checkpoint is normal and stays silent');
+            assert.strictEqual(mainSync.isHalted(), false);
+            assert.strictEqual(mainDb.doQuery.called, false);
+        } finally {
+            delete process.env['CHECKPOINT_VALIDATORS_BTC_MAINNET'];
+        }
     });
 
     it('records the verified checkpoint_seq high-water mark on success', async function(){

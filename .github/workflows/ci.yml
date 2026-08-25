@@ -96,13 +96,15 @@ jobs:
       # generated-column map from the indexer AND decoder DDL, so in the shared `ci`
       # job (no siblings checked out) it skips, and a guard that only ever skips
       # protects nothing. It needs the DECODER path too, which this job already has
-      # checked out for the e2e tier.
+      # checked out for the e2e tier. decoderTableClassification.test.js joins for the
+      # same reason: it enumerates the decoder schema dir to prove TOPOLOGY.decoder
+      # exhaustive, so it is only real coverage where that sibling exists.
       - name: Run cross-repo consensus drift guards against the checked-out indexer
         env:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js test/unit/decoderTableClassification.test.js
 
       - name: Run the e2e tier
         env:
