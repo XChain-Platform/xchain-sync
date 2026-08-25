@@ -266,6 +266,16 @@ class SyncService {
                 // both paths self-heal. Idempotent, so the double-call on the
                 // direct-DB path is a cheap no-op.
                 await db.ensureReplicaSecondaryIndexes();
+                // Fail closed on collation drift in the columns the stake-weight
+                // snapshot orders on. The follower rebuilds stakes_root from the
+                // byte-mirrored _cappedStakeWeightsSql, whose window caps truncate on
+                // that order, so a replica whose index_addresses.address collation
+                // deviates from the source's picks different cap survivors and then
+                // halts on a root it computed wrong. Runs AFTER the schema self-heal
+                // above, so a replica that was going to be repaired is judged on its
+                // repaired state. Twin of xchain-indexer's
+                // _assertStakeWeightOrderingCollation.
+                await db.assertStakeWeightOrderingCollation();
             } else {
                 // Server mode: connect to the DB this server polls + serves.
                 // Default: the authoritative DB at the hub-provided coordinates.

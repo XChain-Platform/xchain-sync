@@ -33,6 +33,7 @@ const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 const poolSizing = require('./poolSizing');
 const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
+const stakeWeightCollation = require('./stake_weight_collation_activation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -691,6 +692,43 @@ class Database {
                 if(e.errno !== 1146)
                     console.error('Failed to widen attests.request_status ENUM:', e);
             }
+        }
+    }
+
+    // Fail-closed schema contract for the columns the stake-weight snapshot ORDERS on
+    // (stake_weight_collation_activation.js). Twin of xchain-indexer's
+    // _assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
+    // declared contract so the two services cannot disagree about what "undrifted"
+    // means. The follower rebuilds stakes_root from the byte-mirrored
+    // _cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
+    // collation selects different cap survivors and the replica halts on a root it
+    // computed wrong. Once the collation gate is armed, a drifted CHARSET fails the
+    // query outright (errno 1253), so halting at boot with the column named is the
+    // cheap end of that.
+    //
+    // The comparison normalises the utf8 / utf8mb3 spelling on both sides: MariaDB 10.6
+    // renamed the charset, so a correctly declared column reports utf8mb3_general_ci and
+    // a literal name comparison would halt the whole fleet on a correct schema.
+    //
+    // Indexer replicas only (decoder replicas hold no stakes). An absent column and an
+    // unreadable name both return early rather than halt.
+    async assertStakeWeightOrderingCollation(){
+        if(this.dbType !== 'indexer') return;
+        for(const spec of stakeWeightCollation.STAKE_WEIGHT_ORDERING_COLUMNS){
+            // rethrow, not the fail-soft default: outside a transaction doQuery logs a
+            // driver fault and returns [], which the absent-table branch below would read
+            // as "no such column" and skip. A fail-closed collation guard that a transient
+            // fault turns into a pass is fail-open on the replica fleet.
+            let rows = await this.doQuery(
+                "SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND column_name = ?",
+                [this.dbName, spec.table, spec.column],
+                null,
+                { rethrow: true }
+            );
+            if(!rows || rows.length === 0) continue;  // table absent; schema apply creates it
+            let reason = stakeWeightCollation.collationDriftReason(spec, rows[0]);
+            if(reason) throw new Error(reason);
         }
     }
 
@@ -1564,16 +1602,26 @@ class Database {
     // pubkey+capability); only the returned SET is. CONSENSUS-CRITICAL: feeds the
     // hashed stakes_root at/after SWQ_SOURCE_CAP_ACTIVATION and MUST stay byte-identical
     // to the xchain-indexer twin (cross-repo drift guard in rollback-coverage.test.js).
-    _cappedStakeWeightsSql(inner, maxSources, maxKeys){
+    //
+    // `binCollation` (stake_weight_collation_activation.js) pins the ordering to a
+    // binary collation. `source` and `pubkey` resolve through index_addresses.address
+    // and index_pubkeys.pubkey, both declared utf8_general_ci (folding), and every
+    // other consensus read of those columns already pins utf8_bin. Order is a
+    // consensus quantity HERE and only here: the two window ranks are what the caps
+    // truncate on, so the collation decides which sources and which keys survive into
+    // the hashed stakes_root. Below the height the emitted SQL is byte-identical to
+    // what shipped before the gate; the suffix is '' and concatenates away.
+    _cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation){
+        let c = stakeWeightCollation.stakeWeightCollate(binCollation);
         let sql = `SELECT r.pubkey AS pubkey, r.source AS source, r.weight AS weight, r._sr AS _sr
                    FROM (
                        SELECT b.pubkey AS pubkey, b.source AS source, b.weight AS weight,
-                              DENSE_RANK() OVER (ORDER BY b.source)                        AS _sr,
-                              ROW_NUMBER() OVER (PARTITION BY b.source ORDER BY b.pubkey)  AS _kr
+                              DENSE_RANK() OVER (ORDER BY b.source${c})                        AS _sr,
+                              ROW_NUMBER() OVER (PARTITION BY b.source${c} ORDER BY b.pubkey${c})  AS _kr
                        FROM (${inner.sql}) b
                    ) r
                    WHERE r._sr <= ? AND r._kr <= ?
-                   ORDER BY r.source, r.pubkey`;
+                   ORDER BY r.source${c}, r.pubkey${c}`;
         let args = [...inner.args, maxSources + 1, maxKeys];
         return { sql, args };
     }
@@ -1587,10 +1635,15 @@ class Database {
     // both sides of the height. Sync reads coin/network from the caller (it has no
     // per-chain config); a null coin/network stays inert (legacy uncapped path).
     async _applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
+        // Ordering collation for BOTH regimes (stake_weight_collation_activation.js);
+        // the legacy LIMIT branch truncates on the same order the capped branch ranks on.
+        // A null coin/network stays inert here exactly as it does for the source cap.
+        let binCollation = stakeWeightCollation.isStakeWeightBinCollationActive(blockIndex, network, coin);
+        let swc = stakeWeightCollation.stakeWeightCollate(binCollation);
         if(swqCap.isSwqSourceCapActive(blockIndex, network, coin)){
             let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
             let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
-            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys);
+            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation);
             // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
             // stakes_root, and the SPV checkpoint forward-follow
             // (ClientSync._oraclePublishSetAt) reads it with NO transaction open, so a
@@ -1608,7 +1661,7 @@ class Database {
             }));
             return { rows, truncated };
         }
-        let query = `${inner.sql} ORDER BY source, pubkey LIMIT ?`;
+        let query = `${inner.sql} ORDER BY source${swc}, pubkey${swc} LIMIT ?`;
         let raw = await this.doQueryStrict(query, [...inner.args, limit]);
         let truncated = raw.length >= limit;
         if(truncated)
