@@ -37,10 +37,28 @@
  *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
  *     drift guard in test/unit/rollback-coverage.test.js.
  *
- * The PersistentSMT / DbNodeStore / MemoryNodeStore engine, the leaf encoders,
- * buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to the
- * indexer; merkle.js itself is a verbatim copy. The golden vectors + the
- * persistent-vs-reference fuzz test lock the equality.
+ * DbNodeStore, MemoryNodeStore, PersistentSMT.update / buildFull / prove, the leaf
+ * encoders, buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to
+ * the indexer; merkle.js itself is a verbatim copy. The golden vectors + the
+ * persistent-vs-reference fuzz test lock the equality, and the twin cases in
+ * test/unit/blockhash-conformance-twin.test.js pin the bytes.
+ *
+ * ONE DECLARED DIVERGENCE, and it is the only one: the indexer's PersistentSMT
+ * carries a bounded read-through node cache (SMT_NODE_CACHE_MAX, _nodeCache,
+ * _cacheGet/_cachePut, wired into _descend's read and _putBatch's write) that this
+ * copy does not. It is a transport fix on the indexer's own hot path, and it is
+ * root-neutral by construction: positive entries only (a store MISS is never
+ * cached, so the M-17 fail-loud absence signal still reaches the store every time),
+ * content-addressed keys (node_hash = H(left||right), so an entry cannot go stale),
+ * and instance-scoped so it dies with the call. The follower's consensus recompute
+ * therefore reads the same rows and returns the same roots, one store round trip at
+ * a time. Porting it here is an open decision, NOT an oversight: it buys the same
+ * round-trip saving at the cost of a few hundred MB of transient heap on the
+ * follower apply path, which nobody has measured on follower hardware. Do not
+ * silently widen this divergence and do not silently close it: the shape is pinned
+ * by 'PersistentSMT divergence is exactly the indexer node cache' in
+ * test/unit/blockhash-conformance-twin.test.js, which fails on either move and
+ * points back at this paragraph.
  *
  ********************************************************************/
 
@@ -92,8 +110,9 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 // transaction, so its reads rethrow today by inheritance rather than by design,
 // while the integration harnesses already call it untransacted. The posture is
 // "must not DEPEND on a caller-held transaction", which is why the db.js helpers
-// this file delegates to are strict too (getBlockLeafRows, _applyStakeWeightCap,
-// and the getStatusId behind the stake readers). The failure shapes:
+// this file delegates to are strict too (getBlockLeafRows, getStateRootsRow,
+// _applyStakeWeightCap, and the getStatusId behind the stake readers). The
+// failure shapes:
 //
 //   DbNodeStore.get -> [] is "this subtree is empty", so _descend keeps
 //     building against a truncated tree and emits a root that looks perfectly

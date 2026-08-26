@@ -33,6 +33,7 @@ const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 const poolSizing = require('./poolSizing');
 const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
+const stakeWeightCollation = require('./stake_weight_collation_activation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -86,6 +87,11 @@ class Database {
         this.pass   = pass;
         this.util   = util;
         this.dbType = dbType || 'indexer';  // 'indexer' (default) or 'decoder'
+
+        // Name of the replication connection carrying the served schemas. Unset
+        // reduces across every connection, worst-case; naming one measures that
+        // stream alone so an unrelated lagging connection cannot drag the reading.
+        this.replicaConnectionName = (process.env.SYNC_REPLICA_CONNECTION || '').trim();
 
         // Connection pool parameters.
         // Sizing is per dbType (see poolSizing.js): the indexer pool absorbs
@@ -689,6 +695,43 @@ class Database {
         }
     }
 
+    // Fail-closed schema contract for the columns the stake-weight snapshot ORDERS on
+    // (stake_weight_collation_activation.js). Twin of xchain-indexer's
+    // _assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
+    // declared contract so the two services cannot disagree about what "undrifted"
+    // means. The follower rebuilds stakes_root from the byte-mirrored
+    // _cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
+    // collation selects different cap survivors and the replica halts on a root it
+    // computed wrong. Once the collation gate is armed, a drifted CHARSET fails the
+    // query outright (errno 1253), so halting at boot with the column named is the
+    // cheap end of that.
+    //
+    // The comparison normalises the utf8 / utf8mb3 spelling on both sides: MariaDB 10.6
+    // renamed the charset, so a correctly declared column reports utf8mb3_general_ci and
+    // a literal name comparison would halt the whole fleet on a correct schema.
+    //
+    // Indexer replicas only (decoder replicas hold no stakes). An absent column and an
+    // unreadable name both return early rather than halt.
+    async assertStakeWeightOrderingCollation(){
+        if(this.dbType !== 'indexer') return;
+        for(const spec of stakeWeightCollation.STAKE_WEIGHT_ORDERING_COLUMNS){
+            // rethrow, not the fail-soft default: outside a transaction doQuery logs a
+            // driver fault and returns [], which the absent-table branch below would read
+            // as "no such column" and skip. A fail-closed collation guard that a transient
+            // fault turns into a pass is fail-open on the replica fleet.
+            let rows = await this.doQuery(
+                "SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND column_name = ?",
+                [this.dbName, spec.table, spec.column],
+                null,
+                { rethrow: true }
+            );
+            if(!rows || rows.length === 0) continue;  // table absent; schema apply creates it
+            let reason = stakeWeightCollation.collationDriftReason(spec, rows[0]);
+            if(reason) throw new Error(reason);
+        }
+    }
+
     // Ensure known secondary indexes exist on replicated tables. addMissingColumns
     // propagates new columns from the source schema but does not carry secondary indexes
     // (SHOW CREATE TABLE returns index definitions inline with the CREATE TABLE DDL, but
@@ -1041,9 +1084,13 @@ class Database {
         return await this.doQuery(query, args, conn, { rethrow: true });
     }
 
-    async getLastBlock(conn){
+    // `opts` is forwarded to doQuery, so a cursor caller that must not mistake an
+    // unreadable tip for an empty replica can pass { rethrow: true } (M-17). The
+    // default stays fail-soft for the /status readers, where a partial answer beats
+    // a 500.
+    async getLastBlock(conn, opts){
         let query = "SELECT MAX(block_index) AS block_index FROM blocks";
-        let rows  = await this.doQuery(query, null, conn);
+        let rows  = await this.doQuery(query, null, conn, opts);
         if(rows.length > 0 && rows[0].block_index !== null)
             return Number(rows[0].block_index);
         return null;
@@ -1058,34 +1105,70 @@ class Database {
     // primary/co-located source (empty result set), null when the read itself was
     // refused (missing REPLICATION CLIENT grant), which callers must treat as stale.
     async getReplicaStatus(conn){
+        // Multi-source first: `SHOW REPLICA STATUS` reports only the UNNAMED
+        // connection, so a replica whose connections are all named answers it with
+        // zero rows, which is indistinguishable from a primary. Fall back for MySQL.
         let rows;
-        try {
-            rows = await this.doQueryStrict("SHOW REPLICA STATUS", null, conn);
-        } catch (error){
-            // Pre-10.5 servers only know the SLAVE spelling; anything else is a
-            // genuine failure and falls through to the unknown result below.
-            try {
-                rows = await this.doQueryStrict("SHOW SLAVE STATUS", null, conn);
-            } catch (fallbackError){
-                if(!this._replicaStatusWarned){
-                    this._replicaStatusWarned = true;
-                    this.util.logError('Cannot read replication status (needs REPLICATION CLIENT):', fallbackError);
+        let attempts = ['SHOW ALL SLAVES STATUS', 'SHOW REPLICA STATUS', 'SHOW SLAVE STATUS'];
+        let lastError = null;
+        for (const sql of attempts){
+            try { rows = await this.doQueryStrict(sql, null, conn); lastError = null; break; }
+            catch (error){ lastError = error; }
+        }
+        if(lastError){
+            if(!this._replicaStatusWarned){
+                this._replicaStatusWarned = true;
+                // Name both spellings: MariaDB 10.5 split the privilege, where
+                // REPLICATION CLIENT aliases BINLOG MONITOR and does not cover
+                // slave status.
+                this.util.logError('Cannot read replication status (needs SLAVE MONITOR on MariaDB, ' +
+                    'REPLICATION CLIENT on MySQL):', lastError);
+            }
+            return { isReplica: null, running: null, secondsBehind: null };
+        }
+        // No connections at all: a primary, or a server whose databases are fed by
+        // the sync protocol rather than native replication. Fresh by this probe; the
+        // client-side staleness window covers that path.
+        if(!rows || rows.length === 0)
+            return { isReplica: false, running: null, secondsBehind: null };
+
+        const readRow = (row) => {
+            const io     = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
+            const sql    = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
+            const behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
+            return {
+                name:    row.Connection_name != null ? String(row.Connection_name) : '',
+                running: io === 'Yes' && sql === 'Yes',
+                // NULL here means the SQL thread is not applying at all, never "0 behind".
+                secondsBehind: behind == null ? null : Number(behind)
+            };
+        };
+        let parsed = rows.map(readRow);
+
+        // A named-but-absent connection is an assertion that no longer matches the
+        // server, not an absence of replication: fail closed rather than silently
+        // measuring a different stream.
+        const wanted = this.replicaConnectionName;
+        if(wanted){
+            const hit = parsed.find(p => p.name === wanted);
+            if(!hit){
+                if(!this._replicaConnectionMissingWarned){
+                    this._replicaConnectionMissingWarned = true;
+                    this.util.logError('Configured replica connection "' + wanted + '" is not present on this server; ' +
+                        'saw [' + parsed.map(p => p.name || '(unnamed)').join(', ') + ']. Reporting unknown.', null);
                 }
                 return { isReplica: null, running: null, secondsBehind: null };
             }
+            return { isReplica: true, running: hit.running, secondsBehind: hit.secondsBehind };
         }
-        if(!rows || rows.length === 0)
-            return { isReplica: false, running: null, secondsBehind: null };
-        let row = rows[0];
-        let io  = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
-        let sql = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
-        let behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
-        return {
-            isReplica: true,
-            running: io === 'Yes' && sql === 'Yes',
-            // NULL here means the SQL thread is not applying at all, never "0 behind".
-            secondsBehind: behind == null ? null : Number(behind)
-        };
+
+        // Reduce across every connection, worst-case: served data is only as fresh as
+        // its laggiest stream, and one stopped SQL thread makes the server stale.
+        const running = parsed.every(p => p.running);
+        const anyUnknown = parsed.some(p => p.secondsBehind == null);
+        const secondsBehind = anyUnknown ? null
+            : parsed.reduce((max, p) => Math.max(max, p.secondsBehind), 0);
+        return { isReplica: true, running, secondsBehind };
     }
 
     // Get block hash data for a given block_index.
@@ -1196,7 +1279,11 @@ class Database {
         return res ? res.affectedRows : 0;
     }
 
-    async getBlockHashRow(block_index, conn){
+    // `opts` is forwarded to doQuery, so a caller whose NULL answer suppresses a guard
+    // can pass { rethrow: true }: outside a transaction doQuery turns a query error into
+    // [], which reads here as "this block was never applied" (M-17). The default stays
+    // fail-soft for the /status readers.
+    async getBlockHashRow(block_index, conn, opts){
         let query;
         if(this.dbType === 'decoder'){
             query = `SELECT
@@ -1225,7 +1312,7 @@ class Database {
                 WHERE
                     b.block_index=?`;
         }
-        let rows = await this.doQuery(query, [block_index], conn);
+        let rows = await this.doQuery(query, [block_index], conn, opts);
         if(rows.length > 0)
             return rows[0];
         return null;
@@ -1235,8 +1322,15 @@ class Database {
     // { balances_root, stakes_root, state_root, block_merkle_root } or null. Used by
     // the follower's incremental SMT (reads block-1's balances_root) and by
     // ServerPoller to attach the committed roots to the outgoing block payload.
+    //
+    // STRICT (M-17): this is a consensus-input read for computeFollowerRoots, which
+    // calls it with no conn. Fail-soft doQuery answers [] on a non-transactional
+    // query fault, which this method turns into null and the follower reads as "no
+    // prior row" - a wrong answer, not an error signal, sending it into a silent
+    // full rebuild instead of a halt. ServerPoller always passes a conn, and doQuery
+    // returns conn.query() before its own catch, so this is a no-op for that caller.
     async getStateRootsRow(chain, network, block_index, conn){
-        let rows = await this.doQuery(
+        let rows = await this.doQueryStrict(
             `SELECT balances_root, stakes_root, state_root, block_merkle_root
              FROM state_tree_roots
              WHERE chain=? AND network=? AND block_index=? LIMIT 1`,
@@ -1403,9 +1497,13 @@ class Database {
         return await this.doQuery(query, [startBlock, endBlock]);
     }
 
-    async getFirstActionIndex(block_index, conn){
+    // `opts` is forwarded to doQuery, so a caller whose NULL answer gates a destructive
+    // branch can pass { rethrow: true }. It matters because outside a transaction doQuery
+    // collapses a query error into [], which reads here as "no actions in range" (M-17).
+    // The default stays fail-soft for SnapshotBuilder, which only sizes a window with it.
+    async getFirstActionIndex(block_index, conn, opts){
         let query = `SELECT action_index FROM actions a WHERE a.block_index >= ? ORDER BY a.action_index ASC LIMIT 1`;
-        let rows  = await this.doQuery(query, [block_index], conn);
+        let rows  = await this.doQuery(query, [block_index], conn, opts);
         if(rows.length > 0)
             return Number(rows[0].action_index);
         return null;
@@ -1504,16 +1602,26 @@ class Database {
     // pubkey+capability); only the returned SET is. CONSENSUS-CRITICAL: feeds the
     // hashed stakes_root at/after SWQ_SOURCE_CAP_ACTIVATION and MUST stay byte-identical
     // to the xchain-indexer twin (cross-repo drift guard in rollback-coverage.test.js).
-    _cappedStakeWeightsSql(inner, maxSources, maxKeys){
+    //
+    // `binCollation` (stake_weight_collation_activation.js) pins the ordering to a
+    // binary collation. `source` and `pubkey` resolve through index_addresses.address
+    // and index_pubkeys.pubkey, both declared utf8_general_ci (folding), and every
+    // other consensus read of those columns already pins utf8_bin. Order is a
+    // consensus quantity HERE and only here: the two window ranks are what the caps
+    // truncate on, so the collation decides which sources and which keys survive into
+    // the hashed stakes_root. Below the height the emitted SQL is byte-identical to
+    // what shipped before the gate; the suffix is '' and concatenates away.
+    _cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation){
+        let c = stakeWeightCollation.stakeWeightCollate(binCollation);
         let sql = `SELECT r.pubkey AS pubkey, r.source AS source, r.weight AS weight, r._sr AS _sr
                    FROM (
                        SELECT b.pubkey AS pubkey, b.source AS source, b.weight AS weight,
-                              DENSE_RANK() OVER (ORDER BY b.source)                        AS _sr,
-                              ROW_NUMBER() OVER (PARTITION BY b.source ORDER BY b.pubkey)  AS _kr
+                              DENSE_RANK() OVER (ORDER BY b.source${c})                        AS _sr,
+                              ROW_NUMBER() OVER (PARTITION BY b.source${c} ORDER BY b.pubkey${c})  AS _kr
                        FROM (${inner.sql}) b
                    ) r
                    WHERE r._sr <= ? AND r._kr <= ?
-                   ORDER BY r.source, r.pubkey`;
+                   ORDER BY r.source${c}, r.pubkey${c}`;
         let args = [...inner.args, maxSources + 1, maxKeys];
         return { sql, args };
     }
@@ -1527,10 +1635,15 @@ class Database {
     // both sides of the height. Sync reads coin/network from the caller (it has no
     // per-chain config); a null coin/network stays inert (legacy uncapped path).
     async _applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
+        // Ordering collation for BOTH regimes (stake_weight_collation_activation.js);
+        // the legacy LIMIT branch truncates on the same order the capped branch ranks on.
+        // A null coin/network stays inert here exactly as it does for the source cap.
+        let binCollation = stakeWeightCollation.isStakeWeightBinCollationActive(blockIndex, network, coin);
+        let swc = stakeWeightCollation.stakeWeightCollate(binCollation);
         if(swqCap.isSwqSourceCapActive(blockIndex, network, coin)){
             let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
             let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
-            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys);
+            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation);
             // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
             // stakes_root, and the SPV checkpoint forward-follow
             // (ClientSync._oraclePublishSetAt) reads it with NO transaction open, so a
@@ -1548,7 +1661,7 @@ class Database {
             }));
             return { rows, truncated };
         }
-        let query = `${inner.sql} ORDER BY source, pubkey LIMIT ?`;
+        let query = `${inner.sql} ORDER BY source${swc}, pubkey${swc} LIMIT ?`;
         let raw = await this.doQueryStrict(query, [...inner.args, limit]);
         let truncated = raw.length >= limit;
         if(truncated)

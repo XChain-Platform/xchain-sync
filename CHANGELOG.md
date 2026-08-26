@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-08-25
+
+### Added
+- The bundled consensus pin is verified at API boot, so a host carrying a drifted coin registry halts instead of serving from it.
+- The hub-served coin consensus hashes are cross-checked against the local registry, logging a mismatch as a transport-integrity signal.
+- The replica-completeness sweep now also runs from the primary source's periodic status tick, so a replica with a single configured source is checked too.
+
+### Fixed
+- Replica freshness is read from every replication connection, so a multi-source replica is no longer mistaken for a primary and reported as up to date.
+- The stake-weight collation guard now reads its own column strictly instead of through the fail-soft query default, so a transient database fault can no longer turn a fail-closed check into a pass.
+- Several guard and cursor reads now refuse a fail-soft empty result instead of treating a transient database fault as an authoritative negative.
+- Live block payloads now include the block's state-hash row, so a follower's state hash no longer resolves to null above the last snapshot height.
+- The armed-map fingerprint now covers several consensus-critical activation files it previously missed, so a stale copy of one is no longer invisible to the fleet sweep.
+- The content-parity check no longer misreports validator reward rows as mismatched, since each replica legitimately assigns them their own local id.
+- The documented status endpoint example now uses a chain name instead of a ticker.
+
 ## [0.10.0] - 2026-08-18
 
 ### Changed

@@ -70,7 +70,7 @@ const SIBLINGS = [
     { repo: 'xchain-decoder', envs: [],
       marker: path.join('src', 'sql'),
       altEnvs: ['XCHAIN_DECODER_SQL_PATH'],
-      guards: 'the generated-column parity against the decoder schema' },
+      guards: 'the generated-column parity and the decoder table-classification exhaustiveness against the decoder schema' },
     { repo: 'xchain-sdk', envs: [],
       marker: path.join('src', 'state_subtree_activation.js'),
       guards: 'state_subtree_activation.js byte-identity in its client-liveness carrier' },

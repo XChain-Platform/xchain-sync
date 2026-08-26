@@ -690,9 +690,60 @@ describe('ServerPoller', function(){
 
             let payload = await poller._buildBlockPayload(1);
 
-            // Should have called doQuery for index_transactions with IDs 1,2,3,5
+            // Assert the ID SET, not merely that a call happened: a missing hash id rides
+            // green against the weaker assertion (see the state_hash_id regression below).
             let idxCall = db.doQuery.getCalls().find(c => c.args[0].includes('index_transactions'));
             assert.ok(idxCall);
+            assert.deepStrictEqual([...idxCall.args[1]].sort((a, b) => a - b), [1, 2, 3, 5]);
+        });
+
+        it('streams the blocks.state_hash_id index_transactions row with the live block @regression', async function(){
+            // The generic `*_id` pass skips index_transactions, so this explicit
+            // collection is the only path the state hash row takes to a follower: omit it
+            // and every live block leaves a dangling blocks.state_hash_id behind.
+            db.getBlockHashRow.resolves({
+                block_index: 1, block_time: 100,
+                ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c', state_hash: 's'
+            });
+            db.getBlockScopedRows.callsFake(async (table) => {
+                if(table === 'blocks') return [{
+                    block_index: 1, ledger_hash_id: 1, actions_hash_id: 2,
+                    contract_hash_id: 3, state_hash_id: 4
+                }];
+                return [];
+            });
+            db.getTransactions.resolves([]);
+            db.getActions.resolves([]);
+            db.doQuery.resolves([]);
+
+            await poller._buildBlockPayload(1);
+
+            let idxCall = db.doQuery.getCalls().find(c => c.args[0].includes('index_transactions'));
+            assert.ok(idxCall, 'index_transactions must be queried for the block hash ids');
+            assert.ok(idxCall.args[1].includes(4),
+                'the state_hash_id row must ride the live block payload, or the replica ' +
+                'holds a dangling reference and serves state_hash NULL forever');
+        });
+
+        it('collects both decoder blocks hash ids under the shared *_hash_id rule @regression', async function(){
+            let decoderDb = createMockDb();
+            decoderDb.dbType = 'decoder';
+            decoderDb.getBlockHashRow.resolves({ block_index: 1, block_time: 100, block_hash: 'bh' });
+            decoderDb.getBlockScopedRows.callsFake(async (table) => {
+                if(table === 'blocks') return [{
+                    block_index: 1, block_hash_id: 11, previous_block_hash_id: 12
+                }];
+                return [];
+            });
+            decoderDb.getTransactions.resolves([{ tx_index: 1, tx_hash_id: 13 }]);
+            decoderDb.doQuery.resolves([]);
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+
+            await decoderPoller._buildBlockPayload(1);
+
+            let idxCall = decoderDb.doQuery.getCalls().find(c => c.args[0].includes('index_transactions'));
+            assert.ok(idxCall);
+            assert.deepStrictEqual([...idxCall.args[1]].sort((a, b) => a - b), [11, 12, 13]);
         });
 
         it('fetches index_addresses by source_id from transactions', async function(){

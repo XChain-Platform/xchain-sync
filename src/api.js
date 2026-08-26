@@ -39,6 +39,7 @@ const BlockHasher = require('./BlockHasher');
 const { createApiKeyMiddleware, safeEqual } = require('./middleware');
 const { createShutdown, createSyncDrain } = require('./shutdown');
 const { getReplicatedTables, missingReplicatedTables } = require('./replicatedTables');
+const coins       = require('./coins');
 
 // Stateless helper for the advisory index-map parity checksum published on
 // /status (server mode). getDataHash holds no per-call state, so one shared
@@ -369,6 +370,16 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
 }
 
 async function startApi(){
+
+    // Verify the bundled coin files against CONSENSUS_CONFIG_PIN before any port,
+    // poller or source-DB handle exists. Sync recomputes state and halts on
+    // divergence, so a coin bundle that drifted on THIS host must fail closed with
+    // the pin-mismatch error instead of surfacing later as an opaque
+    // local-recompute divergence. CI hashes the checkout, never the running
+    // artifact. All networks (the XChainHub.start form) because sync serves every
+    // chain the hub hands it, so no single network key is known at boot. A null pin
+    // (mainnet, pre-arm) skips; a mismatch on an armed network throws, uncaught.
+    for(const net of coins.NETWORKS) coins.verifyConsensusPin(net);
 
     const app = express();
     // Must precede every limiter: they read req.ip, which express only derives

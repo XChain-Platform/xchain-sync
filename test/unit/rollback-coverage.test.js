@@ -393,7 +393,7 @@ describe('Rollback coverage guard @regression', function(){
         const fs = require('fs');
         function cappedSql(p){
             const src = fs.readFileSync(p, 'utf8');
-            const m = src.match(/_cappedStakeWeightsSql\(inner, maxSources, maxKeys\)\{([\s\S]*?)return \{ sql, args \};/);
+            const m = src.match(/_cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
             assert.ok(m, `_cappedStakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
@@ -784,7 +784,12 @@ describe('Rollback coverage guard @regression', function(){
     // follower must answer "which leaves does this block commit" with the same
     // bytes: the follower recomputes and HALTs on divergence, so drift here is a
     // fleet halt at the first armed block rather than a subtle fork.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js']){
+    // stake_weight_collation_activation.js decides the ORDER the stake-weight window
+    // caps truncate on, so a drifted copy selects different cap survivors and commits a
+    // different stakes_root at an armed height - the same class of fork the source-cap
+    // twin above guards. It also carries the schema-drift contract both services'
+    // startup checks read, so one definition of "undrifted" serves both fleets.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);

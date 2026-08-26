@@ -358,6 +358,73 @@ describe('ClientSync', function(){
             await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
             assert.strictEqual(sync._incrementalCatchUp.called, false);
         });
+
+        it('runs the completeness sweep against the source that sent the status tick @regression', async function(){
+            // The status tick is the one recurring signal from the client's OWN primary,
+            // and the bootstrap caller's loop over sources[1..] never reaches that source,
+            // so a single-source replica runs no completeness check without this wiring.
+            config.COMPLETENESS_CHECK_INTERVAL = 60000;
+            sync.lastAppliedBlock = 100;
+            sinon.stub(sync, '_maybeVerifyCompleteness').resolves();
+
+            await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
+
+            assert.strictEqual(sync._maybeVerifyCompleteness.calledOnce, true);
+            assert.strictEqual(sync._maybeVerifyCompleteness.firstCall.args[0], 'http://source1:3006');
+        });
+    });
+
+    describe('_maybeVerifyCompleteness', function(){
+        beforeEach(function(){
+            config.COMPLETENESS_CHECK_INTERVAL = 60000;
+            sync.lastAppliedBlock = 100;
+            db.getTableCount = sinon.stub().resolves(9);
+            sinon.stub(axios, 'get').resolves({
+                data: { block_height: 100, table_counts: { blocks: 10 } }
+            });
+        });
+
+        it('reports a shortfall against the primary source at equal heights', async function(){
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+
+            assert.strictEqual(axios.get.calledOnce, true);
+            assert.ok(/\/status\/indexer\/bitcoin\/mainnet$/.test(axios.get.firstCall.args[0]));
+            let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+            assert.ok(/TABLE_COUNT_MISMATCH/.test(logged),
+                'a follower short rows the hashes cannot cover must be reported');
+        });
+
+        it('does not sweep while the replica is behind the source', async function(){
+            // A shortfall while behind is ordinary lag: reporting it would train
+            // operators to ignore the one signal this check exists to give them.
+            await sync._maybeVerifyCompleteness('http://source1:3006', 140);
+            assert.strictEqual(axios.get.called, false);
+        });
+
+        it('throttles to COMPLETENESS_CHECK_INTERVAL', async function(){
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            assert.strictEqual(axios.get.callCount, 1, 'the second tick inside the window must not re-sweep');
+        });
+
+        it('is inert when the interval is 0', async function(){
+            config.COMPLETENESS_CHECK_INTERVAL = 0;
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            assert.strictEqual(axios.get.called, false);
+        });
+
+        it('does not sweep once halted on a divergence', async function(){
+            sync._halted = { blockIndex: 100, reason: 'test' };
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            assert.strictEqual(axios.get.called, false);
+        });
+
+        it('logs and continues when the source is unreachable', async function(){
+            axios.get.rejects(new Error('ECONNREFUSED'));
+            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+            assert.ok(/Periodic completeness sweep failed/.test(logged));
+        });
     });
 
     describe('_handleBlock', function(){

@@ -24,7 +24,7 @@ const ROLE_BY_ADDRESS = {
     '1XChain3M4uRwcHqt4XuhVBUQ8cL4qQsA': 'GAS',
     '1Donate1GERVKPW6GFQcnGeTa8dgL6Abyp': 'DONATE1',
     '1Donate2LkbBrsanwCVRPWZCXAqQcvcqGz': 'DONATE2',
-    '1rewardsZAyeuLeFJKoAepYiNN5N6uSzn': 'REWARD',
+    '1RewardsRQTXMAytLt4bBQvPEscKsSEXt': 'REWARD',
     'mxchainburnaddressXXXXXXXXXXa8EAfp': 'BURN',
     'mgassdEpzH2AuKGK9W5FZh8drWYKrpXk6D': 'GAS',
     'mfztXKX1HeVdCQf6pDCZFEzo5i5wYNHAM6': 'DONATE1',

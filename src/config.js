@@ -344,6 +344,14 @@ module.exports = {
         // and on throwaway mirrors.
         config['VERIFY_STATE_COMMITMENT'] = (process.env.VERIFY_STATE_COMMITMENT || 'true').toLowerCase() !== 'false';
 
+        // COMPLETENESS_CHECK_INTERVAL: how often (ms) a live client re-runs the
+        // replica-completeness sweep (the source's published per-table row counts against
+        // its own) on its PRIMARY source, which the bootstrap caller's sources[1..] loop
+        // never reaches. 0 disables. Deliberately slow: the sweep makes the source run a
+        // COUNT(*) per replicated table, a cost its /status contract accepts only because
+        // that endpoint is operator-polled rather than hot.
+        config['COMPLETENESS_CHECK_INTERVAL'] = parseIntMin0(process.env.COMPLETENESS_CHECK_INTERVAL, 3600000);
+
         // INDEX_MAP_PARITY_CHECK: advisory id->address map parity. Default OFF, and
         // UNLIKE the VERIFY_* gates above it NEVER halts: a mismatch is logged + counted
         // only. It catches a replica whose index_addresses id->address map content

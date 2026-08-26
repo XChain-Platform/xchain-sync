@@ -270,4 +270,125 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             'reportOrphanStats block drifted between xchain-sync and xchain-indexer stateCommitment.js; ' +
             'the header comment declares it a keep-BYTE-IDENTICAL twin (comments included)');
     });
+
+    // ---- SMT engine twin ----------------------------------------------------
+    //
+    // The follower header calls the SMT engine byte-identical to the indexer's,
+    // and until these cases nothing checked it: the whole-file loop in
+    // rollback-coverage.test.js never listed stateCommitment.js, and the case
+    // above pins only reportOrphanStats. The engine HAD drifted - the indexer
+    // grew a read-through node cache the follower has not - and the stale claim
+    // is why nobody had to look. Both halves are pinned now: what is still
+    // shared, and the shape of the one divergence the header declares.
+
+    it('DbNodeStore and MemoryNodeStore are BYTE-identical (node-store twin)', function(){
+        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment.js');
+        if(!pair) return;
+        // Raw, comments included: these two stores define what a node row IS on
+        // both sides of the recompute, so a one-sided edit is a fork risk even
+        // when it reads as a refactor.
+        function stores(src, from){
+            const i = src.indexOf('class DbNodeStore');
+            const j = src.indexOf('// ---- Persistent SMT engine');
+            assert.ok(i !== -1 && j > i, 'node-store block markers not found in ' + from);
+            return src.slice(i, j);
+        }
+        assert.strictEqual(
+            stores(pair.sync, 'xchain-sync/src/stateCommitment.js'),
+            stores(pair.indexer, 'xchain-indexer/src/stateCommitment.js'),
+            'the DbNodeStore / MemoryNodeStore block drifted between xchain-sync and ' +
+            'xchain-indexer stateCommitment.js; the follower header declares it byte-identical');
+    });
+
+    it('PersistentSMT update / buildFull / prove are BYTE-identical (root-bearing twin)', function(){
+        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment.js');
+        if(!pair) return;
+        // These three are the whole root-producing surface of the engine. The
+        // declared cache divergence lives entirely in _descend's read and
+        // _putBatch's write, so these must stay equal to the byte: a difference
+        // here IS a state_root fork, and the follower halts the fleet on it.
+        for(const sig of [/async update\(rootHex, keyBuf, newLeafHexOrNull\)\{/,
+                          /async buildFull\(entries\)\{/,
+                          /async prove\(rootHex, keyBuf\)\{/]){
+            assert.strictEqual(
+                extractFunction(pair.sync, sig, 'xchain-sync/src/stateCommitment.js'),
+                extractFunction(pair.indexer, sig, 'xchain-indexer/src/stateCommitment.js'),
+                sig + ' drifted between xchain-sync and xchain-indexer PersistentSMT; ' +
+                'this is the root-producing surface and it must stay byte-identical');
+        }
+    });
+
+    it('PersistentSMT divergence is exactly the indexer node cache (declared, not drift)', function(){
+        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment.js');
+        if(!pair) return;
+        // The follower header names ONE divergence and argues why it is
+        // root-neutral. This case is what makes that paragraph binding: it fails
+        // if the indexer drops the cache, if the follower gains one, or if the
+        // divergence spreads past the two methods it is allowed to touch.
+        // Scoped to the engine block: the follower's file header NAMES the cache
+        // fields in the paragraph that declares the divergence, and a whole-file
+        // search would read that prose as the cache itself.
+        function engine(src, from){
+            const i = src.indexOf('// ---- Persistent SMT engine');
+            const j = src.indexOf('// Every EMPTY[h] constant, hex.');
+            assert.ok(i !== -1 && j > i, 'SMT engine block markers not found in ' + from);
+            return src.slice(i, j);
+        }
+        const syncEngine    = engine(pair.sync, 'xchain-sync/src/stateCommitment.js');
+        const indexerEngine = engine(pair.indexer, 'xchain-indexer/src/stateCommitment.js');
+        for(const marker of ['SMT_NODE_CACHE_MAX', '_nodeCache', '_cacheGet(', '_cachePut(']){
+            assert.ok(indexerEngine.includes(marker),
+                'xchain-indexer stateCommitment.js no longer has ' + marker + '. If the node ' +
+                'cache was removed the engines are byte-identical again: port the change and ' +
+                'rewrite the DECLARED DIVERGENCE paragraph in xchain-sync/src/stateCommitment.js');
+            assert.ok(!syncEngine.includes(marker),
+                'xchain-sync stateCommitment.js now has ' + marker + '. If the cache was ' +
+                'deliberately ported, rewrite the DECLARED DIVERGENCE paragraph in that file ' +
+                'and replace this case with a full byte comparison of the engine block');
+        }
+
+        // Nothing else may differ. Subtract the cache from the INDEXER's two
+        // remaining methods and they must equal the follower's, code-for-code
+        // (comments stripped: independently-worded prose is not a fork, and one
+        // word of it had already drifted - "pre-batch" vs "pre-batching").
+        // Every substitution asserts it FIRED, so a reworded cache cannot pass
+        // this case by silently matching nothing.
+        function subtract(src, from, pairs){
+            let out = src;
+            for(const [find, replace] of pairs){
+                assert.ok(out.includes(find),
+                    'the indexer node cache no longer has the shape this guard subtracts, in ' +
+                    from + '. Missing: ' + find + '\nRe-derive the subtraction against ' +
+                    'xchain-indexer/src/stateCommitment.js before trusting this guard again.');
+                out = out.replace(find, replace);
+            }
+            return out;
+        }
+        const descendSig  = /async _descend\(rootHex, keyBuf\)\{/;
+        const putBatchSig = /async _putBatch\(nodes\)\{/;
+
+        const idxDescend = subtract(
+            normalize(extractFunction(pair.indexer, descendSig, 'xchain-indexer _descend')),
+            '_descend',
+            [['let row = this._cacheGet(cur); if(row === undefined){ row = await this.store.get(cur); ' +
+              'if(row) this._cachePut(cur, row.left_hash, row.right_hash); }',
+              'const row = await this.store.get(cur);']]);
+        assert.strictEqual(normalize(extractFunction(pair.sync, descendSig, 'xchain-sync _descend')),
+            idxDescend,
+            '_descend differs between xchain-sync and xchain-indexer by more than the declared ' +
+            'node-cache read. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
+            'xchain-sync/src/stateCommitment.js to say what else may differ');
+
+        const idxPutBatch = subtract(
+            normalize(extractFunction(pair.indexer, putBatchSig, 'xchain-indexer _putBatch')),
+            '_putBatch',
+            [['} else { for(const n of nodes) await this.store.put(n.hash, n.left, n.right); } ' +
+              'for(const n of nodes) this._cachePut(n.hash, n.left, n.right); }',
+              'return; } for(const n of nodes) await this.store.put(n.hash, n.left, n.right); }']]);
+        assert.strictEqual(normalize(extractFunction(pair.sync, putBatchSig, 'xchain-sync _putBatch')),
+            idxPutBatch,
+            '_putBatch differs between xchain-sync and xchain-indexer by more than the declared ' +
+            'node-cache seeding. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
+            'xchain-sync/src/stateCommitment.js to say what else may differ');
+    });
 });
