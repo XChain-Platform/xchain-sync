@@ -1941,3 +1941,73 @@ describe('Database.ensureReplicaSecondaryIndexes(): votes append-only migration'
         await dec.close();
     });
 });
+
+// A replica that bootstrapped before the indexer's
+// 2026-08-28-anchor-actions-section-index-pk migration carries anchor_actions on
+// the single-column PRIMARY KEY (action_index). The column self-heal adds
+// section_index but never touches the key, so the first ANCHOR v7 bundle (N rows
+// sharing one action_index) collides on ER_DUP_ENTRY, which is outside the
+// {1146, 1054} schema-heal set and therefore wedges the replica permanently.
+describe('Database.ensureReplicaSecondaryIndexes(): anchor_actions bundle-section primary key', function () {
+    // Fake doQuery that treats only `anchor_actions` as present, so the
+    // index-ensure/attests/votes steps above no-op and the test isolates this
+    // migration. pk is the PRIMARY's column list; hasColumn drives the
+    // section_index existence probe.
+    function stubDoQuery(db, pk, hasColumn) {
+        let calls = [];
+        let fake = async (sql, params) => {
+            calls.push({ sql, params });
+            if (/information_schema\.tables/.test(sql)) {
+                if (/table_name = 'anchor_actions'/.test(sql)) return [{ table_name: 'anchor_actions' }];
+                return [];
+            }
+            if (/information_schema\.columns/.test(sql))
+                return hasColumn ? [{ column_name: 'section_index' }] : [];
+            if (/information_schema\.statistics/.test(sql)) {
+                if (/index_name = 'PRIMARY'/.test(sql)) return pk.map(c => ({ column_name: c }));
+                return [];
+            }
+            return [];
+        };
+        sinon.stub(db, 'doQuery').callsFake(fake);
+        sinon.stub(db, 'doQueryStrict').callsFake(fake);
+        return calls;
+    }
+
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb('indexer'); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('widens a stale single-column PRIMARY KEY to (action_index, section_index)', async function () {
+        let calls = stubDoQuery(db, ['action_index'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(ddl.some(s => /ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY \(`action_index`, `section_index`\)/.test(s)),
+            'must drop and re-add the primary key in one ALTER');
+    });
+
+    it('is a no-op when the composite key is already in place (idempotent)', async function () {
+        let calls = stubDoQuery(db, ['action_index', 'section_index'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'a replica already on the composite key must not be re-altered');
+    });
+
+    it('refuses to swap the key while section_index is still missing', async function () {
+        // ADD PRIMARY KEY on an unknown column is errno 1072 and the whole ALTER is
+        // refused, leaving the stale key in place with no signal; wait for the
+        // column self-heal instead.
+        let calls = stubDoQuery(db, ['action_index'], false);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'must not issue the ALTER before the column exists');
+    });
+
+    it('leaves an unexpected primary key alone', async function () {
+        // Never guess at a key this migration does not describe.
+        let calls = stubDoQuery(db, ['id'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'only the exact stale (action_index) key is migrated');
+    });
+});

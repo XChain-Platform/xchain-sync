@@ -862,6 +862,74 @@ class Database {
                 if(e.errno !== 1146)
                     console.error('Failed to migrate votes append-only unique index:', e);
             }
+
+            // anchor_actions bundle-section key (indexer migration
+            // 2026-08-28-anchor-actions-section-index-pk). ANCHOR v7 bundles every
+            // checkpointed chain into ONE action, stored as N rows sharing an
+            // action_index and separated by section_index, so the source widened
+            // PRIMARY KEY (action_index) to (action_index, section_index).
+            //
+            // The replica's own schema self-heal cannot reach that. addMissingColumns
+            // ADDs section_index (NOT NULL DEFAULT 0) because it is a column gap, and
+            // ensureReplicaSecondaryIndexes above only ever ADDs secondary indexes; a
+            // PRIMARY KEY is neither. So a replica bootstrapped before the migration
+            // ends up with the new column under the OLD single-column key, and the
+            // first v7 bundle wedges it: anchor_actions is in neither ignoreTables nor
+            // upsertFullDumpTables (ClientApplier), so its rows take a plain INSERT and
+            // section 1 collides with section 0 on ER_DUP_ENTRY (1062). 1062 is not in
+            // ClientSync._healSchemaIfStale's {1146, 1054} heal set, so the apply
+            // transaction rolls back and re-fails on every retry, forever. Same
+            // unhealable-at-apply-time shape as the votes append-only key above.
+            //
+            // Widening is the safe direction and cannot fail on existing rows: every
+            // pre-v7 row is a single body at section_index 0 (DEFAULT), so the composite
+            // key is a strict superset of the key it replaces. Detection reads the
+            // PRIMARY's column list from information_schema.statistics; the swap runs as
+            // ONE ALTER so the table is never briefly without a primary key. Idempotent:
+            // a replica already on the composite key (fresh bootstrap from the source's
+            // own DDL) matches neither predicate and is skipped. indexer-only.
+            try {
+                let anchorCheck = await this.doQuery(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'anchor_actions'",
+                    [this.dbName]
+                );
+                if(anchorCheck.length > 0){
+                    let pkCols = await this.doQuery(
+                        "SELECT column_name FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'anchor_actions' AND index_name = 'PRIMARY' " +
+                        "ORDER BY seq_in_index ASC",
+                        [this.dbName]
+                    );
+                    let cols = pkCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
+                    if(cols.length === 1 && cols[0] === 'action_index'){
+                        // The column must already be present or the ADD PRIMARY KEY names
+                        // an unknown column (1072) and the ALTER is refused wholesale,
+                        // leaving the stale key in place. ensureReplicatedColumns runs
+                        // immediately before this in replicateSchema, but SyncService calls
+                        // this method on its own, so re-check rather than assume.
+                        let colRows = await this.doQuery(
+                            "SELECT column_name FROM information_schema.columns " +
+                            "WHERE table_schema = ? AND table_name = 'anchor_actions' AND column_name = 'section_index'",
+                            [this.dbName]
+                        );
+                        if(colRows.length === 0){
+                            console.warn('anchor_actions still on PRIMARY KEY (action_index) but section_index is missing; ' +
+                                'the column self-heal must run first (schema replication will re-run on the next startup)');
+                        } else {
+                            console.log('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
+                                'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
+                            await this.doQueryStrict(
+                                'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
+                        }
+                    }
+                }
+            } catch(e){
+                // 1146 (table absent) is a schema-shape difference, not a fault. Anything
+                // else leaves the replica on a key that WILL wedge on the first v7 bundle,
+                // so it is logged loudly; the apply-time 1062 is the backstop signal.
+                if(e.errno !== 1146)
+                    console.error('Failed to widen the anchor_actions primary key to (action_index, section_index):', e);
+            }
         }
     }
 
