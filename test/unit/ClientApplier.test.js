@@ -542,18 +542,31 @@ describe('ClientApplier', function(){
         });
 
         for(const table of ['markets', 'attest_validator_stats']){
-            it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every column', async function(){
+            it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every carried column', async function(){
                 await applier._insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
                 let query = db.doQuery.firstCall.args[0];
                 assert.ok(query.startsWith('INSERT INTO'), table + ' upsert starts as INSERT (not IGNORE)');
                 assert.ok(!query.startsWith('INSERT IGNORE'), table + ' must not be INSERT IGNORE');
                 assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), table + ' must upsert');
-                for(const col of ['id', 'a', 'b']){
+                for(const col of ['a', 'b']){
                     assert.ok(query.includes('`' + col + '` = VALUES(`' + col + '`)'),
                         table + ' upsert must refresh column ' + col);
                 }
             });
         }
+
+        // The id half of that contract is NOT shared, and the split is the point.
+        // markets keeps its source-assigned id (a replica never mints one for it, and its
+        // uq_markets_pair natural key arrives from a migration an aged replica may lack,
+        // so the id is the only key a re-dump can safely collide on). attest_validator_stats
+        // mints its own id locally, so replicating the source's rewrites the replica's
+        // PRIMARY KEY onto a number another surviving row holds.
+        it('keeps refreshing markets.id, whose id space is source-assigned end to end', async function(){
+            await applier._insertRows('markets', [{ id: 1, a: 'x' }]);
+            let query = db.doQuery.firstCall.args[0];
+            assert.ok(query.includes('`id`'), 'markets must still carry the source id');
+            assert.ok(query.includes('`id` = VALUES(`id`)'), 'markets must still refresh id');
+        });
 
         // These three cover generic column/batch handling and used `blocks` only as an
         // arbitrary plain-INSERT table, with synthetic {id} rows a real blocks row never
@@ -637,6 +650,59 @@ describe('ClientApplier', function(){
                 let calls = db.doQuery.getCalls().map(c => c.args[0]);
                 assert.ok(!calls.some(q => /^DELETE/.test(q)), 'no id to strip means no delete is needed');
                 assert.ok(calls.some(q => /^INSERT INTO `blocks`/.test(q)));
+            });
+        });
+
+        // attest_validator_stats gained a node-local AUTO_INCREMENT id (indexer migration
+        // 2026-08-19-attest-validator-stats-surrogate-id) while still riding the
+        // upsertFullDumpTables path, so the applier emitted `id` = VALUES(`id`) against
+        // the replica's PRIMARY KEY. A replica assigns that id itself (sync runs no
+        // migrations; db.addMissingColumns backfills the sequence in local row order), so
+        // the source's value lands on a number another surviving row holds: ER_DUP_ENTRY
+        // 1062, outside the {1146, 1054} schema-heal set, aborting the apply transaction
+        // and re-failing forever. Strip the id; the composite UNIQUE
+        // (validator_pubkey, provider_id) is what identifies the row.
+        describe('attest_validator_stats surrogate id (strip-only class)', function(){
+            it('strips the source id so the replica keeps its own', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(!insert.includes('`id`'),
+                    'the source surrogate id must reach neither the column list nor the update suffix');
+                for(const col of ['validator_pubkey', 'provider_id', 'fulfilled_count'])
+                    assert.ok(insert.includes('`' + col + '`'), col + ' must still be written');
+            });
+
+            it('still upserts on the natural key, so a re-dump refreshes the counters', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(insert.includes('ON DUPLICATE KEY UPDATE'), 'the full-dump upsert must survive the strip');
+                assert.ok(insert.includes('`fulfilled_count` = VALUES(`fulfilled_count`)'),
+                    'the running counters must still be overwritten with the source values');
+            });
+
+            it('issues no DELETE: the natural key is composite and a scoped delete would drop siblings', async function(){
+                await applier._insertRows('attest_validator_stats', [
+                    { id: 1, validator_pubkey: 'aa', provider_id: 'http_get' },
+                    { id: 2, validator_pubkey: 'aa', provider_id: 'other' }
+                ]);
+                let calls = db.doQuery.getCalls().map(c => c.args[0]);
+                assert.ok(!calls.some(q => /^DELETE/.test(q)),
+                    'deleting by validator_pubkey alone would remove that validator other-provider rows');
+            });
+
+            it('leaves a row that carries no id alone', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ validator_pubkey: 'aa', provider_id: 'http_get' }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(insert.includes('`validator_pubkey`') && insert.includes('`provider_id`'));
+            });
+
+            it('refuses a row that carries only the stripped id rather than inserting nothing', async function(){
+                await assert.rejects(
+                    () => applier._insertRows('attest_validator_stats', [{ id: 7 }]),
+                    /carries only the stripped surrogate id/);
             });
         });
 
