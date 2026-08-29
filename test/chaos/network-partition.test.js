@@ -53,8 +53,7 @@ const {
     createServer,
     createClient,
     seedSourceBlocks,
-    waitForSyncRecovery,
-    sleep
+    waitForSyncRecovery
 } = require('./helpers/chaos-setup');
 
 const {
@@ -145,9 +144,17 @@ describe('CE-NET-01: Full WebSocket Partition', function () {
     it('client reconnects and heals block gap after partition is lifted', async function () {
         await wsFaults.dbDown();
 
+        // The gap has to be a FACT before the link comes back, and both halves of
+        // it are observable. Wait for the client to see the socket go (same anchor
+        // CE-NET-01's first case uses), so 21-30 are broadcast with no path to it,
+        // then drain poll cycles until the poller has actually recorded through 30
+        // rather than assuming one cycle covered the range. A fixed wait passed
+        // identically when the partition never landed, healing a gap that was
+        // never opened.
+        await waitForClientDisconnect(client);
+
         await seedSourceBlocks(21, 30);
-        await server.poll();
-        await sleep(3000);
+        await server.pollUntil(30);
 
         await wsFaults.dbUp();
 

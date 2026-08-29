@@ -166,7 +166,14 @@ describe('E2E: Full Lifecycle', function() {
 
             await waitForReplicaBlock(replicaDb, 10);
 
-            await new Promise(r => setTimeout(r, 2000));
+            // The idle period this test resumes FROM has to be one the client
+            // actually sat through connected, not two elapsed seconds: wait for
+            // four status heartbeats to be fully handled, the same anchor 1.4
+            // uses for idleness. A sleep here passed just as well when the live
+            // socket had dropped, which would make the resume below a reconnect
+            // test wearing a resume test's name.
+            const seenStatus = client.getEventsHandled('status');
+            await waitForClientEvents(client, 'status', seenStatus + 4, 10000);
 
             await fixtures.seedBlocks(sourceDb, 11, 15);
 
