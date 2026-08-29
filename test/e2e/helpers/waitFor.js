@@ -43,9 +43,11 @@ async function waitForTableCount(db, table, expectedCount, timeout = 15000) {
 }
 
 // Bounded drain that reports rather than throws: resolves true as soon as `fn`
-// holds, false when the budget runs out. Only for MEASUREMENT windows (the perf
-// tier), where a shortfall - a subscriber dropped under backpressure - is the
-// number being recorded, not a failure. Assertions use waitFor, which throws.
+// holds, false when the budget runs out. For windows whose OUTCOME is the thing
+// being recorded rather than a precondition being met: a perf shortfall (a
+// subscriber dropped under backpressure) is the number being measured, and a
+// settle window that ends with no close frame is a socket that was accepted.
+// Assertions on a precondition use waitFor, which throws.
 async function drainUntil(fn, timeout = 15000, interval = 50) {
     let start = Date.now();
     while (Date.now() - start < timeout) {
