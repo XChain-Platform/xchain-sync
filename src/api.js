@@ -48,6 +48,12 @@ const statusUtil = new Utility();
 
 dotenv.config();
 
+// Before anything else logs. checkStartupEnv's console.error calls are exactly
+// the lines an operator needs levelled and timestamped, and installObservability
+// does not run until well past module load, so the patch has to land here.
+const { patchConsole, getLogger } = require('./observability');
+patchConsole({ service: 'xchain-sync', version: require('../package.json').version });
+
 const REQUIRED_ENV = ['HUB_API_HOST'];
 
 const cfg = config.getConfig();
@@ -1149,6 +1155,21 @@ async function startApi(){
     });
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT',  () => shutdown('SIGINT'));
+
+    // Crash visibility. An uncaughtException leaves module-level state (the
+    // poll/apply loops, open DB pool handles) in an unknown shape, so the
+    // process still exits after logging; an unhandledRejection logs and
+    // continues, matching the decoder's existing choice (src/api.js
+    // unhandledRejection handler) since a single unresolved promise, unlike a
+    // synchronous throw, does not by itself corrupt shared state.
+    process.on('uncaughtException', (err) => {
+        getLogger().error('CRASH', { kind: 'uncaughtException', err: err && err.message, stack: err && err.stack });
+        process.exit(1);
+    });
+    process.on('unhandledRejection', (reason) => {
+        const err = reason instanceof Error ? reason : new Error(String(reason));
+        getLogger().error('CRASH', { kind: 'unhandledRejection', err: err.message, stack: err.stack });
+    });
 }
 
 // Only boot when this file IS the process entry point (`npm run api`, the
