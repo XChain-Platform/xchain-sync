@@ -862,6 +862,149 @@ class Database {
                 if(e.errno !== 1146)
                     console.error('Failed to migrate votes append-only unique index:', e);
             }
+
+            // anchor_actions bundle-section key (indexer migration
+            // 2026-08-28-anchor-actions-section-index-pk). ANCHOR v7 bundles every
+            // checkpointed chain into ONE action, stored as N rows sharing an
+            // action_index and separated by section_index, so the source widened
+            // PRIMARY KEY (action_index) to (action_index, section_index).
+            //
+            // The replica's own schema self-heal cannot reach that. addMissingColumns
+            // ADDs section_index (NOT NULL DEFAULT 0) because it is a column gap, and
+            // ensureReplicaSecondaryIndexes above only ever ADDs secondary indexes; a
+            // PRIMARY KEY is neither. So a replica bootstrapped before the migration
+            // ends up with the new column under the OLD single-column key, and the
+            // first v7 bundle wedges it: anchor_actions is in neither ignoreTables nor
+            // upsertFullDumpTables (ClientApplier), so its rows take a plain INSERT and
+            // section 1 collides with section 0 on ER_DUP_ENTRY (1062). 1062 is not in
+            // ClientSync._healSchemaIfStale's {1146, 1054} heal set, so the apply
+            // transaction rolls back and re-fails on every retry, forever. Same
+            // unhealable-at-apply-time shape as the votes append-only key above.
+            //
+            // Widening is the safe direction and cannot fail on existing rows: every
+            // pre-v7 row is a single body at section_index 0 (DEFAULT), so the composite
+            // key is a strict superset of the key it replaces. Detection reads the
+            // PRIMARY's column list from information_schema.statistics; the swap runs as
+            // ONE ALTER so the table is never briefly without a primary key. Idempotent:
+            // a replica already on the composite key (fresh bootstrap from the source's
+            // own DDL) matches neither predicate and is skipped. indexer-only.
+            try {
+                let anchorCheck = await this.doQuery(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'anchor_actions'",
+                    [this.dbName]
+                );
+                if(anchorCheck.length > 0){
+                    let pkCols = await this.doQuery(
+                        "SELECT column_name FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'anchor_actions' AND index_name = 'PRIMARY' " +
+                        "ORDER BY seq_in_index ASC",
+                        [this.dbName]
+                    );
+                    let cols = pkCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
+                    if(cols.length === 1 && cols[0] === 'action_index'){
+                        // The column must already be present or the ADD PRIMARY KEY names
+                        // an unknown column (1072) and the ALTER is refused wholesale,
+                        // leaving the stale key in place. ensureReplicatedColumns runs
+                        // immediately before this in replicateSchema, but SyncService calls
+                        // this method on its own, so re-check rather than assume.
+                        let colRows = await this.doQuery(
+                            "SELECT column_name FROM information_schema.columns " +
+                            "WHERE table_schema = ? AND table_name = 'anchor_actions' AND column_name = 'section_index'",
+                            [this.dbName]
+                        );
+                        if(colRows.length === 0){
+                            console.warn('anchor_actions still on PRIMARY KEY (action_index) but section_index is missing; ' +
+                                'the column self-heal must run first (schema replication will re-run on the next startup)');
+                        } else {
+                            console.log('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
+                                'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
+                            await this.doQueryStrict(
+                                'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
+                        }
+                    }
+                }
+            } catch(e){
+                // 1146 (table absent) is a schema-shape difference, not a fault. Anything
+                // else leaves the replica on a key that WILL wedge on the first v7 bundle,
+                // so it is logged loudly; the apply-time 1062 is the backstop signal.
+                if(e.errno !== 1146)
+                    console.error('Failed to widen the anchor_actions primary key to (action_index, section_index):', e);
+            }
+
+            // validator_rewards reward_unique qualifier key (indexer migration
+            // 2026-08-24-validator-rewards-round-qualifier). The reward identity gained
+            // round_qualifier, which carries snapshot_block for 'anchor_archive' and 0 for
+            // every other reward type, so the source's UNIQUE key became
+            // (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier).
+            //
+            // Nothing else converges that key on a replica. sync runs no migrations, and
+            // addMissingColumns ADDs round_qualifier (NOT NULL DEFAULT 0) because it is a
+            // column gap while ensureReplicaSecondaryIndexes above only ever ADDs indexes
+            // that are ABSENT; reward_unique is present under both schemas, just narrower.
+            // A replica bootstrapped before the migration therefore ends up with the new
+            // column under the OLD four-column key, and validator_rewards is in
+            // ClientApplier.ignoreTables, so the apply is INSERT IGNORE: two genuinely
+            // distinct archive rewards differing only in round_qualifier collapse into one
+            // row, silently, with the second row ignored rather than erroring. The table
+            // declares no hash class (tableLifecycle.js), so no ledger/state hash catches
+            // it either; the only tell is the advisory TABLE_COUNT_MISMATCH. Latent while
+            // ANCHOR_REWARD_DERIVE_ACTIVATION is inert, which is why it has to land before
+            // that gate is ratified rather than after.
+            //
+            // Detection is by COLUMN LIST, never by name: the index keeps the name
+            // `reward_unique` under both schemas, so a presence check always reports
+            // "present" and would never heal. Only the exact stale four-column definition
+            // is migrated; an already-correct key is a silent no-op, and any other shape is
+            // left alone and reported rather than guessed at. Widening cannot fail on
+            // existing rows (the new key is a strict superset and round_qualifier is NOT
+            // NULL DEFAULT 0, so every pre-existing row keeps the key it had), and the drop
+            // and the add ride ONE ALTER so the table is never briefly keyless. indexer-only.
+            try {
+                let rewardsCheck = await this.doQueryStrict(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'validator_rewards'",
+                    [this.dbName]
+                );
+                if(rewardsCheck.length > 0){
+                    let idxCols = await this.doQueryStrict(
+                        "SELECT column_name FROM information_schema.statistics " +
+                        "WHERE table_schema = ? AND table_name = 'validator_rewards' AND index_name = 'reward_unique' " +
+                        "ORDER BY seq_in_index ASC",
+                        [this.dbName]
+                    );
+                    let cols  = idxCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
+                    let stale = ['source_id', 'signing_pubkey_id', 'reward_type', 'round_reference'];
+                    if(cols.length === stale.length && cols.every((c, i) => c === stale[i])){
+                        // The ADD names round_qualifier, so an absent column makes the whole
+                        // ALTER errno 1072 and the stale key survives with no signal. The
+                        // column self-heal (ensureReplicatedColumns / addMissingColumns) runs
+                        // earlier in replicateSchema, but SyncService calls this method on its
+                        // own, so re-check rather than assume.
+                        let colRows = await this.doQueryStrict(
+                            "SELECT column_name FROM information_schema.columns " +
+                            "WHERE table_schema = ? AND table_name = 'validator_rewards' AND column_name = 'round_qualifier'",
+                            [this.dbName]
+                        );
+                        if(colRows.length === 0){
+                            console.warn('validator_rewards still on the four-column reward_unique but round_qualifier is missing; ' +
+                                'the column self-heal must run first (schema replication will re-run on the next startup)');
+                        } else {
+                            console.log('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
+                                'Rebuilding with round_qualifier for the anchor_archive reward identity.');
+                            await this.doQueryStrict(
+                                'ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ' +
+                                'ADD UNIQUE INDEX `reward_unique` ' +
+                                '(`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`)');
+                        }
+                    }
+                }
+            } catch(e){
+                // 1146 (table absent) is a schema-shape difference, not a fault. Anything
+                // else leaves the replica on a key that silently DEDUPLICATES two distinct
+                // archive rewards, which no hash and no halt would ever surface, so it is
+                // logged loudly.
+                if(e.errno !== 1146)
+                    console.error('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e);
+            }
         }
     }
 

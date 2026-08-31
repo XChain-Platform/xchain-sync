@@ -648,15 +648,18 @@ describe('Rollback coverage guard @regression', function(){
 
     // The archive-head version set is defined ONCE (stateHash.js, twinned across
     // repos) and consumed by every parent-selecting predicate. Pin its value and the SQL
-    // fragment shape, and pin the forward updatedRows class to the same constant so a
-    // v6 parent's invalid_archive stamp keeps replicating to followers.
-    it('archive-head version set is [1, 6] via the shared stateHash constant, consumed by updatedRows', function(){
+    // fragment shape, and pin the forward updatedRows class to the same constant so an
+    // archive parent's invalid_archive stamp keeps replicating to followers.
+    // The set is a SINGLETON: the wire versions restart at 0, the archive head is v1
+    // alone, and any other version byte is unparseable at or above ANCHOR_ACTIVATION.
+    // The splice sites do not move when only the array's members change.
+    it('archive-head version set is [1] via the shared stateHash constant, consumed by updatedRows', function(){
         const assertLocal = require('assert');
         const sh = require('../../src/stateHash');
-        assertLocal.deepStrictEqual(sh.ARCHIVE_HEAD_VERSIONS, [1, 6],
-            'ARCHIVE_HEAD_VERSIONS must be exactly [1, 6]');
-        assertLocal.strictEqual(sh.ARCHIVE_HEAD_VERSIONS_SQL, 'IN (1, 6)',
-            'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1, 6)');
+        assertLocal.deepStrictEqual(sh.ARCHIVE_HEAD_VERSIONS, [1],
+            'ARCHIVE_HEAD_VERSIONS must be exactly [1]');
+        assertLocal.strictEqual(sh.ARCHIVE_HEAD_VERSIONS_SQL, 'IN (1)',
+            'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1)');
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8'));

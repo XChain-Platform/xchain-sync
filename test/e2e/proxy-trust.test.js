@@ -29,6 +29,7 @@ const WebSocket     = require('ws');
 const setup         = require('./helpers/setup');
 const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
+const { drainUntil } = require('./helpers/waitFor');
 
 const SERVER_PORT = 29950;
 
@@ -110,9 +111,11 @@ describe('E2E: Proxy-trust client attribution', function() {
             ws.once('error', reject);
         });
 
-        let deadline = Date.now() + 750;
-        while (closeCode === null && Date.now() < deadline)
-            await new Promise(r => setTimeout(r, 25));
+        // Report-don't-throw is the point here: "no close arrived inside the
+        // window" is the answer being recorded, not a failure, so this drains
+        // rather than asserting. Going through the shared helper keeps the poll
+        // interval and the bound in one place instead of hand-rolled per site.
+        await drainUntil(() => closeCode !== null, 750, 25);
 
         return { accepted: closeCode === null, closeCode };
     }

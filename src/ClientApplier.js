@@ -149,6 +149,48 @@ class ClientApplier {
         this.localSurrogateIdTables = new Map([
             ['blocks', 'block_index']
         ]);
+
+        // Same class as localSurrogateIdTables above, minus the DELETE: tables whose
+        // `id` is a node-local AUTO_INCREMENT surrogate the replica must not inherit,
+        // but which already carry a REAL unique natural key and already ride
+        // upsertFullDumpTables, so the existing ON DUPLICATE KEY UPDATE identifies the
+        // row and nothing has to be cleared first.
+        //
+        // attest_validator_stats gained `id ... AUTO_INCREMENT PRIMARY KEY` in indexer
+        // migration 2026-08-19-attest-validator-stats-surrogate-id, which states the id
+        // is node-local ("NOT consensus-visible ... Nothing reads or signs over the id")
+        // and that the source reassigns ids wholesale on reorg
+        // (Rollback._recomputeAttestationValidatorStats). The replica mints its own
+        // instead: sync runs no migrations, so an aged replica takes the column through
+        // db.addMissingColumns + _autoIncrementKeyAction, which lets the engine backfill
+        // the sequence in LOCAL row order. The two id spaces then disagree, and because
+        // the table is full-dumped with SELECT * and upserted over every carried column,
+        // the applier would emit `id` = VALUES(`id`) against the replica's PRIMARY KEY:
+        // on a source id another surviving replica row already holds that is ER_DUP_ENTRY
+        // (1062), outside ClientSync._healSchemaIfStale's {1146, 1054} heal set, so the
+        // apply transaction aborts and re-fails on every retry. Exactly the production
+        // wedge `blocks.id` was stripped for.
+        //
+        // It cannot use localSurrogateIdTables: that map's value is a SINGLE natural-key
+        // column driving DELETE ... WHERE <key> IN (...), and this table's natural key is
+        // the COMPOSITE UNIQUE (validator_pubkey, provider_id). Deleting by
+        // validator_pubkey alone would drop that validator's rows for every OTHER
+        // provider, and since _insertRows runs per batch a later batch's DELETE could
+        // remove rows an earlier one just inserted: a recoverable wedge traded for silent
+        // data loss.
+        //
+        // `markets` is deliberately NOT here even though it shares the id-PK + upsert
+        // shape. Its unique natural key uq_markets_pair arrives from indexer migration
+        // 2026-07-15-markets-dedup-unique-pair, and secondary indexes are NOT propagated
+        // to replicas (db.ensureReplicaSecondaryIndexes carries a hand-listed few), so an
+        // aged replica may hold markets with NO unique key at all. Stripping the id there
+        // would leave the re-dump with nothing to collide on and append duplicate rows
+        // silently. attest_validator_stats has no such gap: validator_pubkey_provider has
+        // been in its CREATE TABLE since the table was introduced and no migration adds
+        // it, so every replica that has the table has the key.
+        this.localSurrogateIdOnlyTables = new Set([
+            'attest_validator_stats'
+        ]);
     }
 
     async applyBlock(payload){
@@ -571,6 +613,17 @@ class ClientApplier {
             columns = columns.filter(c => !generated.has(c));
             if(columns.length === 0)
                 throw new Error('Refusing to insert into ' + table + ': every carried column is generated');
+        }
+
+        // Drop the source's local surrogate id and let the replica keep its own. No
+        // DELETE: this class already upserts on a real unique natural key, so the
+        // existing ON DUPLICATE KEY UPDATE identifies the row. Writing the id here is
+        // what would rewrite the replica's PRIMARY KEY onto a number another surviving
+        // row holds (ER_DUP_ENTRY 1062). See localSurrogateIdOnlyTables.
+        if(this.localSurrogateIdOnlyTables.has(table) && columns.includes('id')){
+            columns = columns.filter(c => c !== 'id');
+            if(columns.length === 0)
+                throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
         }
 
         // Drop the source's local surrogate id and clear any row already holding the

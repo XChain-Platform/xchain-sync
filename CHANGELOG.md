@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-08-30
+
+### Added
+- Roll call epoch-close tables are mirrored on the replica.
+
+### Fixed
+- The MariaDB connector moves to 3.5.3, closing three high-severity advisories against the pinned 3.5.2.
+- A replica's anchor_actions primary key widens to (action_index, section_index).
+- The canonical coin registry is re-vendored, and the confirmations floor comes with it.
+
+### Changed
+- Price batches are version 0, and the per-round wire is retired.
+- The anchor archive-head version set follows the indexer's restart.
+- Service logging routes through the shared log shim, one line per console call.
+
 ## [0.11.0] - 2026-08-25
 
 ### Added

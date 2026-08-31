@@ -15,7 +15,7 @@ const testDb        = require('./helpers/testDb');
 const fixtures      = require('./helpers/fixtures');
 const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
-const { waitFor, waitForReplicaBlock, waitForClientDisconnect } = require('./helpers/waitFor');
+const { waitFor, waitForReplicaBlock, waitForClientDisconnect, waitForClientEvents } = require('./helpers/waitFor');
 const { assertBlockExists, assertBalancesConsistent, assertReplicaByteIdentical } = require('./helpers/assertions');
 
 const SERVER_PORT = 29400;
@@ -142,12 +142,22 @@ describe('E2E: Error Handling & Recovery', function() {
 
             let blockCountBefore = await testDb.getRowCount(replicaDb, 'blocks');
 
+            // Baseline before the re-broadcast, so the wait below counts only the
+            // ten duplicates this step produces.
+            let seenBlocks = client.getEventsHandled('block');
+
             // Resetting lastPolledBlock forces the poller to re-broadcast blocks
             // it already sent, simulating a duplicate delivery.
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
-            await new Promise(r => setTimeout(r, 2000));
+            // The claim is "the client received these blocks again and inserted
+            // none of them", so wait for the receipt itself: ten more block events
+            // fully handled. The counter advances only after each handler settles,
+            // so reaching it proves the duplicates arrived and were declined. A
+            // fixed wait passed identically when the socket had silently dropped
+            // and nothing was re-delivered at all.
+            await waitForClientEvents(client, 'block', seenBlocks + 10, 10000);
 
             let blockCountAfter = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blockCountAfter, blockCountBefore);

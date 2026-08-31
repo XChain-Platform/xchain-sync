@@ -16,6 +16,7 @@
 const assert = require('assert');
 const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/shutdown');
 const SyncService = require('../../src/SyncService');
+const { waitFor } = require('../e2e/helpers/waitFor');
 
 const silentLog = { log(){}, warn(){}, error(){} };
 
@@ -55,8 +56,12 @@ describe('graceful shutdown', function(){
                 exit: (c) => codes.push(c),
                 log: silentLog
             });
+            // The handler is fire-and-forget, so wait on the thing it produces -
+            // an exit code - rather than on a guessed number of milliseconds. The
+            // code is pushed after the drain has settled, so its arrival IS the
+            // completion signal a sleep was standing in for.
             shutdown('SIGTERM');
-            await new Promise((r) => setTimeout(r, 10));
+            await waitFor(() => codes.length > 0, 2000, 5);
             assert.strictEqual(drained, true);
             assert.deepStrictEqual(codes, [0]);
         });
@@ -69,9 +74,12 @@ describe('graceful shutdown', function(){
                 exit: (c) => codes.push(c),
                 log: silentLog
             });
+            // Both signals are delivered before the first drain can finish, so a
+            // re-entry would have bumped `calls` synchronously; waiting for the
+            // single exit code proves the drain ran to completion without one.
             shutdown('SIGTERM');
             shutdown('SIGINT');
-            await new Promise((r) => setTimeout(r, 60));
+            await waitFor(() => codes.length > 0, 2000, 5);
             assert.strictEqual(calls, 1);
             assert.deepStrictEqual(codes, [0]);
         });
@@ -88,7 +96,7 @@ describe('graceful shutdown', function(){
                 log: silentLog
             });
             shutdown('SIGTERM');
-            await new Promise((r) => setTimeout(r, 80));
+            await waitFor(() => codes.length > 0, 2000, 5);
             assert.deepStrictEqual(codes, [1]);
         });
 
@@ -101,6 +109,12 @@ describe('graceful shutdown', function(){
                 log: silentLog
             });
             shutdown('SIGTERM');
+            // Deliberately a fixed window rather than a poll, and longer than the
+            // 50ms budget: the "only once" half of this claim is that the timeout
+            // timer produced NO second exit after the throw already produced one,
+            // so the budget has to be allowed to expire. Waiting for the first
+            // code instead would return before the timer could misfire and assert
+            // nothing.
             await new Promise((r) => setTimeout(r, 120));
             assert.deepStrictEqual(codes, [1]);
         });

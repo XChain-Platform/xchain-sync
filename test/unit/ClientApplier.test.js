@@ -542,18 +542,31 @@ describe('ClientApplier', function(){
         });
 
         for(const table of ['markets', 'attest_validator_stats']){
-            it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every column', async function(){
+            it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every carried column', async function(){
                 await applier._insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
                 let query = db.doQuery.firstCall.args[0];
                 assert.ok(query.startsWith('INSERT INTO'), table + ' upsert starts as INSERT (not IGNORE)');
                 assert.ok(!query.startsWith('INSERT IGNORE'), table + ' must not be INSERT IGNORE');
                 assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), table + ' must upsert');
-                for(const col of ['id', 'a', 'b']){
+                for(const col of ['a', 'b']){
                     assert.ok(query.includes('`' + col + '` = VALUES(`' + col + '`)'),
                         table + ' upsert must refresh column ' + col);
                 }
             });
         }
+
+        // The id half of that contract is NOT shared, and the split is the point.
+        // markets keeps its source-assigned id (a replica never mints one for it, and its
+        // uq_markets_pair natural key arrives from a migration an aged replica may lack,
+        // so the id is the only key a re-dump can safely collide on). attest_validator_stats
+        // mints its own id locally, so replicating the source's rewrites the replica's
+        // PRIMARY KEY onto a number another surviving row holds.
+        it('keeps refreshing markets.id, whose id space is source-assigned end to end', async function(){
+            await applier._insertRows('markets', [{ id: 1, a: 'x' }]);
+            let query = db.doQuery.firstCall.args[0];
+            assert.ok(query.includes('`id`'), 'markets must still carry the source id');
+            assert.ok(query.includes('`id` = VALUES(`id`)'), 'markets must still refresh id');
+        });
 
         // These three cover generic column/batch handling and used `blocks` only as an
         // arbitrary plain-INSERT table, with synthetic {id} rows a real blocks row never
@@ -640,6 +653,59 @@ describe('ClientApplier', function(){
             });
         });
 
+        // attest_validator_stats gained a node-local AUTO_INCREMENT id (indexer migration
+        // 2026-08-19-attest-validator-stats-surrogate-id) while still riding the
+        // upsertFullDumpTables path, so the applier emitted `id` = VALUES(`id`) against
+        // the replica's PRIMARY KEY. A replica assigns that id itself (sync runs no
+        // migrations; db.addMissingColumns backfills the sequence in local row order), so
+        // the source's value lands on a number another surviving row holds: ER_DUP_ENTRY
+        // 1062, outside the {1146, 1054} schema-heal set, aborting the apply transaction
+        // and re-failing forever. Strip the id; the composite UNIQUE
+        // (validator_pubkey, provider_id) is what identifies the row.
+        describe('attest_validator_stats surrogate id (strip-only class)', function(){
+            it('strips the source id so the replica keeps its own', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(!insert.includes('`id`'),
+                    'the source surrogate id must reach neither the column list nor the update suffix');
+                for(const col of ['validator_pubkey', 'provider_id', 'fulfilled_count'])
+                    assert.ok(insert.includes('`' + col + '`'), col + ' must still be written');
+            });
+
+            it('still upserts on the natural key, so a re-dump refreshes the counters', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(insert.includes('ON DUPLICATE KEY UPDATE'), 'the full-dump upsert must survive the strip');
+                assert.ok(insert.includes('`fulfilled_count` = VALUES(`fulfilled_count`)'),
+                    'the running counters must still be overwritten with the source values');
+            });
+
+            it('issues no DELETE: the natural key is composite and a scoped delete would drop siblings', async function(){
+                await applier._insertRows('attest_validator_stats', [
+                    { id: 1, validator_pubkey: 'aa', provider_id: 'http_get' },
+                    { id: 2, validator_pubkey: 'aa', provider_id: 'other' }
+                ]);
+                let calls = db.doQuery.getCalls().map(c => c.args[0]);
+                assert.ok(!calls.some(q => /^DELETE/.test(q)),
+                    'deleting by validator_pubkey alone would remove that validator other-provider rows');
+            });
+
+            it('leaves a row that carries no id alone', async function(){
+                await applier._insertRows('attest_validator_stats',
+                    [{ validator_pubkey: 'aa', provider_id: 'http_get' }]);
+                let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+                assert.ok(insert.includes('`validator_pubkey`') && insert.includes('`provider_id`'));
+            });
+
+            it('refuses a row that carries only the stripped id rather than inserting nothing', async function(){
+                await assert.rejects(
+                    () => applier._insertRows('attest_validator_stats', [{ id: 7 }]),
+                    /carries only the stripped surrogate id/);
+            });
+        });
+
         it('backtick-wraps column names', async function(){
             await applier._insertRows('blocks', [{ 'block_index': 1 }]);
             let query = db.doQuery.firstCall.args[0];
@@ -699,5 +765,55 @@ describe('ClientApplier', function(){
             assert.ok(db.rollbackTransaction.calledOnce, 'transaction rolled back');
             assert.strictEqual(db.commitTransaction.called, false);
         });
+    });
+});
+
+// ANCHOR v7 puts N rows per action_index in anchor_actions (one per bundle
+// section). Two properties of the apply path have to hold for that, and both are
+// easy to break by "tidying" the table sets in the constructor.
+describe('ClientApplier: anchor_actions bundle sections', function(){
+    let applier, db, util;
+
+    beforeEach(function(){
+        db = {
+            doQuery: sinon.stub().resolves([]),
+            getBlockHashRow: sinon.stub().resolves(null),
+            beginTransaction: sinon.stub().resolves(),
+            commitTransaction: sinon.stub().resolves(),
+            rollbackTransaction: sinon.stub().resolves(),
+            truncateTable: sinon.stub().resolves()
+        };
+        util = new Utility();
+        applier = new ClientApplier(db, util, 'DOGE', 'regtest');
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('inserts every section of a bundle, naming section_index in the write', async function(){
+        let sections = [0, 1, 2].map(i => ({
+            action_index: 41, section_index: i, version: 7,
+            chain: ['BTC', 'DOGE', 'LTC'][i], network: 'regtest', block_index: 900 + i
+        }));
+        await applier._insertRows('anchor_actions', sections);
+        assert.ok(db.doQuery.calledOnce, 'one batched INSERT for the three rows');
+        let sql = db.doQuery.firstCall.args[0];
+        assert.ok(/`section_index`/.test(sql),
+            'section_index must be named in the INSERT; without it every section lands on the DEFAULT 0 ' +
+            'and sections 1..N-1 collide with section 0 on the composite primary key');
+        assert.strictEqual((sql.match(/\(\?/g) || []).length, 3, 'all three sections are written');
+    });
+
+    it('leaves anchor_actions on a plain INSERT, so a section collision cannot pass silently', function(){
+        // INSERT IGNORE here would turn a replica still carrying the OLD
+        // single-column PRIMARY KEY (action_index) into one that silently keeps
+        // only section 0 and drops the rest: a permanently short, permanently
+        // wrong consensus table with no divergence signal. The loud ER_DUP_ENTRY
+        // is the wanted behavior; Database.ensureReplicaSecondaryIndexes widens
+        // the key so it never fires in the first place.
+        assert.ok(!applier.ignoreTables.has('anchor_actions'),
+            'anchor_actions must not use INSERT IGNORE');
+        assert.ok(!applier.upsertFullDumpTables.has('anchor_actions'),
+            'anchor_actions is action-scoped, not a re-dumped mutable aggregate');
     });
 });

@@ -97,7 +97,13 @@ describe('ServerPoller', function(){
             // contract_stakes row through it, in both directions: forward via updatedRows,
             // backward via the ClientRollback key restore.
             assert.ok(poller.blockScopedTables.includes('contract_delegation_rotations'));
-            assert.strictEqual(poller.blockScopedTables.length, 11);
+            // ROLLCALL epoch closes and their pinned absences. These ARE block-scoped for
+            // REPLICATION even though their rollback is bespoke: the replica needs the rows
+            // streamed like any other per-block table, and only the reorg delete differs,
+            // because their block key is close_block rather than block_index.
+            assert.ok(poller.blockScopedTables.includes('rollcalls'));
+            assert.ok(poller.blockScopedTables.includes('rollcall_absences'));
+            assert.strictEqual(poller.blockScopedTables.length, 13);
         });
 
         it('has action-scoped tables', function(){

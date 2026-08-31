@@ -1941,3 +1941,164 @@ describe('Database.ensureReplicaSecondaryIndexes(): votes append-only migration'
         await dec.close();
     });
 });
+
+// A replica that bootstrapped before the indexer's
+// 2026-08-28-anchor-actions-section-index-pk migration carries anchor_actions on
+// the single-column PRIMARY KEY (action_index). The column self-heal adds
+// section_index but never touches the key, so the first ANCHOR v7 bundle (N rows
+// sharing one action_index) collides on ER_DUP_ENTRY, which is outside the
+// {1146, 1054} schema-heal set and therefore wedges the replica permanently.
+describe('Database.ensureReplicaSecondaryIndexes(): anchor_actions bundle-section primary key', function () {
+    // Fake doQuery that treats only `anchor_actions` as present, so the
+    // index-ensure/attests/votes steps above no-op and the test isolates this
+    // migration. pk is the PRIMARY's column list; hasColumn drives the
+    // section_index existence probe.
+    function stubDoQuery(db, pk, hasColumn) {
+        let calls = [];
+        let fake = async (sql, params) => {
+            calls.push({ sql, params });
+            if (/information_schema\.tables/.test(sql)) {
+                if (/table_name = 'anchor_actions'/.test(sql)) return [{ table_name: 'anchor_actions' }];
+                return [];
+            }
+            if (/information_schema\.columns/.test(sql))
+                return hasColumn ? [{ column_name: 'section_index' }] : [];
+            if (/information_schema\.statistics/.test(sql)) {
+                if (/index_name = 'PRIMARY'/.test(sql)) return pk.map(c => ({ column_name: c }));
+                return [];
+            }
+            return [];
+        };
+        sinon.stub(db, 'doQuery').callsFake(fake);
+        sinon.stub(db, 'doQueryStrict').callsFake(fake);
+        return calls;
+    }
+
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb('indexer'); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('widens a stale single-column PRIMARY KEY to (action_index, section_index)', async function () {
+        let calls = stubDoQuery(db, ['action_index'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(ddl.some(s => /ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY \(`action_index`, `section_index`\)/.test(s)),
+            'must drop and re-add the primary key in one ALTER');
+    });
+
+    it('is a no-op when the composite key is already in place (idempotent)', async function () {
+        let calls = stubDoQuery(db, ['action_index', 'section_index'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'a replica already on the composite key must not be re-altered');
+    });
+
+    it('refuses to swap the key while section_index is still missing', async function () {
+        // ADD PRIMARY KEY on an unknown column is errno 1072 and the whole ALTER is
+        // refused, leaving the stale key in place with no signal; wait for the
+        // column self-heal instead.
+        let calls = stubDoQuery(db, ['action_index'], false);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'must not issue the ALTER before the column exists');
+    });
+
+    it('leaves an unexpected primary key alone', async function () {
+        // Never guess at a key this migration does not describe.
+        let calls = stubDoQuery(db, ['id'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
+            'only the exact stale (action_index) key is migrated');
+    });
+});
+
+// A replica that bootstrapped before the indexer's
+// 2026-08-24-validator-rewards-round-qualifier migration carries the OLD
+// four-column UNIQUE reward_unique. sync runs no migrations and the column
+// self-heal never touches indexes, so the key stays narrow while the applier
+// INSERT IGNOREs validator_rewards: two distinct archive rewards differing only
+// in round_qualifier collapse into one row with nothing to catch it. The index
+// keeps the same NAME under both schemas, so detection must read the column list.
+describe('Database.ensureReplicaSecondaryIndexes(): validator_rewards reward_unique qualifier key', function () {
+    // Fake query layer that treats only `validator_rewards` as present, so the
+    // index-ensure/attests/votes/anchor_actions steps above no-op and the test
+    // isolates this migration. idxCols is reward_unique's ordered column list
+    // (empty = index absent); hasColumn drives the round_qualifier probe.
+    function stubDoQuery(db, idxCols, hasColumn) {
+        let calls = [];
+        let fake = async (sql, params) => {
+            calls.push({ sql, params });
+            if (/information_schema\.tables/.test(sql)) {
+                if (/table_name = 'validator_rewards'/.test(sql)) return [{ table_name: 'validator_rewards' }];
+                return [];
+            }
+            if (/information_schema\.columns/.test(sql))
+                return hasColumn ? [{ column_name: 'round_qualifier' }] : [];
+            if (/information_schema\.statistics/.test(sql)) {
+                if (/index_name = 'reward_unique'/.test(sql)) return idxCols.map(c => ({ column_name: c }));
+                return [];
+            }
+            return [];
+        };
+        sinon.stub(db, 'doQuery').callsFake(fake);
+        sinon.stub(db, 'doQueryStrict').callsFake(fake);
+        return calls;
+    }
+
+    let staleKey = ['source_id', 'signing_pubkey_id', 'reward_type', 'round_reference'];
+    let newKey   = staleKey.concat(['round_qualifier']);
+
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb('indexer'); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('rebuilds a stale four-column reward_unique with round_qualifier appended', async function () {
+        let calls = stubDoQuery(db, staleKey, true);
+        await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        assert.ok(ddl.some(s => /ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ADD UNIQUE INDEX `reward_unique` \(`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`\)/.test(s)),
+            'must drop and re-add reward_unique in one ALTER so the table is never keyless');
+    });
+
+    it('is a no-op when the five-column key is already in place (idempotent)', async function () {
+        let calls = stubDoQuery(db, newKey, true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /validator_rewards` DROP INDEX/.test(c.sql)),
+            'a replica already on the qualifier key must not be re-altered');
+    });
+
+    it('refuses to rebuild the key while round_qualifier is still missing', async function () {
+        // ADD UNIQUE INDEX naming an unknown column is errno 1072 and the whole
+        // ALTER is refused, leaving the stale key in place with no signal.
+        let calls = stubDoQuery(db, staleKey, false);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /validator_rewards` DROP INDEX/.test(c.sql)),
+            'must not issue the ALTER before the column exists');
+    });
+
+    it('leaves an unexpected reward_unique definition alone', async function () {
+        // Never guess at a key this migration does not describe.
+        let calls = stubDoQuery(db, ['source_id', 'round_reference'], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /validator_rewards` DROP INDEX/.test(c.sql)),
+            'only the exact stale four-column key is migrated');
+    });
+
+    it('does nothing when reward_unique is absent', async function () {
+        // Adding a UNIQUE index to a table that has been running without one can
+        // fail on pre-existing duplicates; that is not the drift this heals.
+        let calls = stubDoQuery(db, [], true);
+        await db.ensureReplicaSecondaryIndexes();
+        assert.ok(!calls.some(c => /validator_rewards` (DROP INDEX|ADD UNIQUE)/.test(c.sql)),
+            'an absent key is left for the operator, not invented here');
+    });
+
+    it('is a no-op for a decoder replica (indexer-only)', async function () {
+        let dec  = makeDb('decoder');
+        let spy  = sinon.stub(dec, 'doQuery').resolves([]);
+        let spy2 = sinon.stub(dec, 'doQueryStrict').resolves([]);
+        await dec.ensureReplicaSecondaryIndexes();
+        assert.ok(spy.notCalled && spy2.notCalled, 'decoder returns before any schema query');
+        await dec.close();
+    });
+});
