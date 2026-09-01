@@ -4,8 +4,8 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.11.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-1850%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.12.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-2%2C461%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
@@ -129,23 +129,23 @@ npm run api
 |---|---|
 | `npm run api` | Start the sync service |
 | `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
-| `npm test` | Run unit tests |
+| `npm test` | Run unit tests (1,975 tests) |
 | `npm run ci` | Unit tests plus the security tier, exits on completion |
 | `npm run coverage` | Unit tests under `c8` coverage instrumentation |
-| `npm run test:boundary` | Boundary condition tests (consensus constants) |
-| `npm run test:regression` | Unit tests tagged `@regression` |
-| `npm run test:smoke` | Smoke tests (server + client startup, config loading) |
-| `npm run test:integration` | Integration tests (requires MariaDB + running indexer) |
-| `npm run test:e2e` | End-to-end tests (full server/client lifecycle) |
-| `npm run test:security` | Security tests (validation, injection, auth) |
-| `npm run test:fuzz` | Fuzz tests (property-based via fast-check) |
-| `npm run test:fuzz:tier1` | Tier 1 fuzz (client applier, hash verifier) |
-| `npm run test:fuzz:tier2` | Tier 2 fuzz (rollback, server poller, hub client) |
-| `npm run test:fuzz:tier3` | Tier 3 fuzz (config parsing) |
-| `npm run test:fuzz:quick` | Quick fuzz (100 iterations) |
-| `npm run test:chaos` | Chaos engineering tests (DB failures, network partitions) |
-| `npm run test:perf` | Performance tests (throughput, snapshots, scaling) |
-| `npm run test:perf:quick` | Quick perf (50 blocks) |
+| `npm run test:boundary` | Boundary condition tests (consensus constants, 7 tests) |
+| `npm run test:regression` | Unit tests tagged `@regression` (501 tests) |
+| `npm run test:smoke` | Smoke tests (server + client startup, config loading, 17 tests) |
+| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 102 tests) |
+| `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 72 tests) |
+| `npm run test:security` | Security tests (validation, injection, auth, 157 tests) |
+| `npm run test:fuzz` | Fuzz tests (property-based via fast-check, 55 tests) |
+| `npm run test:fuzz:tier1` | Tier 1 fuzz (client applier, hash verifier, 25 tests) |
+| `npm run test:fuzz:tier2` | Tier 2 fuzz (rollback, server poller, hub client, 23 tests) |
+| `npm run test:fuzz:tier3` | Tier 3 fuzz (config parsing, 7 tests) |
+| `npm run test:fuzz:quick` | Quick fuzz (100 iterations, 55 tests) |
+| `npm run test:chaos` | Chaos engineering tests (DB failures, network partitions, 38 tests) |
+| `npm run test:perf` | Performance tests (throughput, snapshots, scaling, 38 tests) |
+| `npm run test:perf:quick` | Quick perf (50 blocks, 38 tests) |
 | `npm run test:mutate` | Mutation tests (Stryker) |
 | `npm run test:mutate:quick` | Quick mutation tests |
 | `npm run test:mutate:check` | Incremental mutation tests |
