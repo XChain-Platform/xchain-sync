@@ -266,6 +266,13 @@ class SyncService {
                 // both paths self-heal. Idempotent, so the double-call on the
                 // direct-DB path is a cheap no-op.
                 await db.ensureReplicaSecondaryIndexes();
+                // Same again for the raw-wire-field charset widen: neither self-heal above
+                // retypes an existing column, so a replica bootstrapped before the
+                // 2026-09-02 indexer migration keeps utf8mb3 on contracts.code and the
+                // grammar-constrained fields and halts on the first 4-byte character the
+                // widened origin accepts. Idempotent, so the double-call on the direct-DB
+                // path is a cheap no-op.
+                await db.ensureReplicaUtf8mb4Columns();
                 // Fail closed on collation drift in the columns the stake-weight
                 // snapshot orders on. The follower rebuilds stakes_root from the
                 // byte-mirrored _cappedStakeWeightsSql, whose window caps truncate on

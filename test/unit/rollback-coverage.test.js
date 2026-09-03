@@ -792,7 +792,12 @@ describe('Rollback coverage guard @regression', function(){
     // different stakes_root at an armed height - the same class of fork the source-cap
     // twin above guards. It also carries the schema-drift contract both services'
     // startup checks read, so one definition of "undrifted" serves both fleets.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js']){
+    // utf8mb4Columns.js is the widen set for the columns that ingest raw wire fields
+    // (contracts.code and the grammar-constrained fields). The source converges through a
+    // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
+    // copy means an origin that accepts a 4-byte character and a replica that halts on it
+    // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js', 'utf8mb4Columns.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
@@ -802,6 +807,30 @@ describe('Rollback coverage guard @regression', function(){
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
         });
     }
+
+    // Lockstep, read from the other end: the replica widen and the source MIGRATION must
+    // land the same column shape. Byte-identity of the module alone does not prove that -
+    // the two copies could agree with each other while the indexer's dated migration says
+    // something else, leaving the origin on one charset and every follower on another.
+    // Every entry's MODIFY clause must therefore appear verbatim in one of the sibling's
+    // dated migration files, which is exactly what ensureReplicaUtf8mb4Columns issues.
+    it('every utf8mb4 widen entry is carried by a dated xchain-indexer migration (source/replica lockstep)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const widenSet = require('../../src/utf8mb4Columns');
+        const migDir   = indexerFile(pathMod.join('src', 'sql', 'migrations'));
+        if(!requireSibling(this, migDir)) return;
+        const ledger = fs.readdirSync(migDir).filter(f => f.endsWith('.sql'))
+            .map(f => fs.readFileSync(pathMod.join(migDir, f), 'utf8')).join('\n');
+        const missing = [];
+        for(const entry of widenSet.UTF8MB4_RAW_FIELD_COLUMNS){
+            if(!ledger.includes(widenSet.modifyClause(entry)))
+                missing.push('  ' + entry.table + '.' + entry.column + ': ' + widenSet.modifyClause(entry));
+        }
+        assert.deepStrictEqual(missing, [],
+            'These columns are widened on the replica but no dated xchain-indexer migration MODIFYs them to ' +
+            'the same shape, so the source and its followers converge on DIFFERENT column charsets:\n' +
+            missing.join('\n'));
+    });
 
     // The gate's own conformance suite is a twin too: it is what proves the carrier
     // is inert (identical state_root to the two-sub-root v1 assembly) and that the
