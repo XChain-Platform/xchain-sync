@@ -207,6 +207,7 @@ describe('SyncService', function(){
             sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
             sinon.stub(Database.prototype, 'replicateSchema').resolves();
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
             sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
@@ -231,6 +232,7 @@ describe('SyncService', function(){
             sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
             sinon.stub(Database.prototype, 'replicateSchema').resolves();
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
             sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
@@ -289,6 +291,7 @@ describe('SyncService', function(){
             sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
             let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
             sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
@@ -310,6 +313,7 @@ describe('SyncService', function(){
             sinon.stub(Database.prototype, 'verifyDatabaseOnce').rejects(new Error('unreachable'));
             let repl = sinon.stub(Database.prototype, 'replicateSchema').resolves();
             let vst  = sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
             sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
             sinon.stub(Database.prototype, 'close').resolves();
@@ -331,6 +335,7 @@ describe('SyncService', function(){
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
             sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             let startPoller = sinon.stub(service, '_startPollerForChain');
 
             await service._discoverChains();
@@ -346,6 +351,7 @@ describe('SyncService', function(){
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
             sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, '_assertConsensusOrderingCollations').resolves();
             sinon.stub(service, '_startPollerForChain');
 
             await service._discoverChains();

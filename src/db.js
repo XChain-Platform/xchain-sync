@@ -33,6 +33,7 @@ const { canonicalizeHashAddress } = require('./protocolAddressRoles');
 const poolSizing = require('./poolSizing');
 const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
+const swCollation = require('./stake_weight_collation_activation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -239,6 +240,42 @@ class Database {
         await db.release();
         console.log('Database and tables verified (' + checked + ' tables, ' + created + ' created).');
         return true;
+    }
+
+    // See Database.CONSENSUS_ORDERED_COLUMNS. Twin of the indexer's assertion of the
+    // same name. The indexer runs it off runMigrations; sync has no migration runner,
+    // so SyncService._discoverChains calls it once per chain at startup, on both the
+    // client and server paths, after any schema replication has landed. It is NOT
+    // folded into verifySyncTables: that method's contract is the sync-OWNED tables
+    // (and its tests pin exactly which tables it probes), while these columns are
+    // replicated from the source. Skips silently when the table/column is absent
+    // (decoder-shaped replica, or schema not yet fetched from the server).
+    async _assertConsensusOrderingCollations(){
+        let conn;
+        try {
+            conn = await this.getConnection();
+            for(const spec of Database.CONSENSUS_ORDERED_COLUMNS){
+                const rows = await conn.query(
+                    "SELECT COLLATION_NAME AS collation FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND column_name = ?",
+                    [this.dbName, spec.table, spec.column]
+                );
+                if(!rows.length) continue;                       // table/column not created yet
+                const observed = rows[0].collation;
+                if(observed == null) continue;                   // non-character type: not this guard's contract
+                if(Database.normalizeCollationName(observed) === Database.normalizeCollationName(spec.collation)) continue;
+                throw new Error(
+                    spec.table + '.' + spec.column + ' is ' + observed + ' but ' + spec.collation +
+                    ' is required (as declared in the source\'s src/sql/' + spec.table + '.sql). Consensus ordering ' +
+                    'reads this column: the stake-weight snapshot ranks and truncates on it, so a replica sorting ' +
+                    'under a different collation keeps a different row set and rebuilds a different stakes_root. ' +
+                    'Re-collate the column to ' + spec.collation + ' before running this node.'
+                );
+            }
+        } finally {
+            if(conn && this.transactionConnection == null){
+                try { await conn.release(); } catch(_){}
+            }
+        }
     }
 
     // Only for sync-service-owned tables such as sync_meta; replicated tables come
@@ -1545,16 +1582,29 @@ class Database {
     // pubkey+capability); only the returned SET is. CONSENSUS-CRITICAL: feeds the
     // hashed stakes_root at/after SWQ_SOURCE_CAP_ACTIVATION and MUST stay byte-identical
     // to the xchain-indexer twin (cross-repo drift guard in rollback-coverage.test.js).
-    _cappedStakeWeightsSql(inner, maxSources, maxKeys){
+    //
+    // `binCollation` (stake_weight_collation_activation.js) pins utf8_bin on the three
+    // ordering sites. Although row ORDER is consensus-irrelevant here, the rank/partition
+    // comparisons are a TRUNCATION boundary - they decide which sources and which keys
+    // survive the caps - and `source` resolves through index_addresses.address, declared
+    // utf8_general_ci (case/accent-folding). Unpinned, that comparison is decided by each
+    // node's schema collation rather than by this tree, so a drifted node truncates to a
+    // different SET and forks the stakes_root. Every other consensus read of that column
+    // already pins utf8_bin; this one is gated because pinning it CHANGES the surviving
+    // set wherever a cap bit, which would re-evaluate already-valid blocks. OFF (below
+    // the height / unarmed chain) the emitted string is byte-for-byte the legacy SQL.
+    _cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation){
+        // Empty when the gate is off, so the legacy string is reproduced exactly.
+        const c = binCollation ? ' COLLATE utf8_bin' : '';
         let sql = `SELECT r.pubkey AS pubkey, r.source AS source, r.weight AS weight, r._sr AS _sr
                    FROM (
                        SELECT b.pubkey AS pubkey, b.source AS source, b.weight AS weight,
-                              DENSE_RANK() OVER (ORDER BY b.source)                        AS _sr,
-                              ROW_NUMBER() OVER (PARTITION BY b.source ORDER BY b.pubkey)  AS _kr
+                              DENSE_RANK() OVER (ORDER BY b.source${c})                        AS _sr,
+                              ROW_NUMBER() OVER (PARTITION BY b.source${c} ORDER BY b.pubkey${c})  AS _kr
                        FROM (${inner.sql}) b
                    ) r
                    WHERE r._sr <= ? AND r._kr <= ?
-                   ORDER BY r.source, r.pubkey`;
+                   ORDER BY r.source${c}, r.pubkey${c}`;
         let args = [...inner.args, maxSources + 1, maxKeys];
         return { sql, args };
     }
@@ -1567,11 +1617,18 @@ class Database {
     // are byte-mirrored to the indexer so the follower's stakes_root set is identical on
     // both sides of the height. Sync reads coin/network from the caller (it has no
     // per-chain config); a null coin/network stays inert (legacy uncapped path).
+    // A SECOND, independent gate rides both branches: STAKE_WEIGHT_COLLATION_ACTIVATION
+    // pins utf8_bin on the ordering that decides WHICH rows survive the caps (see
+    // _cappedStakeWeightsSql). It is unarmed on mainnet, so both branches emit today's
+    // SQL there; a null coin/network stays inert here too. The indexer's
+    // _stakeWeightsWithCap resolves the same gate from its own config.
     async _applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
+        let binColl = swCollation.isStakeWeightBinCollationActive(blockIndex, network, coin);
+        let c = binColl ? ' COLLATE utf8_bin' : '';
         if(swqCap.isSwqSourceCapActive(blockIndex, network, coin)){
             let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
             let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
-            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys);
+            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys, binColl);
             // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
             // stakes_root, and the SPV checkpoint forward-follow
             // (ClientSync._oraclePublishSetAt) reads it with NO transaction open, so a
@@ -1589,7 +1646,9 @@ class Database {
             }));
             return { rows, truncated };
         }
-        let query = `${inner.sql} ORDER BY source, pubkey LIMIT ?`;
+        // Same truncation-boundary argument as the capped branch: the LIMIT keeps the
+        // FIRST `limit` rows in this order, so the order decides the surviving set.
+        let query = `${inner.sql} ORDER BY source${c}, pubkey${c} LIMIT ?`;
         let raw = await this.doQueryStrict(query, [...inner.args, limit]);
         let truncated = raw.length >= limit;
         if(truncated)
@@ -1976,5 +2035,30 @@ class Database {
 // Exposed for the unit suite (and the indexer-twin drift check): the weightless-row
 // guard is consensus-relevant, so it is tested directly, not only through a query.
 Database.requireStakeWeight = requireStakeWeight;
+
+// Columns whose COLLATION decides a consensus RESULT, with the collation the source's
+// src/sql declares for each. Enforced at startup by _assertConsensusOrderingCollations.
+// Twin of the xchain-indexer list: the follower rebuilds the same stakes_root from the
+// same replicated tables and HALTs on divergence, so a replica collating these columns
+// differently from its source halts (or, below the halt, silently truncates to a
+// different set). Keep the two lists in step.
+Database.CONSENSUS_ORDERED_COLUMNS = [
+    // stake-weight snapshot source ranking/truncation (_cappedStakeWeightsSql, via
+    // _stakeWeightsSql's `sa.address AS source`); also BlockHasher/stateHash.js, which
+    // pin utf8_bin OVER this declared collation.
+    { table: 'index_addresses', column: 'address', collation: 'utf8_general_ci' },
+    // per-source key ranking/truncation in the same snapshot (`ip.pubkey AS pubkey`).
+    { table: 'index_pubkeys',   column: 'pubkey',  collation: 'utf8_general_ci' },
+];
+
+// Compare collation names across the utf8/utf8mb3 rename. `utf8` is an alias for
+// utf8mb3, and information_schema reports the alias on older servers but the explicit
+// utf8mb3_* name on MariaDB 10.6+/MySQL 8, so a literal compare against the `utf8_*`
+// spelling in src/sql would fail-closed on an entirely conforming database - turning a
+// drift guard into a fleet outage on a routine server upgrade. Normalising is safe
+// because the two names denote the SAME collation, hence the same sort order.
+Database.normalizeCollationName = function(name){
+    return String(name == null ? '' : name).toLowerCase().replace(/^utf8mb3_/, 'utf8_');
+};
 
 module.exports = Database;

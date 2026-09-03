@@ -266,6 +266,15 @@ class SyncService {
                 // both paths self-heal. Idempotent, so the double-call on the
                 // direct-DB path is a cheap no-op.
                 await db.ensureReplicaSecondaryIndexes();
+                // Fail closed when a consensus-ORDERED column is collated differently
+                // from the source's declared schema. This follower recomputes the
+                // stakes_root and HALTs on divergence, and the stake-weight snapshot
+                // RANKS and TRUNCATES on index_addresses.address / index_pubkeys.pubkey
+                // (see db.CONSENSUS_ORDERED_COLUMNS), so a mis-collated replica keeps a
+                // different row set and rebuilds a different root. Runs after schema
+                // replication and the column/index self-heals, so it sees the schema this
+                // replica will actually query; it no-ops on a decoder-shaped replica.
+                await db._assertConsensusOrderingCollations();
             } else {
                 // Server mode: connect to the DB this server polls + serves.
                 // Default: the authoritative DB at the hub-provided coordinates.
@@ -282,6 +291,10 @@ class SyncService {
                 // Sync-owned tables (dbType-aware: indexer = full set, decoder =
                 // sync_halt only); same rationale as the client branch above.
                 await db.verifySyncTables();
+                // Same consensus-ordering collation guard as the client branch: a server
+                // serving a mis-collated local replica would hand downstream clients a
+                // stake-weight set its source never committed.
+                await db._assertConsensusOrderingCollations();
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
