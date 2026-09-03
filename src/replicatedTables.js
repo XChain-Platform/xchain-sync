@@ -53,8 +53,8 @@
  *     capability_snapshots,           per-block stream. xchain-sync NEVER replicates them
  *     state_checkpoints,              on any channel, snapshots included. A serving node
  *     price_snapshots,                does not fall back to a local mirror either: the
- *     anchor_reward_attestations      explorer reads the consensus-relevant ones from the
- *                                     MANDATORY co-located hub DB and fails loud without
+ *     anchor_reward_attestations,     explorer reads the consensus-relevant ones from the
+ *     attestation_responses           MANDATORY co-located hub DB and fails loud without
  *                                     it, rather than serving stale local rows. The set is
  *                                     every tableLifecycle entry with replication
  *                                     'hub-mirror'; that registry is the authority and
