@@ -16,11 +16,14 @@
 // log shim that redacts credentials and never throws at a dead collector.
 //
 // Ported from the canonical suite at xchain-hub/test/unit/observability.test.js.
-// src/observability/ here is a verbatim vendored copy (parity is gated by a
-// check across the vendored copies in CI), so this file runs
-// the same assertions against xchain-sync's own copy, express version and
-// Node engine. Behaviour changes belong in the canonical suite first; re-port
-// rather than hand-editing, or the two drift apart silently.
+// src/observability/ here is a verbatim vendored copy, vendored and verified by
+// xchain-hub/bin/sync-observability.sh. Parity is gated in the HUB, not here:
+// the hub's pre-push gate (bin/ci-full.sh) and the drift-guards job of its
+// ci.yml both run that script with --check against all six consumers, so a
+// hand-edit to this copy reddens the hub. This file runs the same assertions
+// against xchain-sync's own copy, express version and Node engine.
+// Behaviour changes belong in the canonical suite first; re-port rather than
+// hand-editing, or the two drift apart silently.
 
 const { expect } = require('chai');
 const express = require('express');
