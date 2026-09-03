@@ -100,10 +100,15 @@ class HubClient {
     // getallconfigs sits in the hub's sensitive-read tier (its response carries DB
     // credentials) and 401s without it once the hub sets a key, while methods that do
     // not need it ignore it, so sending unconditionally is safe.
+    // HUB_CONFIG_SECRETS_API_KEY wins when set: the hub can split the credential
+    // tier (getallconfigs with include_secrets, the only way this client gets the
+    // replication sources' DB passwords) onto a key of its own, and one request
+    // carries one x-api-key header. Unset, the bulk key covers both tiers.
     async _call(data, timeout = 5000){
         this.lastFailures = [];
         let headers = {};
-        if(process.env.HUB_API_KEY) headers['x-api-key'] = process.env.HUB_API_KEY;
+        let hubKey = process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY;
+        if(hubKey) headers['x-api-key'] = hubKey;
         for(let i = 0; i < this.urls.length; i++){
             let idx = (this._lastGoodIdx + i) % this.urls.length;
             let url = this.urls[idx];
@@ -126,6 +131,34 @@ class HubClient {
         return result !== null;
     }
 
+    // Params for every getallconfigs call this client makes.
+    //
+    // include_secrets is NOT optional for sync: _extractDbConfigs turns this tree
+    // into the replication sources' connection details (db_user/db_pass per
+    // coin/network), so a redacted response hands every source the literal
+    // "[redacted]" as its password. The hub redacts secret-bearing params by
+    // default and serves them only to a caller that asks and is authorized
+    // (HUB_CONFIG_SECRETS_API_KEY when the hub sets one, the bulk HUB_API_KEY
+    // otherwise). Older hubs ignore an unknown param and return the full tree, so
+    // this is safe to deploy ahead of the hub change (and must be: a sync without
+    // the flag against a redacting hub loses its DB passwords).
+    _configParams(cursor){
+        return { since_updated_at: cursor, include_secrets: true };
+    }
+
+    // One warning, not one per poll: a redacted response means this service asked
+    // for credentials and is not authorized for them, so every DB pool built from
+    // the result will fail to authenticate several layers away from the cause.
+    _warnIfRedacted(result){
+        if(!result || typeof result !== 'object' || result.secrets_redacted !== true) return;
+        if(this._warnedRedacted) return;
+        this._warnedRedacted = true;
+        console.error('Hub served a CREDENTIAL-REDACTED config tree (' + (result.redacted_params || 0) +
+            ' params withheld): this service asked for secrets but is not authorized for them. Set ' +
+            'HUB_API_KEY (or the hub\'s HUB_CONFIG_SECRETS_API_KEY) to the value the hub expects; until ' +
+            'then every replication source built from this config will fail to authenticate.');
+    }
+
     // Returns the full nested tree { coin: { network: { module: { param: value } } } }
     // whatever shape the hub answered in; see _applyConfigResult for the version
     // handling. Sync discovers DBs at startup, so this.lastSeq is tracked for
@@ -138,7 +171,7 @@ class HubClient {
             method:  'getallconfigs',
             // Echo the high-water mark so the hub returns only rows changed since
             // our last poll; 0 requests the full tree (initial fetch / old hub).
-            params:  { since_updated_at: this.lastWatermark },
+            params:  this._configParams(this.lastWatermark),
             id:      1
         }, 10000);
         // _call returns null when every endpoint failed; preserve that signal so
@@ -156,12 +189,13 @@ class HubClient {
             result = await this._call({
                 jsonrpc: '2.0',
                 method:  'getallconfigs',
-                params:  { since_updated_at: 0 },
+                params:  this._configParams(0),
                 id:      1
             }, 10000);
             if(result === null) return null;
         }
 
+        this._warnIfRedacted(result);
         this.configs = this._applyConfigResult(result);
         // Bind the (possibly advanced) cursor to the endpoint that answered.
         this._watermarkEndpointIdx = this._lastGoodIdx;
