@@ -35,6 +35,7 @@ const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
 const stakeWeightCollation = require('./stake_weight_collation_activation');
 const utf8mb4Columns = require('./utf8mb4Columns');
+const lifecycle = require('./tableLifecycle');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -2036,7 +2037,13 @@ class Database {
             // (recovery pre-seed, API read-path createAddress). Those are benign
             // source-local drift, excluded exactly as computeIndexMapChecksum
             // excludes them, so they can never raise a false alarm.
-            query = "SELECT * FROM `" + table + "` WHERE block_index IS NOT NULL AND block_index BETWEEN ? AND ?";
+            //
+            // Window by the registry's scope column, never the literal: a close_block-keyed
+            // table raises errno 1054 on `block_index`, the caller's per-table catch drops
+            // it, and it stays reported as parity-covered while nothing ever checks it.
+            let key = lifecycle.blockKey(table);
+            assertValidIdentifier(key);
+            query = "SELECT * FROM `" + table + "` WHERE " + key + " IS NOT NULL AND " + key + " BETWEEN ? AND ?";
         }
         return await this.doQueryStrict(query, [fromBlock, toBlock], conn);
     }
@@ -2060,11 +2067,17 @@ class Database {
             "SELECT * FROM `" + table + "` WHERE id > ? AND id <= ?", [fromId, toId], conn);
     }
 
-    // Get all rows from a table for a given block (block_index-scoped tables).
-    // ORDER BY block_index, then by the first column for deterministic ordering
+    // Get all rows from a table for a given block (block-scoped tables).
+    // ORDER BY the scope column, then by the first column for deterministic ordering
     // across sources with differing insert histories (matches the snapshot path).
+    //
+    // Scope by the registry's blockKey, never the literal `block_index`: a table keyed
+    // by another column raises errno 1054, which ServerPoller classifies as an older
+    // source schema and drops from the payload with no log line and no delivery.
     async getBlockScopedRows(table, block_index, conn){
-        let query = "SELECT * FROM `" + table + "` WHERE block_index = ? ORDER BY block_index ASC, 1 ASC";
+        let key = lifecycle.blockKey(table);
+        assertValidIdentifier(key);
+        let query = "SELECT * FROM `" + table + "` WHERE " + key + " = ? ORDER BY " + key + " ASC, 1 ASC";
         return await this.doQuery(query, [block_index], conn);
     }
 

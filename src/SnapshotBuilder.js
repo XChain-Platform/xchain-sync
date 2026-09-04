@@ -721,7 +721,11 @@ class SnapshotBuilder {
                         }
                     } else {
                         if(indexerBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
+                            // Scope by the registry's blockKey, never the literal: a table
+                            // keyed by another column raises errno 1054, which this loop's
+                            // catch tolerates as an older source schema and skips forever.
+                            let key = tableLifecycle.blockKey(table);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key, [sinceBlock], conn);
                         } else if(indexerFullDump.has(table)){
                             if(skipLookups && lookupSet.has(table)) continue;
                             rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);

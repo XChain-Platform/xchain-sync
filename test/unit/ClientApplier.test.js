@@ -541,6 +541,20 @@ describe('ClientApplier', function(){
             assert.ok(!query.includes('ON DUPLICATE KEY UPDATE'));
         });
 
+        // The two close_block-keyed roll-call tables ride the bootstrap full dump AND
+        // stream per block, so an overlapping window re-delivers a row already applied.
+        // Each is pinned at its close and never re-derived, so the repeat is identical:
+        // IGNORE is a no-op, while a plain INSERT aborts the whole apply transaction.
+        for(const table of ['rollcalls', 'rollcall_absences']){
+            it('uses INSERT IGNORE for the re-deliverable ' + table, async function(){
+                await applier._insertRows(table, [{ epoch_height: 1000, close_block: 1100 }]);
+                let query = db.doQuery.firstCall.args[0];
+                assert.ok(query.startsWith('INSERT IGNORE'), table + ' must be INSERT IGNORE');
+                assert.ok(!query.includes('ON DUPLICATE KEY UPDATE'),
+                    table + ' is pinned at close and must never be overwritten by a re-delivery');
+            });
+        }
+
         for(const table of ['markets', 'attest_validator_stats']){
             it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every carried column', async function(){
                 await applier._insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);

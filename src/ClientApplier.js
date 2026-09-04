@@ -106,7 +106,14 @@ class ClientApplier {
             // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
             // (each row streams once in its earn-block; mirrors createValidatorReward's
             // own INSERT IGNORE on the source).
-            'validator_rewards'
+            'validator_rewards',
+            // rollcalls / rollcall_absences ride the bootstrap full dump AND stream by
+            // close_block, so an overlapping window re-delivers a row already applied.
+            // Each is pinned at close and never re-derived, so the re-delivery is
+            // identical and IGNORE is a no-op; a plain INSERT would abort the apply
+            // transaction on the duplicate PK. Same reasoning as validator_rewards above.
+            'rollcalls',
+            'rollcall_absences'
         ]);
 
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
