@@ -4,8 +4,8 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.12.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-2%2C461%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.15.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-2%2C479%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
@@ -129,11 +129,11 @@ npm run api
 |---|---|
 | `npm run api` | Start the sync service |
 | `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
-| `npm test` | Run unit tests (1,975 tests) |
+| `npm test` | Run unit tests (1,993 tests) |
 | `npm run ci` | Unit tests plus the security tier, exits on completion |
 | `npm run coverage` | Unit tests under `c8` coverage instrumentation |
 | `npm run test:boundary` | Boundary condition tests (consensus constants, 7 tests) |
-| `npm run test:regression` | Unit tests tagged `@regression` (501 tests) |
+| `npm run test:regression` | Unit tests tagged `@regression` (506 tests) |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading, 17 tests) |
 | `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 102 tests) |
 | `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 72 tests) |

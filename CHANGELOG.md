@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-09-04
+
+### Added
+- `attestation_responses` is registered as a hub-mirror table.
+- The bootstrap mirror is vendored instead of living only on the file master.
+
+### Fixed
+- The replication-source read asks the hub for unredacted config secrets.
+- Replica columns widen from the shared utf8mb4 definition.
+- mariadb moved off the cleartext-credential advisory range with the floor pinned in the dependency gate.
+
+### Changed
+- The vendored coin registry is resynced from the hub.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added
