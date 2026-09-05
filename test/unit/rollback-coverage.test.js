@@ -729,6 +729,41 @@ describe('Rollback coverage guard @regression', function(){
             'updatedRows.js must also select polls by callback_due_block with a fired stamp (the deferred callback fire is an in-place UPDATE at the due block)');
     });
 
+    // Forward parity for DELEGATE v1 signing-key rotations: the materialization sweep
+    // rewrites signing_pubkey_id IN PLACE on surviving stake-ledger rows whose action_index
+    // sits below the window, so only the contract_delegation_rotations journal pins the
+    // rewrite to a block. Dropping a table or the journal join silently stops replicating
+    // the rotation and a follower hands contracts a stale staker set. Pin the class table
+    // list and its journal-window predicate in updatedRows.js.
+    it('updated_rows carries the DELEGATE v1 rotation rewrite keyed by the rotations journal window', function(){
+        const { ROTATION_TABLES } = require('../../src/updatedRows');
+        assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
+            'updated_rows must track the rotation rewrite on both contract stake tables');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
+            'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
+    });
+
+    // Forward parity for the BET in-place flips: the closed latch, the terminal flip and
+    // settlement each mutate a surviving bet_feeds / bets row the action-scoped stream
+    // cannot reach, stamping a block column. Dropping a stamp silently stops replicating
+    // that flip and a follower keeps a stale feed or bet status. Pin the class spec list
+    // and the per-stamp window predicate it drives in updatedRows.js.
+    it('updated_rows carries the BET status flips keyed by their stamp columns', function(){
+        const { BET_STATUS_SPECS } = require('../../src/updatedRows');
+        assert.deepStrictEqual(BET_STATUS_SPECS, [
+            { table: 'bet_feeds', stamps: ['closed_block', 'terminal_block'] },
+            { table: 'bets',      stamps: ['settled_block'] }
+        ], 'updated_rows must track the feed closed/terminal stamps and the bet settlement stamp');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/for\(let spec of BET_STATUS_SPECS\)\{ try \{ let where = spec\.stamps\.map\(col => col BETWEEN \? AND \? \)\.join\( OR \);/.test(src),
+            'updatedRows.js must select each BET class by every stamp column landing in the window, OR-joined so a feed that latches and goes terminal in one window is still carried');
+    });
+
     // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from
     // src/stateHash.js: the indexer stores it at index-time, the follower recomputes it
     // apply-time and halts on mismatch. The two copies are a byte-aligned twin (separate
