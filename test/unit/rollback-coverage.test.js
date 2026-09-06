@@ -360,6 +360,35 @@ describe('Rollback coverage guard @regression', function(){
             'cross-chain mirror reorg delete SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
 
+    // Cross-repo drift guard for the contract slash reorg-restore. Both the source
+    // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js)
+    // copy back the highest orphaned contract_slash_debits.prev_amount for a mutated stake
+    // row. A predicate that picks a different debit on one side restores a different active
+    // stake there, and active stake drives staker weighting and quorum eligibility, so the
+    // two nodes fork. Both files carry the statement between //<CONTRACT-SLASH-RESTORE-SQL>
+    // markers; this concatenates its string literals (the indexer spells them as template
+    // literals, the replica as double-quoted concatenation, and the interpolated table name
+    // drops out of both) and asserts whitespace-normalised equality.
+    it('contract slash-restore SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function slashRestoreSql(path){
+            const src = fs.readFileSync(path, 'utf8');
+            const m = src.match(/\/\/<CONTRACT-SLASH-RESTORE-SQL>([\s\S]*?)\/\/<\/CONTRACT-SLASH-RESTORE-SQL>/);
+            assert.ok(m, `CONTRACT-SLASH-RESTORE-SQL markers not found in ${path}`);
+            const lits = m[1].match(/`[^`]*`|"(?:[^"\\]|\\.)*"/g) || [];
+            assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
+            return lits.map(l => l.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const sql = slashRestoreSql(syncPath);
+        assert.ok(/CAST\(e\.prev_amount AS DECIMAL\(60,18\)\) > CAST\(d\.prev_amount AS DECIMAL\(60,18\)\)/.test(sql),
+            'the restore must pick the highest orphaned prev_amount; the position columns invert under a nested EXECUTE');
+        assert.strictEqual(sql, slashRestoreSql(indexerPath),
+            'contract slash-restore SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+    });
+
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
     // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
     // byte-identical to xchain-indexer/src/db.js _stakeWeightsSql, or the follower's

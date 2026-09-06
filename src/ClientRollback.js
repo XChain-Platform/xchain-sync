@@ -341,19 +341,23 @@ class ClientRollback {
                 // delete below drops orphaned-range rows but never re-streams the surviving
                 // mutated row, so the replica keeps the slashed amount and diverges from the
                 // source after a reorg. Mirror the source restore (xchain-indexer
-                // rollback.js): copy back the EARLIEST orphaned debit's `prev_amount` per row
-                // This is a pure string copy, byte-identical to the source (no arithmetic). Keys
-                // only on block_index/stake_action_index, so it ports cleanly (no
-                // ACTIVATION_DELAY_BLOCKS dependency).
+                // rollback.js): copy back the HIGHEST orphaned `prev_amount` per row.
+                // The restored value is a pure string copy, byte-identical to the source (no
+                // arithmetic on the amount itself). Keys only on block_index/stake_action_index,
+                // so it ports cleanly (no ACTIVATION_DELAY_BLOCKS dependency).
                 //
-                // Same-block tiebreak is (execution_index, slash_position), the EXECUTE's
-                // on-chain action_index plus the emission-loop index, the deterministic total
-                // order the source uses for contract_emissions, NOT the AUTO_INCREMENT `id`.
+                // The debits on one stake row form a strictly decreasing chain and the orphaned
+                // range is a suffix of it, so the maximum `prev_amount` IS the value the row held
+                // before the first orphaned debit. Position columns alone cannot express that
+                // order, because a re-entrant nested EXECUTE slashes FIRST under a HIGHER
+                // action_index than its parent frame. (execution_index, slash_position) stays as
+                // the tiebreak for numerically equal amounts, NOT the AUTO_INCREMENT `id`.
                 // This MUST byte-match the source indexer or a reorg retracting a block with
                 // ≥2 contract slashes on one stake row restores a divergent amount on the
                 // replica vs the source (stake-weight fork).
                 for(let slashTbl of ['contract_stakes', 'contract_unstakes']){
                     try {
+                        //<CONTRACT-SLASH-RESTORE-SQL>
                         await this.db.doQuery(
                             "UPDATE " + slashTbl + " t " +
                             "JOIN contract_slash_debits d ON d.stake_action_index = t.action_index " +
@@ -364,13 +368,16 @@ class ClientRollback {
                             "  WHERE e.target_table = d.target_table " +
                             "    AND e.stake_action_index = d.stake_action_index " +
                             "    AND e.block_index >= ? " +
-                            "    AND (e.block_index < d.block_index " +
-                            "         OR (e.block_index = d.block_index " +
-                            "             AND (e.execution_index < d.execution_index " +
-                            "                  OR (e.execution_index = d.execution_index " +
-                            "                      AND e.slash_position < d.slash_position)))))",
+                            "    AND (CAST(e.prev_amount AS DECIMAL(60,18)) > CAST(d.prev_amount AS DECIMAL(60,18)) " +
+                            "         OR (CAST(e.prev_amount AS DECIMAL(60,18)) = CAST(d.prev_amount AS DECIMAL(60,18)) " +
+                            "             AND (e.block_index < d.block_index " +
+                            "                  OR (e.block_index = d.block_index " +
+                            "                      AND (e.execution_index < d.execution_index " +
+                            "                           OR (e.execution_index = d.execution_index " +
+                            "                               AND e.slash_position < d.slash_position)))))))",
                             [slashTbl, block_index, block_index]
                         );
+                        //</CONTRACT-SLASH-RESTORE-SQL>
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
