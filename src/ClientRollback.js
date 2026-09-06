@@ -27,12 +27,18 @@ const lifecycle      = require('./tableLifecycle');
 const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
+const { archiveAuthorScopeJoin } = require('./archive_rollback_author_scope_activation');
 
 class ClientRollback {
 
-    constructor(db, util, coin) {
+    constructor(db, util, coin, network) {
         this.db   = db;
         this.util = util;
+
+        // The replica's own network, the key for the publisher-scoped archive reset below.
+        // An omitted network reads as inactive, correct only while every threshold is inert:
+        // the guard in test/unit/rollback-coverage.test.js fails the moment one is armed.
+        this.network = network || null;
 
         // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
         // indexer's reorg deactivation_block re-NULL resets (see _rollbackIndexer). A wrong
@@ -661,11 +667,16 @@ class ClientRollback {
             // 'unverified', the conservative re-verification state. Runs BEFORE the delete.
             if(firstActionIndex !== null){
                 try {
+                    // Author scope, flag-day gated and INERT on every network today; mirror of
+                    // the source indexer's term. Rationale and the arming precondition live in
+                    // archive_rollback_author_scope_activation.js.
+                    let authorScope = archiveAuthorScopeJoin(block_index, this.network);
                     await this.db.doQuery(
                         "UPDATE anchor_actions p " +
                         "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
                         "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                        authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = us.id " +
                         "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND p.action_index < ?",

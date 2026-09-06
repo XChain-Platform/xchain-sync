@@ -683,6 +683,11 @@ describe('Rollback coverage guard @regression', function(){
             // (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's string concat.
             { name: 'archive-head version predicate (shared v1+v6 constant)',
               re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
+            // The publisher-scope term is spliced from the shared activation module on both
+            // sides, between the chunk-status join and the reset join. A side that drops it
+            // resets under a different batch key than its twin the moment the flag day arms.
+            { name: 'publisher author-scope splice',
+              re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
             const src = norm(fs.readFileSync(p, 'utf8'));
@@ -690,6 +695,34 @@ describe('Rollback coverage guard @regression', function(){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
             }
         }
+    });
+
+    // The publisher-scope flag day is one file, twinned. A per-network height that differs
+    // between source and replica is a fleet split at the reorg the gate governs.
+    it('archive_rollback_author_scope_activation.js is byte-identical across xchain-indexer and xchain-sync', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const rel = 'src/archive_rollback_author_scope_activation.js';
+        const indexerPath = indexerFile(rel);
+        if(!requireSibling(this, indexerPath)) return;
+        const syncPath = pathMod.resolve(__dirname, '../..', rel);
+        assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+            'the publisher-scope activation must be the same file on both sides; a divergent height ' +
+            'makes source and replica reset a reorg under different batch keys');
+    });
+
+    // An omitted network reads as inactive, which is only correct while every threshold is
+    // inert. Arming one without first making the network mandatory would leave every
+    // un-wired construction site quietly on the legacy unscoped rule.
+    it('cannot arm the publisher scope while ClientRollback still accepts an omitted network', function(){
+        const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../../src/archive_rollback_author_scope_activation');
+        const INERT = 9999999999;
+        const armed = Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION)
+            .filter(n => ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION[n] !== INERT);
+        if(!armed.length) return;
+        assert.throws(() => new ClientRollback({ dbType: 'indexer' }, new Utility(), 'DOGE'),
+            /network/i,
+            'arming ' + armed.join(', ') + ' requires ClientRollback to demand a network: ' +
+            'every construction site must be wired before a replica can run the scoped reset');
     });
 
     // The archive-head version set is defined ONCE (stateHash.js, twinned across

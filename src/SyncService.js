@@ -390,7 +390,7 @@ class SyncService {
         if(this.clientSyncs.has(key)) return;
 
         let applier  = new ClientApplier(db, this.util, cfg.coin, cfg.network);
-        let rollback = new ClientRollback(db, this.util, cfg.coin);
+        let rollback = new ClientRollback(db, this.util, cfg.coin, cfg.network);
         let sync     = new ClientSync(cfg.coin, cfg.network, db, applier, rollback, this.hashVerifier, this.config, this.util);
         this.clientSyncs.set(key, sync);
 
