@@ -100,7 +100,7 @@ class ClientApplier {
             // full-dump re-send on an incremental catch-up idempotent.
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
-            // reward_type, round_reference). The recovery-redriven collector
+            // reward_type, round_reference, round_qualifier). The recovery-redriven collector
             // (recoveryRewards.js) can re-inject a backdated survivor row via BOTH the
             // live per-block and incremental-snapshot channels when their windows overlap;
             // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
@@ -487,10 +487,14 @@ class ClientApplier {
             // roots must go even when state commitment is inactive on this node. Swallow
             // only schema gaps (1146 table missing on decoder / older schemas, 1054 missing
             // column); any other error must propagate so the outer catch rolls the txn back.
+            // Bind this.coinTicker, NOT this.chain: the rows carry the TICKER (every writer
+            // in stateCommitment.js is called with this.coinTicker, and SyncService passes
+            // the hub's full lowercase coin name into the constructor), so the full name
+            // matches zero rows and the cleanup silently no-ops on every production chain.
             try {
                 await this.db.doQuery(
                     'DELETE FROM state_tree_roots WHERE chain = ? AND network = ? AND block_index >= ?',
-                    [this.chain, this.network, snapshotData.block_height]);
+                    [this.coinTicker, this.network, snapshotData.block_height]);
             } catch(e){
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
@@ -736,8 +740,19 @@ class ClientApplier {
     // (bootstrap snapshot, or the pre-flag-day ANCHOR write) kept it forever, strictly
     // AHEAD of the source and invisible to the source-ahead-only count check. The log
     // row carries the loser's full UNIQUE identity (source_id, signing_pubkey_id,
-    // reward_type, round_reference), so this is a keyed delete with no winner predicate
-    // to reproduce; rows the source still holds (winners) never match a pre-image.
+    // reward_type, round_reference, round_qualifier), so this is a keyed delete with no
+    // winner predicate to reproduce; rows the source still holds (winners) never match a
+    // pre-image.
+    //
+    // round_qualifier is load-bearing here, not decoration. The archive leg keys
+    // round_reference on MATCH_BATCH_SEQ, a dense hub counter a rebase reissues, so two
+    // genuinely distinct archive rewards can share all four older columns and differ only
+    // in qualifier (the snapshot_block). Keyed on the four alone this DELETE also reaches
+    // the OTHER snapshot's row and destroys a reward the source still holds: the exact
+    // inverse of the drift the mirror exists to close, and silent, because
+    // validator_rewards declares no hash class (tableLifecycle.js). Both columns are NOT
+    // NULL DEFAULT 0 on both tables, so this predicate is a plain `=` rather than the
+    // NULL-safe `<=>` that nullable round_reference needs.
     // Runs AFTER the insert loop (the log rows of this apply are in place) and INSIDE
     // the apply transaction. The reverse twin is ClientRollback's RB-ANCHOR restore,
     // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`
@@ -750,6 +765,7 @@ class ClientApplier {
                 "JOIN anchor_reward_reconcile_log d " +
                 "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
                 " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
+                " AND d.round_qualifier = vr.round_qualifier " +
                 "WHERE " + scopeSql,
                 scopeArgs);
         } catch(e){
@@ -757,6 +773,17 @@ class ClientApplier {
             // to skip: such a replica received no log rows either. Anything else must
             // abort the apply so the block is retried, never applied half-mirrored.
             if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // A replica whose log table or validator_rewards predates round_qualifier now
+            // raises 1054 on the whole statement, so the mirror stops rather than deleting
+            // on the stale four-column key. That leaves the replica AHEAD, which the
+            // source-ahead-only count check cannot see, so say it once per apply instead of
+            // skipping in silence; schema replication (ensureReplicatedColumns) adds the
+            // column on the next pass and the mirror resumes.
+            if(e && e.errno === 1054)
+                console.warn('anchor-reward reconcile mirror skipped: an identity column ' +
+                    '(round_qualifier) is missing from validator_rewards or ' +
+                    'anchor_reward_reconcile_log on this replica, so reconcile losers stay ' +
+                    'until schema replication adds it');
         }
     }
 

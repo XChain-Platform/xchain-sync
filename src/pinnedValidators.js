@@ -34,12 +34,23 @@
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
  *
+ * ABSENT is not INVALID. An unset override is inert: no trust root exists, so
+ * ClientSync._verifyCheckpointQuorum skips the step, which is what the config.js
+ * VERIFY_CHECKPOINT_QUORUM contract means by "skipped, never bypassed". An override
+ * the operator DID supply but got wrong used to resolve to the same null, and with
+ * every baked-in key still null that silently switched checkpoint authentication OFF
+ * on a replica whose operator armed the flag believing it on. So the getters still
+ * return null (they are read on hot paths and must never throw), and
+ * `assertPinnedEnvOverrides` runs once at client startup to REFUSE to start on a
+ * present-but-invalid value, the same shape as config.js assertBootstrapDepthChains.
+ *
  * Validator ROTATION past the launch epoch: the launch set eventually stops
  * signing, so `getPinnedCheckpoint` below provides the out-of-band SEED checkpoint
  * (a committed state_root plus its block/snapshot height) from which a client rolls
  * its trust root FORWARD, proving each successor oracle_publish set against the
  * committed BTC stakes_root (spec §7.3). That registry is INERT too until launch
- * values land. Env override: CHECKPOINT_SEED_<CHAIN>_<NETWORK> (JSON, fail-closed).
+ * values land. Env override: CHECKPOINT_SEED_<CHAIN>_<NETWORK> (JSON), under the same
+ * absent-versus-invalid rule as the validator override above.
  *
  * FILL AT LAUNCH: replace a key's null with the oracle_publish signer set that signs
  * the launch checkpoints, in the stake-weighted shape checkpoint.js verifyCheckpoint
@@ -83,22 +94,37 @@ function _envKey(chain, network) {
     return 'CHECKPOINT_VALIDATORS_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied set; returns null on any malformation
-// so a bad override never weakens verification (fails closed: no set to verify
-// against means the quorum step is skipped, not bypassed).
+// Parse + lightly validate an env-supplied set into { set, error }: `set` when the
+// value is usable, `error` naming WHY it is not. The reason is what separates an
+// absent override from an explicitly supplied invalid one, which the getters cannot
+// express in their null and assertPinnedEnvOverrides refuses to start on.
+function _parseValidatorSetEnv(raw) {
+    let arr;
+    try { arr = JSON.parse(raw); } catch (e) { return { set: null, error: 'is not valid JSON (' + e.message + ')' }; }
+    if (!Array.isArray(arr)) return { set: null, error: 'is not a JSON array' };
+    if (arr.length === 0) return { set: null, error: 'is an empty array (an empty set verifies nothing)' };
+    for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return { set: null, error: 'entry ' + i + ' is not an object' };
+        for (const f of ['pubkey', 'weight', 'source']) {
+            if (typeof v[f] !== 'string') return { set: null, error: 'entry ' + i + ' has no string `' + f + '`' };
+        }
+    }
+    return { set: arr, error: null };
+}
+
+// Resolve the env-supplied set for (chain, network), or null when it is absent or
+// unusable. Never throws: this is on the per-verify read path, and startup already
+// refused an invalid explicit value.
 function _fromEnv(chain, network) {
     const raw = process.env[_envKey(chain, network)];
     if (!raw) return null;
-    let arr;
-    try { arr = JSON.parse(raw); } catch (e) {
-        console.warn('[pinnedValidators] malformed ' + _envKey(chain, network) + ' override, falling back (fail-closed):', e.message);
+    const { set, error } = _parseValidatorSetEnv(raw);
+    if (error) {
+        console.warn('[pinnedValidators] ' + _envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
         return null;
     }
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    for (const v of arr) {
-        if (!v || typeof v.pubkey !== 'string' || typeof v.weight !== 'string' || typeof v.source !== 'string') return null;
-    }
-    return arr;
+    return set;
 }
 
 /**
@@ -147,20 +173,32 @@ function _seedEnvKey(chain, network) {
     return 'CHECKPOINT_SEED_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied seed checkpoint; returns null on any
-// malformation so a bad override never weakens the trust root (fail-closed: no seed
-// means forward-following is skipped, not bypassed). state_root is the field the
-// walk anchors successor-set proofs to, so it is required and must be a string.
+// Parse + lightly validate an env-supplied seed checkpoint into { seed, error }, the
+// same absent-versus-invalid split as _parseValidatorSetEnv. state_root is the field
+// the forward walk anchors successor-set proofs to, so it is required and a string.
+function _parseSeedEnv(raw) {
+    let cp;
+    try { cp = JSON.parse(raw); } catch (e) { return { seed: null, error: 'is not valid JSON (' + e.message + ')' }; }
+    if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return { seed: null, error: 'is not a JSON object' };
+    if (typeof cp.state_root !== 'string' || !cp.state_root) return { seed: null, error: 'has no non-empty string `state_root`' };
+    for (const f of ['block_index', 'snapshot_block']) {
+        if (typeof cp[f] !== 'number' || !Number.isFinite(cp[f]) || cp[f] < 0)
+            return { seed: null, error: 'has no finite non-negative number `' + f + '`' };
+    }
+    return { seed: cp, error: null };
+}
+
+// Resolve the env-supplied seed for (chain, network), or null when it is absent or
+// unusable. Never throws, for the same reason _fromEnv does not.
 function _seedFromEnv(chain, network) {
     const raw = process.env[_seedEnvKey(chain, network)];
     if (!raw) return null;
-    let cp;
-    try { cp = JSON.parse(raw); } catch (e) { return null; }
-    if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return null;
-    if (typeof cp.state_root !== 'string' || !cp.state_root) return null;
-    if (typeof cp.block_index !== 'number' || !Number.isFinite(cp.block_index) || cp.block_index < 0) return null;
-    if (typeof cp.snapshot_block !== 'number' || !Number.isFinite(cp.snapshot_block) || cp.snapshot_block < 0) return null;
-    return cp;
+    const { seed, error } = _parseSeedEnv(raw);
+    if (error) {
+        console.warn('[pinnedValidators] ' + _seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
+        return null;
+    }
+    return seed;
 }
 
 /**
@@ -178,4 +216,55 @@ function getPinnedCheckpoint(chain, network) {
     return entry || null;
 }
 
-module.exports = { getPinnedValidators, getPinnedCheckpoint, PINNED, PINNED_CHECKPOINTS };
+// Env names the getters can actually read: the prefix plus a CHAIN_NETWORK suffix,
+// both halves non-empty. Mirrors config.js bootstrapDepthEnvKey's shape rule.
+const _OVERRIDE_PREFIXES = [
+    { prefix: 'CHECKPOINT_VALIDATORS_', parse: _parseValidatorSetEnv, what: 'pinned validator set' },
+    { prefix: 'CHECKPOINT_SEED_',       parse: _parseSeedEnv,         what: 'pinned seed checkpoint' },
+];
+
+function _isChainNetworkShaped(prefix, envKey) {
+    if (envKey.indexOf(prefix) !== 0) return false;
+    const rest = envKey.slice(prefix.length);
+    const sep  = rest.lastIndexOf('_');
+    return sep > 0 && sep < rest.length - 1;
+}
+
+/**
+ * REFUSE to start when an explicitly supplied CHECKPOINT_VALIDATORS_* or
+ * CHECKPOINT_SEED_* value is present but unusable.
+ *
+ * A malformed override is not inert. The getters answer null for it, exactly as they
+ * do for an override nobody set, and every baked-in pin still ships null, so
+ * ClientSync._verifyCheckpointQuorum's `if(!validators || !validators.length) return;`
+ * skips checkpoint authentication entirely on a replica whose operator turned
+ * VERIFY_CHECKPOINT_QUORUM on. An unset variable stays inert and is NOT an error; only
+ * a value the operator supplied and got wrong is. Same rationale, and the same
+ * "Refusing to start" shape, as config.js assertBootstrapDepthChains.
+ *
+ * @param {Record<string, string>} [env] Environment to scan; defaults to process.env.
+ * @throws {Error} naming every offending variable and why it is unusable.
+ */
+function assertPinnedEnvOverrides(env) {
+    const source = env || process.env;
+    const bad = [];
+    for (const envKey of Object.keys(source)) {
+        for (const { prefix, parse, what } of _OVERRIDE_PREFIXES) {
+            if (!_isChainNetworkShaped(prefix, envKey)) continue;
+            const raw = source[envKey];
+            if (raw === undefined || raw === null || raw === '') break;   // absent: inert, not an error
+            const { error } = parse(raw);
+            if (error) bad.push(envKey + ' (' + what + ') ' + error);
+            break;
+        }
+    }
+    if (bad.length === 0) return;
+    throw new Error(
+        'Invalid checkpoint pin override: ' + bad.join('; ') +
+        '. Refusing to start: an unusable override resolves to the same null as an ABSENT one, ' +
+        'which silently skips checkpoint-quorum verification instead of anchoring it. ' +
+        'Fix the value or unset the variable to run deliberately unanchored.'
+    );
+}
+
+module.exports = { getPinnedValidators, getPinnedCheckpoint, assertPinnedEnvOverrides, PINNED, PINNED_CHECKPOINTS };

@@ -251,6 +251,45 @@ describe('SyncService', function(){
             assert.strictEqual(startSync.callCount, 0, 'no ClientSync started on a refused config');
         });
 
+        // A malformed CHECKPOINT_VALIDATORS_* is not inert either: it resolves to the same
+        // null an ABSENT override does, so _verifyCheckpointQuorum skips the anchor on a
+        // replica whose operator armed VERIFY_CHECKPOINT_QUORUM believing it on. Discovery
+        // must refuse it on the same pass, before any ClientSync replicates a block.
+        it('client mode REFUSES a malformed checkpoint pin override, before starting any sync', async function(){
+            const PINKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_MAINNET';
+            config.SYNC_MODE = 'client';
+            config.VERIFY_CHECKPOINT_QUORUM = true;
+            process.env[PINKEY] = '[{"pubkey":"aa","weight":100}]';   // weight not a string, no source
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            try {
+                await assert.rejects(() => service._discoverChains(), new RegExp(PINKEY));
+                assert.strictEqual(startSync.callCount, 0, 'no ClientSync started on a refused pin override');
+            } finally { delete process.env[PINKEY]; }
+        });
+
+        it('client mode accepts a well-formed checkpoint pin override', async function(){
+            const PINKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_MAINNET';
+            config.SYNC_MODE = 'client';
+            config.VERIFY_CHECKPOINT_QUORUM = true;
+            process.env[PINKEY] = JSON.stringify([{ pubkey: 'ab'.repeat(32), weight: '100', source: 'S1' }]);
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            let startSync = sinon.stub(service, '_startClientSyncForChain');
+
+            try {
+                let newChains = await service._discoverChains();
+                assert.strictEqual(newChains.length, 1);
+                assert.strictEqual(startSync.callCount, 1, 'a valid override does not block startup');
+            } finally { delete process.env[PINKEY]; }
+        });
+
         it('client mode accepts a bootstrap-depth key whose chain the hub published under its full name', async function(){
             config.SYNC_MODE = 'client';
             config.SYNC_BOOTSTRAP_DEPTH = { 'BTC:MAINNET': 50000 };
@@ -478,7 +517,9 @@ describe('SyncService', function(){
     describe('getClientSyncState', function(){
         it('returns nulls/false when no sync exists for the key', function(){
             assert.deepStrictEqual(service.getClientSyncState('bitcoin', 'mainnet'),
-                { lastKnownServerBlock: null, sourceHeightStale: null, halted: false,
+                { lastKnownServerBlock: null, sourceHeightStale: null,
+                  upstreamReplica: { stale: null, secondsBehind: null, sourceHeight: null },
+                  halted: false,
                   haltInfo: null, truncated: false, bootstrapBase: null,
                   sourceQuorum: null, sourcesConfigured: null, sourcesActive: null,
                   sourcesAgreeing: null, sourcesEvicted: [] });

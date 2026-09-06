@@ -407,6 +407,17 @@ describe('ClientRollback', function(){
                 'restore must also require the loser materialization block to survive the reorg');
             assert.ok(/derive_block_index\)/.test(restore.args[0]),
                 'restore must carry derive_block_index back onto the restored row');
+            // round_qualifier is part of reward_unique (2026-08-24 indexer migration) and the
+            // pre-image log carries it, so both the column list and the projection must name
+            // it. Dropped, the loser comes back under the schema default 0, a DIFFERENT row
+            // from the one the reconcile deleted: INSERT IGNORE then either swallows it
+            // against a legacy qualifier-0 row or lands a wrong-identity duplicate, and the
+            // replica forks SUM(validator_rewards) either way. The source twin at
+            // xchain-indexer/src/rollback.js already carries both halves.
+            assert.ok(/round_reference, round_qualifier,/.test(restore.args[0]),
+                'restore column list must name round_qualifier');
+            assert.ok(/d\.round_qualifier/.test(restore.args[0]),
+                'restore projection must select d.round_qualifier rather than fall back to the schema default 0');
             assert.deepStrictEqual(restore.args[1], [100, 100, 100]);
             let restoreIdx = calls.indexOf(restore);
             let deleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `validator_rewards`'));

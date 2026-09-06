@@ -171,6 +171,34 @@ describe('ServerPoller', function(){
             assert.strictEqual(log.recordBlock.called, false);
         });
 
+        // The failure the replication verdict exists to catch is exactly the one that
+        // stops block advancement: a native SQL replica that stops applying freezes the
+        // served tip, so a refresh gated on blocksProcessed > 0 never runs again and the
+        // last healthy verdict is republished forever.
+        it('re-evaluates the replica verdict on idle polls', async function(){
+            poller.lastPolledBlock = 100;
+            db.getLastBlock.resolves(100);
+            db.getBlockHashRow.resolves({
+                block_index: 100, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
+            });
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
+
+            await poller._poll();
+            assert.strictEqual(broadcaster.updateStatus.callCount, 1);
+            assert.strictEqual(broadcaster.updateStatus.lastCall.args[2].replica_stale, false);
+
+            // Replication stops applying. The served tip is frozen from here on, so no
+            // later poll ever processes a block.
+            db.getReplicaStatus.resolves({ isReplica: true, running: false, secondsBehind: null });
+
+            await poller._poll();
+            assert.strictEqual(broadcaster.broadcast.called, false);
+            assert.strictEqual(broadcaster.updateStatus.callCount, 2);
+            assert.strictEqual(broadcaster.updateStatus.lastCall.args[2].replica_stale, true);
+            assert.strictEqual(broadcaster.updateStatus.lastCall.args[2].block_height, 100);
+        });
+
         it('limits to 100 blocks per poll', async function(){
             poller.lastPolledBlock = 0;
             db.getLastBlock.resolves(200);

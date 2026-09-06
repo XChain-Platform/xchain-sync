@@ -607,8 +607,25 @@ describe('Rollback coverage guard @regression', function(){
                 `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
         }
         const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientApplier.js'), 'utf8'));
-        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(applier),
-            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore)');
+        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
+            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
+        // RB-ANCHOR restore parity on that same identity. The source twin
+        // (xchain-indexer/src/rollback.js) names round_qualifier in BOTH the INSERT column
+        // list and the projection, so the replica must too: without it the restored loser
+        // lands under the schema default 0, a different row from the one the reconcile
+        // deleted, and INSERT IGNORE either swallows it or lands a wrong-identity duplicate.
+        assert.ok(/INSERT IGNORE INTO validator_rewards \(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index\) SELECT .*d\.round_qualifier/.test(rbSync),
+            'ClientRollback.js RB-ANCHOR restore must carry round_qualifier in both the column list and the projection, mirroring xchain-indexer/src/rollback.js');
+        // The four JS payload-merge dedup keys ride the same identity: a four-column key
+        // treats two distinct archive rewards as one and drops the second from the payload
+        // before it ever reaches a replica.
+        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js',
+                        '../../src/derivedRewards.js', '../../src/recoveryRewards.js']){
+            // Collapse whitespace only (the quotes around ':' are part of the key text).
+            const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8').replace(/\s+/g, ' ');
+            const stale = src.match(/r\.reward_type \+ ':' \+ r\.round_reference(?! \+ ':' \+ r\.round_qualifier)/g);
+            assert.ok(!stale, `${f} still builds a reward dedup key on the pre-migration four columns (${stale && stale.length} site(s)); reward_unique carries round_qualifier`);
+        }
     });
 
     // Bespoke-logic parity: anchor invalid_archive to unverified reset. When the final v2

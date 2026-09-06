@@ -459,11 +459,21 @@ class ClientRollback {
                 // MATERIALIZATION block (reward_derive_block_index) is itself inside the
                 // orphaned range is NOT restored: its earn-block survives, but a replay to
                 // reorg_block-1 never derived it, so restoring it would mint an orphan.
+                // round_qualifier rides the pre-image like every other key column (the twin
+                // at xchain-indexer/src/rollback.js carries it in both the column list and the
+                // projection): it is part of the reward's UNIQUE identity, snapshot_block for
+                // the archive leg whose round_reference is a reissuable hub counter. Dropped,
+                // the restore re-INSERTs the loser under the schema default 0, a DIFFERENT row
+                // from the one the reconcile deleted, which either collides with whatever
+                // legacy row already holds that key and is swallowed by INSERT IGNORE, or
+                // lands as a wrong-identity duplicate. Either way the real loser stays
+                // unrestored and the replica forks SUM(validator_rewards) from the source.
                 try {
                     await this.db.doQuery(
                         "INSERT IGNORE INTO validator_rewards " +
-                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index, derive_block_index) " +
+                        "(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index) " +
                         "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
+                        "       d.round_qualifier, " +
                         "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
                         "  FROM anchor_reward_reconcile_log d " +
                         " WHERE d.block_index >= ? AND d.reward_block_index < ? " +

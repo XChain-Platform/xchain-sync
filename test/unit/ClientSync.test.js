@@ -372,6 +372,69 @@ describe('ClientSync', function(){
             assert.strictEqual(sync._maybeVerifyCompleteness.calledOnce, true);
             assert.strictEqual(sync._maybeVerifyCompleteness.firstCall.args[0], 'http://source1:3006');
         });
+
+        // The server publishes its own replication verdict on every status tick. Dropping
+        // it left this follower's lag_blocks certifying a server whose SQL replica had
+        // stopped applying: its heights freeze together, so we catch up to the frozen tip
+        // and the heartbeats keep source_height_stale false.
+        describe('upstream replication evidence', function(){
+            beforeEach(function(){
+                sync.lastAppliedBlock = 100;
+                sinon.stub(sync, '_maybeVerifyCompleteness').resolves();
+            });
+
+            it('is unknown, not fresh, before any status event', function(){
+                assert.deepStrictEqual(sync.getUpstreamReplicaState(),
+                    { stale: null, secondsBehind: null, sourceHeight: null });
+            });
+
+            it('keeps the source height, staleness verdict and lag from a status event', async function(){
+                await sync._handleEvent({
+                    type: 'status', block_height: 100, source_block_height: 140,
+                    replica_stale: true, replica_seconds_behind: 900
+                }, 0);
+                assert.deepStrictEqual(sync.getUpstreamReplicaState(),
+                    { stale: true, secondsBehind: 900, sourceHeight: 140 });
+            });
+
+            it('re-reads the verdict on a status tick that does not advance the height', async function(){
+                await sync._handleEvent({
+                    type: 'status', block_height: 100, source_block_height: 100,
+                    replica_stale: false, replica_seconds_behind: 2
+                }, 0);
+                assert.strictEqual(sync.getUpstreamReplicaState().stale, false);
+
+                // The upstream replica stops applying: its height never moves again.
+                await sync._handleEvent({
+                    type: 'status', block_height: 100, source_block_height: 100,
+                    replica_stale: true, replica_seconds_behind: null
+                }, 0);
+                assert.strictEqual(sync.getUpstreamReplicaState().stale, true);
+            });
+
+            it('reads a server older than the fields as unknown rather than fresh', async function(){
+                await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
+                assert.deepStrictEqual(sync.getUpstreamReplicaState(),
+                    { stale: null, secondsBehind: null, sourceHeight: null });
+            });
+
+            it('takes the worst verdict across sources and ignores an evicted one', async function(){
+                await sync._handleEvent({
+                    type: 'status', block_height: 100, source_block_height: 100,
+                    replica_stale: false, replica_seconds_behind: 1
+                }, 0);
+                await sync._handleEvent({
+                    type: 'status', block_height: 100, source_block_height: 130,
+                    replica_stale: true, replica_seconds_behind: 700
+                }, 1);
+                assert.deepStrictEqual(sync.getUpstreamReplicaState(),
+                    { stale: true, secondsBehind: 700, sourceHeight: 130 });
+
+                sync._evictedSources.add(1);
+                assert.deepStrictEqual(sync.getUpstreamReplicaState(),
+                    { stale: false, secondsBehind: 1, sourceHeight: 100 });
+            });
+        });
     });
 
     describe('_maybeVerifyCompleteness', function(){

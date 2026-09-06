@@ -154,6 +154,13 @@ describe('ClientApplier', function(){
             assert.ok(/d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id/.test(del.args[0]));
             assert.ok(/d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(del.args[0]),
                 'NULL-safe round_reference match (the UNIQUE key component is nullable)');
+            // round_qualifier joined reward_unique in the 2026-08-24 indexer migration and
+            // anchor_reward_reconcile_log pre-images it. Without this predicate the keyed
+            // delete ALSO matches the other archive snapshot's reward whenever a hub rebase
+            // reissued the MATCH_BATCH_SEQ round_reference, destroying a row the source still
+            // holds. Both columns are NOT NULL DEFAULT 0, so the match is `=`, not `<=>`.
+            assert.ok(/AND d\.round_qualifier = vr\.round_qualifier/.test(del.args[0]),
+                'the mirror delete must carry the full five-column reward identity');
             assert.ok(/WHERE d\.block_index = \?$/.test(del.args[0]), 'scoped to THIS block\'s reconcile rows');
             assert.deepStrictEqual(del.args[1], [961700]);
             let logInsert = calls.findIndex(c => /anchor_reward_reconcile_log/.test(c.args[0]) && /^INSERT/.test(c.args[0]));
@@ -360,6 +367,34 @@ describe('ClientApplier', function(){
                 .map(c => c.args[0])
                 .some(q => /^DELETE FROM `state_tree_roots`/.test(q));
             assert.strictEqual(genericWipe, false, 'state_tree_roots must not be whole-table wiped by the clear loop');
+        });
+
+        it('binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression', async function(){
+            // SyncService constructs ClientApplier with cfg.coin, the hub's full lowercase
+            // name ('bitcoin'), while every state_tree_roots writer is called with
+            // this.coinTicker, so the rows carry 'BTC'. Binding this.chain made the scoped
+            // clear match zero rows on every production chain: a permanent silent no-op that
+            // left future-dated orphan roots for the Explorer to serve as commitments. The
+            // enclosing suite's applier is built with NO chain, so both fields are null there
+            // and cannot tell the two apart; this case supplies the full name on purpose.
+            let localDb = createMockDb();
+            let fullNameApplier = new ClientApplier(localDb, new Utility(), 'bitcoin', 'mainnet');
+            assert.strictEqual(fullNameApplier.chain, 'bitcoin');
+            assert.strictEqual(fullNameApplier.coinTicker, 'BTC', 'the two identities must actually differ here');
+
+            await fullNameApplier.applyFullSnapshot({
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            });
+
+            let scoped = localDb.doQuery.getCalls().find(c =>
+                /DELETE FROM state_tree_roots/.test(c.args[0]) && /block_index >= \?/.test(c.args[0]));
+            assert.ok(scoped, 'the scoped delete must still be issued');
+            assert.strictEqual(scoped.args[1][0], 'BTC',
+                'the chain predicate must bind the ticker the rows are written with');
+            assert.notStrictEqual(scoped.args[1][0], 'bitcoin',
+                'binding the full coin name makes the cleanup match zero rows');
         });
 
         it('ignores node-local tables (mempool_transactions) shipped by an older source', async function(){

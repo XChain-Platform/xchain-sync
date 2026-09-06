@@ -32,6 +32,7 @@ const ClientRollback  = require('./ClientRollback');
 const HashVerifier    = require('./HashVerifier');
 const stateCommitment = require('./stateCommitment');
 const { assertBootstrapDepthChains } = require('./config');
+const { assertPinnedEnvOverrides }   = require('./pinnedValidators');
 const Utility         = require('./utility');
 
 class SyncService {
@@ -315,6 +316,12 @@ class SyncService {
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
             this._bootstrapDepthChecked = true;
             assertBootstrapDepthChains(this.config, this.getChains());
+            // REFUSE a present-but-invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value on
+            // the same pass, and for the same reason: it is not inert either. It resolves to
+            // the null an ABSENT override resolves to, so _verifyCheckpointQuorum skips the
+            // anchor on a replica whose operator armed VERIFY_CHECKPOINT_QUORUM. Client mode
+            // only (a server reads no pinned set) and before any ClientSync is constructed.
+            assertPinnedEnvOverrides();
         }
 
         if(newChains.length > 0){
@@ -501,6 +508,11 @@ class SyncService {
         return {
             lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null,
             sourceHeightStale: sync ? sync.isSourceHeightStale() : null,
+            // The upstream's OWN replication verdict, relayed on its status events.
+            // Tri-state stale: null is unknown, never fresh.
+            upstreamReplica: (sync && typeof sync.getUpstreamReplicaState === 'function')
+                ? sync.getUpstreamReplicaState()
+                : { stale: null, secondsBehind: null, sourceHeight: null },
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
             truncated:     sync ? sync.isTruncated() : false,
