@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-09-07
+
+### Fixed
+- A lookup-table hole below the replica cursor is repaired by re-paging that table from zero when the completeness sweep finds it short.
+- The append-only events log is left out of the table-count comparison, which could never converge on it.
+
 ## [0.15.0] - 2026-09-07
 
 ### Added
