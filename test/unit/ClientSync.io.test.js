@@ -2224,3 +2224,70 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.lastAppliedBlock, 94, 'cursor moves to block_index - 1 after a real rollback');
     });
 });
+
+// A hole below the replica's high-water mark is unreachable from the ordinary
+// cursor, which is how the BTC mainnet index_transactions gap (blocks
+// 961908-963876, every block's state_hash row) survived four weeks of sweeps
+// that reported it on every pass. These pin the repair, and pin that the count
+// check which FOUND it stays strict on the lookups.
+describe('ClientSync lookup-hole repair and count-check scoping @regression', function(){
+    let sync, db, applier, rt;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+        rt = require('../../src/replicatedTables');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    function page(rows, has_more, max_id){
+        return { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, table: 'index_transactions', max_id, has_more, rows })) };
+    }
+
+    it('fromZero pages from id 0, never consulting the high-water mark', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        // A replica holding rows up to id 500 with a hole below it. The ordinary
+        // path would start at 500 and skip the hole forever.
+        db.doQuery.resolves([{ m: 500 }]);
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).resolves(page([{ id: 1 }], false, 1));
+
+        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_transactions']) });
+
+        assert.ok(get.firstCall.args[0].indexOf('after_id=0') !== -1,
+            'a repair pass must start at id 0, or the hole stays unreachable');
+        assert.strictEqual(db.doQuery.called, false,
+            'the MAX(id) probe is skipped entirely on a repair pass');
+    });
+
+    it('leaves tables not named in fromZero on the ordinary high-water cursor', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_transactions'] });
+        db.doQuery.resolves([{ m: 500 }]);
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).resolves(page([], false, 500));
+
+        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_addresses']) });
+
+        assert.ok(get.firstCall.args[0].indexOf('after_id=500') !== -1,
+            'an unnamed table keeps the cheap cursor-seeded page');
+    });
+
+    it('excludes the events operational log from the count check, whose counts cannot converge', async function(){
+        ({ sync, db } = makeSync());
+        db.getTableCount = sinon.stub().resolves(0);
+        let mismatches = await sync._verifyTableCounts({ events: 415 }, undefined, {});
+        assert.deepStrictEqual(mismatches, [],
+            'events is applied INSERT IGNORE over an independently generated id, so a delta is structural');
+    });
+
+    it('KEEPS index_transactions strict, because that check is what found the mainnet hole', async function(){
+        ({ sync, db } = makeSync());
+        db.getTableCount = sinon.stub().resolves(186003);
+        let mismatches = await sync._verifyTableCounts({ index_transactions: 187972 }, undefined, {});
+        assert.strictEqual(mismatches.length, 1, 'a short lookup must still be reported');
+        assert.strictEqual(mismatches[0].table, 'index_transactions');
+        assert.strictEqual(mismatches[0].delta, 1969);
+    });
+});

@@ -40,6 +40,12 @@ const checkpointVerifier = require('./checkpoint');
 const M = require('./merkle');
 const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
 
+// Tables whose row counts cannot converge between source and replica, and so are
+// never a completeness signal. See the exclusion in _verifyTableCounts for the
+// mechanism; kept here as a named set so a second such table is added in one place
+// rather than at each call site's excludeTables argument.
+const OPERATIONAL_LOG_TABLES = new Set(['events']);
+
 // Permanent bootstrap exhaustion. start()-time throws already unwind to
 // SyncService's sync.start().catch(... process.exit(1)) restart contract on their
 // own, but the same exhaustion is also reachable MID-STREAM (the size-cap fallback
@@ -1255,10 +1261,14 @@ class ClientSync {
     // max -> only new rows, since the tables are INSERT-only with monotonic ids).
     // Each page is applied via the existing incremental surface; index_* are in
     // ClientApplier.ignoreTables (INSERT IGNORE), so re-sent rows are idempotent.
-    async _syncLookupTablesPaged(source){
+    // opts.fromZero: a Set of table names to page from id 0 instead of from the
+    // replica's high-water mark. See the HOLE note below for why that is a distinct
+    // mode and not something the ordinary path can do.
+    async _syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this._lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
+        let fromZero = (opts && opts.fromZero) || null;
         for(let table of tables){
             // Replica's current high-water cursor for this table (0 if empty/absent).
             // Cursor column is the monotonic AUTO_INCREMENT `id` for every lookup table,
@@ -1267,11 +1277,32 @@ class ClientSync {
             // lookupCursorColumn in replicatedTables.js.
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
+
+            // HOLES ARE NOT REACHABLE FROM THIS CURSOR, which is why fromZero exists.
+            // Seeding at MAX(id) and requesting only `after_id=<max>` extends a table
+            // but can never fill a gap BELOW the high-water mark, so re-paging repairs
+            // nothing however many times it runs.
+            //
+            // That is not hypothetical. A BTC mainnet replica held a 1969-row gap in
+            // index_transactions covering blocks 961908-963876: one bootstrap left it
+            // complete, then every live-followed block streamed three of its four
+            // *_hash_id rows and never the state one, until the source ran a build
+            // carrying ca170ee. Each re-page walked straight past the gap, because
+            // every missing id sat below MAX(id) from the moment the next block landed,
+            // and the public explorer answered state_hash null for all 1969 blocks.
+            // A from-zero pass is idempotent (index_* apply with INSERT IGNORE), only
+            // slower, so it is used solely for a table measured to be short.
+            let repairing = !!(fromZero && fromZero.has(table));
+            if(repairing){
+                console.log('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
+                    'below the high-water mark (a cursor-seeded page cannot reach it).');
+            } else {
             try {
                 let r = await this.db.doQuery('SELECT MAX(`' + col + '`) AS m FROM `' + table + '`');
                 if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
             } catch(e){
                 afterId = 0; // table not present yet -> treat as empty (schema applied earlier)
+            }
             }
             let pages = 0;
             while(true){
@@ -1969,6 +2000,25 @@ class ClientSync {
             // passes (e.g. `dispensers` between replace-table reconciles) so a known,
             // separately-tracked divergence does not spam TABLE_COUNT_MISMATCH.
             if(excludeTables && excludeTables.has(table)) continue;
+            // Operational logs are excluded from every count check, at the comparison
+            // itself rather than per call site, because their counts CANNOT converge
+            // and a permanent delta here is what buries the real signal.
+            //
+            // `events` is an append-only operational log keyed by an AUTO_INCREMENT id
+            // that BOTH sides generate independently, and the client applies it with
+            // INSERT IGNORE (ClientApplier.ignoreTables) because a full re-dump would
+            // otherwise collide on the PK. So any source row whose id the replica has
+            // already used for one of its OWN events is silently dropped, and the two
+            // counts diverge permanently by construction. Measured across four healthy
+            // production replicas: short by 1, 1, 3 and 415 rows respectively, none of
+            // which any amount of syncing could close.
+            //
+            // The `index_*` lookups deliberately STAY strict. They are fully paged in
+            // and their counts are expected to match exactly, which is the whole point:
+            // that check is what caught the BTC mainnet state-hash hole (1969 missing
+            // index_transactions rows, blocks 961908-963876). Excluding them to quiet
+            // this signal would delete the only detector for that class of defect.
+            if(OPERATIONAL_LOG_TABLES.has(table)) continue;
             // table names here come straight from the remote source's /status
             // payload: validate before they reach getTableCount's identifier
             // interpolation, mirroring the schema-application loop above. Skip
@@ -2056,6 +2106,26 @@ class ClientSync {
                 console.error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
                     '; follower may be missing replicated rows:');
                 console.error(JSON.stringify(shortfalls));
+                // A short append-only lookup is the one shortfall shape this client can
+                // repair by itself, and until now it did not: the ordinary pager seeds
+                // at MAX(id), so a hole below the high-water mark survived every sweep
+                // (see the HOLE note in _syncLookupTablesPaged). Detecting the shortfall
+                // and then never acting on it is what let the BTC mainnet
+                // index_transactions gap sit for four weeks while this very check
+                // reported it on every pass. Re-page exactly the short lookups from
+                // zero; INSERT IGNORE makes it idempotent, and a table that is short for
+                // some other reason simply comes back short and reports again next sweep.
+                let lookups = new Set(replicatedTables.getTopology(this.dbType).index || []);
+                let shortLookups = new Set(shortfalls.map(m => m.table).filter(t => lookups.has(t)));
+                if(shortLookups.size){
+                    try {
+                        await this._syncLookupTablesPaged(source, { fromZero: shortLookups });
+                    } catch(repairErr){
+                        // Advisory: the sweep must not fault on a repair attempt.
+                        console.error('Lookup repair pass failed against ' + source + ':',
+                            repairErr.message || repairErr);
+                    }
+                }
             }
             if(ahead.length){
                 console.error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
