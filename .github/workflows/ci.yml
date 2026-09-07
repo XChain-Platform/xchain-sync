@@ -75,6 +75,8 @@ jobs:
       # declaration the e2e venue reads.
       - name: Check out declared sibling repositories
         uses: XChain-Platform/.github/actions/checkout-siblings@master # one definition for every call site; see the action for why this tracks master
+        with:
+          ref: ${{ (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/')) && github.head_ref || '' }}
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -193,6 +195,8 @@ jobs:
       # Same roster (.ci-siblings) and same layout the shared workflow uses.
       - name: Check out declared sibling repositories
         uses: XChain-Platform/.github/actions/checkout-siblings@master # one definition for every call site; see the action for why this tracks master
+        with:
+          ref: ${{ (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/')) && github.head_ref || '' }}
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
