@@ -234,6 +234,18 @@ class ClientSync {
         // Count of sources that agreed on the most recently applied block (for /status).
         this._lastSourcesAgreeing = null;
 
+        // Upstream replication evidence, per CONNECTED source index. A server's status
+        // event carries its own DB tip (source_block_height) and the verdict its
+        // ServerPoller reached on its own database (replica_stale, replica_seconds_behind).
+        // Discarding it left this follower publishing lag_blocks 0 against a server whose
+        // SQL replica had stopped applying hours earlier: both of that server's heights
+        // freeze together, so we catch up to the frozen tip while the heartbeats keep
+        // source_height_stale false. Rewritten on EVERY status event, not only when the
+        // height advances, because a stalled upstream is exactly the case where it never
+        // advances again; dropped when the socket closes, so a disconnected source's last
+        // verdict is never mistaken for current evidence.
+        this._upstreamStatus = new Map();   // sourceIndex -> { sourceHeight, stale, secondsBehind }
+
         // Applied-block heartbeat state. After committing each live block we report
         // our applied height back to the source servers so operators can observe
         // this validator's lag via the server's /status endpoint. Debounced to avoid
@@ -2203,6 +2215,10 @@ class ClientSync {
 
         ws.on('close', () => {
             console.log('WebSocket disconnected from ' + source);
+            // A source we are no longer connected to is not evidence about anything.
+            // Keeping its last verdict would let a disconnected server go on certifying
+            // its own freshness, which is the shape of the bug this map exists to fix.
+            this._upstreamStatus.delete(sourceIndex);
             this._scheduleReconnect(source, sourceIndex);
         });
 
@@ -2261,6 +2277,9 @@ class ClientSync {
                (this.lastKnownServerBlock === null || event.block_height > this.lastKnownServerBlock)){
                 this.lastKnownServerBlock = event.block_height;
             }
+            // Keep the server's own replication verdict. Unconditional: the height guard
+            // above is exactly what a stalled upstream stops satisfying.
+            this._recordUpstreamStatus(sourceIndex, event);
             // Check for gaps on status update. Use a strict '>' (not '>='): a
             // server exactly one block ahead is the normal steady state (that
             // next block arrives over the live WS stream), so only a shortfall of
@@ -2662,6 +2681,47 @@ class ClientSync {
     isSourceHeightStale(){
         if(this._lastWsEventAt === null) return null;
         return (Date.now() - this._lastWsEventAt) > this.config['CLIENT_SOURCE_STALE_MS'];
+    }
+
+    // Record one source's self-reported replication evidence off its status event.
+    // A server that predates the fields reports nothing, which stays UNKNOWN here
+    // rather than being read as healthy: `undefined` is not `false`.
+    _recordUpstreamStatus(sourceIndex, event){
+        let stale = (typeof event.replica_stale === 'boolean') ? event.replica_stale : null;
+        let secondsBehind = (typeof event.replica_seconds_behind === 'number'
+                             && Number.isFinite(event.replica_seconds_behind))
+                                ? event.replica_seconds_behind : null;
+        let sourceHeight = (typeof event.source_block_height === 'number'
+                            && Number.isFinite(event.source_block_height))
+                               ? event.source_block_height : null;
+        this._upstreamStatus.set(sourceIndex, { sourceHeight, stale, secondsBehind });
+    }
+
+    // The upstream replication verdict this follower's own /status must carry, so
+    // lag_blocks is never read as a clean bill of health for a source whose database
+    // said otherwise. Separate from the transport-liveness signal isSourceHeightStale:
+    // that one says whether the server is still SPEAKING, this one says whether what it
+    // said certifies its data.
+    //
+    // stale is TRI-STATE, and the third state is the point: null means no connected
+    // source has reported the field at all (nothing heard yet, or an older server), which
+    // is unknown and must not read as fresh. true means at least one connected source
+    // reported its own DB stale; the follower applies from all of them, so any stale
+    // source qualifies the row. secondsBehind is the WORST reported lag and sourceHeight
+    // the HIGHEST reported upstream DB tip, which is what makes broadcaster-vs-source lag
+    // visible on the follower.
+    getUpstreamReplicaState(){
+        let stale = null, secondsBehind = null, sourceHeight = null;
+        for(let [sourceIndex, seen] of this._upstreamStatus){
+            if(this._evictedSources.has(sourceIndex)) continue;
+            if(seen.stale === true) stale = true;
+            else if(seen.stale === false && stale === null) stale = false;
+            if(seen.secondsBehind !== null && (secondsBehind === null || seen.secondsBehind > secondsBehind))
+                secondsBehind = seen.secondsBehind;
+            if(seen.sourceHeight !== null && (sourceHeight === null || seen.sourceHeight > sourceHeight))
+                sourceHeight = seen.sourceHeight;
+        }
+        return { stale, secondsBehind, sourceHeight };
     }
 
     _safeParse(s){ try { return JSON.parse(s); } catch(e){ return s; } }

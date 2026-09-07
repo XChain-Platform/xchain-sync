@@ -34,6 +34,8 @@ const poolSizing = require('./poolSizing');
 const swqCap = require('./swq_source_cap_activation');
 const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
 const stakeWeightCollation = require('./stake_weight_collation_activation');
+const utf8mb4Columns = require('./utf8mb4Columns');
+const lifecycle = require('./tableLifecycle');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter
@@ -501,6 +503,11 @@ class Database {
         // indexes. Ensure known secondary indexes that must exist on replicated
         // tables are present (idempotent; safe on snapshot-bootstrapped replicas).
         await this.ensureReplicaSecondaryIndexes();
+
+        // Neither of those retypes an existing column, so a replica built before the
+        // 2026-09-02 raw-wire-field widen keeps utf8mb3 on those columns and halts on the
+        // first 4-byte character the widened origin accepts. Converge them here.
+        await this.ensureReplicaUtf8mb4Columns();
 
         if(columnFailures.length){
             let err = new Error('Schema replication into ' + this.dbName + ' left columns missing: ' +
@@ -1004,6 +1011,76 @@ class Database {
                 // logged loudly.
                 if(e.errno !== 1146)
                     console.error('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e);
+            }
+        }
+    }
+
+    // Widen the raw-wire-field columns to utf8mb4 on an already-existing replica.
+    //
+    // The source indexer converges through a dated migration
+    // (2026-09-02-utf8mb4-raw-wire-fields.sql and its NOT NULL pair). sync runs no
+    // migrations: a replica's tables are copied from the source's SHOW CREATE TABLE at
+    // bootstrap, and addMissingColumns only ever ADDs a column, never retypes one. So a
+    // replica built before that migration keeps utf8mb3 on these columns forever - and the
+    // moment the widened ORIGIN accepts a 4-byte character (a contract whose source carries
+    // an emoji, an EXECUTE method name, a VOTE quorum), every aged follower halts applying
+    // that block with errno 1366 while the source runs on. This is the replica half of that
+    // migration, and it has to land with it: an origin that can hold the bytes and a
+    // follower that cannot is a fleet-wide halt with no schema error anywhere upstream.
+    //
+    // src/utf8mb4Columns.js is the byte-identical twin of the indexer's copy, so the two
+    // sides cannot disagree about which columns are in the set or what shape they take.
+    //
+    // Idempotent and additive: a column already utf8mb4 is skipped (so a snapshot-bootstrapped
+    // replica pays one information_schema read per table and nothing else), an absent table or
+    // column is skipped, and the widen only ever grows the accepted byte domain - utf8mb3 is a
+    // strict subset of utf8mb4, so no stored value is rewritten and no row is lost. The
+    // per-table clauses ride ONE ALTER because each ALTER is a COPY rebuild under a metadata
+    // lock. indexer replicas only (decoder replicas hold none of these tables).
+    async ensureReplicaUtf8mb4Columns(){
+        if(this.dbType !== 'indexer') return;
+        for(const [table, entries] of utf8mb4Columns.byTable()){
+            let rows;
+            try {
+                // rethrow, not the fail-soft default: outside a transaction doQuery logs a
+                // driver fault and returns [], which the absent-table branch below would read
+                // as "this replica does not carry the table" and skip silently, leaving the
+                // follower narrow. A transient fault must look like a fault.
+                rows = await this.doQuery(
+                    "SELECT COLUMN_NAME, CHARACTER_SET_NAME FROM information_schema.columns " +
+                    "WHERE table_schema = ? AND table_name = ?",
+                    [this.dbName, table],
+                    null,
+                    { rethrow: true }
+                );
+            } catch(e){
+                console.error('Failed to read the column charsets of ' + table + ' while widening to utf8mb4:', e);
+                continue;
+            }
+            if(!rows || rows.length === 0) continue;   // table absent on this replica
+
+            let live = new Map();
+            for(const row of rows)
+                live.set(String(row.COLUMN_NAME || row.column_name || '').toLowerCase(), row);
+
+            let pending = entries.filter(entry => {
+                let row = live.get(entry.column.toLowerCase());
+                return row !== undefined && !utf8mb4Columns.isAlreadyUtf8mb4(row);
+            });
+            if(pending.length === 0) continue;
+
+            try {
+                await this.doQuery('ALTER TABLE `' + table + '` ' +
+                    pending.map(utf8mb4Columns.modifyClause).join(', '), [], null, { rethrow: true });
+                console.log('Widened ' + pending.length + ' raw-wire-field column(s) on ' + table +
+                    ' to utf8mb4 in ' + this.dbName + ': ' + pending.map(e => e.column).join(', '));
+            } catch(e){
+                // Not fatal to startup: the replica is exactly as usable as it was a moment
+                // ago, and every other table still converges. But it stays wedge-capable on
+                // these columns, and nothing downstream would say so, so log it loudly.
+                console.error('Failed to widen ' + table + ' to utf8mb4 (errno ' + ((e && e.errno) || 'unknown') +
+                    '); this replica still halts on a 4-byte character in ' +
+                    pending.map(e => e.column).join(', '), e);
             }
         }
     }
@@ -1960,7 +2037,13 @@ class Database {
             // (recovery pre-seed, API read-path createAddress). Those are benign
             // source-local drift, excluded exactly as computeIndexMapChecksum
             // excludes them, so they can never raise a false alarm.
-            query = "SELECT * FROM `" + table + "` WHERE block_index IS NOT NULL AND block_index BETWEEN ? AND ?";
+            //
+            // Window by the registry's scope column, never the literal: a close_block-keyed
+            // table raises errno 1054 on `block_index`, the caller's per-table catch drops
+            // it, and it stays reported as parity-covered while nothing ever checks it.
+            let key = lifecycle.blockKey(table);
+            assertValidIdentifier(key);
+            query = "SELECT * FROM `" + table + "` WHERE " + key + " IS NOT NULL AND " + key + " BETWEEN ? AND ?";
         }
         return await this.doQueryStrict(query, [fromBlock, toBlock], conn);
     }
@@ -1984,11 +2067,17 @@ class Database {
             "SELECT * FROM `" + table + "` WHERE id > ? AND id <= ?", [fromId, toId], conn);
     }
 
-    // Get all rows from a table for a given block (block_index-scoped tables).
-    // ORDER BY block_index, then by the first column for deterministic ordering
+    // Get all rows from a table for a given block (block-scoped tables).
+    // ORDER BY the scope column, then by the first column for deterministic ordering
     // across sources with differing insert histories (matches the snapshot path).
+    //
+    // Scope by the registry's blockKey, never the literal `block_index`: a table keyed
+    // by another column raises errno 1054, which ServerPoller classifies as an older
+    // source schema and drops from the payload with no log line and no delivery.
     async getBlockScopedRows(table, block_index, conn){
-        let query = "SELECT * FROM `" + table + "` WHERE block_index = ? ORDER BY block_index ASC, 1 ASC";
+        let key = lifecycle.blockKey(table);
+        assertValidIdentifier(key);
+        let query = "SELECT * FROM `" + table + "` WHERE " + key + " = ? ORDER BY " + key + " ASC, 1 ASC";
         return await this.doQuery(query, [block_index], conn);
     }
 

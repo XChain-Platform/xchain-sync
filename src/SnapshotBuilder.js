@@ -721,7 +721,11 @@ class SnapshotBuilder {
                         }
                     } else {
                         if(indexerBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
+                            // Scope by the registry's blockKey, never the literal: a table
+                            // keyed by another column raises errno 1054, which this loop's
+                            // catch tolerates as an older source schema and skips forever.
+                            let key = tableLifecycle.blockKey(table);
+                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key, [sinceBlock], conn);
                         } else if(indexerFullDump.has(table)){
                             if(skipLookups && lookupSet.has(table)) continue;
                             rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
@@ -829,9 +833,13 @@ class SnapshotBuilder {
                             let redriven = await collectRedrivenValidatorRewards(db, sinceBlock, lastBlock, conn);
                             if(redriven.length > 0){
                                 rows = rows || [];
-                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                // The dedup key is the FULL five-column identity: the archive leg's
+                                // round_reference (MATCH_BATCH_SEQ) is a dense hub counter a rebase
+                                // reissues, so two distinct archive rewards can share the four older
+                                // columns and the narrower key silently drops one from the payload.
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                                 for(let r of redriven){
-                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                                     if(!seen.has(k)){ seen.add(k); rows.push(r); }
                                 }
                             }
@@ -852,9 +860,11 @@ class SnapshotBuilder {
                             let derived = await collectDerivedAnchorRewards(db, sinceBlock, lastBlock, conn);
                             if(derived.length > 0){
                                 rows = rows || [];
-                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                                // Five-column identity, same reason as the redriven merge above;
+                                // the derived-anchor channel is where the archive leg arrives.
+                                let seen = new Set(rows.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                                 for(let r of derived){
-                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                                    let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                                     if(!seen.has(k)){ seen.add(k); rows.push(r); }
                                 }
                             }

@@ -360,6 +360,35 @@ describe('Rollback coverage guard @regression', function(){
             'cross-chain mirror reorg delete SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
     });
 
+    // Cross-repo drift guard for the contract slash reorg-restore. Both the source
+    // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js)
+    // copy back the highest orphaned contract_slash_debits.prev_amount for a mutated stake
+    // row. A predicate that picks a different debit on one side restores a different active
+    // stake there, and active stake drives staker weighting and quorum eligibility, so the
+    // two nodes fork. Both files carry the statement between //<CONTRACT-SLASH-RESTORE-SQL>
+    // markers; this concatenates its string literals (the indexer spells them as template
+    // literals, the replica as double-quoted concatenation, and the interpolated table name
+    // drops out of both) and asserts whitespace-normalised equality.
+    it('contract slash-restore SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function slashRestoreSql(path){
+            const src = fs.readFileSync(path, 'utf8');
+            const m = src.match(/\/\/<CONTRACT-SLASH-RESTORE-SQL>([\s\S]*?)\/\/<\/CONTRACT-SLASH-RESTORE-SQL>/);
+            assert.ok(m, `CONTRACT-SLASH-RESTORE-SQL markers not found in ${path}`);
+            const lits = m[1].match(/`[^`]*`|"(?:[^"\\]|\\.)*"/g) || [];
+            assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
+            return lits.map(l => l.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const sql = slashRestoreSql(syncPath);
+        assert.ok(/CAST\(e\.prev_amount AS DECIMAL\(60,18\)\) > CAST\(d\.prev_amount AS DECIMAL\(60,18\)\)/.test(sql),
+            'the restore must pick the highest orphaned prev_amount; the position columns invert under a nested EXECUTE');
+        assert.strictEqual(sql, slashRestoreSql(indexerPath),
+            'contract slash-restore SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+    });
+
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
     // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
     // byte-identical to xchain-indexer/src/db.js _stakeWeightsSql, or the follower's
@@ -607,8 +636,25 @@ describe('Rollback coverage guard @regression', function(){
                 `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
         }
         const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientApplier.js'), 'utf8'));
-        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(applier),
-            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore)');
+        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
+            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
+        // RB-ANCHOR restore parity on that same identity. The source twin
+        // (xchain-indexer/src/rollback.js) names round_qualifier in BOTH the INSERT column
+        // list and the projection, so the replica must too: without it the restored loser
+        // lands under the schema default 0, a different row from the one the reconcile
+        // deleted, and INSERT IGNORE either swallows it or lands a wrong-identity duplicate.
+        assert.ok(/INSERT IGNORE INTO validator_rewards \(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index\) SELECT .*d\.round_qualifier/.test(rbSync),
+            'ClientRollback.js RB-ANCHOR restore must carry round_qualifier in both the column list and the projection, mirroring xchain-indexer/src/rollback.js');
+        // The four JS payload-merge dedup keys ride the same identity: a four-column key
+        // treats two distinct archive rewards as one and drops the second from the payload
+        // before it ever reaches a replica.
+        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js',
+                        '../../src/derivedRewards.js', '../../src/recoveryRewards.js']){
+            // Collapse whitespace only (the quotes around ':' are part of the key text).
+            const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8').replace(/\s+/g, ' ');
+            const stale = src.match(/r\.reward_type \+ ':' \+ r\.round_reference(?! \+ ':' \+ r\.round_qualifier)/g);
+            assert.ok(!stale, `${f} still builds a reward dedup key on the pre-migration four columns (${stale && stale.length} site(s)); reward_unique carries round_qualifier`);
+        }
     });
 
     // Bespoke-logic parity: anchor invalid_archive to unverified reset. When the final v2
@@ -637,6 +683,11 @@ describe('Rollback coverage guard @regression', function(){
             // (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's string concat.
             { name: 'archive-head version predicate (shared v1+v6 constant)',
               re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
+            // The publisher-scope term is spliced from the shared activation module on both
+            // sides, between the chunk-status join and the reset join. A side that drops it
+            // resets under a different batch key than its twin the moment the flag day arms.
+            { name: 'publisher author-scope splice',
+              re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
             const src = norm(fs.readFileSync(p, 'utf8'));
@@ -644,6 +695,34 @@ describe('Rollback coverage guard @regression', function(){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
             }
         }
+    });
+
+    // The publisher-scope flag day is one file, twinned. A per-network height that differs
+    // between source and replica is a fleet split at the reorg the gate governs.
+    it('archive_rollback_author_scope_activation.js is byte-identical across xchain-indexer and xchain-sync', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const rel = 'src/archive_rollback_author_scope_activation.js';
+        const indexerPath = indexerFile(rel);
+        if(!requireSibling(this, indexerPath)) return;
+        const syncPath = pathMod.resolve(__dirname, '../..', rel);
+        assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+            'the publisher-scope activation must be the same file on both sides; a divergent height ' +
+            'makes source and replica reset a reorg under different batch keys');
+    });
+
+    // An omitted network reads as inactive, which is only correct while every threshold is
+    // inert. Arming one without first making the network mandatory would leave every
+    // un-wired construction site quietly on the legacy unscoped rule.
+    it('cannot arm the publisher scope while ClientRollback still accepts an omitted network', function(){
+        const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../../src/archive_rollback_author_scope_activation');
+        const INERT = 9999999999;
+        const armed = Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION)
+            .filter(n => ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION[n] !== INERT);
+        if(!armed.length) return;
+        assert.throws(() => new ClientRollback({ dbType: 'indexer' }, new Utility(), 'DOGE'),
+            /network/i,
+            'arming ' + armed.join(', ') + ' requires ClientRollback to demand a network: ' +
+            'every construction site must be wired before a replica can run the scoped reset');
     });
 
     // The archive-head version set is defined ONCE (stateHash.js, twinned across
@@ -729,6 +808,41 @@ describe('Rollback coverage guard @regression', function(){
             'updatedRows.js must also select polls by callback_due_block with a fired stamp (the deferred callback fire is an in-place UPDATE at the due block)');
     });
 
+    // Forward parity for DELEGATE v1 signing-key rotations: the materialization sweep
+    // rewrites signing_pubkey_id IN PLACE on surviving stake-ledger rows whose action_index
+    // sits below the window, so only the contract_delegation_rotations journal pins the
+    // rewrite to a block. Dropping a table or the journal join silently stops replicating
+    // the rotation and a follower hands contracts a stale staker set. Pin the class table
+    // list and its journal-window predicate in updatedRows.js.
+    it('updated_rows carries the DELEGATE v1 rotation rewrite keyed by the rotations journal window', function(){
+        const { ROTATION_TABLES } = require('../../src/updatedRows');
+        assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
+            'updated_rows must track the rotation rewrite on both contract stake tables');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
+            'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
+    });
+
+    // Forward parity for the BET in-place flips: the closed latch, the terminal flip and
+    // settlement each mutate a surviving bet_feeds / bets row the action-scoped stream
+    // cannot reach, stamping a block column. Dropping a stamp silently stops replicating
+    // that flip and a follower keeps a stale feed or bet status. Pin the class spec list
+    // and the per-stamp window predicate it drives in updatedRows.js.
+    it('updated_rows carries the BET status flips keyed by their stamp columns', function(){
+        const { BET_STATUS_SPECS } = require('../../src/updatedRows');
+        assert.deepStrictEqual(BET_STATUS_SPECS, [
+            { table: 'bet_feeds', stamps: ['closed_block', 'terminal_block'] },
+            { table: 'bets',      stamps: ['settled_block'] }
+        ], 'updated_rows must track the feed closed/terminal stamps and the bet settlement stamp');
+        const fs = require('fs'), pathMod = require('path');
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+            .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        assert.ok(/for\(let spec of BET_STATUS_SPECS\)\{ try \{ let where = spec\.stamps\.map\(col => col BETWEEN \? AND \? \)\.join\( OR \);/.test(src),
+            'updatedRows.js must select each BET class by every stamp column landing in the window, OR-joined so a feed that latches and goes terminal in one window is still carried');
+    });
+
     // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from
     // src/stateHash.js: the indexer stores it at index-time, the follower recomputes it
     // apply-time and halts on mismatch. The two copies are a byte-aligned twin (separate
@@ -792,7 +906,12 @@ describe('Rollback coverage guard @regression', function(){
     // different stakes_root at an armed height - the same class of fork the source-cap
     // twin above guards. It also carries the schema-drift contract both services'
     // startup checks read, so one definition of "undrifted" serves both fleets.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js']){
+    // utf8mb4Columns.js is the widen set for the columns that ingest raw wire fields
+    // (contracts.code and the grammar-constrained fields). The source converges through a
+    // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
+    // copy means an origin that accepts a 4-byte character and a replica that halts on it
+    // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
+    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js', 'utf8mb4Columns.js']){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
@@ -802,6 +921,30 @@ describe('Rollback coverage guard @regression', function(){
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
         });
     }
+
+    // Lockstep, read from the other end: the replica widen and the source MIGRATION must
+    // land the same column shape. Byte-identity of the module alone does not prove that -
+    // the two copies could agree with each other while the indexer's dated migration says
+    // something else, leaving the origin on one charset and every follower on another.
+    // Every entry's MODIFY clause must therefore appear verbatim in one of the sibling's
+    // dated migration files, which is exactly what ensureReplicaUtf8mb4Columns issues.
+    it('every utf8mb4 widen entry is carried by a dated xchain-indexer migration (source/replica lockstep)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const widenSet = require('../../src/utf8mb4Columns');
+        const migDir   = indexerFile(pathMod.join('src', 'sql', 'migrations'));
+        if(!requireSibling(this, migDir)) return;
+        const ledger = fs.readdirSync(migDir).filter(f => f.endsWith('.sql'))
+            .map(f => fs.readFileSync(pathMod.join(migDir, f), 'utf8')).join('\n');
+        const missing = [];
+        for(const entry of widenSet.UTF8MB4_RAW_FIELD_COLUMNS){
+            if(!ledger.includes(widenSet.modifyClause(entry)))
+                missing.push('  ' + entry.table + '.' + entry.column + ': ' + widenSet.modifyClause(entry));
+        }
+        assert.deepStrictEqual(missing, [],
+            'These columns are widened on the replica but no dated xchain-indexer migration MODIFYs them to ' +
+            'the same shape, so the source and its followers converge on DIFFERENT column charsets:\n' +
+            missing.join('\n'));
+    });
 
     // The gate's own conformance suite is a twin too: it is what proves the carrier
     // is inert (identical state_root to the two-sub-root v1 assembly) and that the

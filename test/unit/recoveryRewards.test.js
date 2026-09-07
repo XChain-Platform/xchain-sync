@@ -94,6 +94,21 @@ describe('collectRedrivenValidatorRewards', function(){
         assert.strictEqual(out.length, 2);
     });
 
+    // Same five-column identity the 2026-08-24 migration put in reward_unique: the archive
+    // leg's round_reference is MATCH_BATCH_SEQ, a dense hub counter a rebase reissues, so
+    // round_qualifier (snapshot_block) is the only column separating two real rewards. A
+    // four-column key collapses them and the second never reaches the replica.
+    it('distinguishes archive rows that differ only in round_qualifier', async function(){
+        let db = { doQuery: async () => [
+            row({ reward_type: 'anchor_archive', round_reference: 42, round_qualifier: 100 }),
+            row({ reward_type: 'anchor_archive', round_reference: 42, round_qualifier: 200 })
+        ] };
+        let out = await collectRedrivenValidatorRewards(db, 150, 150);
+        assert.strictEqual(out.length, 2,
+            'round_qualifier is part of reward_unique; collapsing on it drops a real reward');
+        assert.deepStrictEqual(out.map(r => r.round_qualifier).sort(), [100, 200]);
+    });
+
     it('swallows ONLY a schema gap (1146/1054); a transient fault propagates so the block is retried', async function(){
         // Regression: a bare catch here made both callers' isSchemaGapError gates dead
         // code (ServerPoller freezes the cursor, SnapshotBuilder aborts the stream), so a

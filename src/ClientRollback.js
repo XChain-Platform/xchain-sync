@@ -27,12 +27,18 @@ const lifecycle      = require('./tableLifecycle');
 const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
+const { archiveAuthorScopeJoin } = require('./archive_rollback_author_scope_activation');
 
 class ClientRollback {
 
-    constructor(db, util, coin) {
+    constructor(db, util, coin, network) {
         this.db   = db;
         this.util = util;
+
+        // The replica's own network, the key for the publisher-scoped archive reset below.
+        // An omitted network reads as inactive, correct only while every threshold is inert:
+        // the guard in test/unit/rollback-coverage.test.js fails the moment one is armed.
+        this.network = network || null;
 
         // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
         // indexer's reorg deactivation_block re-NULL resets (see _rollbackIndexer). A wrong
@@ -341,19 +347,23 @@ class ClientRollback {
                 // delete below drops orphaned-range rows but never re-streams the surviving
                 // mutated row, so the replica keeps the slashed amount and diverges from the
                 // source after a reorg. Mirror the source restore (xchain-indexer
-                // rollback.js): copy back the EARLIEST orphaned debit's `prev_amount` per row
-                // This is a pure string copy, byte-identical to the source (no arithmetic). Keys
-                // only on block_index/stake_action_index, so it ports cleanly (no
-                // ACTIVATION_DELAY_BLOCKS dependency).
+                // rollback.js): copy back the HIGHEST orphaned `prev_amount` per row.
+                // The restored value is a pure string copy, byte-identical to the source (no
+                // arithmetic on the amount itself). Keys only on block_index/stake_action_index,
+                // so it ports cleanly (no ACTIVATION_DELAY_BLOCKS dependency).
                 //
-                // Same-block tiebreak is (execution_index, slash_position), the EXECUTE's
-                // on-chain action_index plus the emission-loop index, the deterministic total
-                // order the source uses for contract_emissions, NOT the AUTO_INCREMENT `id`.
+                // The debits on one stake row form a strictly decreasing chain and the orphaned
+                // range is a suffix of it, so the maximum `prev_amount` IS the value the row held
+                // before the first orphaned debit. Position columns alone cannot express that
+                // order, because a re-entrant nested EXECUTE slashes FIRST under a HIGHER
+                // action_index than its parent frame. (execution_index, slash_position) stays as
+                // the tiebreak for numerically equal amounts, NOT the AUTO_INCREMENT `id`.
                 // This MUST byte-match the source indexer or a reorg retracting a block with
                 // ≥2 contract slashes on one stake row restores a divergent amount on the
                 // replica vs the source (stake-weight fork).
                 for(let slashTbl of ['contract_stakes', 'contract_unstakes']){
                     try {
+                        //<CONTRACT-SLASH-RESTORE-SQL>
                         await this.db.doQuery(
                             "UPDATE " + slashTbl + " t " +
                             "JOIN contract_slash_debits d ON d.stake_action_index = t.action_index " +
@@ -364,13 +374,16 @@ class ClientRollback {
                             "  WHERE e.target_table = d.target_table " +
                             "    AND e.stake_action_index = d.stake_action_index " +
                             "    AND e.block_index >= ? " +
-                            "    AND (e.block_index < d.block_index " +
-                            "         OR (e.block_index = d.block_index " +
-                            "             AND (e.execution_index < d.execution_index " +
-                            "                  OR (e.execution_index = d.execution_index " +
-                            "                      AND e.slash_position < d.slash_position)))))",
+                            "    AND (CAST(e.prev_amount AS DECIMAL(60,18)) > CAST(d.prev_amount AS DECIMAL(60,18)) " +
+                            "         OR (CAST(e.prev_amount AS DECIMAL(60,18)) = CAST(d.prev_amount AS DECIMAL(60,18)) " +
+                            "             AND (e.block_index < d.block_index " +
+                            "                  OR (e.block_index = d.block_index " +
+                            "                      AND (e.execution_index < d.execution_index " +
+                            "                           OR (e.execution_index = d.execution_index " +
+                            "                               AND e.slash_position < d.slash_position)))))))",
                             [slashTbl, block_index, block_index]
                         );
+                        //</CONTRACT-SLASH-RESTORE-SQL>
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -459,11 +472,21 @@ class ClientRollback {
                 // MATERIALIZATION block (reward_derive_block_index) is itself inside the
                 // orphaned range is NOT restored: its earn-block survives, but a replay to
                 // reorg_block-1 never derived it, so restoring it would mint an orphan.
+                // round_qualifier rides the pre-image like every other key column (the twin
+                // at xchain-indexer/src/rollback.js carries it in both the column list and the
+                // projection): it is part of the reward's UNIQUE identity, snapshot_block for
+                // the archive leg whose round_reference is a reissuable hub counter. Dropped,
+                // the restore re-INSERTs the loser under the schema default 0, a DIFFERENT row
+                // from the one the reconcile deleted, which either collides with whatever
+                // legacy row already holds that key and is swallowed by INSERT IGNORE, or
+                // lands as a wrong-identity duplicate. Either way the real loser stays
+                // unrestored and the replica forks SUM(validator_rewards) from the source.
                 try {
                     await this.db.doQuery(
                         "INSERT IGNORE INTO validator_rewards " +
-                        "(source_id, signing_pubkey_id, reward_type, round_reference, amount, block_index, derive_block_index) " +
+                        "(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index) " +
                         "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
+                        "       d.round_qualifier, " +
                         "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
                         "  FROM anchor_reward_reconcile_log d " +
                         " WHERE d.block_index >= ? AND d.reward_block_index < ? " +
@@ -644,11 +667,16 @@ class ClientRollback {
             // 'unverified', the conservative re-verification state. Runs BEFORE the delete.
             if(firstActionIndex !== null){
                 try {
+                    // Author scope, flag-day gated and INERT on every network today; mirror of
+                    // the source indexer's term. Rationale and the arming precondition live in
+                    // archive_rollback_author_scope_activation.js.
+                    let authorScope = archiveAuthorScopeJoin(block_index, this.network);
                     await this.db.doQuery(
                         "UPDATE anchor_actions p " +
                         "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
                         "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                        authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = us.id " +
                         "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND p.action_index < ?",

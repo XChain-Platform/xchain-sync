@@ -63,7 +63,7 @@ const SIBLINGS = [
     { repo: 'xchain-indexer', envs: ['XCHAIN_INDEXER_DIR'],
       marker: 'src',
       altEnvs: ['XCHAIN_INDEXER_SQL_PATH'],
-      guards: 'rollback coverage, the block-hash and protocol-address twins, and the validator-set parity' },
+      guards: 'rollback coverage, the block-hash and protocol-address twins, the validator-set parity, and the stream scope-column binding' },
     { repo: 'xchain-hub', envs: ['XCHAIN_HUB_DIR'],
       marker: path.join('src', 'coins'),
       guards: 'vendored coins-registry byte-identity (BTC/LTC/DOGE/index/consensus_pin)' },

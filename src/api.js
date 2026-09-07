@@ -315,6 +315,27 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // an operator the lag figure is computed against a source height we have not
         // heard confirmed recently (null = no live event seen yet, staleness unknown).
         row.source_height_stale = clientState.sourceHeightStale;
+        // The upstream server's OWN replication verdict, relayed on its status events and
+        // published under distinct names: `replica_stale` on a SERVER row is a claim about
+        // that node's own database, and reusing the name here would say something else
+        // under the same key. source_height_stale above is transport liveness (is the
+        // server still speaking); this is data authority (does what it said certify the
+        // heights). Both are needed: a server whose SQL replica stopped applying keeps
+        // heart-beating, so its follower catches up to the frozen tip and reports
+        // lag_blocks 0 with source_height_stale false.
+        //
+        // upstream_replica_stale is TRI-STATE. null means no connected source reported it
+        // (nothing heard yet, or a server older than the field) and must not be read as
+        // healthy; true means at least one connected source called its own database stale.
+        // upstream_source_height is the upstream's own DB tip, which is what makes its
+        // broadcaster-versus-source-database lag visible from here.
+        // Absent on a caller that predates the field (a test double, an older
+        // SyncService): unknown, which is the null tri-state, never a fresh verdict.
+        let upstream = clientState.upstreamReplica || {};
+        row.upstream_replica_stale          = (upstream.stale === true || upstream.stale === false)
+                                                  ? upstream.stale : null;
+        row.upstream_replica_seconds_behind = (upstream.secondsBehind != null) ? upstream.secondsBehind : null;
+        row.upstream_source_height          = (upstream.sourceHeight != null) ? upstream.sourceHeight : null;
         // Consensus-divergence halt: a halted client has STOPPED applying and
         // requires operator clearance. Surfaced so the dashboard monitor and
         // peers see a forked/Byzantine validator immediately.

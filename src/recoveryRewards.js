@@ -41,7 +41,8 @@
 // inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)
 // is BELOW that window, so the normal block-scoped channels missed them. Returns raw
 // rows for the caller to merge into the `validator_rewards` array, deduped on the UNIQUE
-// identity (source_id, signing_pubkey_id, reward_type, round_reference). `db` must be an
+// identity (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier).
+// `db` must be an
 // indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
 // REPEATABLE READ view read these at the same height as the rest of its payload.
 async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
@@ -77,9 +78,16 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
             "  AND rpr.applied_block BETWEEN ? AND ? " +
             "  AND vr.block_index < rpr.applied_block",
             [from, to], conn);
+        // round_qualifier closes the key, exactly as in derivedRewards.js: two distinct
+        // archive rewards can share the four older columns after a hub rebase reissues
+        // MATCH_BATCH_SEQ, and on the four-column key the second overwrites the first here
+        // and never reaches the replica. recovery_pending_rewards has no round_qualifier
+        // column (xchain-indexer/src/sql/recovery_pending_rewards.sql), so the JOIN above
+        // stays as it is; over-selecting there is harmless once this key is qualifier-aware.
         for(let r of (rows || [])){
             if(r && r.source_id != null && r.signing_pubkey_id != null)
-                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference, r);
+                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference
+                        + ':' + r.round_qualifier, r);
         }
     } catch(e){
         // recovery_pending_rewards / applied_block may not exist on a non-recovery stack

@@ -437,8 +437,18 @@ class ServerPoller {
                 console.log('Synced block ' + this.lastPolledBlock + ' for ' +
                     this.chain + '/' + this.network + '/' + this.dbType);
             }
-            await this._updateStatus(streamTo);
         }
+
+        // Refresh status on EVERY poll, not only when blocks advanced. The replication
+        // verdict _updateStatus carries is the one field whose failure mode also stops
+        // block advancement: a native SQL replica that stops applying freezes the served
+        // tip, so a refresh gated on blocksProcessed > 0 never runs again and REST and the
+        // periodic WebSocket status keep republishing the last healthy replica_stale:false
+        // and a zero lag indefinitely, straight past SYNC_REPLICA_MAX_LAG_S. Idle polls
+        // cost no extra source read (streamTo is the tip this poll already read) and no
+        // extra WebSocket traffic (updateStatus only writes the broadcaster's map; the
+        // status push is api.js's own timer).
+        await this._updateStatus(streamTo);
 
         return blocksProcessed;
     }
@@ -750,9 +760,14 @@ class ServerPoller {
                 let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index, conn);
                 if(redriven.length > 0){
                     let existing = payload.data['validator_rewards'] || [];
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    // The dedup key is the FULL five-column identity. round_qualifier is the
+                    // archive leg's snapshot_block, and its round_reference (MATCH_BATCH_SEQ) is
+                    // a dense hub counter a rebase reissues, so two distinct archive rewards can
+                    // share the four older columns; on the narrower key the second is treated as
+                    // a duplicate and dropped from the payload before it ever reaches a replica.
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                     for(let r of redriven){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                         if(!seen.has(k)){ seen.add(k); existing.push(r); }
                     }
                     payload.data['validator_rewards'] = existing;
@@ -776,9 +791,12 @@ class ServerPoller {
                 let derived = await collectDerivedAnchorRewards(this.db, block_index, block_index, conn);
                 if(derived.length > 0){
                     let existing = payload.data['validator_rewards'] || [];
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference));
+                    // Five-column identity, same reason as the redriven merge above: the
+                    // archive leg is exactly the channel that can present two distinct rewards
+                    // differing only in round_qualifier.
+                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
                     for(let r of derived){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference;
+                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
                         if(!seen.has(k)){ seen.add(k); existing.push(r); }
                     }
                     payload.data['validator_rewards'] = existing;

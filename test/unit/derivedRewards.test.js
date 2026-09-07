@@ -64,6 +64,23 @@ describe('collectDerivedAnchorRewards', function(){
         assert.strictEqual(out[0].derive_block_index, 961700);
     });
 
+    // The archive leg keys round_reference on MATCH_BATCH_SEQ, a dense hub counter a
+    // wipe-and-replay rebase reissues, so two genuinely distinct archive rewards can share
+    // source_id/signing_pubkey_id/reward_type/round_reference and differ only in
+    // round_qualifier (the snapshot_block). The 2026-08-24 migration put that column in
+    // reward_unique; a four-column dedup key here treats the second reward as a duplicate
+    // and it never reaches the replica at all.
+    it('keeps two archive rewards that differ only in round_qualifier (the five-column identity)', async function(){
+        let db = { doQuery: async () => [
+            row({ reward_type: 'anchor_archive', round_reference: 42, round_qualifier: 100 }),
+            row({ reward_type: 'anchor_archive', round_reference: 42, round_qualifier: 200 })
+        ] };
+        let out = await collectDerivedAnchorRewards(db, 961700, 961700);
+        assert.strictEqual(out.length, 2,
+            'a reissued MATCH_BATCH_SEQ makes round_reference non-unique; round_qualifier is what separates them');
+        assert.deepStrictEqual(out.map(r => r.round_qualifier).sort(), [100, 200]);
+    });
+
     it('swallows ONLY a schema gap (1054/1146); a transient fault propagates so the block is retried', async function(){
         let gap = Object.assign(new Error('Unknown column derive_block_index'), { errno: 1054 });
         assert.deepStrictEqual(await collectDerivedAnchorRewards({ doQuery: async () => { throw gap; } }, 1, 1), []);

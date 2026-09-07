@@ -160,7 +160,13 @@ describe('Advisory table-content parity', function(){
             // would make an honest replica fail forever.
             const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/db.js'), 'utf8');
             const body = src.slice(src.indexOf('async getContentWindowRows('), src.indexOf('async getMaxRowId('));
-            assert.ok(/block_index IS NOT NULL AND block_index BETWEEN/.test(body),
+            // The scope column is now the registry's (lifecycle.blockKey), so the guard
+            // pins the PROPERTY (the same column, NULL-excluded, then range-bounded)
+            // rather than the literal 'block_index' a hard-coded query would assume.
+            assert.ok(/lifecycle\.blockKey\(table\)/.test(body),
+                'getContentWindowRows must window by the registry scope column; the literal block_index ' +
+                'raised errno 1054 on the close_block-keyed tables and the caller swallowed it');
+            assert.ok(/" \+ key \+ " IS NOT NULL AND " \+ key \+ " BETWEEN/.test(body),
                 'getContentWindowRows lost its NULL-block exclusion; benign out-of-band rows would false-alarm');
             assert.ok(/doQueryStrict/.test(body),
                 'getContentWindowRows must read strictly: a fail-soft [] would read as "table has no rows" on both sides');

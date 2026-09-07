@@ -32,6 +32,7 @@ const ClientRollback  = require('./ClientRollback');
 const HashVerifier    = require('./HashVerifier');
 const stateCommitment = require('./stateCommitment');
 const { assertBootstrapDepthChains } = require('./config');
+const { assertPinnedEnvOverrides }   = require('./pinnedValidators');
 const Utility         = require('./utility');
 
 class SyncService {
@@ -266,6 +267,13 @@ class SyncService {
                 // both paths self-heal. Idempotent, so the double-call on the
                 // direct-DB path is a cheap no-op.
                 await db.ensureReplicaSecondaryIndexes();
+                // Same again for the raw-wire-field charset widen: neither self-heal above
+                // retypes an existing column, so a replica bootstrapped before the
+                // 2026-09-02 indexer migration keeps utf8mb3 on contracts.code and the
+                // grammar-constrained fields and halts on the first 4-byte character the
+                // widened origin accepts. Idempotent, so the double-call on the direct-DB
+                // path is a cheap no-op.
+                await db.ensureReplicaUtf8mb4Columns();
                 // Fail closed on collation drift in the columns the stake-weight
                 // snapshot orders on. The follower rebuilds stakes_root from the
                 // byte-mirrored _cappedStakeWeightsSql, whose window caps truncate on
@@ -308,6 +316,12 @@ class SyncService {
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
             this._bootstrapDepthChecked = true;
             assertBootstrapDepthChains(this.config, this.getChains());
+            // REFUSE a present-but-invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value on
+            // the same pass, and for the same reason: it is not inert either. It resolves to
+            // the null an ABSENT override resolves to, so _verifyCheckpointQuorum skips the
+            // anchor on a replica whose operator armed VERIFY_CHECKPOINT_QUORUM. Client mode
+            // only (a server reads no pinned set) and before any ClientSync is constructed.
+            assertPinnedEnvOverrides();
         }
 
         if(newChains.length > 0){
@@ -376,7 +390,7 @@ class SyncService {
         if(this.clientSyncs.has(key)) return;
 
         let applier  = new ClientApplier(db, this.util, cfg.coin, cfg.network);
-        let rollback = new ClientRollback(db, this.util, cfg.coin);
+        let rollback = new ClientRollback(db, this.util, cfg.coin, cfg.network);
         let sync     = new ClientSync(cfg.coin, cfg.network, db, applier, rollback, this.hashVerifier, this.config, this.util);
         this.clientSyncs.set(key, sync);
 
@@ -494,6 +508,11 @@ class SyncService {
         return {
             lastKnownServerBlock: sync ? sync.lastKnownServerBlock : null,
             sourceHeightStale: sync ? sync.isSourceHeightStale() : null,
+            // The upstream's OWN replication verdict, relayed on its status events.
+            // Tri-state stale: null is unknown, never fresh.
+            upstreamReplica: (sync && typeof sync.getUpstreamReplicaState === 'function')
+                ? sync.getUpstreamReplicaState()
+                : { stale: null, secondsBehind: null, sourceHeight: null },
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
             truncated:     sync ? sync.isTruncated() : false,

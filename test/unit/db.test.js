@@ -1142,6 +1142,31 @@ describe('Database.getBlockScopedRows()', function () {
         assert.ok(sql.includes('blocks'));
         assert.ok(sql.includes('block_index'));
     });
+
+    it('scopes a close_block-keyed table by close_block, not the class default', async function () {
+        // rollcalls and rollcall_absences are declared stream:block and have no
+        // block_index column, so the old literal raised errno 1054, which
+        // ServerPoller classifies as an older source schema and drops without a log
+        // line: the tables were streamed by membership and delivered by nothing.
+        // ServerPoller.test.js asserts the membership; this asserts the read.
+        sinon.stub(db, 'doQuery').resolves([]);
+        await db.getBlockScopedRows('rollcalls', 900);
+        await db.getBlockScopedRows('rollcall_absences', 900);
+        assert.strictEqual(db.doQuery.firstCall.args[0],
+            'SELECT * FROM `rollcalls` WHERE close_block = ? ORDER BY close_block ASC, 1 ASC');
+        assert.strictEqual(db.doQuery.secondCall.args[0],
+            'SELECT * FROM `rollcall_absences` WHERE close_block = ? ORDER BY close_block ASC, 1 ASC');
+    });
+
+    it('leaves every other block-scoped table on block_index', async function () {
+        // The registry field defaults, so the eleven tables that really are
+        // block_index-scoped must produce byte-identical SQL to before the change.
+        sinon.stub(db, 'doQuery').resolves([]);
+        for(const table of ['blocks', 'transactions', 'slash_events', 'escrow_leaf_journal'])
+            await db.getBlockScopedRows(table, 5);
+        for(const call of db.doQuery.getCalls())
+            assert.match(call.args[0], /WHERE block_index = \? ORDER BY block_index ASC, 1 ASC$/);
+    });
 });
 
 describe('Database.getActionScopedRows()', function () {

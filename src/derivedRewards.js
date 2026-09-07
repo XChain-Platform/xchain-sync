@@ -47,7 +47,7 @@
 // window [fromBlock, toBlock] whose own block_index (earn-block E) is BELOW their
 // materialization block, so the block-keyed channels missed them. Returns raw rows for
 // the caller to merge into the `validator_rewards` array, deduped on the UNIQUE identity
-// (source_id, signing_pubkey_id, reward_type, round_reference). `db` must be an
+// (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier). `db` must be an
 // indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
 // REPEATABLE READ view read these at the same height as the rest of its payload.
 async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
@@ -77,9 +77,14 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
             "WHERE vr.derive_block_index BETWEEN ? AND ? " +
             "  AND vr.block_index < vr.derive_block_index",
             [from, to], conn);
+        // round_qualifier closes the key. The archive leg's round_reference is
+        // MATCH_BATCH_SEQ, a dense hub counter a rebase reissues, so two genuinely distinct
+        // archive rewards can share the four older columns; on the four-column key the
+        // second overwrites the first in this Map and never reaches the replica at all.
         for(let r of (rows || [])){
             if(r && r.source_id != null && r.signing_pubkey_id != null)
-                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference, r);
+                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference
+                        + ':' + r.round_qualifier, r);
         }
     } catch(e){
         // derive_block_index may not exist on an older source schema (pre-RB-ANCHOR);
