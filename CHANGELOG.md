@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The indexer schema version is 9: followers must carry the `rollcall_gates` table and the `rollcall_signers.gates` column before they can apply the rows a gates-era epoch close streams; the table is rolled back with the other close-scoped roll-call tables.
 - The indexer schema version is 8: followers must carry the deferred chunked-DEPLOY columns on `contract_executions` before they can apply the rows a completing carrier streams.
 
 ## [0.15.0] - 2026-09-07

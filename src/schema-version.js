@@ -93,9 +93,17 @@
  *       column to receive the streamed assembler_action_index, so the rows the
  *       completing carrier writes from DEPLOY_DEFERRED_ASSEMBLY on cannot apply
  *       there. Decoder is unaffected and stays at 3.
+ *   9 - (indexer only) ROLLCALL v1 gates: a new close_block-scoped table
+ *       rollcall_gates (one row per verified signer of a rolled epoch, its
+ *       re-signed gate list) and a nullable gates column on rollcall_signers,
+ *       shipped by the 2026-09-07-rollcall-gates migration. Neither enters a
+ *       block-hash preimage, but a v8 follower has no table to receive the
+ *       streamed gates rows the epoch close writes from ROLLCALL_GATES_ACTIVATION
+ *       on, and the rules-aware attestation set it derives would then differ
+ *       from its source. Decoder is unaffected and stays at 3.
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 8, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 9, decoder: 3 };
 
 module.exports = { SCHEMA_VERSION };

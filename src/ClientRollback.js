@@ -893,7 +893,7 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
-            // The two BTC-side ROLLCALL tables key their block scope on close_block,
+            // The three BTC-side ROLLCALL tables key their block scope on close_block,
             // not block_index, so like price_snapshots they fall outside the generic
             // blockTables loop and need their own delete mirroring the source indexer's.
             //
@@ -902,6 +902,7 @@ class ClientRollback {
             // reorg and kept serving epoch verdicts and absences for orphaned blocks --
             // a replica diverging from its source with nothing reporting it.
             try {
+                await this.db.doQuery("DELETE FROM rollcall_gates WHERE close_block >= ?", [block_index]);
                 await this.db.doQuery("DELETE FROM rollcall_absences WHERE close_block >= ?", [block_index]);
                 await this.db.doQuery("DELETE FROM rollcalls WHERE close_block >= ?", [block_index]);
             } catch(e){
