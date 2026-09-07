@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- The indexer schema version is 8: followers must carry the deferred chunked-DEPLOY columns on `contract_executions` before they can apply the rows a completing carrier streams.
+
 ## [0.15.0] - 2026-09-07
 
 ### Added
