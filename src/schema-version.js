@@ -86,9 +86,16 @@
  *       settlement or hash path reads them) and add no updated_rows class, but a v6
  *       follower lacks the tables entirely and could not apply the streamed rows.
  *       Decoder is unaffected and stays at 3.
+ *   8 - (indexer only) deferred chunked-DEPLOY assembly: two columns on
+ *       contract_executions (assembler_action_index, fee_payment_mode) and a
+ *       (source_id, code_hash) index on contracts, shipped by a dated migration.
+ *       Neither column enters a block-hash preimage, but a v7 follower has no
+ *       column to receive the streamed assembler_action_index, so the rows the
+ *       completing carrier writes from DEPLOY_DEFERRED_ASSEMBLY on cannot apply
+ *       there. Decoder is unaffected and stays at 3.
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 7, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 8, decoder: 3 };
 
 module.exports = { SCHEMA_VERSION };
