@@ -106,10 +106,6 @@ class TestDatabase {
         return rows.length > 0 ? Number(rows[0].id) : null;
     }
 
-    async getBlockScopedRows(table, block_index) {
-        return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index]);
-    }
-
     async getActionScopedRows(table, block_index) {
         return await this.doQuery(`SELECT t.* FROM \`${table}\` t
             INNER JOIN actions a ON (a.action_index = t.action_index)
@@ -266,7 +262,10 @@ class TestDatabase {
 const RealDatabase = require('../../../src/db');
 for (const method of ['getStateRootsRow', 'getBlockLeafRows',
                       'getStakeWeightsByCapability', '_stakeWeightsSql',
-                      '_applyStakeWeightCap', '_cappedStakeWeightsSql'])
+                      '_applyStakeWeightCap', '_cappedStakeWeightsSql',
+                      // getBlockScopedRows keys by lifecycle.blockKey(table), never
+                      // a fixed block_index (rollcalls scope by close_block).
+                      'getBlockScopedRows'])
     TestDatabase.prototype[method] = RealDatabase.prototype[method];
 
 // Create a TestDatabase for a given db name

@@ -105,7 +105,10 @@ describe('ServerPoller', function(){
             // read the membership drives is asserted separately below.
             assert.ok(poller.blockScopedTables.includes('rollcalls'));
             assert.ok(poller.blockScopedTables.includes('rollcall_absences'));
-            assert.strictEqual(poller.blockScopedTables.length, 13);
+            // The gates each verified signer re-signed at a rolled epoch: same close_block
+            // key, same bespoke rollback, written by the same close.
+            assert.ok(poller.blockScopedTables.includes('rollcall_gates'));
+            assert.strictEqual(poller.blockScopedTables.length, 14);
             // The read those two names drive is asserted in db.test.js
             // (Database.getBlockScopedRows), because that is where it can fail.
         });

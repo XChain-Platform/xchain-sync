@@ -113,7 +113,10 @@ class ClientApplier {
             // identical and IGNORE is a no-op; a plain INSERT would abort the apply
             // transaction on the duplicate PK. Same reasoning as validator_rewards above.
             'rollcalls',
-            'rollcall_absences'
+            'rollcall_absences',
+            // Same close_block scoping and the same pinned-at-close reasoning; the
+            // source writes it with ON DUPLICATE KEY UPDATE, so a re-delivery is identical.
+            'rollcall_gates'
         ]);
 
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT

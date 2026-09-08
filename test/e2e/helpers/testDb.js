@@ -154,10 +154,6 @@ class TestDatabase {
         return rows.length > 0 ? Number(rows[0].action_index) : null;
     }
 
-    async getBlockScopedRows(table, block_index, conn) {
-        return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index = ?", [block_index], conn);
-    }
-
     // Mirror src/db.js getEmissionRowsForBlock (568c800): ServerPoller streams
     // contract_emissions via the execution_index -> contract_executions chain
     // (byte-aligned with BlockHasher), not the generic action-scoped join.
@@ -361,6 +357,12 @@ class TestDatabase {
         try { await this.pool.end(); } catch (e) {}
     }
 }
+
+// Adopt getBlockScopedRows from the real Database class by reference, so the
+// harness reads lifecycle.blockKey(table) exactly as production does (pure
+// SQL over this.doQuery, which this wrapper already provides).
+const RealDatabase = require('../../../src/db');
+TestDatabase.prototype.getBlockScopedRows = RealDatabase.prototype.getBlockScopedRows;
 
 async function createDb(dbName, host, port, user, pass) {
     let mariadb = await getMariadb();
