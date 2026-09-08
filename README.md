@@ -4,8 +4,8 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.15.3-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-2%2C518%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.16.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-2%2C520%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
@@ -135,7 +135,7 @@ npm run api
 | `npm run test:boundary` | Boundary condition tests (consensus constants, 7 tests) |
 | `npm run test:regression` | Unit tests tagged `@regression` (528 tests) |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading, 17 tests) |
-| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 102 tests) |
+| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 104 tests) |
 | `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 72 tests) |
 | `npm run test:security` | Security tests (validation, injection, auth, 157 tests) |
 | `npm run test:fuzz` | Fuzz tests (property-based via fast-check, 55 tests) |
