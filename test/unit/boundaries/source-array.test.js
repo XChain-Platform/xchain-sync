@@ -33,7 +33,7 @@ function createMockDb(){
 function createSync(sources, opts){
     let db = createMockDb();
     let applier = new ClientApplier(db, new Utility());
-    let rollback = new ClientRollback(db, new Utility());
+    let rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
     let verifier = new HashVerifier();
     let config = {
         SYNC_SOURCES: sources,

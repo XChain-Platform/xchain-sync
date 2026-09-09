@@ -128,7 +128,7 @@ describe('Integration: Full Lifecycle', function() {
             await startServer();
 
             let applier    = new ClientApplier(replicaDb, testDb.util);
-            let rollbacker = new ClientRollback(replicaDb, testDb.util);
+            let rollbacker = new ClientRollback(replicaDb, testDb.util, undefined, 'regtest');
             let verifier   = new HashVerifier();
             let config = {
                 SYNC_SOURCES: 'http://127.0.0.1:' + LIFECYCLE_PORT,

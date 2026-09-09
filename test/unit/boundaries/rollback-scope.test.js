@@ -30,7 +30,7 @@ describe('Boundary: Rollback Scope', function(){
 
     beforeEach(function(){
         db = createMockDb();
-        rollback = new ClientRollback(db, new Utility());
+        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });

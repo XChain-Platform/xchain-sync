@@ -208,7 +208,7 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
 
             // The reorg. Real ClientRollback, real generic table lists from the
             // lifecycle registry.
-            await new ClientRollback(replicaDb, testDb.util, TICKER).rollback(TIP);
+            await new ClientRollback(replicaDb, testDb.util, TICKER, 'regtest').rollback(TIP);
 
             const afterRollback = await rootsRow(replicaDb, TIP);
             const belowAfter    = await rootsRow(replicaDb, TIP - 1);

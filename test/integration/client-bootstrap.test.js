@@ -109,7 +109,7 @@ describe('Integration: Client Bootstrap', function() {
             HASH_CONFIRM_TIMEOUT: 5000
         };
         let applier  = new ClientApplier(replicaDb, testDb.util);
-        let rollback = new ClientRollback(replicaDb, testDb.util);
+        let rollback = new ClientRollback(replicaDb, testDb.util, undefined, 'regtest');
         let verifier = new HashVerifier();
         return new ClientSync('bitcoin', 'mainnet', replicaDb, applier, rollback, verifier, config, testDb.util);
     }

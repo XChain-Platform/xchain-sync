@@ -45,7 +45,7 @@ class ClientProcess {
         };
 
         this.applier    = new ClientApplier(replicaDb, testDb.util);
-        this.rollbacker = new ClientRollback(replicaDb, testDb.util);
+        this.rollbacker = new ClientRollback(replicaDb, testDb.util, undefined, 'regtest');
         this.verifier   = new HashVerifier();
         this.sync       = new ClientSync(
             this.chain, this.network, replicaDb,

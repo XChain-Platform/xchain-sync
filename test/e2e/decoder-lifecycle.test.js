@@ -293,7 +293,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
 
     function makeClient(){
         let applier  = new ClientApplier(replicaDb, util);
-        let rollback = new ClientRollback(replicaDb, util);
+        let rollback = new ClientRollback(replicaDb, util, undefined, 'regtest');
         let verifier = new HashVerifier();
         let sync = new ClientSync(CHAIN, NETWORK, replicaDb, applier, rollback, verifier, {
             SYNC_SOURCES: 'http://127.0.0.1:' + SERVER_PORT,

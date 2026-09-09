@@ -37,7 +37,7 @@ describe('Tier 2 - ClientRollback @tier2', function () {
     beforeEach(function () {
         db = createMockDb();
         util = createMockUtil();
-        rollback = new ClientRollback(db, util);
+        rollback = new ClientRollback(db, util, undefined, 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });

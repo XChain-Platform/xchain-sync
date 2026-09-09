@@ -45,13 +45,26 @@ afterEach(function () { sinon.restore(); });
 describe('sync: stake-weight ordering collation gate', function () {
 
     it('an unpinned chain emits no COLLATE', async function () {
+        // testnet is the unpinned network now that mainnet arms at genesis.
+        assert.strictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'], null,
+            'this test needs an unpinned chain; re-point it if testnet is ever armed');
         const db = dbWithCapturedQueries();
-        await db._applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'mainnet', 'probe');
+        await db._applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'testnet', 'probe');
         const q = db._calls.map(c => c.q).join('\n');
         assert.ok(q.length > 0, 'no query was emitted');
         assert.doesNotMatch(q, /COLLATE/,
             'a COLLATE leaked onto an unpinned chain; below the gate the follower must order ' +
             'exactly as the source does today');
+    });
+
+    // The follower must pin the same collation the source does from mainnet genesis, or
+    // the two rebuild different cap survivors and commit different stakes_roots.
+    it('mainnet is armed at genesis and pins utf8_bin on the follower too', async function () {
+        const db = dbWithCapturedQueries();
+        await db._applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'mainnet', 'probe');
+        const q = db._calls.map(c => c.q).join('\n').replace(/\s+/g, ' ');
+        assert.match(q, /DENSE_RANK\(\) OVER \(ORDER BY b\.source COLLATE utf8_bin\)/);
+        assert.match(q, /ORDER BY r\.source COLLATE utf8_bin, r\.pubkey COLLATE utf8_bin/);
     });
 
     it('a null coin/network stays inert, as it does for the source cap', async function () {
@@ -120,11 +133,18 @@ describe('sync: stake-weight ordering collation gate', function () {
         });
     });
 
-    it('the gate map ships inert on every chain with history', function () {
-        for (const [key, height] of Object.entries(swc.STAKE_WEIGHT_COLLATION_ACTIVATION)) {
-            if (key === 'regtest') { assert.strictEqual(height, 0); continue; }
-            assert.strictEqual(height, null,
-                key + ' carries a pinned height; arming needs both fleets deployed first');
-        }
+    // The follower's copy of the map is the same bytes as the source's (twin guard in
+    // rollback-coverage.test.js). Pinned here too so a one-sided edit in this repo,
+    // which is exactly the fork the gate exists to prevent, fails in this repo's suite.
+    it('the gate map is armed at genesis on mainnet and still unpinned on testnet', function () {
+        assert.deepStrictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION, {
+            'BTC:mainnet':  0,
+            'LTC:mainnet':  0,
+            'DOGE:mainnet': 0,
+            'BTC:testnet':  null,
+            'LTC:testnet':  null,
+            'DOGE:testnet': null,
+            regtest: 0,
+        });
     });
 });
