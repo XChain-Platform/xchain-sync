@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.17.0] - 2026-09-10
+
+### Changed
+- Mainnet activation gates, the state-hash, stake-weight collation and archive rollback scope twins included, are armed at genesis under the 2026-09-09 ruling; `ClientRollback` now demands a network.
+
+### Fixed
+- A from-zero lookup repair strict-checks SHOW WARNINGS, so a non-PRIMARY collision throws instead of silently dropping the row.
+- The ATTEST batch-head verdict flip is carried on the updated_rows forward channel, so a follower is not asked to hash a parent row it was never sent.
+- A ServerPoller cursor read fails closed, so a source-database outage counts as a poll failure instead of reading as an idle chain.
+
 ## [0.16.0] - 2026-09-08
 
 ### Changed
