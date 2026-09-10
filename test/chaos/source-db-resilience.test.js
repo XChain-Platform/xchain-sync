@@ -17,7 +17,7 @@
  *
  * Experiment IDs:
  *   CE-SRC-01  Complete source DB unavailability (circuit breaker validation)
- *   CE-SRC-02  Slow query responses (3 s latency injection)
+ *   CE-SRC-02  Slow query responses (per-query latency injection)
  *   CE-SRC-03  Connection pool exhaustion (30 s timeout toxic)
  *   CE-SRC-04  Intermittent connection drops (30 % TCP reset)
  *   CE-SRC-05  Source down → blocks accumulate → recovery + integrity check
@@ -123,7 +123,16 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
         // the fault never reached the poller the counter never moves and this
         // throws, instead of a sleep that would report a healthy server as proof
         // of outage survival.
-        await waitForServerPollFailures(server, 3, 30000);
+        //
+        // Budget: a poll against a severed source does not fail fast. The first
+        // one trips on the pool's already-open socket (milliseconds), and every
+        // one after it waits out the pool's acquire timeout, measured at 10.0s
+        // per read against this fixture (the same 10s production sets in
+        // poolSizing.js). Three failures therefore need upwards of 30s of
+        // wall clock, which the old 30s budget could not contain: the wait
+        // expired a fraction of a second before the third failure landed, and
+        // did so deterministically. Sized to 3 x acquire timeout plus margin.
+        await waitForServerPollFailures(server, 3, 60000);
 
         const alive = await isServerAlive(server.getUrl());
         expect(alive).to.equal(true, 'Server must stay alive during source DB outage');
@@ -156,29 +165,48 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
 
 describe('CE-SRC-02: Slow Query Responses', function () {
 
+    // Per-query latency for the advancement case below. A 3s toxic cannot measure
+ // what the case claims to measure: the poller pays the toxic once per query and
+ // issues ~86 action-scoped queries per block, so 3s costs ~260s for ONE block,
+ // past this suite per-test cap, and the case can only ever expire, never
+ // report. A 3s toxic also exceeds the fixture pool 1s connect timeout, so no
+ // MariaDB handshake completes and every read fails with
+ // ER_GET_CONNECTION_TIMEOUT, a source that is effectively DOWN, which is
+ // CE-SRC-01 experiment, not this one. 100ms keeps a genuinely slow source (two
+ // orders of magnitude off baseline, with connections still establishable) and
+ // leaves the per-block cost inside a budget a failure can actually be reported
+ // from.
+ const QUERY_LATENCY_MS = 100;
+
     afterEach(async function () {
         await sourceFaults.reset();
     });
 
-    it('server still advances block height under 3s DB latency', async function () {
-        await sourceFaults.addLatency(3000);
+    it('server still advances block height under injected query latency', async function () {
+        await sourceFaults.addLatency(QUERY_LATENCY_MS);
 
         // Seed via the direct connection so the latency just injected on the
-        // proxy doesn't also slow down seeding itself.
+        // proxy doesn't also slow down seeding itself. The range starts ABOVE
+        // the tip CE-SRC-01 left behind (25) so the claim under test is real
+        // advancement; re-seeding 21-25 leaves the height where it already was,
+        // and the recovery wait below would be satisfied before the poller ran.
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         const fixtures = require('../e2e/helpers/fixtures');
-        await fixtures.seedBlocks(sourceDbDirect, 21, 25);
+        await fixtures.seedBlocks(sourceDbDirect, 26, 30);
 
         await server.poll();
 
-        // Generous timeout: 3s latency applies to multiple queries per block
-        const recoveryMs = await waitForSyncRecovery(25, 90000);
-        expect(recoveryMs).to.be.above(-1, 'Sync should complete despite 3s latency');
+        // Budget: the latency is paid per query, and the poller issues ~86
+        // action-scoped queries per block on top of its block-scoped reads
+        // (sync_action_scoped_queries_per_block), so five blocks cost roughly
+        // 5 x 100 x QUERY_LATENCY_MS. Sized with room to spare on top of that.
+        const recoveryMs = await waitForSyncRecovery(30, 150000);
+        expect(recoveryMs).to.be.above(-1, 'Sync should complete despite injected query latency');
         console.log(`    CE-SRC-02 sync time under latency: ${recoveryMs}ms`);
     });
 
     it('latency returns to normal after toxic is removed', async function () {
-        await sourceFaults.addLatency(3000);
+        await sourceFaults.addLatency(QUERY_LATENCY_MS);
         await sourceFaults.reset();
 
         const t0 = Date.now();

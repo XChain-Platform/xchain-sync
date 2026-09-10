@@ -119,6 +119,32 @@ class ClientApplier {
             'rollcall_gates'
         ]);
 
+        // Tables whose own numeric PRIMARY KEY IS the sole re-send idempotency key: a
+        // re-delivered row is only ever expected to collide on THAT id, never on any
+        // other unique key the table carries. validator_rewards, merkle_epochs and
+        // sync_meta are deliberately excluded: each has a surrogate AUTO_INCREMENT `id`
+        // that plays no part in de-duplication, so their legitimate re-send collides on
+        // a SEPARATE natural-key unique index instead (reward_unique / epoch / block_index)
+        // and any warning there is the expected case, not a fault.
+        //
+        // a from-zero lookup repair (ClientSync._syncLookupTablesPaged) exists
+        // precisely because a short index_* table needs its missing rows FORCED back in,
+        // and INSERT IGNORE gives that repair no signal when a row it must land instead
+        // collides on a DIFFERENT key (e.g. index_statuses' UNIQUE `status`) - a sign the
+        // replica already holds a WRONG row at some other id for that same natural value.
+        // IGNORE silently keeps the wrong row and the true one never lands; the repair
+        // reports the identical short count on every following pass with nothing in the
+        // journal to explain why (observed on a production RDOGE replica: a from-zero
+        // pass closed one of two missing index_statuses rows and stayed short by one,
+        // hourly, forever). See the SHOW WARNINGS check below.
+        this.idKeyedIgnoreTables = new Set([
+            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
+            'pubkeys',
+            'rollcalls',
+            'rollcall_absences',
+            'rollcall_gates'
+        ]);
+
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
@@ -518,7 +544,10 @@ class ClientApplier {
         }
     }
 
-    async applyIncrementalSnapshot(snapshotData){
+    // opts.strictIgnoreCheck: see the SHOW WARNINGS block in _insertRows.
+    // Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
+    // live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
+    async applyIncrementalSnapshot(snapshotData, opts){
         if(!snapshotData || !snapshotData.tables) return;
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
@@ -535,7 +564,7 @@ class ClientApplier {
             for(let table in snapshotData.tables){
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
-                await this._insertRows(table, rows);
+                await this._insertRows(table, rows, opts);
             }
             // Rebuild balances if this snapshot touched credits/debits. The
             // incremental catch-up inserts new credit/debit rows, but the
@@ -600,7 +629,7 @@ class ClientApplier {
         }
     }
 
-    async _insertRows(table, rows){
+    async _insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
 
         let tableCheck = validation.validateIdentifier(table);
@@ -731,6 +760,37 @@ class ClientApplier {
                             'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
                             'Warning: ' + (w.Message || w.message || ''));
                     }
+                }
+            } else if(opts && opts.strictIgnoreCheck && this.idKeyedIgnoreTables.has(table)){
+                // gated on opts.strictIgnoreCheck (set only by ClientSync's
+                // from-zero lookup repair, ClientApplier.applyIncrementalSnapshot's
+                // caller) rather than running on every ordinary per-block apply: this is
+                // an extra SHOW WARNINGS round-trip per batch, and the hot streaming path
+                // re-sends these tables' rows constantly by design (that is the whole
+                // point of ignoreTables), so it must stay cheap there. A REPAIR pass is
+                // different - ClientSync only pages a table from-zero because the
+                // completeness check already measured it short, so every row in that page
+                // is expected to be either already-correct or genuinely missing, never a
+                // silent conflict.
+                //
+                // For this class of table the row's own id/PRIMARY KEY is the ENTIRE
+                // re-send contract - a benign re-delivery can only ever warn "Duplicate
+                // entry '<id>' for key 'PRIMARY'". Any other warning (a collision on a
+                // DIFFERENT unique key, e.g. index_statuses' `status`, or a non-duplicate
+                // error like a truncated/NULL column) means IGNORE just silently dropped
+                // a row the repair needed to land, with the replica left short and no
+                // signal anywhere that it happened. Fail loud instead, so the repair's
+                // caller (ClientSync._maybeVerifyCompleteness) sees exactly which
+                // table/row collided rather than reporting the same short count forever.
+                let warnings = await this.db.doQuery('SHOW WARNINGS');
+                for(let w of (warnings || [])){
+                    let code = Number(w.Code || w.code || 0);
+                    let message = w.Message || w.message || '';
+                    if(code === 1062 && /for key ['"`]?(?:[\w-]+\.)?PRIMARY['"`]?/i.test(message)) continue;
+                    throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
+                        '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
+                        'PRIMARY-key duplicate only; any other warning means a DIFFERENT row already ' +
+                        'holds this one\'s natural key and needs a human to reconcile it.');
                 }
             }
         }

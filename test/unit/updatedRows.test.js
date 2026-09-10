@@ -51,10 +51,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
         // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
-        // + bet-status + anchor_invalid + tokens-supply classes still run, none of which
-        // depend on the activation delay (4 slash + 2 rotation + 2 request + 1 poll
-        // + 2 cooldown-status + 2 bet-status + 1 anchor + 1 tokens = 15).
-        assert.strictEqual(db.calls.length, 15);
+        // + bet-status + anchor_invalid + attest-batch-head + tokens-supply classes still run,
+        // none of which depend on the activation delay (4 slash + 2 rotation + 2 request
+        // + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor + 1 attest batch head
+        // + 1 tokens = 16).
+        assert.strictEqual(db.calls.length, 16);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -157,6 +158,82 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(tq.sql.indexOf('SELECT t.*') !== -1);
         assert.ok(out.tokens && out.tokens.length === 1);
         assert.strictEqual(out.tokens[0].supply, '1000');
+    });
+
+    it('carries the stamped ATTEST v5 batch head on the block its completing v6 chunk landed in', async function(){
+        // The head is written at the block the batch was opened at, below the window; only
+        // the completing continuation pins the verdict flip to a block. Without this class
+        // the replica keeps the head's pre-flip 'valid' verdict forever and serves a batch
+        // the source condemned, with no hash class to halt on.
+        let db = fakeDb([
+            { match: 'JOIN attests ac ON ac.request_id = ah.request_id',
+              rows: [{ action_index: 500, version: 5, request_id: 'ab12', batch_chunk_index: 0, status_id: 9 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.ok(out.attests && out.attests.length === 1, 'the stamped head must ride the forward channel');
+        assert.strictEqual(out.attests[0].action_index, 500);
+        assert.strictEqual(out.attests[0].version, 5);
+
+        let hq = db.calls.find(c => c.sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1);
+        // Marker-scoped (an after-the-fact stamp, not a head that was terminal when written)
+        // and keyed on the completing chunk's block window.
+        assert.deepStrictEqual(hq.args, ['% (stamped on batch completion)', 300, 300]);
+        // The window key is the COMPLETING CHUNK's height, never the head's own block or
+        // action_index: the head is always below the window, so either of those emits nothing.
+        assert.ok(hq.sql.indexOf('ac.block_index BETWEEN ? AND ?') !== -1);
+        assert.ok(hq.sql.indexOf('ah.block_index BETWEEN') === -1);
+        // Head/continuation versions and the head's slot 0.
+        assert.ok(hq.sql.indexOf('ah.version = 5') !== -1);
+        assert.ok(hq.sql.indexOf('ac.version = 6') !== -1);
+        assert.ok(hq.sql.indexOf('ah.batch_chunk_index = 0') !== -1);
+        // Only a VALID continuation completes a batch, and both rows must share an author:
+        // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
+        assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
+        assert.ok(hq.sql.indexOf('aca.source_id = aha.source_id') !== -1);
+        // Full row, so the follower's upsert refreshes status_id in place.
+        assert.ok(hq.sql.indexOf('SELECT ah.*') === 0);
+    });
+
+    it('emits the v0 request flip and the v5 batch head as separate attests rows, deduped by action_index', async function(){
+        // Both classes write into the same table. The Map keys on action_index, so two
+        // different rows both survive and one row reached twice is emitted once.
+        let db = fakeDb([
+            { match: 'FROM `attests` WHERE version = 0',
+              rows: [{ action_index: 21, version: 0, request_status: 'fulfilled' }] },
+            { match: 'JOIN attests ac ON ac.request_id = ah.request_id',
+              rows: [{ action_index: 500, version: 5, batch_chunk_index: 0 },
+                     { action_index: 500, version: 5, batch_chunk_index: 0 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.strictEqual(out.attests.length, 2);
+        assert.deepStrictEqual(out.attests.map(r => r.action_index).sort((a, b) => a - b), [21, 500]);
+    });
+
+    it('skips the attest batch-head class on a pre-batch-rail schema instead of throwing', async function(){
+        let db = fakeDb([]);
+        db.doQuery = sinon.stub().callsFake(async (sql) => {
+            if(sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1){
+                let e = new Error("Unknown column 'ah.batch_chunk_index'");
+                e.errno = 1054;
+                throw e;
+            }
+            return [];
+        });
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.strictEqual(out.attests, undefined);
+    });
+
+    it('rethrows a non-schema error from the attest batch-head class (never a silent drop)', async function(){
+        let db = fakeDb([]);
+        db.doQuery = sinon.stub().callsFake(async (sql) => {
+            if(sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1){
+                let e = new Error('Lock wait timeout exceeded');
+                e.errno = 1205;
+                throw e;
+            }
+            return [];
+        });
+        await assert.rejects(() => collectUpdatedRows(db, 300, 300, 6), /Lock wait timeout/);
     });
 
     it('uses target_table to separate contract_stakes vs contract_unstakes', async function(){

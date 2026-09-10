@@ -58,6 +58,11 @@
  *     stream misses it; this is keyed by the completing chunk's block_index instead.
  *     Forward twin of ClientRollback's reverse 'unverified' reset. status_id is not
  *     hashed raw; the follower's upsert resolves it by name through index_statuses.
+ *   - batch-completion verdict stamp on a surviving ATTEST v5 batch head when the v6
+ *     continuation that completes its slot coverage lands in this window and the
+ *     reassembly or batch quorum fails. The head's action_index is below the window,
+ *     so the action-scoped stream carries the chunk but not the head's flipped status;
+ *     keyed by the completing continuation's block_index and scoped to one author.
  *   - supply refresh on a surviving tokens row (the indexer UPDATEs tokens.supply in
  *     place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). Both
  *     action_index and last_action_index stay pinned at the DEPLOY action, below the
@@ -116,6 +121,18 @@ const POLL_FINALIZE_TABLES = ['polls'];
 // block), exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
 // credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
 const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
+
+// ATTEST batch rail: a v5 head declares a window and holds slot 0, each v6 continuation
+// holds a later slot, and the continuation that COMPLETES the slot coverage reassembles
+// the body. A failed reassembly (bad CRC, or a batch quorum that does not verify) is the
+// BATCH's fault, so the verdict is stamped IN PLACE on the head, which was written in an
+// earlier block. Byte-identical copies of the indexer's own values
+// (xchain-indexer/src/attest_batch_wire.js for the versions,
+// xchain-indexer/src/actions/attest.js for the marker, which
+// xchain-indexer/src/rollback.js already keeps a second copy of); keep all copies in step.
+const ATTEST_BATCH_HEAD_VERSION         = 5;
+const ATTEST_BATCH_CONTINUATION_VERSION = 6;
+const ATTEST_BATCH_COMPLETION_STAMP     = ' (stamped on batch completion)';
 
 // BET in-place flips: a surviving bet_feeds row is mutated in place by
 // the closed latch (closed_block stamp, end-of-block pass) and by the terminal flip
@@ -312,6 +329,64 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
         // Table/columns may not exist on older source schemas; skip.
     }
 
+    // 5b. ATTEST batch-head verdict flip, the same shape as class 5 one rail over. When the
+    //     v6 continuation that completes a batch's slot coverage lands in this window and the
+    //     reassembly or the batch quorum fails, the indexer stamps the FAILURE on the v5 HEAD
+    //     in place (db.setAttestBatchStatus, called from actions/attest.js _absorbCompletedBatch).
+    //     Chunking spans blocks by design, so the head's action_index is below the window and
+    //     the action-scoped stream carries the completing chunk row but not the head's flipped
+    //     status: every replica kept the head's PRE-FLIP verdict (still 'valid'), served a batch
+    //     the source had condemned, and nothing detected it because the class is unhashed
+    //     (stateHash.js reads attests at version = 0 only, so this divergence never halts).
+    //
+    //     Keyed on the COMPLETING CHUNK's block_index, which attests rows always carry
+    //     (NOT NULL, indexed, written by createAttestationBatchAction) - unlike the anchor
+    //     rail's v2 continuation, whose block_index is never populated and which therefore
+    //     needed the block_index_doge key.
+    //
+    //     Predicate mirrors, in the forward direction, the indexer's reverse restore
+    //     (xchain-indexer/src/rollback.js, the head -> 'valid' reset): head at
+    //     batch_chunk_index = 0, a status carrying the completion marker (which is what
+    //     separates an after-the-fact stamp from a head that was terminal when written), a
+    //     VALID continuation of the same batch key, and the SAME AUTHOR on both rows via
+    //     actions.source_id. Author scoping is not an optimisation: a batch key is sha256
+    //     over the window it names, so anyone can mint wires under another publisher's key,
+    //     and (key, author) has been the batch's identity since the rail shipped. An
+    //     unresolvable author on either side is a NULL that no equality matches, so it
+    //     authenticates nothing rather than everything (fail closed), matching _authoredBy.
+    //
+    //     Aliases are ah/ac (head, chunk) rather than class 5's p/c: the anchor class's
+    //     regression guard is a file-wide regex over this source that forbids the literal
+    //     `c.block_index BETWEEN` (never populated on a v2 archive chunk). Distinct aliases
+    //     keep that guard sharp on the rail it was written for while letting this rail use
+    //     the column that IS populated on its own continuations.
+    //
+    //     No DISTINCT: attests is a wide table (MEDIUMTEXT payload / response_payload /
+    //     batch_chunk_b64), and a head with several completing-shaped continuations would
+    //     make MySQL de-duplicate over those blobs. add() already dedups by the UNIQUE
+    //     action_index, exactly as the SLASH class does.
+    //
+    //     UN-GATED for class 5's reason: shipping the row is not a hash preimage, and the
+    //     carry must be live before any future state-hash twin of this class arms, or a
+    //     follower halts on a head row it was never sent.
+    try {
+        let attestHeadRows = await db.doQuery(
+            "SELECT ah.* FROM attests ah " +
+            "JOIN index_statuses ahs ON ahs.id = ah.status_id AND ahs.status LIKE ? " +
+            "JOIN actions aha ON aha.action_index = ah.action_index " +
+            "JOIN attests ac ON ac.request_id = ah.request_id " +
+                "AND ac.version = " + ATTEST_BATCH_CONTINUATION_VERSION + " AND ac.batch_chunk_index IS NOT NULL " +
+            "JOIN index_statuses acs ON acs.id = ac.status_id AND acs.status = 'valid' " +
+            "JOIN actions aca ON aca.action_index = ac.action_index AND aca.source_id = aha.source_id " +
+            "WHERE ah.version = " + ATTEST_BATCH_HEAD_VERSION + " AND ah.batch_chunk_index = 0 " +
+                "AND ac.block_index BETWEEN ? AND ?",
+            ['%' + ATTEST_BATCH_COMPLETION_STAMP, from, to], conn);
+        add('attests', attestHeadRows);
+    } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        // Table/columns may not exist on older source schemas (pre-batch-rail builds); skip.
+    }
+
     // 6. tokens.supply refresh on surviving token rows. The indexer materialises supply
     //    as an in-place UPDATE on DEPLOY/ISSUE/MINT, on settlement and on STAKE
     //    rebalances, while action_index and last_action_index both stay pinned at the
@@ -359,4 +434,5 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     return out;
 }
 
-module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, ROTATION_TABLES, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES, BET_STATUS_SPECS };
+module.exports = { collectUpdatedRows, DEACTIVATION_TABLES, SLASH_SPECS, ROTATION_TABLES, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES, POLL_FINALIZE_TABLES, BET_STATUS_SPECS,
+                   ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP };
