@@ -130,7 +130,7 @@ describe('Rollback coverage guard @regression', function(){
     let rollback;
 
     before(function(){
-        rollback = new ClientRollback({ dbType: 'indexer' }, new Utility());
+        rollback = new ClientRollback({ dbType: 'indexer' }, new Utility(), undefined, 'regtest');
     });
 
     it('sanity: ServerPoller declares a meaningful indexer table set', function(){
@@ -677,10 +677,10 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor reset to unverified',          re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = us\.id/ },
             // The parent predicate must select the FULL archive-head version set
-            // (v1 legacy + v6 publisher-bearing) via the shared stateHash.js constant, on
-            // both sides. A literal `p.version = 1` regression re-wedges a reorg-orphaned
-            // v6 archive batch permanently. Matches the indexer's template-literal splice
-            // (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's string concat.
+            // (currently just v1) via the shared stateHash.js constant, on both sides,
+            // rather than a hardcoded literal that drifts from it. Matches the indexer's
+            // template-literal splice (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's
+            // string concat.
             { name: 'archive-head version predicate (shared v1+v6 constant)',
               re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
             // The publisher-scope term is spliced from the shared activation module on both
@@ -710,19 +710,44 @@ describe('Rollback coverage guard @regression', function(){
             'makes source and replica reset a reorg under different batch keys');
     });
 
-    // An omitted network reads as inactive, which is only correct while every threshold is
-    // inert. Arming one without first making the network mandatory would leave every
-    // un-wired construction site quietly on the legacy unscoped rule.
-    it('cannot arm the publisher scope while ClientRollback still accepts an omitted network', function(){
+    // The publisher scope is ARMED (mainnet 0, testnet 67915000, 2026-09-09 ruling), so an
+    // omitted or misspelled network no longer reads as a harmless inert lookup: it silently
+    // runs the legacy unscoped reset on a fleet whose source indexer runs the scoped one.
+    // ClientRollback must refuse to construct at all rather than resolve to that fallback.
+    it('demands a known network, because the publisher scope is armed', function(){
         const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../../src/archive_rollback_author_scope_activation');
         const INERT = 9999999999;
         const armed = Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION)
             .filter(n => ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION[n] !== INERT);
-        if(!armed.length) return;
-        assert.throws(() => new ClientRollback({ dbType: 'indexer' }, new Utility(), 'DOGE'),
-            /network/i,
-            'arming ' + armed.join(', ') + ' requires ClientRollback to demand a network: ' +
-            'every construction site must be wired before a replica can run the scoped reset');
+        assert.ok(armed.length,
+            'the publisher scope is expected to be armed on at least one network; if every ' +
+            'threshold went back to the inert sentinel, re-derive this guard rather than deleting it');
+        // Omitted, and every shape of "not a network we have a threshold for".
+        for(const bad of [undefined, null, '', 'signet', 'MAINNET', 'main', 0]){
+            assert.throws(() => new ClientRollback({ dbType: 'indexer' }, new Utility(), 'DOGE', bad),
+                /network/i,
+                'ClientRollback must refuse network ' + JSON.stringify(bad) + ': armed on ' +
+                armed.join(', ') + ', so an unresolvable network would run the legacy unscoped reset');
+        }
+        // A wired site still constructs, and carries the network it was handed.
+        for(const good of Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION)){
+            const r = new ClientRollback({ dbType: 'indexer' }, new Utility(), 'DOGE', good);
+            assert.strictEqual(r.network, good, good + ' must construct and keep its network');
+        }
+    });
+
+    // The armed thresholds themselves, so a silent revert to the inert sentinel (which would
+    // put the whole fleet back on the unscoped reset) fails here rather than in production.
+    it('publisher-scope heights are the 2026-09-09 ruling values', function(){
+        const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION, isArchiveRollbackAuthorScopeActive } =
+            require('../../src/archive_rollback_author_scope_activation');
+        assert.deepStrictEqual(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION,
+            { mainnet: 0, testnet: 67915000, regtest: 9999999999 });
+        // Mainnet is scoped from genesis; testnet only at its flag day; regtest stays off.
+        assert.strictEqual(isArchiveRollbackAuthorScopeActive(0, 'mainnet'), true);
+        assert.strictEqual(isArchiveRollbackAuthorScopeActive(67914999, 'testnet'), false);
+        assert.strictEqual(isArchiveRollbackAuthorScopeActive(67915000, 'testnet'), true);
+        assert.strictEqual(isArchiveRollbackAuthorScopeActive(1000000000, 'regtest'), false);
     });
 
     // The archive-head version set is defined ONCE (stateHash.js, twinned across

@@ -1336,10 +1336,21 @@ class ClientSync {
                     // table. index_* are INSERT IGNORE, so re-sent rows no-op; a lookup
                     // page has no credits/debits/updated_rows, so the balance/escrow
                     // rebuilds inside applyIncrementalSnapshot are skipped.
+                    //
+                    // strictIgnoreCheck only on a repairing (fromZero) pass:
+                    // this table was just measured short, so every row here is expected
+                    // to be either already-correct or genuinely missing, never a silent
+                    // conflict. If INSERT IGNORE instead swallows a collision against some
+                    // OTHER row's key, ClientApplier throws with the exact table/row so it
+                    // surfaces here (and up through _maybeVerifyCompleteness's catch)
+                    // instead of the sweep reporting the same short count forever. The
+                    // ordinary cursor-seeded path never sets this: every block re-sends
+                    // these tables' current tail by design, and the extra SHOW WARNINGS
+                    // round trip per batch must stay off that hot path.
                     await this._withApplyLock(() => this.applier.applyIncrementalSnapshot({
                         schema_version: expected,
                         tables: { [table]: rows }
-                    }));
+                    }, repairing ? { strictIgnoreCheck: true } : undefined));
                 }
                 pages++;
                 if(!page.has_more) break;

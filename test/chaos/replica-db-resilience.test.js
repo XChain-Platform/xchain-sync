@@ -125,7 +125,14 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
         // so reaching it proves the client processed 11-15 and declined to
         // advance. A sleep here proved nothing - a client whose socket never
         // came up would sit at block 10 too and pass.
-        await waitForClientEvents(client, 'block', seenBlocks + 5, 30000);
+        //
+        // Budget: settling an event against a dead replica is SLOW, not quick.
+        // Each apply (and each catch-up the resulting gap triggers) waits out the
+        // pool's acquire timeout before it can conclude the write is impossible,
+        // measured at 10.0s per read against this fixture. Five serialized events
+        // therefore need well over the old 30s budget, which expired mid-second-
+        // event every run. Sized to 5 x acquire timeout plus the catch-up reads.
+        await waitForClientEvents(client, 'block', seenBlocks + 5, 150000);
 
         expect(client.isConnected()).to.equal(true,
             'Client must still be connected to the server with only the replica DB down');

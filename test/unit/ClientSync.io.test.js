@@ -2274,6 +2274,50 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
             'an unnamed table keeps the cheap cursor-seeded page');
     });
 
+    // a repair pass must tell ClientApplier to fail loud on a row IGNORE
+    // silently ate for any reason other than its own PRIMARY key, or a from-zero
+    // pass over a short lookup table can go on reporting the identical short count
+    // forever with nothing in the journal to explain why (the production RDOGE
+    // index_statuses case this ticket exists for). The ordinary cursor-seeded path
+    // must NOT pay for that extra check: every block re-sends these tables' rows
+    // by design, so it stays on the cheap, silent INSERT IGNORE contract.
+    it('a repairing (fromZero) pass asks ClientApplier for the strict IGNORE check', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_statuses'] });
+        db.doQuery.resolves([{ m: null }]);
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).resolves(
+            { data: Buffer.from(JSON.stringify({
+                schema_version: SCHEMA_VERSION.indexer, table: 'index_statuses',
+                max_id: 3, has_more: false,
+                rows: [{ id: 1, status: 'open' }, { id: 2, status: 'closed' }, { id: 3, status: 'completed' }]
+            })) });
+
+        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_statuses']) });
+
+        assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 1);
+        assert.deepStrictEqual(applier.applyIncrementalSnapshot.firstCall.args[1], { strictIgnoreCheck: true },
+            'a repair pass must opt into the strict post-INSERT IGNORE check');
+    });
+
+    it('the ordinary high-water cursor path never asks for the strict IGNORE check', async function(){
+        ({ sync, db, applier } = makeSync());
+        sinon.stub(rt, 'getTopology').returns({ index: ['index_statuses'] });
+        db.doQuery.resolves([{ m: 0 }]);
+        let get = sinon.stub(axios, 'get');
+        get.onCall(0).resolves(
+            { data: Buffer.from(JSON.stringify({
+                schema_version: SCHEMA_VERSION.indexer, table: 'index_statuses',
+                max_id: 1, has_more: false, rows: [{ id: 1, status: 'open' }]
+            })) });
+
+        await sync._syncLookupTablesPaged('http://src:3006');
+
+        assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 1);
+        assert.strictEqual(applier.applyIncrementalSnapshot.firstCall.args[1], undefined,
+            'the hot streaming/catch-up path must not pay for the extra SHOW WARNINGS round trip');
+    });
+
     it('excludes the events operational log from the count check, whose counts cannot converge', async function(){
         ({ sync, db } = makeSync());
         db.getTableCount = sinon.stub().resolves(0);

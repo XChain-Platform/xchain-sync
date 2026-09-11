@@ -27,9 +27,22 @@ const assert   = require('assert');
 const sinon    = require('sinon');
 const Database = require('../../src/db');
 const swqCap   = require('../../src/swq_source_cap_activation');
+const swc      = require('../../src/stake_weight_collation_activation');
 
 const MAX_SOURCES = swqCap.STAKE_WEIGHT_MAX_SOURCES;
 const MAX_KEYS    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
+
+// The stake-weight ordering collation gate splices a ` COLLATE utf8_bin` suffix into
+// the very ORDER BY clauses this suite matches on, and it is armed on mainnet from
+// genesis (2026-09-09 ruling) while testnet stays unpinned. Derive the suffix from
+// that gate instead of freezing a literal: this suite stays about the SOURCE CAP,
+// and it additionally proves the two gates COMPOSE. That composition is the thing
+// that would break liveness here, because the follower must emit the same suffix the
+// source indexer does or it orders the capped set differently and forks stakes_root.
+function collateSuffix(blockIndex, coin, network) {
+    return swc.stakeWeightCollate(swc.isStakeWeightBinCollationActive(blockIndex, network, coin));
+}
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function makeUtil() {
     return {
@@ -60,7 +73,8 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
             const db = dbFor([]);
             await db.getStakeWeightsByCapability('oracle_publish', 900000, '500', 1000, 'BTC', 'mainnet');
             const { query, args } = db._calls[0];
-            assert.match(query, /ORDER BY source, pubkey\s+LIMIT \?/);
+            const c = escapeRe(collateSuffix(900000, 'BTC', 'mainnet'));
+            assert.match(query, new RegExp('ORDER BY source' + c + ', pubkey' + c + '\\s+LIMIT \\?'));
             assert.doesNotMatch(query, /DENSE_RANK/);
             assert.strictEqual(args[args.length - 1], 1000);
         });
@@ -69,10 +83,30 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
             const db = dbFor([]);
             await db.getStakeWeightsByCapability('oracle_publish', 960000, '500', 1000, 'BTC', 'mainnet');
             const { query, args } = db._calls[0];
-            assert.match(query, /DENSE_RANK\(\) OVER \(ORDER BY b\.source\)/);
-            assert.match(query, /ROW_NUMBER\(\) OVER \(PARTITION BY b\.source ORDER BY b\.pubkey\)/);
+            const c = escapeRe(collateSuffix(960000, 'BTC', 'mainnet'));
+            assert.match(query, new RegExp('DENSE_RANK\\(\\) OVER \\(ORDER BY b\\.source' + c + '\\)'));
+            assert.match(query, new RegExp('ROW_NUMBER\\(\\) OVER \\(PARTITION BY b\\.source' + c + ' ORDER BY b\\.pubkey' + c + '\\)'));
             assert.strictEqual(args[args.length - 2], MAX_SOURCES + 1);
             assert.strictEqual(args[args.length - 1], MAX_KEYS);
+        });
+
+        // The control that keeps the helper above honest: a venue where the collation
+        // gate is OFF must emit the bare window, so a helper that returned a suffix
+        // unconditionally (or never) could not pass both this and the mainnet case.
+        // testnet caps from genesis but is not collation-pinned, so it is that venue.
+        it('an un-collated venue keeps the bare window: the cap and the collation are separate gates', async function () {
+            assert.strictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'], null,
+                'this control needs a capped-but-uncollated venue; re-point it if testnet is ever pinned');
+            // Built through the SAME helper, so an always-suffix helper fails HERE while an
+            // always-empty one fails the mainnet cases above: neither degenerate form passes both.
+            const c = collateSuffix(900000, 'BTC', 'testnet');
+            assert.strictEqual(c, '', 'the collation gate must be off on an unpinned chain');
+            const db = dbFor([]);
+            await db.getStakeWeightsByCapability('oracle_publish', 900000, '500', 1000, 'BTC', 'testnet');
+            const { query } = db._calls[0];
+            assert.match(query, new RegExp('DENSE_RANK\\(\\) OVER \\(ORDER BY b\\.source' + escapeRe(c) + '\\)'),
+                'testnet caps from genesis');
+            assert.doesNotMatch(query, /COLLATE/, 'an unpinned chain must order exactly as it does today');
         });
 
         it('stays on the legacy path when no coin/network is threaded (backward compatible)', async function () {
@@ -98,7 +132,9 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
             const db = dbFor([]);
             await db.getStakeWeightsByCapabilityAsOf('oracle_publish', 960000, '500', 1000, 'BTC', 'mainnet');
             const { query, args } = db._calls[0];
-            assert.match(query, /DENSE_RANK\(\) OVER \(ORDER BY b\.source\)/, 'AsOf reconstruction is capped');
+            const c = escapeRe(collateSuffix(960000, 'BTC', 'mainnet'));
+            assert.match(query, new RegExp('DENSE_RANK\\(\\) OVER \\(ORDER BY b\\.source' + c + '\\)'),
+                'AsOf reconstruction is capped');
             assert.match(query, /capability_slash_debits csd/, 'still folds in the post-snapshot slash add-back');
             assert.strictEqual(args[args.length - 2], MAX_SOURCES + 1);
             assert.strictEqual(args[args.length - 1], MAX_KEYS);

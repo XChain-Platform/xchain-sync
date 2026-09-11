@@ -242,7 +242,15 @@ class ServerPoller {
     }
 
     async _poll(){
-        let currentBlock = await this.db.getLastBlock();
+        // Fail CLOSED on the cursor read (M-17). db.doQuery collapses a
+        // non-transactional query error into [], so the fail-soft default answers a
+        // source-DB outage with null - the same answer a genuinely empty source
+        // gives - and the early return below then makes an unreachable database
+        // indistinguishable from an idle chain: pollErrorCount stays 0, the loop in
+        // start() never logs, and _updateStatus keeps publishing a fresh status with
+        // poll_error_count 0 while the poller is blind. Rethrow instead, so the outage
+        // surfaces as a counted poll failure. An empty source still returns null.
+        let currentBlock = await this.db.getLastBlock(null, { rethrow: true });
         if(currentBlock === null) return;
 
         if(this.lastPolledBlock === null){

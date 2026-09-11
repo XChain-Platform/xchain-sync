@@ -27,7 +27,7 @@ const lifecycle      = require('./tableLifecycle');
 const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
-const { archiveAuthorScopeJoin } = require('./archive_rollback_author_scope_activation');
+const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('./archive_rollback_author_scope_activation');
 
 class ClientRollback {
 
@@ -36,9 +36,19 @@ class ClientRollback {
         this.util = util;
 
         // The replica's own network, the key for the publisher-scoped archive reset below.
-        // An omitted network reads as inactive, correct only while every threshold is inert:
-        // the guard in test/unit/rollback-coverage.test.js fails the moment one is armed.
-        this.network = network || null;
+        // MANDATORY since ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION armed (2026-09-09): an
+        // omitted or misspelled network resolves to no threshold and so reads as inactive,
+        // which would silently run the legacy unscoped reset on a fleet whose source
+        // indexer runs the scoped one. That is the divergence this gate exists to prevent,
+        // so an un-wired construction site must fail loudly at construction instead.
+        // The production wiring (SyncService._startClientSyncForChain) passes cfg.network.
+        if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
+            throw new Error('ClientRollback: network is required and must be one of ' +
+                Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
+                ' (got ' + JSON.stringify(network) + '); the publisher-scoped archive reset ' +
+                'is armed and an unknown network would silently fall back to the legacy unscoped rule');
+        }
+        this.network = network;
 
         // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
         // indexer's reorg deactivation_block re-NULL resets (see _rollbackIndexer). A wrong

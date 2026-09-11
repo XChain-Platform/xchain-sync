@@ -117,7 +117,7 @@ describe('Integration: index-map parity over HTTP (e2e)', function() {
         await new Promise(r => { server = http.createServer(app).listen(PORT, r); });
 
         let applier  = new ClientApplier(realReplica, util, CHAIN, NETWORK);
-        let rollback = new ClientRollback(realReplica, util, CHAIN);
+        let rollback = new ClientRollback(realReplica, util, CHAIN, 'regtest');
         let cfg = {
             SYNC_SOURCES: 'http://127.0.0.1:' + PORT,
             INDEX_MAP_PARITY_CHECK: true,

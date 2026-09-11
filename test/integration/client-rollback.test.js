@@ -22,7 +22,7 @@ describe('Integration: ClientRollback', function() {
     before(async function() {
         await setup.globalSetup();
         replicaDb = setup.getReplicaDb();
-        rollback = new ClientRollback(replicaDb, testDb.util);
+        rollback = new ClientRollback(replicaDb, testDb.util, undefined, 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });

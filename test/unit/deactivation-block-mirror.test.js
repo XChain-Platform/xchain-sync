@@ -51,21 +51,21 @@ describe('deactivation_block sync-mirror', function(){
         });
 
         it('a supplied-but-unknown coin is a hard error (never a silent wrong delay)', function(){
-            assert.throws(() => new ClientRollback(createMockDb(), new Utility(), 'XRP'),
+            assert.throws(() => new ClientRollback(createMockDb(), new Utility(), 'XRP', 'regtest'),
                 /unrecognized coin "XRP"/);
         });
 
         it('an omitted coin leaves activationDelay null (legacy path)', function(){
-            const r = new ClientRollback(createMockDb(), new Utility());
+            const r = new ClientRollback(createMockDb(), new Utility(), undefined, 'regtest');
             assert.strictEqual(r.activationDelay, null);
         });
 
         it('resolves both the ticker and the full coin name (any case), since cfg.coin varies', function(){
             // Production cfg.coin is a ticker ('BTC'); some fixtures/callers use the full
             // name ('bitcoin'). Both must resolve to the same frozen delay.
-            for(const c of ['BTC', 'bitcoin', 'Bitcoin'])  assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c).activationDelay, 6, c);
-            for(const c of ['LTC', 'litecoin'])            assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c).activationDelay, 24, c);
-            for(const c of ['DOGE', 'dogecoin'])           assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c).activationDelay, 60, c);
+            for(const c of ['BTC', 'bitcoin', 'Bitcoin'])  assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c, 'regtest').activationDelay, 6, c);
+            for(const c of ['LTC', 'litecoin'])            assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c, 'regtest').activationDelay, 24, c);
+            for(const c of ['DOGE', 'dogecoin'])           assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c, 'regtest').activationDelay, 60, c);
         });
     });
 
@@ -75,7 +75,7 @@ describe('deactivation_block sync-mirror', function(){
             sinon.stub(console, 'log');
             sinon.stub(console, 'warn');
             db = createMockDb();
-            rollback = new ClientRollback(db, new Utility(), 'BTC');
+            rollback = new ClientRollback(db, new Utility(), 'BTC', 'regtest');
             await rollback.rollback(100); // block_index=100, activationDelay=6
         });
 
@@ -122,7 +122,7 @@ describe('deactivation_block sync-mirror', function(){
             sinon.stub(console, 'log');
             const warn = sinon.stub(console, 'warn');
             const db = createMockDb();
-            const rollback = new ClientRollback(db, new Utility()); // no coin
+            const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest'); // no coin
             await rollback.rollback(100);
             assert.strictEqual(deactivationResets(db).length, 0);
             assert.ok(warn.getCalls().some(c => String(c.args[0]).includes('deactivation_block re-NULL mirror skipped')));

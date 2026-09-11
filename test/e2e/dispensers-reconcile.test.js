@@ -234,7 +234,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
     function makeClient(opts){
         opts = opts || {};
         let applier  = new ClientApplier(replicaDb, util);
-        let rollback = new ClientRollback(replicaDb, util);
+        let rollback = new ClientRollback(replicaDb, util, undefined, 'regtest');
         let verifier = new HashVerifier();
         let cfg = {
             SYNC_SOURCES: 'http://127.0.0.1:' + SERVER_PORT,

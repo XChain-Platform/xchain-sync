@@ -53,24 +53,101 @@ async function waitForQuiesce(src, rep, timeout) {
 }
 const REPLICA_B_NAME = 'xchain_e2e_replica_b';
 
+// mocha's hook timeout cannot cancel a still-running async before()
+// body - once the timer fires, mocha marks the hook failed and moves on, but
+// our setup code keeps executing in the background and will still reach the
+// sinon.stub(console, ...) call. That leaves a live stub with nobody left to
+// restore it (mocha only runs `after` when `before` succeeded), so the next
+// file's before hook then throws "Attempted to wrap log which is already
+// wrapped." This watchdog races the setup itself, inside our own code, so we
+// can react before mocha gives up: after graceMs with no explicit disarm, it
+// flags the stub as abandoned (skipping it if not yet applied, or undoing it
+// immediately via sinon.restore() if it already was).
+function createStubWatchdog(graceMs) {
+    const state = { abandoned: false, stubbed: false };
+    const timer = setTimeout(function() {
+        state.abandoned = true;
+        if (state.stubbed) sinon.restore();
+    }, graceMs);
+    return {
+        state: state,
+        cancel: function() { clearTimeout(timer); },
+        stubConsole: function() {
+            if (state.abandoned) return false;
+            if (!process.env.E2E_VERBOSE) {
+                sinon.stub(console, 'log');
+                sinon.stub(console, 'error');
+                state.stubbed = true;
+            }
+            return true;
+        }
+    };
+}
+
+// Unit coverage for the watchdog itself: exercised in isolation (no DB/docker
+// infra, no real hook timeout) so it runs under the plain unit/CI venues too,
+// not only a full e2e pass. Lives in this file because the fix does.
+describe('resume-parity before-all stub watchdog', function() {
+    afterEach(function() { sinon.restore(); });
+
+    it('skips the stub once abandoned before it was ever applied, leaving console stubbable', async function() {
+        const watchdog = createStubWatchdog(5);
+        await new Promise(function(r) { setTimeout(r, 30); }); // let it fire
+        const applied = watchdog.stubConsole();
+        assert.strictEqual(applied, false, 'stub must be skipped once abandoned');
+        // The "next suite" must be able to wrap console cleanly - this is the
+        // actual production symptom (an "already wrapped" throw).
+        assert.doesNotThrow(function() {
+            sinon.stub(console, 'log');
+            sinon.stub(console, 'error');
+        });
+    });
+
+    it('undoes an already-applied stub once abandoned, leaving console stubbable', async function() {
+        const watchdog = createStubWatchdog(5);
+        const applied = watchdog.stubConsole(); // applies immediately, well inside grace
+        assert.strictEqual(applied, true);
+        await new Promise(function(r) { setTimeout(r, 30); }); // let the watchdog fire and restore
+        assert.doesNotThrow(function() {
+            sinon.stub(console, 'log');
+            sinon.stub(console, 'error');
+        });
+    });
+
+    it('leaves a normal, on-time stub in place (cancel path never abandons it)', function() {
+        const watchdog = createStubWatchdog(60000);
+        const applied = watchdog.stubConsole();
+        watchdog.cancel();
+        assert.strictEqual(applied, true);
+        assert.ok(console.log.isSinonProxy, 'a timely stub must stay applied for the suite body');
+    });
+});
+
 describe('E2E: Disconnect/Resume Parity', function() {
 
     let sourceDb, replicaDb, replicaBDb, server, client, clientB;
 
     before(async function() {
         this.timeout(60000);
-        await setup.globalSetup();
-        sourceDb  = setup.getSourceDb();
-        replicaDb = setup.getReplicaDb();
+        // Grace window kept under the mocha hook timeout above so the
+        // watchdog always gets to react first (see createStubWatchdog).
+        const watchdog = createStubWatchdog(55000);
+        try {
+            await setup.globalSetup();
+            sourceDb  = setup.getSourceDb();
+            replicaDb = setup.getReplicaDb();
 
-        // Second replica (the "control" that never disconnects), same MariaDB
-        // endpoint as the primary replica, name-scoped.
-        replicaBDb = await testDb.createDatabase(REPLICA_B_NAME,
-            testDb.REPLICA_DB_HOST, testDb.REPLICA_DB_PORT,
-            testDb.REPLICA_DB_USER, testDb.REPLICA_DB_PASS);
-        await testDb.seedSchema(replicaBDb);
+            // Second replica (the "control" that never disconnects), same MariaDB
+            // endpoint as the primary replica, name-scoped.
+            replicaBDb = await testDb.createDatabase(REPLICA_B_NAME,
+                testDb.REPLICA_DB_HOST, testDb.REPLICA_DB_PORT,
+                testDb.REPLICA_DB_USER, testDb.REPLICA_DB_PASS);
+            await testDb.seedSchema(replicaBDb);
 
-        if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
+            watchdog.stubConsole();
+        } finally {
+            watchdog.cancel();
+        }
     });
 
     after(async function() {

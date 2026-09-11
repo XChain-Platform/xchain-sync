@@ -220,7 +220,7 @@ describe('Smoke: Client Mode', function() {
         await replicaDb.doQuery("SET FOREIGN_KEY_CHECKS = 1");
 
         let applier    = new ClientApplier(replicaDb, util);
-        let rollback   = new ClientRollback(replicaDb, util);
+        let rollback   = new ClientRollback(replicaDb, util, undefined, 'regtest');
         let verifier   = new HashVerifier();
         let cfg = {
             SYNC_SOURCES: 'http://127.0.0.1:' + SERVER_PORT,

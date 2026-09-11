@@ -32,7 +32,7 @@ describe('ClientRollback', function(){
     beforeEach(function(){
         db = createMockDb();
         util = new Utility();
-        rollback = new ClientRollback(db, util);
+        rollback = new ClientRollback(db, util, undefined, 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
@@ -711,7 +711,7 @@ describe('ClientRollback', function(){
         beforeEach(function(){
             decoderDb = createMockDb();
             decoderDb.dbType = 'decoder';
-            decoderRollback = new ClientRollback(decoderDb, util);
+            decoderRollback = new ClientRollback(decoderDb, util, undefined, 'regtest');
         });
 
         it('routes a decoder DB through _rollbackDecoder', async function(){
