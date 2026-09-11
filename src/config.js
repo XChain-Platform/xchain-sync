@@ -256,8 +256,17 @@ module.exports = {
         // WebSocket ping interval (default 30 seconds; override via WS_PING_INTERVAL)
         config['WS_PING_INTERVAL'] = parseIntMin0(process.env.WS_PING_INTERVAL, 30000);
 
-        // Security: API key authentication (disabled when not set)
+        // Security: INBOUND API key. Guards this process's own REST routes and WS
+        // upgrades (disabled when not set).
         config['SYNC_API_KEY'] = process.env.SYNC_API_KEY || '';
+
+        // Security: OUTBOUND credential, presented to the source servers this client
+        // replicates FROM. Deliberately NOT defaulted to SYNC_API_KEY: one variable
+        // for both directions meant arming a server forced every client onto that
+        // same value, and a client that guarded its own API could not talk to a
+        // source keyed differently. Unset sends no header, so a fleet whose servers
+        // are still keyless behaves exactly as before.
+        config['SYNC_UPSTREAM_KEY'] = process.env.SYNC_UPSTREAM_KEY || '';
 
         // Security: Hub protocol (http or https)
         config['HUB_PROTOCOL'] = (process.env.HUB_PROTOCOL || '').toLowerCase() === 'https' ? 'https' : 'http';

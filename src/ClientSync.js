@@ -638,6 +638,17 @@ class ClientSync {
         }
     }
 
+    // Credential for calls we make OUT to a source server, on every REST call and the
+    // WebSocket handshake. SYNC_UPSTREAM_KEY, never SYNC_API_KEY: the latter guards
+    // THIS process's own API, and using one value for both meant a host could not be
+    // a guarded server and a client of a differently-keyed source at the same time.
+    // Unset returns no header, which is what an unkeyed source expects, so nothing
+    // changes on a fleet that has not armed its servers yet.
+    _upstreamHeaders(){
+        let key = this.config['SYNC_UPSTREAM_KEY'];
+        return key ? { Authorization: 'Bearer ' + key } : {};
+    }
+
     // POST the current applied height to a source server's /validator-heartbeat endpoint.
     // Best-effort: errors are suppressed at the call site.
     async _sendRestHeartbeat(source){
@@ -647,10 +658,7 @@ class ClientSync {
             applied_height:     this.lastAppliedBlock,
             applied_block_time: this.lastAppliedBlockTime
         };
-        let headers = {};
-        let apiKey  = this.config['SYNC_API_KEY'];
-        if(apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-        await axios.post(url, body, { timeout: 5000, headers });
+        await axios.post(url, body, { timeout: 5000, headers: this._upstreamHeaders() });
     }
 
     async _fetchAndApplySchema(source){
@@ -658,7 +666,7 @@ class ClientSync {
         let schema;
         try {
             let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 30000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 30000 });
             schema = response.data;
         } catch(e){
             // A fetch/transport failure is not a schema fault: the source may be
@@ -957,6 +965,7 @@ class ClientSync {
         try {
             let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, {
+                headers: this._upstreamHeaders(),
                 responseType: 'arraybuffer',
                 timeout: 600000, // 10 minute timeout for large snapshots
                 decompress: true,
@@ -1131,7 +1140,7 @@ class ClientSync {
 
         // 1. Discover the source tip.
         let statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-        let statusResp = await axios.get(statusUrl, { timeout: 30000 });
+        let statusResp = await axios.get(statusUrl, { headers: this._upstreamHeaders(), timeout: 30000 });
         let status = statusResp.data || {};
         // A server reports block_height (last broadcast position) and source_height
         // (DB tip). The incremental snapshot is built from the DB, so prefer the DB
@@ -1161,6 +1170,7 @@ class ClientSync {
         //    cooldown credits, and rebuilds touched balances (all still bundled here).
         let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
         let response = await axios.get(url, {
+            headers: this._upstreamHeaders(),
             responseType: 'arraybuffer',
             timeout: 600000,
             decompress: true,
@@ -1309,6 +1319,7 @@ class ClientSync {
                 let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
                     this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
                 let response = await axios.get(url, {
+                    headers: this._upstreamHeaders(),
                     responseType: 'arraybuffer',
                     timeout: 600000,
                     decompress: true,
@@ -1525,6 +1536,7 @@ class ClientSync {
             let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
                 (skipLookups ? '?skip_lookups=1' : '');
             let response = await axios.get(url, {
+                headers: this._upstreamHeaders(),
                 responseType: 'arraybuffer',
                 timeout: 300000,
                 decompress: true,
@@ -1683,7 +1695,7 @@ class ClientSync {
         let verdict = 'skip';
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
 
             let localHashes = await this.db.getBlockHashRow(blockHeight);
@@ -1943,7 +1955,7 @@ class ClientSync {
         if(this.dbType !== 'decoder') return;
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
 
             // On a truncated replica the block-windowed tables (blocks, transactions,
@@ -2103,7 +2115,7 @@ class ClientSync {
                 return;
             }
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
             // Re-check the height against the status we just fetched: the tick that
             // triggered this may be seconds old and the source may have advanced.
@@ -2208,6 +2220,7 @@ class ClientSync {
                     '?limit=' + pageSize +
                     (afterTx !== null ? '&after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
                 let response = await axios.get(url, {
+                    headers: this._upstreamHeaders(),
                     responseType: 'arraybuffer',
                     timeout: 300000,
                     decompress: true,
@@ -2254,7 +2267,13 @@ class ClientSync {
 
         let ws;
         try {
-            ws = new WebSocket(wsUrl, { maxPayload: this.config['WS_MAX_PAYLOAD'] });
+            // The server's upgrade handler runs the same Bearer check as the REST
+            // routes, so a keyed source drops a headerless handshake with a bare 401
+            // and the client falls into its reconnect loop with no streaming sync.
+            ws = new WebSocket(wsUrl, {
+                maxPayload: this.config['WS_MAX_PAYLOAD'],
+                headers:    this._upstreamHeaders()
+            });
         } catch(e){
             console.error('WebSocket connection error:', e);
             this._scheduleReconnect(source, sourceIndex);
@@ -3033,7 +3052,7 @@ class ClientSync {
         let cp;
         try {
             let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
-            let resp = await axios.get(url, { timeout: 10000 });
+            let resp = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             cp = resp && resp.data;
         } catch(e){
             // Transport fault / 404 is not proof of divergence, so it never halts. But it
@@ -3218,7 +3237,7 @@ class ClientSync {
             try {
                 let url = this.sources[0] + '/checkpoint/indexer/' + this.chain + '/' + this.network +
                           '/range?from=' + from + '&to=' + cp.block_index;
-                let resp = await axios.get(url, { timeout: 10000 });
+                let resp = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
                 chain = resp && resp.data && resp.data.checkpoints;
             } catch(e){ return { verdict: 'wait' }; }            // transport: not a divergence
             if(!Array.isArray(chain) || !chain.length) return { verdict: 'wait' };   // cannot reach cp

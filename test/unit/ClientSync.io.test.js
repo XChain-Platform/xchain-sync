@@ -1538,8 +1538,8 @@ describe('ClientSync: heartbeat', function(){
         clock.restore();
     });
 
-    it('_sendRestHeartbeat posts to correct URL with Bearer header when api key set', async function(){
-        ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_API_KEY: 'mykey' }));
+    it('_sendRestHeartbeat posts to correct URL with Bearer header when the upstream key is set', async function(){
+        ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_UPSTREAM_KEY: 'upkey' }));
         sync.lastAppliedBlock = 99;
         let postStub = sinon.stub(axios, 'post').resolves();
 
@@ -1548,18 +1548,40 @@ describe('ClientSync: heartbeat', function(){
         assert.ok(postStub.calledOnce);
         let [url, body, opts] = postStub.firstCall.args;
         assert.ok(url.indexOf('/validator-heartbeat/') !== -1);
-        assert.strictEqual(opts.headers['Authorization'], 'Bearer mykey');
+        assert.strictEqual(opts.headers['Authorization'], 'Bearer upkey');
     });
 
-    it('_sendRestHeartbeat omits Authorization header when no api key', async function(){
+    it('_sendRestHeartbeat omits Authorization header when no upstream key', async function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
-        sync.config['SYNC_API_KEY'] = '';
+        sync.config['SYNC_UPSTREAM_KEY'] = '';
         let postStub = sinon.stub(axios, 'post').resolves();
 
         await sync._sendRestHeartbeat('http://src1:3006');
 
         let [, , opts] = postStub.firstCall.args;
-        assert.ok(!opts.headers['Authorization'], 'no Authorization header when no api key');
+        assert.ok(!opts.headers['Authorization'], 'no Authorization header when no upstream key');
+    });
+
+    // The split this pair exists to hold: SYNC_API_KEY guards this process's OWN api,
+    // so leaking it upstream is what forced every client onto the server's value.
+    it('_sendRestHeartbeat does NOT send the inbound SYNC_API_KEY upstream', async function(){
+        ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_API_KEY: 'inbound-only' }));
+        let postStub = sinon.stub(axios, 'post').resolves();
+
+        await sync._sendRestHeartbeat('http://src1:3006');
+
+        let [, , opts] = postStub.firstCall.args;
+        assert.ok(!opts.headers['Authorization'],
+            'the inbound guard key must never be presented to a source server');
+    });
+
+    it('_upstreamHeaders carries the upstream key to snapshot reads, not just heartbeats', async function(){
+        ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_UPSTREAM_KEY: 'upkey' }));
+        assert.strictEqual(sync._upstreamHeaders()['Authorization'], 'Bearer upkey');
+
+        ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
+        assert.deepStrictEqual(sync._upstreamHeaders(), {},
+            'no header at all when the source tier is keyless');
     });
 });
 
