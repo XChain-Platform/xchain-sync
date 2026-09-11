@@ -268,8 +268,9 @@ describe('HubClient', function(){
             assert.ok(second.btc.main['xchain-decoder'], 'merged the delta module');
             assert.ok(second.ltc.test['xchain-indexer'], 'created the brand-new coin branch');
             assert.strictEqual(hub.lastWatermark, 2000);
-            // The second request echoed the cursor from the first.
-            assert.strictEqual(stub.secondCall.args[1].params.since_updated_at, 1000);
+            // The second request echoed the cursor one second behind the stored
+            // watermark (the overlap), not the raw watermark.
+            assert.strictEqual(stub.secondCall.args[1].params.since_updated_at, 999);
         });
 
         it('treats a watermarked payload as a full tree on the first fetch (no cursor sent yet)', async function(){
@@ -311,6 +312,79 @@ describe('HubClient', function(){
             assert.strictEqual(second.btc, undefined, 'dropped the old endpoint tree (no stale merge)');
             assert.strictEqual(h.lastWatermark, 2000);
             assert.strictEqual(h._watermarkEndpointIdx, 1);
+        });
+    });
+
+    describe('getallconfigs watermark regression', function(){
+        it('discards the cache and re-fetches full when the same endpoint serves a lower watermark', async function(){
+            let stub = sinon.stub(axios, 'post');
+            // First fetch: full tree, watermark advances to 5000.
+            stub.onCall(0).resolves({ data: { result: {
+                configs: { btc: { main: { 'xchain-indexer': { name: 'a' } } } },
+                seq: 5, watermark: 5000
+            } } });
+            let first = await hub.getallconfigs();
+            assert.ok(first.btc.main['xchain-indexer']);
+            assert.strictEqual(hub.lastWatermark, 5000);
+
+            // Second fetch: same endpoint answers (no failover), but the hub restarted
+            // and its watermark regressed below what it served before.
+            stub.onCall(1).resolves({ data: { result: {
+                configs: { ltc: { test: { 'xchain-indexer': { name: 'b' } } } },
+                seq: 1, watermark: 100
+            } } });
+            // Regression re-fetch (since_updated_at: 0) after the regression is detected.
+            stub.onCall(2).resolves({ data: { result: {
+                configs: { ltc: { test: { 'xchain-indexer': { name: 'b' } } } },
+                seq: 1, watermark: 100
+            } } });
+            let second = await hub.getallconfigs();
+
+            // Cache was discarded (not merged): the old btc branch is gone.
+            assert.strictEqual(second.btc, undefined, 'dropped the stale cached branch');
+            assert.ok(second.ltc.test['xchain-indexer'], 'has the restored hub tree');
+            assert.strictEqual(hub.lastWatermark, 100);
+            assert.strictEqual(hub.lastSeq, 1);
+            // The re-fetch after regression asked for the full tree.
+            assert.strictEqual(stub.getCall(2).args[1].params.since_updated_at, 0);
+            assert.ok(console.error.getCalls().some((c) => /HUB CONFIG REGRESSION/.test(String(c.args[0]))));
+        });
+
+        it('does not treat a regressed-but-unwrapped (no seq/configs) payload as a regression', async function(){
+            let stub = sinon.stub(axios, 'post');
+            stub.onCall(0).resolves({ data: { result: {
+                configs: { btc: { main: {} } }, seq: 5, watermark: 5000
+            } } });
+            await hub.getallconfigs();
+            // Bare-map (older hub) response: no seq/configs wrapper, so it cannot regress.
+            stub.onCall(1).resolves({ data: { result: { ltc: { test: {} } } } });
+            let second = await hub.getallconfigs();
+            assert.deepStrictEqual(second, { ltc: { test: {} } });
+            assert.strictEqual(hub.lastWatermark, 0);
+            assert.ok(!console.error.getCalls().some((c) => /HUB CONFIG REGRESSION/.test(String(c.args[0]))));
+        });
+    });
+
+    describe('_hubConfigRegressed', function(){
+        it('is false when there is no prior watermark to regress against', function(){
+            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 1, watermark: 100 }), false);
+        });
+
+        it('is true when watermark drops below the last-seen value', function(){
+            hub.lastWatermark = 5000;
+            hub.lastSeq = 5;
+            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 5, watermark: 100 }), true);
+        });
+
+        it('is true when seq drops below the last-seen value even if watermark is unchanged', function(){
+            hub.lastWatermark = 5000;
+            hub.lastSeq = 5;
+            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 1, watermark: 5000 }), true);
+        });
+
+        it('is false for a bare-map payload with no seq/configs wrapper', function(){
+            hub.lastWatermark = 5000;
+            assert.strictEqual(hub._hubConfigRegressed({ btc: { main: {} } }), false);
         });
     });
 
@@ -391,8 +465,9 @@ describe('HubClient', function(){
                 .resolves({ data: { result: { configs: {}, seq: 1, watermark: 5000 } } });
             await hub.getallconfigs();
             await hub.getallconfigs();
+            // The overlap sends the cursor one second behind the stored watermark.
             assert.deepStrictEqual(post.secondCall.args[1].params,
-                { since_updated_at: 5000, include_secrets: true });
+                { since_updated_at: 4999, include_secrets: true });
         });
 
         it('sends HUB_CONFIG_SECRETS_API_KEY when the hub splits the credential tier', async function(){

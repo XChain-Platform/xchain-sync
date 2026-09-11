@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - The reorg sweeps keep a market whose side is the chain's native coin instead of deleting it as a dangling ticker, so a replica no longer diverges from the source after a reorg.
+- `HubClient` sends the config cursor one second behind its watermark and re-fetches the full tree when the hub's seq or watermark regresses, so a boundary-second row is never stranded and a restored hub cannot pin stale config.
 
 ## [0.17.0] - 2026-09-10
 
