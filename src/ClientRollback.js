@@ -29,6 +29,13 @@ const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants'
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('./archive_rollback_author_scope_activation');
 
+// What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
+// rather than a token: the coin has no index_tickers row, and NULL is distinct inside
+// a UNIQUE index, so the pair would lose its one-row-per-market key. Twin of
+// Database.MARKET_NATIVE_TICK_ID in xchain-indexer/src/db.js; the replica cannot
+// require indexer code, so the value is restated rather than imported.
+const MARKET_NATIVE_TICK_ID = 0;
+
 class ClientRollback {
 
     constructor(db, util, coin, network) {
@@ -156,8 +163,9 @@ class ClientRollback {
         // Pairs whose orders/matches this rollback is about to orphan, collected BEFORE
         // the dataTables delete removes those rows (mirror of the `markets` array the
         // source builds in xchain-indexer/src/rollback.js). Consumed by the IDX-2 sweep
-        // further down. NULL tick ids (the native-coin side of a COINPay match) are
-        // dropped: markets is keyed on a real tick pair.
+        // further down. A NULL tick id is the side that IS the native coin; it maps to
+        // the 0 sentinel `markets` keys it under rather than being dropped, because the
+        // source collects those pairs and the two sets have to agree.
         let affectedMarketPairs = [];
         if(firstActionIndex !== null && !truncatedReplica){
             try {
@@ -167,11 +175,11 @@ class ClientRollback {
                 // - the sweep would just find zero pairs and silently leave the `markets` rows
                 // this reorg orphaned, which no downstream guard detects.
                 let rows = await this.db.doQuery(
-                    "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM orders " +
-                    "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL " +
+                    "SELECT DISTINCT COALESCE(give_tick_id,0) AS tick1_id, COALESCE(get_tick_id,0) AS tick2_id FROM orders " +
+                    "WHERE action_index >= ? " +
                     "UNION " +
-                    "SELECT DISTINCT give_tick_id AS tick1_id, get_tick_id AS tick2_id FROM order_matches " +
-                    "WHERE action_index >= ? AND give_tick_id IS NOT NULL AND get_tick_id IS NOT NULL",
+                    "SELECT DISTINCT COALESCE(give_tick_id,0) AS tick1_id, COALESCE(get_tick_id,0) AS tick2_id FROM order_matches " +
+                    "WHERE action_index >= ?",
                     [firstActionIndex, firstActionIndex], null, { rethrow: true });
                 for(let row of (rows || [])){
                     let t1 = Number(row.tick1_id), t2 = Number(row.tick2_id);
@@ -819,8 +827,13 @@ class ClientRollback {
             // recomputes it wholesale (rebuildBalances) so the orphan never re-derives.
             try {
                 await this.db.doQuery(
-                    "DELETE FROM markets WHERE tick1_id NOT IN (SELECT id FROM index_tickers) " +
-                    "OR tick2_id NOT IN (SELECT id FROM index_tickers)", []);
+                    // A side that is the native coin stores 0, not a ticker id, and 0 is not
+                    // a dangling reference: matching it here deleted every token/native
+                    // market the source keeps, so the replica served an empty market list
+                    // after any reorg. Mirrors the source's exemption exactly.
+                    "DELETE FROM markets WHERE (tick1_id <> ? AND tick1_id NOT IN (SELECT id FROM index_tickers)) " +
+                    "OR (tick2_id <> ? AND tick2_id NOT IN (SELECT id FROM index_tickers))",
+                    [MARKET_NATIVE_TICK_ID, MARKET_NATIVE_TICK_ID]);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -840,15 +853,19 @@ class ClientRollback {
             // surviving orders/order_matches row references either orientation - the same
             // predicate the source applies.
             try {
+                // COALESCE on both probes: the pair ids come from `markets`, where a side
+                // with no ticker is 0, while orders/order_matches store NULL for it. A bare
+                // compare never found a survivor for such a pair, so the delete below took
+                // a live market out of the replica on every reorg that touched one.
                 for(let pair of affectedMarketPairs){
                     let survives = await this.db.doQuery(
-                        "SELECT 1 FROM orders WHERE (give_tick_id=? AND get_tick_id=?) " +
-                        "OR (give_tick_id=? AND get_tick_id=?) LIMIT 1",
+                        "SELECT 1 FROM orders WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
+                        "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
                         [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
                     if(!survives || survives.length === 0){
                         survives = await this.db.doQuery(
-                            "SELECT 1 FROM order_matches WHERE (give_tick_id=? AND get_tick_id=?) " +
-                            "OR (give_tick_id=? AND get_tick_id=?) LIMIT 1",
+                            "SELECT 1 FROM order_matches WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
+                            "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
                             [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
                     }
                     if(!survives || survives.length === 0){

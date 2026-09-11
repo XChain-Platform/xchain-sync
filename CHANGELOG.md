@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The reorg sweeps keep a market whose side is the chain's native coin instead of deleting it as a dangling ticker, so a replica no longer diverges from the source after a reorg.
+
 ## [0.17.0] - 2026-09-10
 
 ### Changed
