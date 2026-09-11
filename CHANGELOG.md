@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A replica row shortfall that survives consecutive equal-height count sweeps escalates once as a distinct persistent-gap alert and is published on `/status` as `replica_gaps`, so a monitor can alert on a follower that agrees on every hash while missing replicated rows.
+
 ### Changed
 - The schema version is `{ indexer: 10, decoder: 4 }`, catching the replicated-DDL accounting up to the migration frontier, and a guard suite fails when a replicated-DDL migration lands past that frontier without a bump.
 

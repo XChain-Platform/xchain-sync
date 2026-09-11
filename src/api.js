@@ -354,6 +354,26 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         row.sources_active     = clientState.sourcesActive != null ? clientState.sourcesActive : null;
         row.sources_agreeing   = clientState.sourcesAgreeing != null ? clientState.sourcesAgreeing : null;
         row.sources_evicted    = Array.isArray(clientState.sourcesEvicted) ? clientState.sourcesEvicted : [];
+        // Persistent replica gap, made monitorable (mirrors missing_tables below).
+        //
+        // A non-empty array means this follower is short replicated ROWS the
+        // committed hashes structurally cannot see: they are computed on the source
+        // and replicated verbatim, so a follower missing rows still agrees on every
+        // hash and keeps reporting halted:false with lag_blocks 0. This carries the
+        // count sweep's VERDICT, not its per-sweep detection: only shortfalls that
+        // survived consecutive equal-height sweeps appear, so a monitor alerts on the
+        // array instead of on a TABLE_COUNT_MISMATCH log line that also fires for a
+        // read racing the source's /status and therefore repeats forever unheeded.
+        //
+        // Read off the live ClientSync (the same accessor the halt-clear endpoint
+        // uses) rather than through getClientSyncState, whose whole return object is
+        // asserted verbatim by callers. [] on a caller or build without the method:
+        // nothing to alert on, which is also what no gaps looks like.
+        let liveSync = (typeof syncService.getClientSync === 'function')
+            ? syncService.getClientSync(chain, network, dbType) : null;
+        let gaps = (liveSync && typeof liveSync.getReplicaGaps === 'function')
+            ? liveSync.getReplicaGaps() : [];
+        row.replica_gaps = Array.isArray(gaps) ? gaps : [];
     }
     // Per-table row counts for replica-completeness verification.
     //
