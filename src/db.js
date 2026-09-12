@@ -49,6 +49,26 @@ function assertValidIdentifier(table){
         throw new Error('Refusing to query unsafe table identifier: ' + check.reason);
 }
 
+// Columns that a key rebuild in ensureReplicaSecondaryIndexes NAMES, with the
+// authoritative definition from the indexer migration that introduced each one. A
+// rebuild whose column is absent is errno 1072 and the whole ALTER is refused, so the
+// column has to land first; the source-DDL heal that would carry it (addMissingColumns)
+// runs LATER in startup on the common client topology, and never at all on a replica
+// holding a durable halt, which is why these definitions are declared here and healed
+// beside the rebuild instead of deferred to a next startup that repeats the same order.
+const KEY_REBUILD_PRECONDITION_COLUMNS = [
+    // xchain-indexer 2026-08-28-anchor-actions-section-index-pk.
+    { table: 'anchor_actions', column: 'section_index',
+      definition: 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `action_index`' },
+    // xchain-indexer 2026-08-24-validator-rewards-round-qualifier, both tables it alters:
+    // the reward identity and the reconcile-log pre-image the replica mirror joins on
+    // (ClientApplier._mirrorAnchorRewardReconcile).
+    { table: 'validator_rewards', column: 'round_qualifier',
+      definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' },
+    { table: 'anchor_reward_reconcile_log', column: 'round_qualifier',
+      definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' }
+];
+
 // A stake weight, as stake_weighted_quorum.bcnum accepts one (plain decimal string).
 // Kept identical to that predicate's pattern so this producer can never emit a row the
 // predicate then has to fail closed on. Twin of the indexer's requireStakeWeight.
@@ -388,6 +408,27 @@ class Database {
         }
     }
 
+    // Add a key-rebuild precondition column that is still absent, and answer whether the
+    // column is there afterwards. Definitions come from KEY_REBUILD_PRECONDITION_COLUMNS,
+    // never from a guess, and the ADD is IF NOT EXISTS so a concurrent startup that won
+    // the race is not an error. A refused ADD returns false and the caller leaves the
+    // stale key alone: the rebuild would only be refused too, with no signal.
+    async _ensureKeyRebuildColumn(table, column){
+        let spec = KEY_REBUILD_PRECONDITION_COLUMNS.find(c => c.table === table && c.column === column);
+        if(!spec) return false;
+        try {
+            await this.doQueryStrict('ALTER TABLE `' + table + '` ADD COLUMN IF NOT EXISTS `' +
+                column + '` ' + spec.definition);
+            console.log('Added ' + table + '.' + column + ' on ' + this.dbName +
+                '; the key rebuild that names it can run in this same startup.');
+            return true;
+        } catch(e){
+            console.error('Failed to add ' + table + '.' + column + ' on ' + this.dbName +
+                ' (errno ' + ((e && e.errno) || 'unknown') + '); the key rebuild that names it cannot run', e);
+            return false;
+        }
+    }
+
     // Replicate schema from a source database into this database.
     // Reads all table DDLs from the source via SHOW CREATE TABLE and
     // creates any missing tables locally. For tables that already exist,
@@ -578,7 +619,12 @@ class Database {
             // never gains it from the definition file and the first shadow-window
             // block would fail its INSERT with errno 1054.
             { table: 'state_tree_roots', column: 'balances_root_escrow_shadow',
-              definition: 'CHAR(64) NULL AFTER `contract_state_root_shadow`' }
+              definition: 'CHAR(64) NULL AFTER `contract_state_root_shadow`' },
+            // The key-rebuild preconditions ride the same ADD COLUMN loop, so the columns
+            // land in this step and the rebuilds that name them run against a converged
+            // table later in the SAME startup. Both are NOT NULL DEFAULT 0, so the add
+            // backfills existing rows on the value their widened key expects.
+            ...KEY_REBUILD_PRECONDITION_COLUMNS
         ];
         for(let { table, column, definition } of drift){
             let tableRows = await this.doQuery(
@@ -913,15 +959,18 @@ class Database {
                         // an unknown column (1072) and the ALTER is refused wholesale,
                         // leaving the stale key in place. ensureReplicatedColumns runs
                         // immediately before this in replicateSchema, but SyncService calls
-                        // this method on its own, so re-check rather than assume.
+                        // this method on its own, so re-check and close the gap here rather
+                        // than hand it to a next startup that repeats this same order.
                         let colRows = await this.doQuery(
                             "SELECT column_name FROM information_schema.columns " +
                             "WHERE table_schema = ? AND table_name = 'anchor_actions' AND column_name = 'section_index'",
                             [this.dbName]
                         );
-                        if(colRows.length === 0){
-                            console.warn('anchor_actions still on PRIMARY KEY (action_index) but section_index is missing; ' +
-                                'the column self-heal must run first (schema replication will re-run on the next startup)');
+                        let haveColumn = colRows.length > 0 ||
+                            await this._ensureKeyRebuildColumn('anchor_actions', 'section_index');
+                        if(!haveColumn){
+                            console.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
+                                'the widened key for ANCHOR v7 bundle sections cannot be built on this replica');
                         } else {
                             console.log('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
                                 'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
@@ -985,15 +1034,18 @@ class Database {
                         // ALTER errno 1072 and the stale key survives with no signal. The
                         // column self-heal (ensureReplicatedColumns / addMissingColumns) runs
                         // earlier in replicateSchema, but SyncService calls this method on its
-                        // own, so re-check rather than assume.
+                        // own, so re-check and close the gap here rather than hand it to a next
+                        // startup that repeats this same order.
                         let colRows = await this.doQueryStrict(
                             "SELECT column_name FROM information_schema.columns " +
                             "WHERE table_schema = ? AND table_name = 'validator_rewards' AND column_name = 'round_qualifier'",
                             [this.dbName]
                         );
-                        if(colRows.length === 0){
-                            console.warn('validator_rewards still on the four-column reward_unique but round_qualifier is missing; ' +
-                                'the column self-heal must run first (schema replication will re-run on the next startup)');
+                        let haveColumn = colRows.length > 0 ||
+                            await this._ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
+                        if(!haveColumn){
+                            console.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
+                                'the archive reward identity stays ambiguous on this replica');
                         } else {
                             console.log('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
                                 'Rebuilding with round_qualifier for the anchor_archive reward identity.');

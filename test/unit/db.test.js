@@ -737,7 +737,13 @@ describe('Database.ensureReplicatedColumns()', function () {
             'ALTER TABLE `swaps` ADD COLUMN `get_ownership` TINYINT(1) NOT NULL DEFAULT 0',
             'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root` CHAR(64) NULL AFTER `block_merkle_root`',
             'ALTER TABLE `state_tree_roots` ADD COLUMN `contract_state_root_shadow` CHAR(64) NULL AFTER `contract_state_root`',
-            'ALTER TABLE `state_tree_roots` ADD COLUMN `balances_root_escrow_shadow` CHAR(64) NULL AFTER `contract_state_root_shadow`'
+            'ALTER TABLE `state_tree_roots` ADD COLUMN `balances_root_escrow_shadow` CHAR(64) NULL AFTER `contract_state_root_shadow`',
+            // The three key-rebuild preconditions: the rebuilds in
+            // ensureReplicaSecondaryIndexes name these columns, so they must land in this
+            // step, ahead of it, in the same startup.
+            'ALTER TABLE `anchor_actions` ADD COLUMN `section_index` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `action_index`',
+            'ALTER TABLE `validator_rewards` ADD COLUMN `round_qualifier` BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`',
+            'ALTER TABLE `anchor_reward_reconcile_log` ADD COLUMN `round_qualifier` BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`'
         ]);
         await db.close();
     });
@@ -1978,10 +1984,13 @@ describe('Database.ensureReplicaSecondaryIndexes(): anchor_actions bundle-sectio
     // index-ensure/attests/votes steps above no-op and the test isolates this
     // migration. pk is the PRIMARY's column list; hasColumn drives the
     // section_index existence probe.
-    function stubDoQuery(db, pk, hasColumn) {
+    function stubDoQuery(db, pk, hasColumn, opts) {
         let calls = [];
         let fake = async (sql, params) => {
             calls.push({ sql, params });
+            if (opts && opts.failAddColumn && /ADD COLUMN IF NOT EXISTS/.test(sql)) {
+                let e = new Error('refused'); e.errno = 1142; throw e;
+            }
             if (/information_schema\.tables/.test(sql)) {
                 if (/table_name = 'anchor_actions'/.test(sql)) return [{ table_name: 'anchor_actions' }];
                 return [];
@@ -2018,14 +2027,25 @@ describe('Database.ensureReplicaSecondaryIndexes(): anchor_actions bundle-sectio
             'a replica already on the composite key must not be re-altered');
     });
 
-    it('refuses to swap the key while section_index is still missing', async function () {
+    it('adds section_index itself and then swaps the key in the same pass', async function () {
         // ADD PRIMARY KEY on an unknown column is errno 1072 and the whole ALTER is
-        // refused, leaving the stale key in place with no signal; wait for the
-        // column self-heal instead.
+        // refused, so the column has to land first. Deferring it to the next startup
+        // repeats this same order, so the step closes the gap itself.
         let calls = stubDoQuery(db, ['action_index'], false);
         await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        let addAt  = ddl.findIndex(s => /ALTER TABLE `anchor_actions` ADD COLUMN IF NOT EXISTS `section_index`/.test(s));
+        let swapAt = ddl.findIndex(s => /anchor_actions` DROP PRIMARY KEY/.test(s));
+        assert.ok(addAt !== -1, 'must add the missing precondition column');
+        assert.ok(swapAt !== -1, 'must still widen the key once the column is there');
+        assert.ok(addAt < swapAt, 'the column must land before the key rebuild names it');
+    });
+
+    it('leaves the stale key alone when the column ADD is refused', async function () {
+        let calls = stubDoQuery(db, ['action_index'], false, { failAddColumn: true });
+        await db.ensureReplicaSecondaryIndexes();
         assert.ok(!calls.some(c => /anchor_actions` DROP PRIMARY KEY/.test(c.sql)),
-            'must not issue the ALTER before the column exists');
+            'a rebuild naming a column that could not be added would be refused too');
     });
 
     it('leaves an unexpected primary key alone', async function () {
@@ -2049,10 +2069,13 @@ describe('Database.ensureReplicaSecondaryIndexes(): validator_rewards reward_uni
     // index-ensure/attests/votes/anchor_actions steps above no-op and the test
     // isolates this migration. idxCols is reward_unique's ordered column list
     // (empty = index absent); hasColumn drives the round_qualifier probe.
-    function stubDoQuery(db, idxCols, hasColumn) {
+    function stubDoQuery(db, idxCols, hasColumn, opts) {
         let calls = [];
         let fake = async (sql, params) => {
             calls.push({ sql, params });
+            if (opts && opts.failAddColumn && /ADD COLUMN IF NOT EXISTS/.test(sql)) {
+                let e = new Error('refused'); e.errno = 1142; throw e;
+            }
             if (/information_schema\.tables/.test(sql)) {
                 if (/table_name = 'validator_rewards'/.test(sql)) return [{ table_name: 'validator_rewards' }];
                 return [];
@@ -2092,13 +2115,25 @@ describe('Database.ensureReplicaSecondaryIndexes(): validator_rewards reward_uni
             'a replica already on the qualifier key must not be re-altered');
     });
 
-    it('refuses to rebuild the key while round_qualifier is still missing', async function () {
+    it('adds round_qualifier itself and then rebuilds the key in the same pass', async function () {
         // ADD UNIQUE INDEX naming an unknown column is errno 1072 and the whole
-        // ALTER is refused, leaving the stale key in place with no signal.
+        // ALTER is refused, so the column has to land first. Deferring it to the next
+        // startup repeats this same order, so the step closes the gap itself.
         let calls = stubDoQuery(db, staleKey, false);
         await db.ensureReplicaSecondaryIndexes();
+        let ddl = calls.map(c => c.sql);
+        let addAt  = ddl.findIndex(s => /ALTER TABLE `validator_rewards` ADD COLUMN IF NOT EXISTS `round_qualifier`/.test(s));
+        let swapAt = ddl.findIndex(s => /validator_rewards` DROP INDEX/.test(s));
+        assert.ok(addAt !== -1, 'must add the missing precondition column');
+        assert.ok(swapAt !== -1, 'must still rebuild the key once the column is there');
+        assert.ok(addAt < swapAt, 'the column must land before the key rebuild names it');
+    });
+
+    it('leaves the stale key alone when the column ADD is refused', async function () {
+        let calls = stubDoQuery(db, staleKey, false, { failAddColumn: true });
+        await db.ensureReplicaSecondaryIndexes();
         assert.ok(!calls.some(c => /validator_rewards` DROP INDEX/.test(c.sql)),
-            'must not issue the ALTER before the column exists');
+            'a rebuild naming a column that could not be added would be refused too');
     });
 
     it('leaves an unexpected reward_unique definition alone', async function () {
