@@ -341,6 +341,12 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // peers see a forked/Byzantine validator immediately.
         row.halted = clientState.halted || false;
         if(clientState.halted) row.halt = clientState.haltInfo;
+        // Platform-train activation verdict for the next apply (clear / pending /
+        // halt). `pending` is the announcement that this build lacks a rule set the
+        // signed manifest requires and names the height it will halt at, so a
+        // monitor can alert before the boundary rather than at it. Null until the
+        // follower has evaluated once (or on a caller that predates the field).
+        row.train_activation = clientState.trainActivation || null;
         // Truncated-replica visibility: lets an explorer or operator know
         // this replica cannot answer pre-base history queries.
         row.truncated      = clientState.truncated || false;

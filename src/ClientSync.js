@@ -29,7 +29,10 @@
 const WebSocket   = require('ws');
 const axios       = require('axios');
 const zlib        = require('zlib');
+const fs          = require('fs');
+const path        = require('path');
 const validation  = require('./validation');
+const trainActivation = require('./train_activation');
 const BlockHasher = require('./BlockHasher');
 const replicatedTables = require('./replicatedTables');
 const tableLifecycle = require('./tableLifecycle');
@@ -270,6 +273,22 @@ class ClientSync {
         // applies NO further blocks and stays halted across restarts until an
         // operator clears it. null = healthy.
         this._halted = null; // { blockIndex, reason, mismatches, sources, at }
+
+        // Platform-train activation verdict for the block (or snapshot tip) this
+        // follower is about to apply (src/train_activation.js), or null before the
+        // first evaluation. `pending` means the signed release manifest names a rule
+        // set this build does not implement and the boundary is still ahead, which
+        // /status carries so the halt is announced before it fires; `halt` means the
+        // boundary is reached and the follower recorded a durable train-activation
+        // halt through the same sync_halt path as a divergence. The log tick keeps
+        // the periodic pending/halt reminder from firing on every apply.
+        this.trainActivation          = null;
+        this._trainActivationLogTick  = 0;
+        // The manifest's trainActivation block, resolved once and cached: undefined
+        // until the first resolution, null when the manifest carries none (every MINOR
+        // and PATCH train). A resolution fault is not cached so a manifest that becomes
+        // readable later is picked up on the next apply.
+        this._trainActivationRequired = undefined;
 
         // Throttle stamp for the periodic replica-completeness sweep against the
         // primary source (see _maybeVerifyCompleteness). 0 = never swept, so the
@@ -1019,6 +1038,11 @@ class ClientSync {
             // where live-follow is already active: a concurrent live block apply or a
             // cross-source fallback timer would otherwise open a second write transaction
             // on the replica and clobber the snapshot's DELETE+reload mid-flight.
+            // Platform-train gate on the snapshot tip first: a full snapshot reseeds
+            // every block up to the tip in one pass, so a tip at or above the boundary
+            // must not be seeded by a build that lacks the rule set. A halt returns
+            // false so _bootstrapFromSnapshot stops burning rounds on it.
+            if(await this._checkTrainActivation(snapshotData.block_height)) return false;
             await this._withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
             this.lastAppliedBlock = snapshotData.block_height;
             // Pair lastHashes with the height just set (see _refreshTipHashes). A full
@@ -1131,6 +1155,14 @@ class ClientSync {
                 console.error('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
                     this.chain + '/' + this.network + ':', e);
             }
+            if(this._halted){
+                // A halt recorded before the window landed (the platform-train gate).
+                // Retrying re-fetches the same window into the same refusal, so stop
+                // burning rounds: throw so start()/SyncService restarts and start()
+                // lands in the durable idle-halted state until an operator clears it.
+                throw new Error('Bootstrap-from-height aborted by ' + this._halted.reason + ' halt for ' +
+                    this.chain + '/' + this.network + '/' + this.dbType + '; operator must clear the halt');
+            }
             if(round >= maxRetries){
                 throw new Error('Bootstrap-from-height failed: exhausted after ' + (round + 1) +
                     ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
@@ -1212,6 +1244,14 @@ class ClientSync {
             throw new Error('Snapshot download truncated or corrupt from ' + source +
                 ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
         }
+
+        // Platform-train gate on the window tip, before the join floor is recorded or
+        // any row lands: a window whose top is at or above the boundary must not be
+        // seeded by a build that lacks the rule set. Returns false so the retry
+        // wrapper sees the halt and stops instead of re-fetching the same window.
+        if(await this._checkTrainActivation(
+                (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : tip))
+            return false;
 
         // Record the join block BEFORE apply so a recompute triggered during/after
         // apply already sees the skip. since_block is authoritative (the server
@@ -1580,6 +1620,11 @@ class ClientSync {
                 throw new Error('Snapshot download truncated or corrupt from ' + source +
                     ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
             }
+            // Platform-train gate on the range TIP: the window lands in one transaction,
+            // so a window whose top is at or above the boundary must not land at all.
+            if(await this._checkTrainActivation(
+                    (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
+                return;
             await this._withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
@@ -2818,12 +2863,113 @@ class ClientSync {
         await this._applyBlockEvent(event);
     }
 
+    // The trainActivation block of the signed release manifest this follower was
+    // installed from. The carrier ships the manifest and this component ships the
+    // vendored TRAIN_ACTIVATION map, which is exactly why the comparison is worth
+    // making: a partial upgrade (new carrier, stale sync image) is the shape a
+    // post-launch MAJOR train forks in, and it is invisible to every per-feature
+    // flag day. Resolved from config RELEASE_MANIFEST_PATH when the deployment sets
+    // one, otherwise from the carrier's copy beside this checkout. NO manifest is
+    // not a fault and not a halt: nothing then names a rule set, which is the honest
+    // reading of an install that has no manifest to require one. A manifest that
+    // exists and cannot be read or parsed is reported as malformed, which
+    // evaluateTrainActivation halts on fail-closed.
+    _resolveTrainActivationRequirement(){
+        if(this._trainActivationRequired !== undefined) return this._trainActivationRequired;
+        let candidates = [];
+        if(this.config && this.config['RELEASE_MANIFEST_PATH'])
+            candidates.push(String(this.config['RELEASE_MANIFEST_PATH']));
+        candidates.push(path.resolve(__dirname, '../../xchain-node/src/release-manifest.json'));
+        for(const file of candidates){
+            let raw;
+            try {
+                if(!fs.existsSync(file)) continue;
+                raw = fs.readFileSync(file, 'utf8');
+            } catch(e){
+                // Present but unreadable. Do NOT cache: a permissions fix or a
+                // completed atomic rename should be picked up on the next apply.
+                return { malformed: 'release manifest at ' + file + ' could not be read (' + (e && e.message) + ')' };
+            }
+            let parsed;
+            try { parsed = JSON.parse(raw); }
+            catch(e){ return { malformed: 'release manifest at ' + file + ' is not valid JSON' }; }
+            this._trainActivationRequired = trainActivation.readManifestTrainActivation(parsed);
+            return this._trainActivationRequired;
+        }
+        this._trainActivationRequired = null;
+        return null;
+    }
+
+    // Pre-apply platform-train gate. `blockIndex` is the block about to be applied
+    // on the live path, or the TIP of a snapshot range on the bootstrap and catch-up
+    // paths: a range lands in one transaction, so if any block in it is at or above
+    // the boundary the whole range is refused. Returns true when the follower halted
+    // (the caller must stop without applying), false when it may apply. Also keeps
+    // this.trainActivation current for /status, which is how the halt is announced
+    // BEFORE it fires: the `pending` verdict is published from the moment the
+    // manifest names an unimplemented rule set, not at the boundary.
+    //
+    // The clock is the BTC height, which on a BTC follower is the block index itself.
+    // Off BTC there is no BTC height in this path, so null is passed and the gate
+    // treats an unimplemented requirement as fail-closed (see the header of
+    // src/train_activation.js). The halt rides _haltOnDivergence so it is durable in
+    // sync_halt, re-read by start(), and cleared only by an operator, exactly like a
+    // divergence halt: a follower that forgot the halt across a restart would apply
+    // the forked block. Never throws into the apply path: a fault in the gate itself
+    // halts, because a gate that cannot decide must not wave the block through.
+    async _checkTrainActivation(blockIndex){
+        let verdict;
+        try {
+            verdict = trainActivation.evaluateTrainActivation({
+                height:   (this.coinTicker === 'BTC') ? blockIndex : null,
+                network:  this.network,
+                required: this._resolveTrainActivationRequirement()
+            });
+        } catch(e){
+            verdict = {
+                status: 'halt', activeRuleSet: null, requiredRuleSet: null, requiredAtHeight: null,
+                network: this.network, height: blockIndex, classification: null,
+                reason: 'train_activation: the activation gate itself failed to evaluate (' +
+                        (e && e.message) + '); refusing to advance'
+            };
+        }
+        this.trainActivation = verdict;
+
+        if(verdict.status === 'clear') return false;
+
+        if(verdict.status === 'pending'){
+            // Loud on the transition, then periodic, so the announcement cannot be
+            // missed and cannot drown the log during a long rolling-upgrade window.
+            if((this._trainActivationLogTick++ % 60) === 0)
+                console.error('ClientSync: TRAIN ACTIVATION PENDING for ' + this.chain + '/' + this.network +
+                    '/' + this.dbType + ' - ' + verdict.reason);
+            return false;
+        }
+
+        // The mismatch record carries the machine-readable fields plus the prose so
+        // /status (haltInfo) and sync_halt name the missing rule set and the height
+        // without a log lookup.
+        await this._haltOnDivergence(blockIndex, [{
+            field:     'rule_set',
+            required:  verdict.requiredRuleSet,
+            at_height: verdict.requiredAtHeight,
+            network:   verdict.network,
+            height:    verdict.height,
+            reason:    verdict.reason
+        }], [], 'train-activation');
+        return true;
+    }
+
+    getTrainActivation(){ return this.trainActivation; }
+
     // Durable HALT on a confirmed cross-source consensus divergence. Two honest
     // sources committed different ledger/actions/contract hashes for the SAME
     // block: one is on a forked/Byzantine chain. We must NOT pick one and apply
     // it (that risks replicating a forked chain), and must NOT silently stall.
     // Stop applying, record the halt durably (survives restart), and alert loudly
-    // until an operator investigates and clears it.
+    // until an operator investigates and clears it. The platform-train gate
+    // (_checkTrainActivation) halts through here too, so every halt shares one
+    // marker, one startup check and one operator clear.
     async _haltOnDivergence(blockIndex, mismatches, sources, reason){
         if(this._halted) return; // already halted
         this._halted = {
@@ -2870,6 +3016,16 @@ class ClientSync {
             console.error('is on. The tail past the last anchor is unverifiable against the federation, so');
             console.error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
             console.error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
+        } else if(this._halted.reason === 'train-activation'){
+            let m = (mismatches && mismatches[0]) || {};
+            console.error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
+            console.error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
+                ', which this build does');
+            console.error('not implement. Applying this block under the old rules would fork. HALTING');
+            console.error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
+            console.error('platform version that carries the rule set, then clear. Clearing without the');
+            console.error('update is not a supported path.');
+            if(m.reason) console.error(m.reason);
         } else {
             console.error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
             console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
@@ -3106,6 +3262,10 @@ class ClientSync {
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
+        // Platform-train activation gate, BEFORE anything about the block is written:
+        // the decision is "may this build apply block N at all", not "what does N
+        // contain". Halted here means lastAppliedBlock stays put and nothing landed.
+        if(await this._checkTrainActivation(event.block_index)) return;
         try {
             await this._withApplyLock(() => this.applier.applyBlock(event));
             // Independent recomputation (validator track). The block's raw rows are

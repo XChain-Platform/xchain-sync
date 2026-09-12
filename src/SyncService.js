@@ -515,6 +515,8 @@ class SyncService {
                 : { stale: null, secondsBehind: null, sourceHeight: null },
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
+            trainActivation: (sync && typeof sync.getTrainActivation === 'function')
+                ? sync.getTrainActivation() : null,
             truncated:     sync ? sync.isTruncated() : false,
             bootstrapBase: sync ? sync.getBootstrapBase() : null,
             // Multi-source Byzantine quorum surface.

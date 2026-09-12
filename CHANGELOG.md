@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The follower halts at a platform-train boundary whose rule set this build lacks, before writing the boundary block, and announces the pending verdict on `/status`.
+
 ## [0.18.0] - 2026-09-11
 
 ### Added

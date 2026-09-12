@@ -520,7 +520,7 @@ describe('SyncService', function(){
                 { lastKnownServerBlock: null, sourceHeightStale: null,
                   upstreamReplica: { stale: null, secondsBehind: null, sourceHeight: null },
                   halted: false,
-                  haltInfo: null, truncated: false, bootstrapBase: null,
+                  haltInfo: null, trainActivation: null, truncated: false, bootstrapBase: null,
                   sourceQuorum: null, sourcesConfigured: null, sourcesActive: null,
                   sourcesAgreeing: null, sourcesEvicted: [] });
         });
@@ -536,11 +536,14 @@ describe('SyncService', function(){
                 getConfiguredSourceCount: () => 3,
                 getActiveSourceCount: () => 2,
                 getSourcesAgreeing: () => 2,
-                getEvictedSources: () => ['http://b:3006']
+                getEvictedSources: () => ['http://b:3006'],
+                getTrainActivation: () => ({ status: 'pending', requiredRuleSet: '9.0.0', requiredAtHeight: 970000 })
             };
             service.clientSyncs.set('bitcoin:mainnet:indexer', fakeSync);
             let state = service.getClientSyncState('bitcoin', 'mainnet');
             assert.strictEqual(state.lastKnownServerBlock, 42);
+            assert.deepStrictEqual(state.trainActivation,
+                { status: 'pending', requiredRuleSet: '9.0.0', requiredAtHeight: 970000 });
             assert.strictEqual(state.sourceHeightStale, false);
             assert.strictEqual(state.halted, true);
             assert.deepStrictEqual(state.haltInfo, { blockIndex: 42, reason: 'divergence' });
