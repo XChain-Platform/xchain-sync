@@ -12,7 +12,9 @@ WORKDIR /XChainIndexerSync
 RUN npm ci --omit=dev
 
 COPY ./src /XChainIndexerSync/src
-COPY ./.en[v] /XChainIndexerSync/.env
+# No .env is baked in: configuration reaches the container as environment
+# (xchain-node at `docker run`, a standalone run via `--env-file .env`). An
+# optional `COPY ./.en[v]` glob here builds only under BuildKit.
 
 # Exec-form node, not `npm run api` (which is this exact command). npm builds an
 # npm -> sh -c -> node tree and no wrapper forwards signals, so `docker stop`

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-11
+
+### Added
+- A replica row shortfall that survives consecutive equal-height count sweeps escalates once as a distinct persistent-gap alert and is published on `/status` as `replica_gaps`, so a monitor can alert on a follower that agrees on every hash while missing replicated rows.
+- The follower carries `src/train_activation.js`, the byte-identical twin of the indexer's platform-train activation gate, held equal by the parity suite.
+- Replication presents `SYNC_UPSTREAM_KEY` on every REST call and on the WebSocket handshake, separate from the inbound `SYNC_API_KEY` that guards this process's own API.
+
+### Changed
+- The indexer migration frontier accounts for the same-day price-snapshot landing-clock migration, a hub-mirror table that needs no schema version bump.
+- The schema version is `{ indexer: 10, decoder: 4 }`, catching the replicated-DDL accounting up to the migration frontier, and a guard suite fails when a replicated-DDL migration lands past that frontier without a bump.
+
+### Fixed
+- The reorg sweeps keep a market whose side is the chain's native coin instead of deleting it as a dangling ticker, so a replica no longer diverges from the source after a reorg.
+- `HubClient` sends the config cursor one second behind its watermark and re-fetches the full tree when the hub's seq or watermark regresses, so a boundary-second row is never stranded and a restored hub cannot pin stale config.
+- The Docker image no longer tries to bake a `.env` file, so the build succeeds on the legacy builder and configuration reaches the container as environment only.
+
 ## [0.17.0] - 2026-09-10
 
 ### Changed

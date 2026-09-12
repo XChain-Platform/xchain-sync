@@ -485,7 +485,9 @@ describe('Rollback coverage guard @regression', function(){
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
             icons:   /DELETE FROM icons WHERE token_id NOT IN \(SELECT id FROM tokens\)/,
-            markets: /DELETE FROM markets WHERE tick1_id NOT IN \(SELECT id FROM index_tickers\) OR tick2_id NOT IN \(SELECT id FROM index_tickers\)/,
+            // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
+            // side that has no ticker); without them the sweep deletes live markets.
+            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
             pubkeys: /DELETE FROM pubkeys WHERE address_id NOT IN \(SELECT id FROM index_addresses\)/,
         };
         const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
@@ -517,10 +519,12 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const IDX2_OPS = [
+            // COALESCE(...,0) on every side: the probe compares a `markets` pair id, where a
+            // tickerless side is 0, against orders/order_matches, which store NULL for it.
             { name: 'surviving-orders probe (both orientations)',
-              re: /SELECT 1 FROM orders (?:o )?WHERE \((?:o\.)?give_tick_id=\? AND (?:o\.)?get_tick_id=\?\) OR \((?:o\.)?give_tick_id=\? AND (?:o\.)?get_tick_id=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM orders (?:o )?WHERE \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
             { name: 'surviving-matches probe (both orientations)',
-              re: /SELECT 1 FROM order_matches (?:om )?WHERE \((?:om\.)?give_tick_id=\? AND (?:om\.)?get_tick_id=\?\) OR \((?:om\.)?give_tick_id=\? AND (?:om\.)?get_tick_id=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM order_matches (?:om )?WHERE \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
             { name: 'two-orientation markets delete',
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];

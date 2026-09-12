@@ -101,9 +101,71 @@
  *       streamed gates rows the epoch close writes from ROLLCALL_GATES_ACTIVATION
  *       on, and the rules-aware attestation set it derives would then differ
  *       from its source. Decoder is unaffected and stays at 3.
+ *  10 - (indexer) frontier catch-up: every replicated-DDL migration dated on or
+ *       before MIGRATION_FRONTIER.indexer is accounted for at this version. The
+ *       history above had drifted behind the migration ledger (entries named the
+ *       migrations that motivated a bump, so DDL that landed without one was
+ *       recorded nowhere), and the backlog folded in here is what a v9 follower
+ *       can be missing: the utf8mb4 widenings of the raw wire and user-text
+ *       columns across ~35 replicated tables (2026-08-19, 2026-09-02) plus
+ *       index_memos.memo, which truncate or reject a 4-byte character a migrated
+ *       source stores; the anchor_actions primary key restated over
+ *       (action_index, section_index) (2026-08-28), which is what lets a
+ *       multi-section anchor apply at all; the destroys UNIQUE action_index drop
+ *       (2026-08-15) and the destroys/sends leg_ordinal column (2026-09-09),
+ *       without which a multi-leg row hits ER_DUP_ENTRY under ClientApplier's
+ *       plain INSERT; new replicated tables escrow_leaf_journal,
+ *       contract_delegation_rotations and the ROLLCALL set (rollcalls,
+ *       rollcall_signers, rollcall_absences); added columns on attests
+ *       (relay origin, relay identity index, batch action_index and chunk
+ *       columns), gated_files, lists.memo, attest_validator_stats,
+ *       validator_rewards, anchor_reward_reconcile_log, prices v2 batch,
+ *       markets native-coin side, contracts meta, and the pubkeys uncompressed
+ *       widening. None of it enters a block-hash preimage; all of it changes
+ *       which streamed rows a follower can store.
+ *   4 - (decoder only) `transactions.data` converted to utf8mb4 by the
+ *       2026-08-10-action-data-utf8mb4 migration. `transactions` is in the
+ *       replicated decoder set, and an unmigrated replica quarantines a
+ *       non-BMP ACTION its source stored, so the two disagree on chain state
+ *       rather than merely lagging; that migration is a coordinated stop-the-
+ *       decoders window, and this bump is what makes the ordering enforced
+ *       instead of advisory. The 2026-07-24 pubkeys widening rides along.
+ *       Indexer is unaffected by this key and stays at 10.
+ *
+ * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
+ * is the newest migration DATE whose replicated DDL is folded into the version
+ * above, and `accounted` names the migration files bearing exactly that date
+ * (dates are not unique, so the tail has to be enumerated or a same-day
+ * migration would hide behind the cursor). test/unit/schema-version-gate.test.js
+ * reads both, walks the sibling migration ledgers, and fails when a migration
+ * past the frontier carries DDL against a wire-replicated table of that dbType
+ * while the frontier stands still. Pure-DML backfills do not change what a
+ * follower can store and are not flagged. Per the operator ruling of 2026-09-09
+ * the answer to a red gate is a bump carried by the next fleet release (the
+ * version decides what peers ACCEPT, so a drive-by edit strands the fleet),
+ * never a frontier advance on its own.
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 9, decoder: 3 };
+const SCHEMA_VERSION = { indexer: 10, decoder: 4 };
 
-module.exports = { SCHEMA_VERSION };
+const MIGRATION_FRONTIER = {
+    indexer: {
+        through: '2026-09-11',
+        accounted: [
+            '2026-09-11-contract-meta-columns.sql',
+            '2026-09-11-cross-chain-btc-chain-id.sql',
+            // hub-mirror only (price_snapshots never rides the sync wire), so the
+            // same-day tail names it without a version bump
+            '2026-09-11-price-snapshots-batch-block-time.sql'
+        ]
+    },
+    decoder: {
+        through: '2026-08-22',
+        accounted: [
+            '2026-08-22-mempool-first-seen.sql'
+        ]
+    }
+};
+
+module.exports = { SCHEMA_VERSION, MIGRATION_FRONTIER };

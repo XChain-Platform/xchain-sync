@@ -276,6 +276,26 @@ class ClientSync {
         // first equal-height status tick of a process runs one baseline sweep.
         this._lastCompletenessSweepAt = 0;
 
+        // Persistent replica-gap state (see _trackReplicaGaps). Keyed by table name,
+        // one entry per table this replica has been found short of the source at
+        // EQUAL heights, carrying how long and across how many sweeps the shortfall
+        // has survived. A shortfall seen on one sweep can still be a race (the local
+        // count and the source's /status read are seconds apart); a shortfall that
+        // survives consecutive equal-height sweeps is replicated rows this follower
+        // will never receive on its own, which is what this state exists to escalate.
+        this._replicaGaps = new Map();
+        // Whether a non-empty gap set has been written to sync state, so the keys get
+        // cleared exactly once on convergence instead of rewritten every sweep (and
+        // so a stale "short N rows" value cannot outlive the gap it described).
+        this._replicaGapRecorded = false;
+        // Sweeps a table must stay short before the loud alert fires, and how often
+        // that alert may repeat afterwards. Defaults: escalate on the second
+        // consecutive sweep, then at most every 6 h. A gap that GROWS re-alerts
+        // immediately regardless of the repeat window, because a widening gap is a
+        // new fault rather than the known one.
+        this._replicaGapAlertSweeps   = this._numericSetting('REPLICA_GAP_ALERT_SWEEPS', 2, 1);
+        this._replicaGapAlertRepeatMs = this._numericSetting('REPLICA_GAP_ALERT_REPEAT_MS', 21600000, 0);
+
         // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
         // testnet, which mints blocks at ~10/sec and is tens of millions of
         // blocks high) the replica perpetually trails the live tip, so every
@@ -638,6 +658,17 @@ class ClientSync {
         }
     }
 
+    // Credential for calls we make OUT to a source server, on every REST call and the
+    // WebSocket handshake. SYNC_UPSTREAM_KEY, never SYNC_API_KEY: the latter guards
+    // THIS process's own API, and using one value for both meant a host could not be
+    // a guarded server and a client of a differently-keyed source at the same time.
+    // Unset returns no header, which is what an unkeyed source expects, so nothing
+    // changes on a fleet that has not armed its servers yet.
+    _upstreamHeaders(){
+        let key = this.config['SYNC_UPSTREAM_KEY'];
+        return key ? { Authorization: 'Bearer ' + key } : {};
+    }
+
     // POST the current applied height to a source server's /validator-heartbeat endpoint.
     // Best-effort: errors are suppressed at the call site.
     async _sendRestHeartbeat(source){
@@ -647,10 +678,7 @@ class ClientSync {
             applied_height:     this.lastAppliedBlock,
             applied_block_time: this.lastAppliedBlockTime
         };
-        let headers = {};
-        let apiKey  = this.config['SYNC_API_KEY'];
-        if(apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-        await axios.post(url, body, { timeout: 5000, headers });
+        await axios.post(url, body, { timeout: 5000, headers: this._upstreamHeaders() });
     }
 
     async _fetchAndApplySchema(source){
@@ -658,7 +686,7 @@ class ClientSync {
         let schema;
         try {
             let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 30000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 30000 });
             schema = response.data;
         } catch(e){
             // A fetch/transport failure is not a schema fault: the source may be
@@ -864,14 +892,19 @@ class ClientSync {
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
-    // means the source's schema moved ahead of this replica AFTER bootstrap.
-    // _fetchAndApplySchema only runs at bootstrap, so a server-side table
-    // addition wedges every already-bootstrapped replica on the first snapshot
-    // carrying rows for it (live case: anchor_actions, added server-side while
-    // the replicas pre-dated it). Re-apply the source schema (it CREATEs
-    // missing tables and ALTERs in missing columns) so the next apply attempt
-    // can proceed. Debounced to one heal per minute so a failure the schema
-    // can't fix (e.g. rejected DDL) can't hammer the /schema endpoint.
+    // means the source's schema moved ahead of this replica AFTER the replica
+    // last reconciled its schema. _fetchAndApplySchema runs at four call
+    // sites, not only at bootstrap: the full-snapshot bootstrap
+    // (_bootstrapRotateSources, line 979), bootstrap-from-height
+    // (_bootstrapFromHeight, line 1178), resume (start(), line 571), and this
+    // apply-time heal itself (below). Even so, a server-side table addition
+    // can still wedge an already-bootstrapped, not-yet-resumed replica on the
+    // first snapshot carrying rows for it (live case: anchor_actions, added
+    // server-side while the replicas pre-dated it) until this heal runs.
+    // Re-apply the source schema (it CREATEs missing tables and ALTERs in
+    // missing columns) so the next apply attempt can proceed. Debounced to
+    // one heal per minute (this._lastSchemaHeal below) so a failure the
+    // schema can't fix (e.g. rejected DDL) can't hammer the /schema endpoint.
     async _healSchemaIfStale(e){
         let errno = e ? e.errno : null;
         if(errno !== 1146 && errno !== 1054) return false;
@@ -957,6 +990,7 @@ class ClientSync {
         try {
             let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, {
+                headers: this._upstreamHeaders(),
                 responseType: 'arraybuffer',
                 timeout: 600000, // 10 minute timeout for large snapshots
                 decompress: true,
@@ -1131,7 +1165,7 @@ class ClientSync {
 
         // 1. Discover the source tip.
         let statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-        let statusResp = await axios.get(statusUrl, { timeout: 30000 });
+        let statusResp = await axios.get(statusUrl, { headers: this._upstreamHeaders(), timeout: 30000 });
         let status = statusResp.data || {};
         // A server reports block_height (last broadcast position) and source_height
         // (DB tip). The incremental snapshot is built from the DB, so prefer the DB
@@ -1161,6 +1195,7 @@ class ClientSync {
         //    cooldown credits, and rebuilds touched balances (all still bundled here).
         let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
         let response = await axios.get(url, {
+            headers: this._upstreamHeaders(),
             responseType: 'arraybuffer',
             timeout: 600000,
             decompress: true,
@@ -1309,6 +1344,7 @@ class ClientSync {
                 let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
                     this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
                 let response = await axios.get(url, {
+                    headers: this._upstreamHeaders(),
                     responseType: 'arraybuffer',
                     timeout: 600000,
                     decompress: true,
@@ -1525,6 +1561,7 @@ class ClientSync {
             let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
                 (skipLookups ? '?skip_lookups=1' : '');
             let response = await axios.get(url, {
+                headers: this._upstreamHeaders(),
                 responseType: 'arraybuffer',
                 timeout: 300000,
                 decompress: true,
@@ -1683,7 +1720,7 @@ class ClientSync {
         let verdict = 'skip';
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
 
             let localHashes = await this.db.getBlockHashRow(blockHeight);
@@ -1939,11 +1976,14 @@ class ClientSync {
         return new Set([].concat(t.blockScoped || [], t.txScoped || [], t.actionScoped || []));
     }
 
+    // Returns the shortfall rows it found (an ARRAY, possibly empty) when the check
+    // completed, and null when it could not run or errored, so the periodic caller can
+    // tell "no gaps" from "no reading" before aging its persistent-gap state.
     async _verifyDecoderCompleteness(source, blockHeight, excludeTables){
-        if(this.dbType !== 'decoder') return;
+        if(this.dbType !== 'decoder') return null;
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
 
             // On a truncated replica the block-windowed tables (blocks, transactions,
@@ -1979,8 +2019,10 @@ class ClientSync {
             // hash, so an equal-count content substitution in blocks, transactions,
             // transaction_outputs or the lookups was invisible here.
             await this._verifyTableContentParity(source, blockHeight, remoteStatus);
+            return countMismatches;
         } catch(e){
             console.error('Decoder completeness check failed against ' + source + ':', e);
+            return null;
         }
     }
 
@@ -2099,11 +2141,22 @@ class ClientSync {
                 // Delegate: the decoder variant carries the truncation exclusions its
                 // counts need. dispensers converges only on a reconcile cycle, so it is
                 // excluded here or every sweep reports drift.
-                await this._verifyDecoderCompleteness(source, this.lastAppliedBlock, new Set(['dispensers']));
+                let decoderShortfalls = await this._verifyDecoderCompleteness(
+                    source, this.lastAppliedBlock, new Set(['dispensers']));
+                // Age the decoder shortfalls too, but ONLY from this periodic
+                // equal-height path: the bootstrap caller runs the same check while the
+                // replica is legitimately mid-dump, and folding those sweeps in would
+                // escalate a gap that the next snapshot page closes. A null return means
+                // the check could not complete (unreachable source, wrong dbType), which
+                // is not evidence the gaps closed.
+                if(Array.isArray(decoderShortfalls))
+                    await this._trackReplicaGaps(decoderShortfalls, {
+                        source: source, blockIndex: this.lastAppliedBlock
+                    });
                 return;
             }
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { timeout: 10000 });
+            let response = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
             // Re-check the height against the status we just fetched: the tick that
             // triggered this may be seconds old and the source may have advanced.
@@ -2113,6 +2166,7 @@ class ClientSync {
                 { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
             let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
             let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
+            let repairTried = new Set();
             if(shortfalls.length){
                 console.error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
                     '; follower may be missing replicated rows:');
@@ -2129,6 +2183,7 @@ class ClientSync {
                 let lookups = new Set(replicatedTables.getTopology(this.dbType).index || []);
                 let shortLookups = new Set(shortfalls.map(m => m.table).filter(t => lookups.has(t)));
                 if(shortLookups.size){
+                    repairTried = shortLookups;
                     try {
                         await this._syncLookupTablesPaged(source, { fromZero: shortLookups });
                     } catch(repairErr){
@@ -2143,11 +2198,183 @@ class ClientSync {
                     '; follower holds rows the source deleted (un-replicated forward DELETE?):');
                 console.error(JSON.stringify(ahead));
             }
+            // Age the shortfall set. A repeated TABLE_COUNT_MISMATCH line is the same
+            // severity on sweep 1 and sweep 700, so a gap that no amount of syncing
+            // will close reads exactly like the transient race it is not; this is what
+            // let a mainnet follower sit ~2k index_transactions rows short for weeks
+            // with the detector firing on every pass. Runs on EVERY completed sweep,
+            // shortfalls or not, because a clean sweep is how a gap gets cleared.
+            await this._trackReplicaGaps(shortfalls, {
+                source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
+            });
             if(!mismatches.length && remoteStatus.table_counts)
                 console.log('Table-count verification passed against ' + source);
         } catch(e){
             console.error('Periodic completeness sweep failed against ' + source + ':', e.message || e);
         }
+    }
+
+    // Read a numeric tunable from config, falling back to the environment and then to
+    // a default, clamped at `min`. Config-first so a test or an embedding service can
+    // set it directly, env second so an operator can set it on a build whose config
+    // loader predates the key, and never NaN (a NaN threshold would either alert on
+    // every sweep or never).
+    _numericSetting(key, fallback, min){
+        let raw = (this.config && this.config[key] != null && this.config[key] !== '')
+            ? this.config[key] : process.env[key];
+        let n = Number(raw);
+        if(!Number.isFinite(n)) n = fallback;
+        if(min != null && n < min) n = min;
+        return n;
+    }
+
+    // Age the equal-height shortfall set and escalate the ones that will not close.
+    //
+    // The row-count sweep already detects a follower short replicated rows, but it
+    // reported every detection identically at error level, so the single line that
+    // means "this replica is permanently missing data" was indistinguishable from the
+    // same line emitted by a count read that raced the source's /status. Operators
+    // learn to skip a line that repeats forever, which is precisely how a mainnet
+    // follower stayed ~2k index_transactions rows short for weeks under a green
+    // status endpoint while this check fired hourly.
+    //
+    // So: carry per-table state across sweeps, and when a table stays short for
+    // _replicaGapAlertSweeps consecutive EQUAL-HEIGHT sweeps, emit a distinct,
+    // rate-limited REPLICA_GAP_PERSISTENT alert that names the age, the sweep count,
+    // the delta trend and whether the client's own repair pass already failed to
+    // close it, plus a durable sync-state record a monitor can read without scraping
+    // logs. A gap that GROWS re-alerts immediately; a gap that closes clears its
+    // state and says so, so the durable record can never outlive the gap.
+    //
+    // Advisory and never throws: this is a reporting layer over a check that itself
+    // never halts.
+    async _trackReplicaGaps(shortfalls, opts){
+        try {
+            let o    = opts || {};
+            let now  = Number.isFinite(o.now) ? o.now : Date.now();
+            let seen = new Set();
+            let escalate = [];
+            for(let m of (shortfalls || [])){
+                if(!m || !m.table || seen.has(m.table)) continue;
+                seen.add(m.table);
+                let entry = this._replicaGaps.get(m.table);
+                if(!entry){
+                    entry = {
+                        table: m.table, firstSeenAt: now, firstDelta: m.delta, worstDelta: m.delta,
+                        sweeps: 0, alerts: 0, lastAlertAt: 0, repairAttempts: 0
+                    };
+                    this._replicaGaps.set(m.table, entry);
+                }
+                entry.sweeps      += 1;
+                entry.lastSeenAt   = now;
+                entry.lastDelta    = m.delta;
+                entry.sourceCount  = m.sourceCount;
+                entry.localCount   = m.localCount;
+                entry.lastBlock    = (o.blockIndex != null) ? o.blockIndex : entry.lastBlock;
+                if(o.repaired && typeof o.repaired.has === 'function' && o.repaired.has(m.table))
+                    entry.repairAttempts += 1;
+                let grew = m.delta > entry.worstDelta;
+                if(grew) entry.worstDelta = m.delta;
+                if(entry.sweeps < this._replicaGapAlertSweeps) continue;
+                let due = !entry.lastAlertAt || (now - entry.lastAlertAt) >= this._replicaGapAlertRepeatMs;
+                if(grew || due) escalate.push(entry);
+            }
+            // Anything absent from a COMPLETED sweep has converged. Say so at the same
+            // volume the alert used, so an operator who was paged sees the recovery in
+            // the same journal rather than inferring it from silence.
+            for(let table of [...this._replicaGaps.keys()]){
+                if(seen.has(table)) continue;
+                let closed = this._replicaGaps.get(table);
+                this._replicaGaps.delete(table);
+                if(closed.alerts || closed.sweeps >= this._replicaGapAlertSweeps)
+                    console.warn('REPLICA_GAP_CLOSED: ' + this._replicaLabel() + ' table ' + table +
+                        ' now matches the source (was short ' + closed.lastDelta + ' row(s) for ' +
+                        this._gapAgeMinutes(closed, now) + ' min across ' + closed.sweeps + ' sweep(s)).');
+            }
+            if(escalate.length) this._alertPersistentReplicaGaps(escalate, now, o.source);
+            await this._recordReplicaGaps(now);
+        } catch(e){
+            // Advisory reporting layer; a failure here must not disturb the sweep.
+            console.error('Replica-gap tracking failed (advisory, continuing):', e.message || e);
+        }
+    }
+
+    // The loud line. Separate tag from TABLE_COUNT_MISMATCH on purpose: the mismatch
+    // line is a detection, this one is a verdict, and a monitor keyed on the verdict
+    // tag cannot be desensitised by the detections.
+    _alertPersistentReplicaGaps(entries, now, source){
+        let detail = entries.map(e => {
+            let trend = e.lastDelta > e.firstDelta ? 'GROWING from ' + e.firstDelta
+                      : (e.lastDelta < e.firstDelta ? 'closing from ' + e.firstDelta : 'unchanged');
+            return e.table + ' short ' + e.lastDelta + ' row(s) (source ' + e.sourceCount +
+                ' vs local ' + e.localCount + ', delta ' + trend + ', first seen ' +
+                this._gapAgeMinutes(e, now) + ' min ago across ' + e.sweeps + ' equal-height sweep(s)' +
+                (e.repairAttempts ? ', ' + e.repairAttempts + ' self-repair pass(es) did NOT close it' : '') + ')';
+        }).join('; ');
+        console.error('REPLICA_GAP_PERSISTENT: ' + this._replicaLabel() +
+            ' is missing replicated rows that repeated sweeps are not closing at block ' +
+            (entries[0].lastBlock != null ? entries[0].lastBlock : 'unknown') +
+            (source ? ' against ' + source : '') + ': ' + detail +
+            '. The consensus hashes describe the source computation and structurally cannot see this, ' +
+            'so the replica keeps reporting healthy while serving incomplete data: operator action required ' +
+            '(re-dump the named table(s) from the source).');
+        for(let e of entries){ e.alerts += 1; e.lastAlertAt = now; }
+    }
+
+    // Durable, monitorable twin of the alert above (the same best-effort sync-state
+    // channel the parity counters use, never a consensus gate, never throws). Written
+    // only while persistent gaps exist, and cleared exactly once when the last one
+    // closes so no key can report a gap that is gone.
+    async _recordReplicaGaps(now){
+        let persistent = this.getReplicaGaps();
+        try {
+            if(!this.db || typeof this.db.setSyncState !== 'function') return;
+            if(!persistent.length){
+                if(!this._replicaGapRecorded) return;
+                this._replicaGapRecorded = false;
+                await this.db.setSyncState('replica_gap_tables:' + this.dbType, '');
+                await this.db.setSyncState('replica_gap_since:' + this.dbType, '');
+                await this.db.setSyncState('replica_gap_sweeps:' + this.dbType, '0');
+                return;
+            }
+            // table:delta pairs, capped: a pathological all-tables shortfall must not
+            // write an unbounded value into sync state.
+            let names = persistent.slice(0, 20).map(g => g.table + ':' + g.delta).join(',');
+            let oldest = Math.min(...persistent.map(g => g.firstSeenAt));
+            let sweeps = Math.max(...persistent.map(g => g.sweeps));
+            await this.db.setSyncState('replica_gap_tables:' + this.dbType, names);
+            await this.db.setSyncState('replica_gap_since:' + this.dbType, String(oldest));
+            await this.db.setSyncState('replica_gap_sweeps:' + this.dbType, String(sweeps));
+            await this.db.setSyncState('replica_gap_last_block:' + this.dbType,
+                String(persistent[0].last_block != null ? persistent[0].last_block : ''));
+            this._replicaGapRecorded = true;
+        } catch(e){
+            // advisory; swallow (mirrors the parity counters)
+        }
+    }
+
+    // Persistent gaps only, worst delta first, in a shape a status row can publish so
+    // a monitor alerts on a non-empty array instead of log-scraping. A shortfall that
+    // has not yet crossed the sweep threshold is deliberately absent: it may still be
+    // a count/status race, and publishing it would rebuild the desensitising signal
+    // this whole path exists to replace.
+    getReplicaGaps(){
+        return [...this._replicaGaps.values()]
+            .filter(e => e.sweeps >= this._replicaGapAlertSweeps)
+            .sort((a, b) => b.lastDelta - a.lastDelta)
+            .map(e => ({
+                table: e.table, delta: e.lastDelta, source_count: e.sourceCount,
+                local_count: e.localCount, sweeps: e.sweeps, first_seen_at: e.firstSeenAt,
+                alerts: e.alerts, repair_attempts: e.repairAttempts, last_block: e.lastBlock
+            }));
+    }
+
+    _replicaLabel(){
+        return this.chain + '/' + this.network + '/' + this.dbType + ' follower';
+    }
+
+    _gapAgeMinutes(entry, now){
+        return Math.round(Math.max(0, now - entry.firstSeenAt) / 60000);
     }
 
     // Indexer tables whose registry class asserts exact row-set parity with the
@@ -2208,6 +2435,7 @@ class ClientSync {
                     '?limit=' + pageSize +
                     (afterTx !== null ? '&after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
                 let response = await axios.get(url, {
+                    headers: this._upstreamHeaders(),
                     responseType: 'arraybuffer',
                     timeout: 300000,
                     decompress: true,
@@ -2254,7 +2482,13 @@ class ClientSync {
 
         let ws;
         try {
-            ws = new WebSocket(wsUrl, { maxPayload: this.config['WS_MAX_PAYLOAD'] });
+            // The server's upgrade handler runs the same Bearer check as the REST
+            // routes, so a keyed source drops a headerless handshake with a bare 401
+            // and the client falls into its reconnect loop with no streaming sync.
+            ws = new WebSocket(wsUrl, {
+                maxPayload: this.config['WS_MAX_PAYLOAD'],
+                headers:    this._upstreamHeaders()
+            });
         } catch(e){
             console.error('WebSocket connection error:', e);
             this._scheduleReconnect(source, sourceIndex);
@@ -3033,7 +3267,7 @@ class ClientSync {
         let cp;
         try {
             let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
-            let resp = await axios.get(url, { timeout: 10000 });
+            let resp = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
             cp = resp && resp.data;
         } catch(e){
             // Transport fault / 404 is not proof of divergence, so it never halts. But it
@@ -3218,7 +3452,7 @@ class ClientSync {
             try {
                 let url = this.sources[0] + '/checkpoint/indexer/' + this.chain + '/' + this.network +
                           '/range?from=' + from + '&to=' + cp.block_index;
-                let resp = await axios.get(url, { timeout: 10000 });
+                let resp = await axios.get(url, { headers: this._upstreamHeaders(), timeout: 10000 });
                 chain = resp && resp.data && resp.data.checkpoints;
             } catch(e){ return { verdict: 'wait' }; }            // transport: not a divergence
             if(!Array.isArray(chain) || !chain.length) return { verdict: 'wait' };   // cannot reach cp
