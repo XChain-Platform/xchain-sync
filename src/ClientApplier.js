@@ -782,18 +782,131 @@ class ClientApplier {
                 // signal anywhere that it happened. Fail loud instead, so the repair's
                 // caller (ClientSync._maybeVerifyCompleteness) sees exactly which
                 // table/row collided rather than reporting the same short count forever.
-                let warnings = await this.db.doQuery('SHOW WARNINGS');
-                for(let w of (warnings || [])){
-                    let code = Number(w.Code || w.code || 0);
-                    let message = w.Message || w.message || '';
-                    if(code === 1062 && /for key ['"`]?(?:[\w-]+\.)?PRIMARY['"`]?/i.test(message)) continue;
-                    throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
-                        '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
-                        'PRIMARY-key duplicate only; any other warning means a DIFFERENT row already ' +
-                        'holds this one\'s natural key and needs a human to reconcile it.');
+                let suspect = this._suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
+
+                // A natural-key collision on this class has two causes and only one of
+                // them needs a human. A STALE GENERATION is the healable one: the source
+                // re-interned its lookup rows (the ids are node-local AUTO_INCREMENT
+                // surrogates assigned in first-seen order and the table is never rolled
+                // back), so the replica holds the natural value at an id the source no
+                // longer has. Retiring that dead row and landing the source's converges
+                // the table. A GENUINE conflict is the other: the id the local row holds
+                // is one the source ALSO serves, so retiring it would destroy a live row.
+                if(suspect.length){
+                    let retired = await this._retireStaleNaturalKeyRows(table, batch, rows, suspect);
+                    if(retired.length){
+                        await this.db.doQuery(query, args);
+                        suspect = this._suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
+                    }
+                    for(let w of suspect){
+                        let code = Number(w.Code || w.code || 0);
+                        let message = w.Message || w.message || '';
+                        throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
+                            '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
+                            'PRIMARY-key duplicate only; the local row holding this one\'s natural key is ' +
+                            'still in the source\'s own row set, so it cannot be retired automatically and ' +
+                            'needs a human to reconcile it.');
+                    }
                 }
             }
         }
+    }
+
+    // Warnings from an id-keyed INSERT IGNORE that the re-send contract does NOT admit.
+    // A benign re-delivery can only ever warn "Duplicate entry '<id>' for key 'PRIMARY'";
+    // everything else means IGNORE dropped a row the caller needed to land.
+    _suspectIgnoreWarnings(warnings){
+        let suspect = [];
+        for(let w of (warnings || [])){
+            let code    = Number(w.Code || w.code || 0);
+            let message = String(w.Message || w.message || '');
+            if(code === 1062 && /for key ['"`]?(?:[\w-]+\.)?PRIMARY['"`]?/i.test(message)) continue;
+            suspect.push(w);
+        }
+        return suspect;
+    }
+
+    // Retire the rows of a superseded lookup generation so the source's rows can land.
+    //
+    // Bounded by the page's own id window, which is what makes the "the source does not
+    // have this id" conclusion sound: a repair page is a contiguous id-ordered slice of
+    // the source table, so an id inside [min, max] that the page did not carry is absent
+    // upstream. An id outside that window may simply be on another page, and an id the
+    // page DID carry is a live row, so both are left for the throw.
+    //
+    // Safe to delete: the replica's data rows carry the SOURCE's status/lookup ids
+    // verbatim (they are replicated, not minted locally), so nothing the source still
+    // serves points at a retired generation's id.
+    async _retireStaleNaturalKeyRows(table, batch, pageRows, warnings){
+        let retired = [];
+        let indexNames = [];
+        for(let w of warnings){
+            if(Number(w.Code || w.code || 0) !== 1062) return retired;   // not a key collision at all
+            let m = /for key ['"`]?(?:[\w-]+\.)?([\w-]+)['"`]?/i.exec(String(w.Message || w.message || ''));
+            if(!m || m[1].toUpperCase() === 'PRIMARY') return retired;
+            if(!indexNames.includes(m[1])) indexNames.push(m[1]);
+        }
+
+        // The source's id set for this table, and the window it proves.
+        let carried = new Set();
+        let low = null, high = null;
+        for(let row of pageRows){
+            let id = row ? row.id : undefined;
+            if(id === undefined || id === null) return retired;   // no surrogate id: not this shape
+            id = Number(id);
+            carried.add(id);
+            if(low === null  || id < low)  low  = id;
+            if(high === null || id > high) high = id;
+        }
+
+        for(let indexName of indexNames){
+            let keyColumns = await this._uniqueKeyColumns(table, indexName);
+            if(!keyColumns.length) continue;
+
+            for(let row of batch){
+                let id = Number(row.id);
+                let mine = await this.db.doQuery('SELECT id FROM `' + table + '` WHERE id = ? LIMIT 1', [id]);
+                if(mine && mine.length) continue;                 // the source's row is already here
+
+                let values = keyColumns.map(c => row[c]);
+                if(values.some(v => v === undefined)) continue;
+                let holder = await this.db.doQuery(
+                    'SELECT id FROM `' + table + '` WHERE ' +
+                        keyColumns.map(c => '`' + c + '` = ?').join(' AND ') + ' LIMIT 2',
+                    values);
+                if(!holder || holder.length !== 1) continue;       // absent, or ambiguous: not this shape
+
+                let holderId = Number(holder[0].id);
+                if(holderId === id || carried.has(holderId)) continue;
+                if(holderId < low || holderId > high) continue;
+
+                await this.db.doQuery('DELETE FROM `' + table + '` WHERE id = ?', [holderId]);
+                retired.push(holderId);
+                console.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
+                    ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
+                    ' retired_id=' + holderId + ' landed_id=' + id +
+                    ' (the source no longer serves the retired id within this page\'s id window)');
+            }
+        }
+        return retired;
+    }
+
+    // Ordered column list of one index, for building the natural-key predicate. Names come
+    // from information_schema and are re-validated before they reach the query string.
+    async _uniqueKeyColumns(table, indexName){
+        let check = validation.validateIdentifier(indexName);
+        if(!check.valid) return [];
+        let rows = await this.db.doQuery(
+            "SELECT column_name FROM information_schema.statistics " +
+            "WHERE table_schema = ? AND table_name = ? AND index_name = ? ORDER BY seq_in_index ASC",
+            [this.db.dbName, table, indexName]);
+        let columns = [];
+        for(let r of (rows || [])){
+            let name = String(r.column_name || r.COLUMN_NAME || '');
+            if(!validation.validateIdentifier(name).valid) return [];
+            columns.push(name);
+        }
+        return columns;
     }
 
     // Mirror the source's anchor-reward winner collapse (xchain-indexer db.js
