@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The indexer migration frontier accounts for the same-day price-snapshot landing-clock migration, a hub-mirror table that needs no schema version bump.
+
 ### Added
 - A replica row shortfall that survives consecutive equal-height count sweeps escalates once as a distinct persistent-gap alert and is published on `/status` as `replica_gaps`, so a monitor can alert on a follower that agrees on every hash while missing replicated rows.
 

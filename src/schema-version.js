@@ -154,7 +154,10 @@ const MIGRATION_FRONTIER = {
         through: '2026-09-11',
         accounted: [
             '2026-09-11-contract-meta-columns.sql',
-            '2026-09-11-cross-chain-btc-chain-id.sql'
+            '2026-09-11-cross-chain-btc-chain-id.sql',
+            // hub-mirror only (price_snapshots never rides the sync wire), so the
+            // same-day tail names it without a version bump
+            '2026-09-11-price-snapshots-batch-block-time.sql'
         ]
     },
     decoder: {
