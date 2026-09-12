@@ -61,16 +61,40 @@ describe('Boundary: Rollback Scope', function(){
         // invalid_archive reset is an in-place UPDATE (not a DELETE) that also references
         // `action_index >=` but binds [firstActionIndex, firstActionIndex] so exclude it.
         // oracle_prices is a bespoke delete that binds [coin, firstActionIndex] so also exclude it.
-        // cross_chain_calls / cross_chain_matches are likewise per-chain scoped bespoke
-        // deletes (source/a/b `_action_index >=`) that bind [coin, firstActionIndex, ...], so
-        // exclude them too.
+        // cross_chain_calls / cross_chain_matches / bridge_transfers are likewise per-chain
+        // scoped bespoke deletes (source/a/b/src `_action_index >=`) that bind
+        // [coin, firstActionIndex, ...], so exclude them too. Excluding a table here only
+        // moves it: the mirror assertion below re-proves that each of the three still ran
+        // and still cut from firstActionIndex, so the exclusion list cannot silence a
+        // mirror delete that stopped happening or started cutting from somewhere else.
         let actionDeletes = db.doQuery.getCalls().filter(c =>
             c.args[0].includes('DELETE') && c.args[0].includes('action_index >=') &&
             !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices') &&
-            !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches')
+            !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches') &&
+            !c.args[0].includes('bridge_transfers')
         );
         for(let call of actionDeletes){
             assert.deepStrictEqual(call.args[1], [100]);
+        }
+        // The per-chain hub-mirror deletes are the same rollback scope stated in the other
+        // shape: every bind is either this replica's coin or the same firstActionIndex the
+        // generic loop cut from. bridge_transfers is one-sided (one src_chain/src_action_index
+        // pair), cross_chain_matches is two-sided (a_* and b_*), so bind counts differ and
+        // only the VALUES are pinned, per table.
+        let coin = rollback.coin;
+        let expectedMirrorBinds = {
+            cross_chain_calls:   [coin, 100],
+            cross_chain_matches: [coin, 100, coin, 100],
+            bridge_transfers:    [coin, 100]
+        };
+        for(let table of Object.keys(expectedMirrorBinds)){
+            let mirrorDeletes = db.doQuery.getCalls().filter(c =>
+                c.args[0].includes('DELETE') && c.args[0].includes(table)
+            );
+            assert.strictEqual(mirrorDeletes.length, 1,
+                'expected exactly one reorg delete against ' + table);
+            assert.deepStrictEqual(mirrorDeletes[0].args[1], expectedMirrorBinds[table],
+                table + ' reorg delete must bind the replica coin and firstActionIndex');
         }
     });
 

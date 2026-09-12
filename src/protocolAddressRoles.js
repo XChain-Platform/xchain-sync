@@ -59,6 +59,29 @@ const ROLE_BY_ADDRESS = {
     'mgasDTdKu5DsbW97qSRnE8raAuYpKMfmhg': 'GAS',
     'mzdg8wGxgP3Jk45FuZPspumCL3Ruup37ob': 'DONATE1',
     'mmXU8RU7q3BUsyT66rtw1H6P7B2ZZd9c5Y': 'DONATE2',
+    // XBRIDGE escrow, one address per (chain, destination coin) on every network.
+    // The escrow is an ordinary balance, so a lock credits a chain-specific string
+    // into the ledger delta; hashing it as the role token is what keeps the same
+    // bridge action hashing identically on BTC, LTC and DOGE. The three coins'
+    // testnet and regtest literals coincide wherever the two networks share a
+    // pubKeyHash byte, exactly as BURN already does above.
+    // BTC bridge escrow
+    '17BridgeLtcXChainXXXXXXXXXXa5uRRy': 'BRIDGE_LTC',
+    '17BridgeDogeXChainXXXXXXXXXVuqXcv': 'BRIDGE_DOGE',
+    'mfbtcbridgeLtcXXXXXXXXXXXXXXVPqpoV': 'BRIDGE_LTC',
+    'mfbtcbridgedogeXXXXXXXXXXXXXUXTr4m': 'BRIDGE_DOGE',
+    // LTC bridge escrow
+    'LKLtcbridgebtcXXXXXXXXXXXXXXXA61Gk': 'BRIDGE_BTC',
+    'LKLtcbridgedogeXXXXXXXXXXXXXX8Aknx': 'BRIDGE_DOGE',
+    'mgLtcbridgebtcXXXXXXXXXXXXXXYpo2Bo': 'BRIDGE_BTC',
+    'mgLtcbridgedogeXXXXXXXXXXXXXZBQunc': 'BRIDGE_DOGE',
+    // DOGE bridge escrow (testnet 0x71 and regtest 0x6f differ, so both are listed)
+    'D5dogebridgebtcXXXXXXXXXXXXXVAFQt9': 'BRIDGE_BTC',
+    'D5dogebridgeLtcXXXXXXXXXXXXXUVFLyn': 'BRIDGE_LTC',
+    'nUdogebridgebtcXXXXXXXXXXXXXWUG2kx': 'BRIDGE_BTC',
+    'nUdogebridgeLtcXXXXXXXXXXXXXTsEz6W': 'BRIDGE_LTC',
+    'mfdogebridgebtcXXXXXXXXXXXXXZ3agHN': 'BRIDGE_BTC',
+    'mfdogebridgeLtcXXXXXXXXXXXXXXb2E4n': 'BRIDGE_LTC',
 };
 
 // Any non-protocol address, including null, passes through unchanged.

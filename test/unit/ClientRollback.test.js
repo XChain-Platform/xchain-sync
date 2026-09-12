@@ -146,17 +146,73 @@ describe('ClientRollback', function(){
             let actionDeletes = db.doQuery.getCalls().filter(c =>
                 c.args[0].includes('DELETE FROM') && c.args[0].includes('action_index >=') &&
                 !c.args[0].includes('contract_emissions') && !c.args[0].includes('oracle_prices') &&
-                !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches')
+                !c.args[0].includes('cross_chain_calls') && !c.args[0].includes('cross_chain_matches') &&
+                !c.args[0].includes('bridge_transfers')
             );
-            // Should have one delete per dataTable. oracle_prices and the two cross_chain
-            // mirrors (cross_chain_calls / cross_chain_matches) are bespoke source_chain-
-            // qualified deletes, excluded above (their source_action_index / a_action_index
-            // predicates also contain the 'action_index >=' substring this filter keys on).
+            // Should have one delete per dataTable. oracle_prices and the three hub-mirror
+            // deletes (cross_chain_calls / cross_chain_matches / bridge_transfers) are bespoke
+            // source_chain-qualified deletes, excluded above (their source_action_index /
+            // a_action_index / src_action_index predicates also contain the 'action_index >='
+            // substring this filter keys on). They are not dropped from coverage: the
+            // dedicated per-chain case below drives them with a real coin and pins each
+            // statement's binds exactly.
             assert.strictEqual(actionDeletes.length, rollback.dataTables.length);
             // Each should use firstActionIndex = 500
             for(let call of actionDeletes){
                 assert.deepStrictEqual(call.args[1], [500]);
             }
+        });
+
+        // The hub-mirrored per-action tables are pruned locally on reorg so the orphaned
+        // range cannot be served while hub-driven convergence (row:deleted) catches up.
+        // Each delete MUST be qualified by THIS replica's chain: action_index is only
+        // unique within a chain, so an unqualified cut would delete another chain's live
+        // mirror rows. cross_chain_matches is two-sided (a match dies when either leg was
+        // rolled back); cross_chain_calls and bridge_transfers are one-sided (the XCALL
+        // source leg, and the XBRIDGE lock or burn named by src_chain/src_action_index).
+        it('prunes the hub-mirrored per-action tables scoped to this chain and firstActionIndex', async function(){
+            let chainDb = createMockDb();
+            let chainRollback = new ClientRollback(chainDb, new Utility(), 'BTC', 'regtest');
+            await chainRollback.rollback(100);
+
+            let expected = {
+                cross_chain_calls:   ['BTC', 500],
+                cross_chain_matches: ['BTC', 500, 'BTC', 500],
+                bridge_transfers:    ['BTC', 500]
+            };
+            for(let table of Object.keys(expected)){
+                let deletes = chainDb.doQuery.getCalls().filter(c =>
+                    typeof c.args[0] === 'string' &&
+                    c.args[0].includes('DELETE FROM ' + table + ' WHERE')
+                );
+                assert.strictEqual(deletes.length, 1,
+                    'expected exactly one reorg delete against ' + table);
+                assert.deepStrictEqual(deletes[0].args[1], expected[table],
+                    table + ' reorg delete must bind this chain and firstActionIndex');
+            }
+        });
+
+        // The three run inside ONE try block, so a replica predating the bridge tables
+        // raises errno 1146 on the bridge_transfers statement. It is issued LAST precisely
+        // so that skip cannot cost the two cross_chain deletes above it, and the rollback
+        // must still commit rather than abort the whole reorg reset.
+        it('still deletes the cross_chain mirrors when bridge_transfers is missing (errno 1146)', async function(){
+            let chainDb = createMockDb();
+            let missing = new Error('Table \'bridge_transfers\' doesn\'t exist'); missing.errno = 1146;
+            chainDb.doQuery.withArgs(sinon.match(/DELETE FROM bridge_transfers/)).rejects(missing);
+            let chainRollback = new ClientRollback(chainDb, new Utility(), 'BTC', 'regtest');
+            await chainRollback.rollback(100);
+
+            for(let table of ['cross_chain_calls', 'cross_chain_matches']){
+                let deletes = chainDb.doQuery.getCalls().filter(c =>
+                    typeof c.args[0] === 'string' &&
+                    c.args[0].includes('DELETE FROM ' + table + ' WHERE')
+                );
+                assert.strictEqual(deletes.length, 1,
+                    table + ' must still be pruned when the bridge table is absent');
+            }
+            assert.strictEqual(chainDb.commitTransaction.calledOnce, true);
+            assert.strictEqual(chainDb.rollbackTransaction.called, false);
         });
 
         it('deletes from block-scoped tables with block_index', async function(){

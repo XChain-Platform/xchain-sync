@@ -123,6 +123,29 @@
  *       markets native-coin side, contracts meta, and the pubkeys uncompressed
  *       widening. None of it enters a block-hash preimage; all of it changes
  *       which streamed rows a follower can store.
+ *  11 - (indexer only) the XCHAIN bridge and token-bridge set. Two new replicated
+ *       tables: `xbridges`, the local action record for every user-broadcast XBRIDGE
+ *       (v0 lock, v1 burn, v3 token lock, v4 bridged-copy burn), and
+ *       `bridge_settlements`, the local idempotency and rollback record for every
+ *       applied settle leg and every applied policy snapshot (both stream:action,
+ *       shipped by the 2026-09-12-bridge-tables migration alongside the two
+ *       hub-mirrored tables, which never ride the wire). Plus the ISSUE format 7
+ *       bridge opt-in columns of 2026-09-12-token-bridge-fields: raw wire strings
+ *       `bridge_chains` / `min_depth` / `lock_bridge` on `issues`, and the parsed
+ *       `bridge_chains` / `min_depth` / `lock_bridge` / `bridged` on `tokens`. A v10
+ *       follower has no table to receive a streamed lock, burn or settlement and no
+ *       column to receive the streamed opt-in fields, so it would apply neither the
+ *       source side nor the destination side of a transfer and would answer
+ *       bridgeability from an empty column while its source refuses the same lock.
+ *       Also folded in here, having landed on the old frontier date without a bump of
+ *       its own: `price_snapshots.batch_block_time` and its
+ *       (coin_pair, batch_block_time, round_number) index
+ *       (2026-09-11-price-snapshots-batch-block-time). price_snapshots is hub-mirrored
+ *       rather than wire-replicated, so it changes nothing a follower can store and the
+ *       gate never flagged it; it is named so the frontier move does not bury it.
+ *       Nothing here enters a block-hash preimage: the bridge tables are action-derived
+ *       and the format-7 fields are derived from `issues`, which actions_hash already
+ *       covers. Decoder is unaffected and stays at 4.
  *   4 - (decoder only) `transactions.data` converted to utf8mb4 by the
  *       2026-08-10-action-data-utf8mb4 migration. `transactions` is in the
  *       replicated decoder set, and an unmigrated replica quarantines a
@@ -130,7 +153,7 @@
  *       rather than merely lagging; that migration is a coordinated stop-the-
  *       decoders window, and this bump is what makes the ordering enforced
  *       instead of advisory. The 2026-07-24 pubkeys widening rides along.
- *       Indexer is unaffected by this key and stays at 10.
+ *       Indexer is unaffected by this key and stays at 11.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -147,17 +170,14 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 10, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 11, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-09-11',
+        through: '2026-09-12',
         accounted: [
-            '2026-09-11-contract-meta-columns.sql',
-            '2026-09-11-cross-chain-btc-chain-id.sql',
-            // hub-mirror only (price_snapshots never rides the sync wire), so the
-            // same-day tail names it without a version bump
-            '2026-09-11-price-snapshots-batch-block-time.sql'
+            '2026-09-12-bridge-tables.sql',
+            '2026-09-12-token-bridge-fields.sql'
         ]
     },
     decoder: {

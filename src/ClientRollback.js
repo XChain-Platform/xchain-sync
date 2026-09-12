@@ -975,6 +975,15 @@ class ClientRollback {
                     await this.db.doQuery(
                         `DELETE FROM cross_chain_matches WHERE (a_chain = ? AND a_action_index >= ?) OR (b_chain = ? AND b_action_index >= ?)`,
                         [this.coin, crossChainFrom, this.coin, crossChainFrom]);
+                    // bridge_transfers is the same kind of mirror and closes the same window. It is
+                    // ONE-SIDED: the single source leg (the XBRIDGE v0 lock or v1 burn named by
+                    // src_chain/src_action_index) is what a reorg takes away, so one column pair
+                    // names the range. Kept LAST inside this try: a replica predating the bridge
+                    // tables raises errno 1146 here, and the skip must not cost the two deletes
+                    // above it. Byte-identical to xchain-indexer/src/rollback.js (marker-guarded).
+                    await this.db.doQuery(
+                        `DELETE FROM bridge_transfers WHERE src_chain = ? AND src_action_index >= ?`,
+                        [this.coin, crossChainFrom]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.

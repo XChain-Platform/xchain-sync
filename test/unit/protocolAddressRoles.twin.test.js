@@ -70,6 +70,28 @@ describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression'
         }
     });
 
+    // The two cases above compare against the sibling indexer and SKIP when it is
+    // absent, so on a sync-only checkout they cover nothing. This one holds without
+    // the sibling: it pins the shape the snapshot must have, so a regeneration that
+    // dropped the bridge escrow roles on BOTH sides (which the comparison above
+    // would happily call equal) still reddens here. An XBRIDGE escrow that is not
+    // canonicalized hashes its per-chain address string into the ledger delta, and
+    // the replica's recomputed hash stops matching the indexer's.
+    it('carries a bridge escrow role for every ordered coin pair', function () {
+        const COINS = ['BTC', 'LTC', 'DOGE'];
+        for (const origin of COINS) {
+            for (const other of COINS) {
+                if (other === origin) continue;
+                const role = 'BRIDGE_' + other;
+                const hits = Object.keys(ROLE_BY_ADDRESS).filter(a => ROLE_BY_ADDRESS[a] === role);
+                // Every coin that can hold an escrow for `other` contributes at
+                // least one literal per distinct address encoding, so the role is
+                // never absent from the snapshot.
+                assert.ok(hits.length > 0, `snapshot carries no address for ${role}`);
+            }
+        }
+    });
+
     it('passes a non-special address through unchanged on both sides', function () {
         const plain = 'mq7tVfobimRUPxPNnyd5mKn11SVmTiLxtu';
         assert.strictEqual(canonicalizeHashAddress(plain), plain);
