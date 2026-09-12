@@ -911,19 +911,18 @@ class ClientSync {
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
-    // means the source's schema moved ahead of this replica AFTER the replica
-    // last reconciled its schema. _fetchAndApplySchema runs at four call
-    // sites, not only at bootstrap: the full-snapshot bootstrap
-    // (_bootstrapRotateSources, line 979), bootstrap-from-height
-    // (_bootstrapFromHeight, line 1178), resume (start(), line 571), and this
-    // apply-time heal itself (below). Even so, a server-side table addition
-    // can still wedge an already-bootstrapped, not-yet-resumed replica on the
-    // first snapshot carrying rows for it (live case: anchor_actions, added
-    // server-side while the replicas pre-dated it) until this heal runs.
-    // Re-apply the source schema (it CREATEs missing tables and ALTERs in
-    // missing columns) so the next apply attempt can proceed. Debounced to
-    // one heal per minute (this._lastSchemaHeal below) so a failure the
-    // schema can't fix (e.g. rejected DDL) can't hammer the /schema endpoint.
+    // means the source's schema moved ahead of this replica since the last
+    // reconciliation, so schema fetch/apply cannot be bootstrap-only.
+    // _fetchAndApplySchema runs at four call sites: the full-snapshot
+    // bootstrap (_bootstrapRotateSources), bootstrap-from-height
+    // (_bootstrapFromHeight), resume (start()), and this apply-time heal
+    // itself. A server-side table addition can still wedge an
+    // already-bootstrapped, not-yet-resumed replica on the first snapshot
+    // carrying rows for it until this heal runs. Re-apply the source schema
+    // (it CREATEs missing tables and ALTERs in missing columns) so the next
+    // apply attempt can proceed, debounced to one heal per minute
+    // (this._lastSchemaHeal below) so a failure the schema can't fix (e.g.
+    // rejected DDL) can't hammer the /schema endpoint.
     async _healSchemaIfStale(e){
         let errno = e ? e.errno : null;
         if(errno !== 1146 && errno !== 1054) return false;
