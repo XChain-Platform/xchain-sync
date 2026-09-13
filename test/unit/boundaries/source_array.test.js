@@ -104,6 +104,7 @@ describe('Boundary: Source Array Parsing', function(){
     describe('bootstrapRotateSources rotation (one round, returns boolean)', function(){
         it('does not recurse when only 1 source', async function(){
             let cs = createSync('http://s1');
+            // Stub axios to fail
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs.bootstrapRotateSources();
             assert.strictEqual(ok, false);

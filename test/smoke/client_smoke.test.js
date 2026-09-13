@@ -52,6 +52,7 @@ describe('Smoke: Client Mode', function() {
 
         let mariadb = await getMariadb();
 
+        // Create source and replica databases
         let conn = await mariadb.createConnection({
             host: TEST_DB_HOST, port: TEST_DB_PORT,
             user: TEST_DB_USER, password: TEST_DB_PASS
@@ -76,6 +77,7 @@ describe('Smoke: Client Mode', function() {
         });
         replicaDb = new TestDatabase(replicaPool, SMOKE_REPLICA_DB);
 
+        // Seed schema on both databases
         let sqlDir = path.join(__dirname, '../../../xchain-indexer/src/sql');
         let files = fs.readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
         let indexFiles = files.filter(f => f.startsWith('index_'));

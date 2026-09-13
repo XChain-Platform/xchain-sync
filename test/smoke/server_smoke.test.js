@@ -53,6 +53,7 @@ describe('Smoke: Server Mode', function() {
         sinon.stub(console, 'error');
         util = new Utility();
 
+        // Create test database with schema
         let mariadb = await getMariadb();
         let conn = await mariadb.createConnection({
             host: TEST_DB_HOST, port: TEST_DB_PORT,
@@ -69,6 +70,7 @@ describe('Smoke: Server Mode', function() {
         });
         db = new TestDatabase(pool, SMOKE_DB_NAME);
 
+        // Seed schema from indexer SQL files
         let sqlDir = path.join(__dirname, '../../../xchain-indexer/src/sql');
         let files = fs.readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
         let indexFiles = files.filter(f => f.startsWith('index_'));
@@ -79,6 +81,7 @@ describe('Smoke: Server Mode', function() {
                 try { await db.doQuery(q); } catch (e) {}
             }
         }
+        // sync_meta, this service's own table, which the indexer DDL does not carry
         let syncSql = fs.readFileSync(path.join(__dirname, '../../src/sql/sync_meta.sql'), 'utf8');
         for (let q of splitSqlStatements(syncSql)) {
             try { await db.doQuery(q); } catch (e) {}

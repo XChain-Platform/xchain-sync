@@ -86,8 +86,8 @@ describe('Tier 2 - ClientRollback @tier2', function () {
 
                     // A transaction was opened; verify it was resolved
                     if (began > 0) {
-                        // Commit is always attempted; rollback only fires as a follow-up when commit fails.
-                        // Commit is always attempted. If it fails, rollback is also called.
+                        // Commit is always attempted; rollback only fires as a follow-up when commit
+                        // fails, so a clean run commits once and a failing commit also rolls back once.
                         // Valid states: committed=1,rolledBack=0 (success) or committed=1,rolledBack=1 (commit failed)
                         assert.ok(committed >= 1,
                             'Commit should always be attempted: committed=' + committed);

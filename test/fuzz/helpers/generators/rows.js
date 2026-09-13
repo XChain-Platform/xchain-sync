@@ -56,6 +56,7 @@ function actionsRow() {
     });
 }
 
+/** credits table row */
 function creditsRow() {
     return fc.record({
         action_index: actionIndex(),

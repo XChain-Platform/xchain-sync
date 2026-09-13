@@ -50,6 +50,7 @@ describe('E2E: Reorg Propagation', function() {
         it('propagates reorg and new blocks correctly', async function() {
             this.timeout(30000);
 
+            // Seed and sync to block 20
             await fixtures.seedBlocks(sourceDb, 1, 20);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -59,10 +60,13 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 20);
 
+            // Simulate reorg: delete blocks 18-20 from source
             await fixtures.deleteBlocksFrom(sourceDb, 18);
 
+            // Force a poll to detect the reorg
             await server.poll();
 
+            // Wait for client to process reorg
             await waitFor(async () => {
                 let block = await replicaDb.getLastBlock();
                 return block !== null && block <= 17;
@@ -109,8 +113,8 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 20);
 
-            // Removes the blocks that carried the 5000-credit range.
-            // Reorg: remove blocks 16-20 (which had 5000 credits)
+            // Reorg: remove blocks 16-20, the range that carried the 5000 credits,
+            // so the replica has to give back exactly that balance contribution.
             await fixtures.deleteBlocksFrom(sourceDb, 16);
             await server.poll();
 
