@@ -1,0 +1,109 @@
+DEAD-CODE SWEEP: xchain-sync
+
+VERDICT: zero deletions. Every tracked src/*.js is reachable from the
+service runtime, so no file reaches the cross-repo falsification step at
+all.
+
+HOW THE VERDICT WAS TAKEN
+  node bin/reachability.js --siblings <the tree this checkout sits in>
+
+  src/*.js tracked                    61
+  runtime entry points                src/api.js  (the Dockerfile CMD and the api script)
+  tooling entry points                2
+  test entry points                   204
+  declared dynamic edges              1
+  reachable from service runtime      61
+  NOT reachable from service runtime  0
+  test-only                           0
+  unreferenced across the platform    0
+  sibling repos swept                 17
+
+WHY THE ZERO IS BELIEVABLE. A sweep that reports nothing to delete can be
+a clean tree or a broken tool, and the two read identically. So the tool
+was falsified rather than trusted: two modules were planted under src/ and
+staged, one required by nothing and one required only by a new test file.
+The sweep named both, the first as unreferenced across the platform and
+the second as held by tests alone, which is the shape the structure
+standard reads as dead rather than as a reason to keep a file. Both plants
+were then removed and the sweep returned to zero.
+
+THE PORTED TOOL WAS ADAPTED BEFORE IT WAS BELIEVED. Its first run reported
+sibling references that belonged to another service: the reference regexes
+spelled that service name as a literal, so the cross-repo half answered a
+question about the wrong repo while the totals still looked plausible.
+Every regex is now built from one name constant, and the counts below are
+the corrected ones.
+
+COMPUTED REQUIRES. A static walk cannot follow a require built at run time,
+so a file held only by one reads dead. All four computed forms were swept
+across src, test and bin: this repo builds no require of its own source at
+run time. Two test files require a JSON fixture through path.join and
+neither names a src path. One dynamic edge is declared ahead of the db
+split, inert until src/db/index.js exists.
+
+WHAT HOLDS THE FILES, of the 61:
+  named by another repo                 35
+  carrying a byte-identical twin copy   30
+
+PER-FILE REACH
+  src/BlockBroadcaster.js                         runtime, tests
+  src/BlockHasher.js                              runtime, tests, sibling-load x2
+  src/ClientApplier.js                            runtime, tests
+  src/ClientRollback.js                           runtime, tests, sibling-mention x99
+  src/ClientSync.js                               runtime, tests, sibling-mention x1
+  src/HashVerifier.js                             runtime, tests
+  src/HubClient.js                                runtime, tests
+  src/MerkleTree.js                               runtime, tests, sibling-mention x12
+  src/ServerPoller.js                             runtime, tests, sibling-mention x1
+  src/SnapshotBuilder.js                          runtime, tests, sibling-mention x1
+  src/SyncService.js                              runtime, tests
+  src/TransparencyLog.js                          runtime, tests, sibling-mention x3
+  src/api.js                                      runtime, tests, sibling-mention x3, twin x8
+  src/archive_rollback_author_scope_activation.js runtime, tests, twin x1
+  src/armedMapFingerprint.js                      runtime, tests, sibling-load x1, twin x1
+  src/balance-helpers.js                          runtime, tests, sibling-mention x3
+  src/checkpoint.js                               runtime, tests, sibling-mention x3, twin x1
+  src/checkpoint_commitment_activation.js         runtime, tests, sibling-load x2, twin x4
+  src/coins/BTC.js                                runtime, tests, twin x10
+  src/coins/DOGE.js                               runtime, tests, twin x10
+  src/coins/LTC.js                                runtime, tests, twin x10
+  src/coins/consensus_pin.js                      runtime, tests, twin x10
+  src/coins/index.js                              runtime, tests, twin x10
+  src/config.js                                   runtime, tests, sibling-mention x4, twin x3
+  src/consensus-constants.js                      runtime, tests, sibling-load x2
+  src/contractStateSubtree.js                     runtime, tests
+  src/cooldownCredits.js                          runtime, tests
+  src/corsOrigin.js                               runtime, tests, sibling-mention x3, twin x3
+  src/db.js                                       runtime, tests, sibling-load x2, twin x4
+  src/derivedRewards.js                           runtime, tests, sibling-mention x3
+  src/equivocation_header.js                      runtime, tests, twin x4
+  src/escrowLeafSubtree.js                        runtime, tests, sibling-mention x9
+  src/generatedColumns.js                         runtime, tests
+  src/merkle.js                                   runtime, tests, sibling-mention x19, twin x2
+  src/middleware.js                               runtime, tests
+  src/observability/index.js                      runtime, tests, sibling-mention x3, twin x6
+  src/observability/logShipper.js                 runtime, tests, twin x6
+  src/observability/metrics.js                    runtime, tests, twin x6
+  src/pinnedValidators.js                         runtime, tests
+  src/poolSizing.js                               runtime, tests, twin x1
+  src/protocolAddressRoles.js                     runtime, tests, sibling-load x2
+  src/recoveryRewards.js                          runtime, tests, sibling-mention x1
+  src/replicatedTables.js                         runtime, tests, sibling-mention x6
+  src/schema-version.js                           runtime, tests
+  src/shutdown.js                                 runtime, tests, twin x3
+  src/sqlUtil.js                                  runtime, tests, sibling-mention x3
+  src/stake_weight_collation_activation.js        runtime, tests, twin x1
+  src/stake_weighted_quorum.js                    runtime, tests, twin x4
+  src/stateCommitment.js                          runtime, tests, sibling-load x4, twin x1
+  src/stateHash.js                                runtime, tests, sibling-load x2, twin x1
+  src/state_commitment_activation.js              runtime, tests, sibling-mention x29, twin x1
+  src/state_key_collation_activation.js           runtime, tests, sibling-mention x6, twin x1
+  src/state_subtree_activation.js                 runtime, tests, sibling-mention x21, twin x3
+  src/swq_source_cap_activation.js                runtime, tests, sibling-mention x9, twin x1
+  src/tableLifecycle.js                           runtime, tests, sibling-mention x19
+  src/train_activation.js                         runtime, tests, sibling-mention x5, twin x1
+  src/updatedRows.js                              runtime, tests, sibling-mention x13
+  src/utf8mb4Columns.js                           runtime, tests, sibling-mention x3
+  src/utility.js                                  runtime, tests, sibling-load x4, twin x3
+  src/validation.js                               runtime, tests
+  src/wireCodec.js                                runtime, tests
