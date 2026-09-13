@@ -18,6 +18,9 @@ const axios  = require('axios');
 const ClientSync = require('../../src/client/sync');
 const Utility = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
+// A fake database gains the real query methods it lacks, so a query that moved
+// into a named db method still reaches the fake's doQuery exactly as before.
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 function createMockDb(){
     return {
@@ -35,7 +38,7 @@ function createMockDb(){
 function makeSync(db){
     const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_HASHES: true };
     const applier = { applyBlock: sinon.stub().resolves() };
-    return new ClientSync('bitcoin', 'mainnet', db, applier,
+    return new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier,
         { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
 }
 

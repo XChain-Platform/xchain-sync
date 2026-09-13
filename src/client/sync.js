@@ -820,10 +820,7 @@ class ClientSync {
                 let succeeded = false;
                 while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
                     try {
-                        let exists = await this.db.doQuery(
-                            "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
-                            [this.db.dbName, tableName]
-                        );
+                        let exists = await this.db.findTableInSchema(tableName);
                         if(exists.length === 0){
                             await this.db.doQuery(createSql);
                             getLogger().info('  Created table: ' + tableName);
@@ -1432,7 +1429,7 @@ class ClientSync {
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
             } else {
             try {
-                let r = await this.db.doQuery('SELECT MAX(`' + col + '`) AS m FROM `' + table + '`');
+                let r = await this.db.getMaxColumnValue(table, col);
                 if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
             } catch(e){
                 afterId = 0; // table not present yet -> treat as empty (schema applied earlier)
@@ -3748,8 +3745,7 @@ class ClientSync {
     // Compare a checkpoint's committed roots to the replica's OWN recomputed
     // state_tree_roots row. Returns { status: 'match'|'mismatch'|'missing', mismatches }.
     async checkpointRootsMatchLocal(c){
-        let rows = await this.db.doQuery(
-            'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [c.block_index]);
+        let rows = await this.db.getStateTreeRootByBlock(c.block_index);
         if(!rows || !rows.length) return { status: 'missing', mismatches: [] };
         let local = rows[0], mism = [];
         if(String(local.state_root).toLowerCase() !== String(c.state_root).toLowerCase())

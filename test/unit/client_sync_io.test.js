@@ -25,6 +25,9 @@ const { SCHEMA_VERSION } = require('../../src/schema/version');
 const Utility    = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
 const realConfig = require('../../src/config');
+// A fake database gains the real query methods it lacks, so a query that moved
+// into a named db method still reaches the fake's doQuery exactly as before.
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
@@ -69,7 +72,7 @@ function makeSync(configOverrides, dbOverrides){
         MAX_ROLLBACK_DEPTH:    10,
         GAP_LOG_INTERVAL_MS:   30000
     }, configOverrides || {});
-    let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rb, hv, config, util);
+    let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
 
@@ -699,7 +702,7 @@ describe('ClientSync truncated catch-up', function(){
             process.env[envKey] = '50000';
             let cfg = Object.assign(realConfig.getConfig(), { SYNC_SOURCES: 'http://src1:3006', MAX_ROLLBACK_DEPTH: 10 });
             // 'dogecoin' is the form the hub publishes as cfg.coin and SyncService passes on
-            let s = new ClientSync('dogecoin', 'testnet', createMockDb(), createMockApplier(),
+            let s = new ClientSync('dogecoin', 'testnet', withDbMixins(createMockDb()), createMockApplier(),
                 createMockRollback(), new HashVerifier(), cfg, new Utility());
             return s._truncatedDepth;
         }

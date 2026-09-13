@@ -44,4 +44,16 @@ module.exports = {
         return rows.length ? rows[0] : null;
     },
 
+    /**
+     * The replica's own recomputed roots for one block, the side a checkpoint's
+     * committed roots are compared against.
+     *
+     * @param {number} blockIndex
+     * @returns {Promise<object[]>} the driver's row array, at most one row
+     */
+    async getStateTreeRootByBlock(blockIndex){
+        return await this.doQuery(
+            'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [blockIndex]);
+    },
+
 };

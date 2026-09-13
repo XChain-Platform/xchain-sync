@@ -197,4 +197,31 @@ module.exports = {
         await this.doQuery("TRUNCATE TABLE `" + table + "`");
     },
 
+    /**
+     * The information_schema row for one table in this database, or none. Used to
+     * decide whether a table must be created before rows are written into it.
+     *
+     * @param {string} tableName
+     * @returns {Promise<object[]>} the driver's row array, empty when the table is absent
+     */
+    async findTableInSchema(tableName){
+        return await this.doQuery(
+            "SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+            [this.dbName, tableName]
+        );
+    },
+
+    /**
+     * The highest value in one column of one table. Both names are interpolated,
+     * because an identifier cannot be a bind parameter; the caller passes names it
+     * read from the replicated-table registry, never user input.
+     *
+     * @param {string} table
+     * @param {string} col
+     * @returns {Promise<object[]>} the driver's row array, one row carrying `m`
+     */
+    async getMaxColumnValue(table, col){
+        return await this.doQuery('SELECT MAX(`' + col + '`) AS m FROM `' + table + '`');
+    },
+
 };

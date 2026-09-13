@@ -27,6 +27,9 @@ const ClientSync   = require('../../src/client/sync');
 const Utility      = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
 const checkpoint   = require('../../src/checkpoint');
+// A fake database gains the real query methods it lacks, so a query that moved
+// into a named db method still reaches the fake's doQuery exactly as before.
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 const ENVKEY = 'CHECKPOINT_VALIDATORS_BTC_REGTEST';
 
@@ -68,7 +71,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const applier = { applyBlock: sinon.stub().resolves() };
         const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true,
             VERIFY_CHECKPOINT_QUORUM: true, CHECKPOINT_VERIFY_INTERVAL: 1 };
-        sync = new ClientSync('BTC', 'regtest', db, applier, { rollback: sinon.stub().resolves() },
+        sync = new ClientSync('BTC', 'regtest', withDbMixins(db), applier, { rollback: sinon.stub().resolves() },
             new HashVerifier(), config, new Utility());
         sync.lastAppliedBlock = 100;
         getStub = sinon.stub(axios, 'get');
@@ -296,7 +299,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         };
         const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true,
             VERIFY_CHECKPOINT_QUORUM: true, CHECKPOINT_VERIFY_INTERVAL: 1 };
-        sync = new ClientSync('BTC', 'regtest', db, { applyBlock: sinon.stub().resolves() },
+        sync = new ClientSync('BTC', 'regtest', withDbMixins(db), { applyBlock: sinon.stub().resolves() },
             { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
         sync.lastAppliedBlock = 1000;
         getStub = sinon.stub(axios, 'get');
