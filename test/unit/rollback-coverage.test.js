@@ -379,7 +379,7 @@ describe('Rollback coverage guard @regression', function(){
     // (xchain-sync/src/ClientRollback.js) locally prune the hub-mirrored
     // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
     // staleness window before hub-driven convergence (row:deleted). The predicates must
-    // also stay byte-identical to xchain-indexer/src/hub_db_sync.js _applyRetraction so
+    // also stay byte-identical to xchain-indexer/src/hub/hub_db_sync.js _applyRetraction so
     // the local belt-and-suspenders delete and the hub-driven delete remove exactly the
     // same rows. Both rollback files carry the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE>
     // markers; this extracts the backtick literals and asserts whitespace-normalised
@@ -1046,11 +1046,26 @@ describe('Rollback coverage guard @regression', function(){
     // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
     // copy means an origin that accepts a 4-byte character and a replica that halts on it
     // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
-    for(const twin of ['merkle.js', 'state_commitment_activation.js', 'swq_source_cap_activation.js', 'state_key_collation_activation.js', 'stake_weight_collation_activation.js', 'state_subtree_activation.js', 'contractStateSubtree.js', 'escrowLeafSubtree.js', 'tableLifecycle.js', 'utf8mb4Columns.js']){
+    // The two sides no longer share one relative path. xchain-sync keeps every twin flat
+    // under src/, while the indexer has sorted its copies into feature directories, so the
+    // indexer tail is spelled out per twin instead of derived from the basename. The pairs
+    // below compare exactly the same code the single-tail loop did.
+    for(const [twin, indexerRel] of [
+        ['merkle.js',                            'src/consensus/merkle.js'],
+        ['state_commitment_activation.js',       'src/state_commitment_activation.js'],
+        ['swq_source_cap_activation.js',         'src/swq_source_cap_activation.js'],
+        ['state_key_collation_activation.js',    'src/state_key_collation_activation.js'],
+        ['stake_weight_collation_activation.js', 'src/stake_weight_collation_activation.js'],
+        ['state_subtree_activation.js',          'src/state_subtree_activation.js'],
+        ['contractStateSubtree.js',              'src/consensus/contractStateSubtree.js'],
+        ['escrowLeafSubtree.js',                 'src/consensus/escrowLeafSubtree.js'],
+        ['tableLifecycle.js',                    'src/hub/tableLifecycle.js'],
+        ['utf8mb4Columns.js',                    'src/chain/utf8mb4Columns.js'],
+    ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
-            const indexerPath = indexerFile('src/' + twin);
+            const indexerPath = indexerFile(indexerRel);
             if(!requireSibling(this, indexerPath)) return;
             assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
@@ -1117,14 +1132,25 @@ describe('Rollback coverage guard @regression', function(){
             'the explorer activation copy drifted; its escrow-leaf proof refusal boundary would disagree with the fleet');
     });
 
+    // These three suites require the modules they cover by relative path, and the two repos
+    // no longer put those modules at the same depth: xchain-indexer sorts src/ into feature
+    // directories (consensus/, hub/, chain/, api/) while xchain-sync keeps its copies flat
+    // under src/. `../../src/consensus/merkle.js` and `../../src/merkle.js` load the SAME
+    // module, so that one directory segment is masked and EVERY OTHER BYTE still has to
+    // match: an assertion, a threshold or a case that changes on one side alone still fails
+    // here. The mask is deliberately narrow (only those four directory names, only inside a
+    // src/ path) so it cannot swallow a real divergence.
+    const maskTwinDepth = (s) => s.replace(/src\/(?:consensus|hub|chain|api)\//g, 'src/');
     for(const twin of ['stateSubtreeActivation.test.js', 'contractStateSubtree.test.js', 'escrowLeafSubtree.test.js']){
-        it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
+        it(twin + ' is byte-identical across xchain-sync and xchain-indexer, modulo sibling require depth (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../test/unit/' + twin);
             const indexerPath = indexerFile('test/unit/' + twin);
             if(!requireSibling(this, indexerPath)) return;
-            assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
-                twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+            assert.strictEqual(maskTwinDepth(fs.readFileSync(syncPath, 'utf8')),
+                               maskTwinDepth(fs.readFileSync(indexerPath, 'utf8')),
+                twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical '
+                + 'apart from the src/<feature>/ segment of its own sibling requires');
         });
     }
 

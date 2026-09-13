@@ -72,7 +72,7 @@ class TransparencyLog {
     // OPT-IN retention for the per-block sync_meta rows. DEFAULT OFF: with
     // SYNC_META_RETENTION_BLOCKS unset (or 0) this is a no-op and the log keeps full
     // history, which stays the shipped behaviour. Mirrors the indexer's
-    // retention.pruneStateRoots (xchain-indexer/src/retention.js): a positive window
+    // retention.pruneStateRoots (xchain-indexer/src/chain/retention.js): a positive window
     // means "keep the last N blocks", a zero/absent window means "keep everything".
     //
     // WHAT IS GIVEN UP: sync_meta holds the Merkle LEAVES, so a pruned block can no

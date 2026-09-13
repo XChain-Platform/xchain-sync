@@ -7,7 +7,7 @@
 // General Public License v3.0 or later; see LICENSE.md.
 
 // CONSENSUS-CRITICAL: protocol special-address canonicalization for the block
-// hash preimage, a frozen mirror of xchain-indexer/src/protocolAddressRoles.js
+// hash preimage, a frozen mirror of xchain-indexer/src/consensus/protocolAddressRoles.js
 // (which derives the same map from src/configs/*.js). The indexer hashes a
 // protocol special address (BURN / GAS / DONATE1 / DONATE2 / REWARD) as its
 // chain-independent role token rather than the per-chain address encoding, so

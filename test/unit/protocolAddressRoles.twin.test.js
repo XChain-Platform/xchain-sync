@@ -32,7 +32,7 @@ const { ROLE_BY_ADDRESS, canonicalizeHashAddress } = require('../../src/protocol
 
 const INDEXER_DIR = process.env.XCHAIN_INDEXER_DIR ||
     path.join(__dirname, '..', '..', '..', 'xchain-indexer');
-const INDEXER_MODULE = path.join(INDEXER_DIR, 'src', 'protocolAddressRoles.js');
+const INDEXER_MODULE = path.join(INDEXER_DIR, 'src', 'consensus', 'protocolAddressRoles.js');
 const INDEXER_PRESENT = fs.existsSync(INDEXER_MODULE);
 
 let indexerRoles = null;

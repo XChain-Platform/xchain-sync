@@ -127,8 +127,8 @@ const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 // the body. A failed reassembly (bad CRC, or a batch quorum that does not verify) is the
 // BATCH's fault, so the verdict is stamped IN PLACE on the head, which was written in an
 // earlier block. Byte-identical copies of the indexer's own values
-// (xchain-indexer/src/attest_batch_wire.js for the versions,
-// xchain-indexer/src/actions/attest.js for the marker, which
+// (xchain-indexer/src/actions/attest/attest_batch_wire.js for the versions,
+// xchain-indexer/src/actions/attest/index.js for the marker, which
 // xchain-indexer/src/rollback.js already keeps a second copy of); keep all copies in step.
 const ATTEST_BATCH_HEAD_VERSION         = 5;
 const ATTEST_BATCH_CONTINUATION_VERSION = 6;

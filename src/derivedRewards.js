@@ -14,7 +14,7 @@
  *
  * XChain Sync - Derived anchor/archive validator-reward delivery (source side, forward)
  *
- * The BTC-side anchor/archive derivation (xchain-indexer/src/anchor_reward_derive.js)
+ * The BTC-side anchor/archive derivation (xchain-indexer/src/consensus/anchor_reward_derive.js)
  * writes a validator_rewards row while processing BTC block B but stamps block_index =
  * the checkpoint's SNAPSHOT_BLOCK E (the earn-block COLLECT reads), with E <= B minus
  * the mirror-maturity watermark, and derive_block_index = B (the MATERIALIZATION block).
