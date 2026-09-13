@@ -28,10 +28,10 @@
  *
  * This selects those rows by their materialization block (derive_block_index) so they can
  * be merged into the normal validator_rewards payload, keeping their block_index = E. It is
- * the forward twin of ClientRollback's `DELETE FROM validator_rewards WHERE
- * derive_block_index >= B` reverse delete (the reverse path already knew this key; the
- * forward path did not), and the exact analogue of the recovery-redriven collector
- * (recoveryRewards.js, keyed on recovery_pending_rewards.applied_block). The follower
+ * the forward twin of ClientRollback's reverse delete, which removes every validator_rewards
+ * row whose derive_block_index is at or above B (the reverse path already knew this key;
+ * the forward path did not), and the exact analogue of the recovery-redriven collector
+ * (recovery_rewards.js, keyed on recovery_pending_rewards.applied_block). The follower
  * applies via the normal validator_rewards path (INSERT IGNORE on the UNIQUE key, so
  * re-injection across the live + snapshot channels is idempotent). Indexer dbType only.
  *
