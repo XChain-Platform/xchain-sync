@@ -8,8 +8,10 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// This module used to fork the e2e fixtures and drifted out of sync with them
-// (fabricated consensus hashes, stale balance SQL, a missed dedup fix). It now
-// re-exports the single maintained e2e implementation instead, so the
-// integration tier can't drift from it again.
+// Re-exports the single maintained e2e fixture implementation rather than keeping a
+// copy of it. That implementation commits REAL computed block hashes, so hash-
+// consistent fixture data lets VERIFY_RECOMPUTE run, and it rebuilds balances with the
+// same shared SQL the applier uses. The integration tier needs only seedBlocks and
+// deleteBlocksFrom from it, and a second copy is exactly what drifts: fabricated
+// consensus hashes, stale balance SQL and a missed dedup fix are what one looks like.
 module.exports = require('../../e2e/helpers/fixtures');

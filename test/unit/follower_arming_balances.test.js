@@ -19,7 +19,8 @@
  * is unchanged, so touched-set application at the arming height misses it, and the
  * prior committed root holds no escrow leaves at all (block-1 is below the armed
  * height). A source that full-builds and a live follower that still threads
- * incrementally commit two different balances_roots for one block.
+ * incrementally commit two different balances_roots for one block, and two honest
+ * nodes disagreeing on a root is a false halt.
  *
  * BTC:regtest is the only chain the escrow leaf is armed on
  * (state_subtree_activation.js, block 11200), so the boundary is 11200.

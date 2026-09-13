@@ -113,6 +113,7 @@ describe('E2E: Transparency Log', function() {
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
+            // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
                     server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',
@@ -169,6 +170,7 @@ describe('E2E: Transparency Log', function() {
             server.poller.lastPolledBlock = 0;
             await server.poll();
 
+            // Wait for all blocks to be logged
             await waitFor(async () => {
                 let res = await axios.get(
                     server.getUrl() + '/transparency/indexer/bitcoin/mainnet/roots?page=0&limit=1',

@@ -13,17 +13,21 @@
  *
  * Internal contract emissions (e.g. SLASH) deduct ledger state but mint no
  * on-wire action, so contract_emissions.action_index is NULL for them. The
- * consensus contract_hash counts those rows by walking execution_index ->
- * contract_executions -> actions rather than action_index, so the server must
- * stream them the same way; the old getActionScopedRows() path joined on
- * action_index directly and its INNER JOIN silently dropped every
- * NULL-action_index row, starving a follower's recompute and halting it.
+ * consensus contract_hash (the block hasher) counts those rows by walking
+ * execution_index -> contract_executions -> actions rather than action_index, so
+ * the server must stream them the same way; the old getActionScopedRows() path
+ * joined on action_index directly and its INNER JOIN silently dropped every
+ * NULL-action_index row. A follower then received fewer emissions than the hash
+ * counted, recomputed a divergent contract_hash and halted.
  *
- * This drill seeds one execution with an on-wire emission and a NULL-index
- * SLASH, then proves getEmissionRowsForBlock() returns both (the fix) while
- * getActionScopedRows() returns only one (the bug it replaces).
+ * This drill proves the fix at the SQL layer against a real MariaDB. It seeds a
+ * block whose single contract execution emits one on-wire emission (action_index
+ * set) and one internal SLASH (action_index NULL), then asserts that
+ *   - getEmissionRowsForBlock() returns BOTH, the streamed, hash-aligned set, and
+ *   - getActionScopedRows()     returns only ONE, dropping the SLASH: the bug.
  *
- * Requires the integration MariaDB; run via `npm run test:integration`.
+ * Requires the integration MariaDB; run via `npm run test:integration`. It cannot
+ * run where no real database is reachable.
  ********************************************************************/
 
 const assert   = require('assert');
