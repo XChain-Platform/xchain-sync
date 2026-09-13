@@ -71,12 +71,7 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a derived-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
-        let rows = await db.doQuery(
-            "SELECT vr.* " +
-            "FROM validator_rewards vr " +
-            "WHERE vr.derive_block_index BETWEEN ? AND ? " +
-            "  AND vr.block_index < vr.derive_block_index",
-            [from, to], conn);
+        let rows = await db.findDerivedValidatorRewards(from, to, conn);
         // round_qualifier closes the key. The archive leg's round_reference is
         // MATCH_BATCH_SEQ, a dense hub counter a rebase reissues, so two genuinely distinct
         // archive rewards can share the four older columns; on the four-column key the

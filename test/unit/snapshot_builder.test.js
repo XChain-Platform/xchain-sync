@@ -19,7 +19,10 @@ const Utility = require('../../src/util');
 const poolSizing = require('../../src/db/pool_sizing');
 
 function createMockDb(dbName){
-    return {
+    // The forward channels read through named Database methods. Mixed in for real
+    // rather than stubbed, so their queries still reach doQuery below and every
+    // doQuery call count these suites assert keeps counting them.
+    return Object.assign({
         dbName: dbName || 'test_db',
         doQuery: sinon.stub().resolves([]),
         // Always-throw twin of doQuery. The authoritative dump reads use it so a
@@ -38,7 +41,7 @@ function createMockDb(dbName){
         beginReadSnapshot: sinon.stub().resolves({ _snapshotConn: true }),
         commitReadSnapshot: sinon.stub().resolves(true),
         rollbackReadSnapshot: sinon.stub().resolves()
-    };
+    }, require('../../src/db/validator_rewards.js'), require('../../src/db/credits.js'));
 }
 
 function createMockRes(){

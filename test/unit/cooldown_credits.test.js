@@ -5,7 +5,13 @@
 // MariaDB): the collector only calls getStatusId and doQuery.
 
 const assert = require('assert');
-const { collectMaturedCooldownCredits } = require('../../src/server/cooldown_credits.js');
+const { collectMaturedCooldownCredits: collectFromRealFake } = require('../../src/server/cooldown_credits.js');
+// The collector reads through a named Database method, and these fakes stand in
+// for the database with nothing but doQuery. Mixing the REAL mixin onto whatever
+// fake reaches the collector keeps every assertion below exactly as it was: the
+// real method still hands its SQL, args and connection to the fake's doQuery.
+const CREDITS_MIXIN = require('../../src/db/credits.js');
+const collectMaturedCooldownCredits = (db, ...rest) => collectFromRealFake(Object.assign(db, CREDITS_MIXIN), ...rest);
 
 function mockDb({ statusId = 1, queries = [] } = {}) {
     let call = 0;

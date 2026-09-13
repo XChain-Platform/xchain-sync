@@ -38,7 +38,10 @@ const SEND_ROWS   = [{ action_index: 11, tick_id: 3, quantity: '500' }];
 const CREDIT_ROWS = [{ action_index: 11, address_id: 4, tick_id: 3, amount: '500' }];
 
 function createMockDb(){
-    return {
+    // The forward channels read through named Database methods. Mixed in for real
+    // rather than stubbed, so their queries still reach doQuery below and every
+    // doQuery call count these suites assert keeps counting them.
+    return Object.assign({
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(HASH_ROW),
         getBlockScopedRows: sinon.stub().resolves([]),
@@ -59,7 +62,7 @@ function createMockDb(){
         beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
         commitReadSnapshot: sinon.stub().resolves(),
         rollbackReadSnapshot: sinon.stub().resolves()
-    };
+    }, require('../../src/db/validator_rewards.js'), require('../../src/db/credits.js'));
 }
 
 function createPoller(db){

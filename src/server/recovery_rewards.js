@@ -66,18 +66,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a redriven-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
-        let rows = await db.doQuery(
-            "SELECT vr.* " +
-            "FROM validator_rewards vr " +
-            "JOIN recovery_pending_rewards rpr " +
-            "     ON rpr.source_id = vr.source_id AND rpr.reward_type = vr.reward_type " +
-            "    AND rpr.round_reference <=> vr.round_reference " +
-            "    AND rpr.amount = vr.amount AND rpr.block_index = vr.block_index " +
-            "JOIN index_pubkeys ip ON ip.id = vr.signing_pubkey_id AND ip.pubkey = rpr.validator_pubkey " +
-            "WHERE rpr.applied = 1 AND rpr.applied_block IS NOT NULL " +
-            "  AND rpr.applied_block BETWEEN ? AND ? " +
-            "  AND vr.block_index < rpr.applied_block",
-            [from, to], conn);
+        let rows = await db.findRedrivenValidatorRewards(from, to, conn);
         // round_qualifier closes the key, exactly as in derivedRewards.js: two distinct
         // archive rewards can share the four older columns after a hub rebase reissues
         // MATCH_BATCH_SEQ, and on the four-column key the second overwrites the first here

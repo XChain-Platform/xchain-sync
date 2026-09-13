@@ -74,12 +74,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     let gasTick = gasTickSymbol();
     if(gasTick){
         try {
-            let rows = await db.doQuery(
-                "SELECT c.* FROM credits c " +
-                "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
-                "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
-                "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?",
-                [gasTick, completedStatusId, from, to], conn);
+            let rows = await db.findMaturedCapabilityCooldownCredits(gasTick, completedStatusId, from, to, conn);
             add(rows);
         } catch(e){
             if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
@@ -89,11 +84,7 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
 
     // Contract maturity refund: paid in the unstake's own tick.
     try {
-        let rows = await db.doQuery(
-            "SELECT c.* FROM credits c " +
-            "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
-            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?",
-            [completedStatusId, from, to], conn);
+        let rows = await db.findMaturedContractCooldownCredits(completedStatusId, from, to, conn);
         add(rows);
     } catch(e){
         if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;

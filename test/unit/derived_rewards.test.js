@@ -15,7 +15,13 @@
 // ClientRollback's derive_block_index >= B reverse delete.
 
 const assert = require('assert');
-const { collectDerivedAnchorRewards } = require('../../src/server/derived_rewards');
+const { collectDerivedAnchorRewards: collectFromRealFake } = require('../../src/server/derived_rewards');
+// The collector reads through a named Database method, and these fakes stand in
+// for the database with nothing but doQuery. Mixing the REAL mixin onto whatever
+// fake reaches the collector keeps every assertion below exactly as it was: the
+// real method still hands its SQL, args and connection to the fake's doQuery.
+const REWARDS_MIXIN = require('../../src/db/validator_rewards.js');
+const collectDerivedAnchorRewards = (db, ...rest) => collectFromRealFake(Object.assign(db, REWARDS_MIXIN), ...rest);
 
 function row(over){
     return Object.assign({

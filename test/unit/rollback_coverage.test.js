@@ -592,7 +592,10 @@ describe('Rollback coverage guard @regression', function(){
     it('forward cooldown-credit selection mirrors the reverse delete keys (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/cooldown_credits.js'), 'utf8'));
+        // The forward SELECTs live in the credits mixin and the collector calls them by
+        // name, so the guard reads both: the keys it pins are the contract, not the file.
+        const fwd = norm(['../../src/server/cooldown_credits.js', '../../src/db/credits.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         const FWD_OPS = [
             { name: 'capability refund select (GAS, by unstake action_index)', re: /SELECT c\.\* FROM credits c JOIN unstakes u ON u\.action_index = c\.action_index AND u\.source_id = c\.address_id/ },
             { name: 'contract refund select (own tick)',                       re: /SELECT c\.\* FROM credits c JOIN contract_unstakes cu ON cu\.action_index = c\.action_index AND cu\.source_id = c\.address_id AND cu\.tick_id = c\.tick_id/ },
@@ -638,7 +641,10 @@ describe('Rollback coverage guard @regression', function(){
     it('forward recovery-reward selection mirrors the rollback key (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/recovery_rewards.js'), 'utf8'));
+        // The forward SELECT lives in the validator_rewards mixin and the collector calls
+        // it by name, so the guard reads both: the keys it pins are the contract, not the file.
+        const fwd = norm(['../../src/server/recovery_rewards.js', '../../src/db/validator_rewards.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         const FWD_OPS = [
             { name: 'validator_rewards / recovery_pending_rewards join (NULL-safe round_reference)', re: /JOIN recovery_pending_rewards rpr ON rpr\.source_id = vr\.source_id AND rpr\.reward_type = vr\.reward_type AND rpr\.round_reference <=> vr\.round_reference/ },
             { name: 'pubkey bridge (lowercase-hex match)',         re: /JOIN index_pubkeys ip ON ip\.id = vr\.signing_pubkey_id AND ip\.pubkey = rpr\.validator_pubkey/ },
@@ -673,7 +679,10 @@ describe('Rollback coverage guard @regression', function(){
     it('forward derived-reward selection mirrors the derive_block_index rollback key, and the reconcile DELETE is mirrored (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/derived_rewards.js'), 'utf8'));
+        // The forward SELECT lives in the validator_rewards mixin and the collector calls
+        // it by name, so the guard reads both: the keys it pins are the contract, not the file.
+        const fwd = norm(['../../src/server/derived_rewards.js', '../../src/db/validator_rewards.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assert.ok(/vr\.derive_block_index BETWEEN \? AND \?/.test(fwd), 'derivedRewards.js must key on derive_block_index (the materialization window)');
         assert.ok(/vr\.block_index < vr\.derive_block_index/.test(fwd), 'derivedRewards.js must restrict to backdated rows (earn-block below the materialization block)');
         const rbSync = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/rollback.js'), 'utf8'));
