@@ -12,12 +12,13 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ServerPoller = require('../../../src/server/poller');
 const Utility = require('../../../src/util');
+const { withDbMixins } = require('../../helpers/db_mixins.js');
 
 function createMockDb(){
-    // The forward channels read through named Database methods. Mixed in for real
-    // rather than stubbed, so their queries still reach doQuery below and every
+    // Queries read through named Database methods. The real ones are installed for
+    // any this fake does not stub, so they still reach doQuery below and every
     // doQuery call count these suites assert keeps counting them.
-    return Object.assign({
+    return withDbMixins({
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
         getBlockScopedRows: sinon.stub().resolves([]),
@@ -31,7 +32,7 @@ function createMockDb(){
         beginReadSnapshot: sinon.stub().resolves({ mockSnapshotConn: true }),
         commitReadSnapshot: sinon.stub().resolves(),
         rollbackReadSnapshot: sinon.stub().resolves()
-    }, require('../../../src/db/validator_rewards.js'), require('../../../src/db/credits.js'));
+    });
 }
 
 function createMockBroadcaster(){

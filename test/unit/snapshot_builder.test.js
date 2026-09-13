@@ -17,12 +17,13 @@ const SnapshotBuilder = require('../../src/server/snapshot_builder');
 const { SnapshotStreamWriter } = require('../../src/server/snapshot_builder');
 const Utility = require('../../src/util');
 const poolSizing = require('../../src/db/pool_sizing');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 function createMockDb(dbName){
-    // The forward channels read through named Database methods. Mixed in for real
-    // rather than stubbed, so their queries still reach doQuery below and every
+    // Queries read through named Database methods. The real ones are installed for
+    // any this fake does not stub, so they still reach doQuery below and every
     // doQuery call count these suites assert keeps counting them.
-    return Object.assign({
+    return withDbMixins({
         dbName: dbName || 'test_db',
         doQuery: sinon.stub().resolves([]),
         // Always-throw twin of doQuery. The authoritative dump reads use it so a
@@ -41,7 +42,7 @@ function createMockDb(dbName){
         beginReadSnapshot: sinon.stub().resolves({ _snapshotConn: true }),
         commitReadSnapshot: sinon.stub().resolves(true),
         rollbackReadSnapshot: sinon.stub().resolves()
-    }, require('../../src/db/validator_rewards.js'), require('../../src/db/credits.js'));
+    });
 }
 
 function createMockRes(){

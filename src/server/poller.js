@@ -559,8 +559,8 @@ class ServerPoller {
             //
             // Burst exemption: during a catch-up batch the pinned view sits at the batch
             // tip, so updated_rows for every block B < viewTip carry row state as of the
-            // tip, not as of B (the tick set is B-scoped but `SELECT t.*` reads the pinned
-            // view). The follower's apply-time recompute of state_hash(B) reads those rows
+            // tip, not as of B (the tick set is B-scoped but the row read takes every column
+            // from the pinned view). The follower's apply-time recompute of state_hash(B) reads those rows
             // back and would halt on a value the source never committed at B, even though
             // the replica converges to exact tip state by the end of the batch (each later
             // mutation re-emits its row under its own block). Ship NULL for those blocks so
@@ -849,7 +849,7 @@ class ServerPoller {
                         for(let tx of payload.data['transactions']) collectHashIds(tx);
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];
-                        let rows = await this.db.doQuery("SELECT * FROM index_transactions WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique, conn);
+                        let rows = await this.db.findIndexTransactionsByIds(unique, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -870,7 +870,7 @@ class ServerPoller {
                     }
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];
-                        let rows = await this.db.doQuery("SELECT * FROM index_addresses WHERE id IN (" + unique.map(() => '?').join(',') + ")", unique, conn);
+                        let rows = await this.db.findIndexAddressesByIds(unique, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -879,7 +879,7 @@ class ServerPoller {
                 else if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses']){
                     let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
                     if(ids.length > 0){
-                        let rows = await this.db.doQuery("SELECT * FROM pubkeys WHERE address_id IN (" + ids.map(() => '?').join(',') + ")", ids, conn);
+                        let rows = await this.db.findPubkeysByAddressIds(ids, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     }
@@ -936,7 +936,6 @@ class ServerPoller {
             }
             if(refIds.size > 0){
                 let idList = [...refIds];
-                let placeholders = idList.map(() => '?').join(',');
                 for(let table of this.indexTables){
                     // index_transactions carries block-hash/tx-hash IDs the generic _id
                     // scan can't see, so it keeps its explicit join above and is skipped here.
@@ -950,7 +949,7 @@ class ServerPoller {
                     // is armed). For every other table the already-populated skip stands.
                     if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
                     try {
-                        let rows = await this.db.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + placeholders + ")", idList, conn);
+                        let rows = await this.db.findRowsByIds(table, idList, conn);
                         if(rows && rows.length > 0)
                             payload.data[table] = rows;
                     } catch(e){

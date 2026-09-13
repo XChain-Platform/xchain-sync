@@ -224,4 +224,18 @@ module.exports = {
         return await this.doQuery('SELECT MAX(`' + col + '`) AS m FROM `' + table + '`');
     },
 
+    /**
+     * Rows of any replicated table for a set of ids. The table is interpolated,
+     * because an identifier cannot be a bind parameter; the caller iterates the
+     * replicated-table registry, never user input.
+     *
+     * @param {string} table
+     * @param {Array<number>} ids at least one
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findRowsByIds(table, ids, conn){
+        return await this.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + ids.map(() => '?').join(',') + ")", ids, conn);
+    },
+
 };
