@@ -23,7 +23,7 @@
  * single lying source cannot forge a quorum of federation signatures, so it
  * cannot make a fabricated state_root pass.
  *
- * The sync-side analogue of the SDK registry (xchain-sdk/src/pinnedCheckpoints.js),
+ * The sync-side analogue of the SDK registry (xchain-sdk/src/protocol/pinned_checkpoints.js),
  * duplicated here because xchain-sync has no xchain-sdk dependency by design.
  * Keyed by "chain:network".
  *
