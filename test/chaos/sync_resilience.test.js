@@ -70,9 +70,6 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
-// -------------------------------------------------------------------------
-// Suite setup / teardown
-// -------------------------------------------------------------------------
 describe('Chaos: Sync Resilience', function () {
 
     const SERVER_PORT = 30400;

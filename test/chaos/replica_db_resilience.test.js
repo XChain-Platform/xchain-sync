@@ -67,9 +67,6 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
-// -------------------------------------------------------------------------
-// Suite setup / teardown
-// -------------------------------------------------------------------------
 describe('Chaos: Replica Database Resilience', function () {
 
     let server, client;

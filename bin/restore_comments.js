@@ -196,7 +196,15 @@ function carriesInternalReference(line) {
 
 function isCut(run) {
     const bodies = run.lines.map(bodyOf).filter(Boolean);
-    return bodies.length > 0 && bodies.every((b) => CUT.some((re) => re.test(b)));
+    if (!bodies.length) return false;
+    if (bodies.every((b) => CUT.some((re) => re.test(b)))) return true;
+    // A TITLED banner: a label between two rule lines. Checking every line alone
+    // misses it, because the label itself is ordinary text, and that is exactly
+    // how a restore puts back a section banner the cleanup was right to remove.
+    const rule = CUT[0];
+    const first = bodies[0];
+    const last = bodies[bodies.length - 1];
+    return bodies.length >= 3 && rule.test(first) && rule.test(last);
 }
 
 /** What one file lost, and where each run goes back. */

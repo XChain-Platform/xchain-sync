@@ -33,9 +33,7 @@ const fixtures      = require('../../e2e/helpers/fixtures');
 const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
 
-// -------------------------------------------------------------------------
 // Connection constants: proxied ports from docker-compose.chaos.yml
-// -------------------------------------------------------------------------
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
 const SOURCE_PROXY_PORT  = parseInt(process.env.SOURCE_PROXY_PORT  || '33060', 10);
 const REPLICA_PROXY_PORT = parseInt(process.env.REPLICA_PROXY_PORT || '33061', 10);
@@ -46,16 +44,10 @@ const CHAOS_DB_PASS      = 'xchain-fixture-throwaway';
 const SOURCE_DB_NAME  = 'xchain_chaos_source';
 const REPLICA_DB_NAME = 'xchain_chaos_replica';
 
-// -------------------------------------------------------------------------
-// Database singletons
-// -------------------------------------------------------------------------
 let sourceDb       = null;   // through proxy (33060), used by ServerProcess
 let replicaDb      = null;   // through proxy (33061), used by ClientProcess
 let sourceDbDirect = null;   // direct (33065), for seeding while proxy is down
 
-// -------------------------------------------------------------------------
-// Database lifecycle
-// -------------------------------------------------------------------------
 async function bootstrapDatabases() {
     console.log('    [chaos setup] Creating databases through proxied ports...');
 
@@ -98,9 +90,6 @@ async function resetDatabases() {
     if (replicaDb) await testDb.truncateAll(replicaDb);
 }
 
-// -------------------------------------------------------------------------
-// Server / Client process creation
-// -------------------------------------------------------------------------
 function createServer(port, chain, network) {
     return new ServerProcess(sourceDb, port, chain || 'bitcoin', network || 'mainnet');
 }
@@ -124,13 +113,14 @@ function createClient(serverUrl, opts = {}) {
  * Seed blocks into the source DB through the proxied connection.
  * Use this when the source proxy is enabled (normal case).
  */
-// -------------------------------------------------------------------------
-// Data seeding
-// -------------------------------------------------------------------------
 async function seedSourceBlocks(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDb, startBlock, endBlock, opts);
 }
 
+/**
+ * Seed blocks into the source DB through the direct connection.
+ * Use this when the source proxy is disabled.
+ */
 async function seedSourceDirect(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDbDirect, startBlock, endBlock, opts);
 }
@@ -143,9 +133,6 @@ async function deleteSourceBlocksFrom(blockIndex) {
     return fixtures.deleteBlocksFrom(sourceDb, blockIndex);
 }
 
-// -------------------------------------------------------------------------
-// HTTP helpers for server status checks
-// -------------------------------------------------------------------------
 function httpGet(urlPath, opts = {}) {
     const base = opts.baseUrl;
     return new Promise((resolve, reject) => {
@@ -183,9 +170,6 @@ async function isServerAlive(serverUrl) {
  * Wait until the replica DB reaches a given block height.
  * Returns elapsed ms, or -1 if timeout expires.
  */
-// -------------------------------------------------------------------------
-// Recovery and monitoring helpers
-// -------------------------------------------------------------------------
 async function waitForSyncRecovery(expectedBlock, timeoutMs = 60000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -258,9 +242,6 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// -------------------------------------------------------------------------
-// Exports
-// -------------------------------------------------------------------------
 module.exports = {
     bootstrapDatabases,
     teardownDatabases,
