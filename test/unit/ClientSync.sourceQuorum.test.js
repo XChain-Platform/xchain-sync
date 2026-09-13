@@ -210,10 +210,10 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             // N=3: evicting 1 leaves 2 (allowed). A second eviction would leave 1: suppressed.
             let { sync } = makeSync('http://a:3006,http://b:3006,http://c:3006',
                 { SOURCE_EVICT_THRESHOLD: 1, SOURCE_STRIKE_WINDOW: 100 });
-            sync._strikeSource(2, 101); // C evicted (2 active remain)
+            sync.strikeSource(2, 101); // C evicted (2 active remain)
             assert.ok(sync._evictedSources.has(2));
             assert.strictEqual(sync.getActiveSourceCount(), 2);
-            sync._strikeSource(1, 102); // would drop to 1 active: suppressed
+            sync.strikeSource(1, 102); // would drop to 1 active: suppressed
             assert.strictEqual(sync._evictedSources.has(1), false, 'never evict below 2 active sources');
             assert.strictEqual(sync.getActiveSourceCount(), 2);
         });
@@ -223,10 +223,10 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
         it('prunes strikes older than SOURCE_STRIKE_WINDOW so stale strikes do not evict', function(){
             let { sync } = makeSync('http://a:3006,http://b:3006,http://c:3006,http://d:3006',
                 { SOURCE_EVICT_THRESHOLD: 3, SOURCE_STRIKE_WINDOW: 10 });
-            sync._strikeSource(3, 100);
-            sync._strikeSource(3, 101);
+            sync.strikeSource(3, 100);
+            sync.strikeSource(3, 101);
             // A strike 20 blocks later prunes the two old ones (outside the 10-block window).
-            sync._strikeSource(3, 121);
+            sync.strikeSource(3, 121);
             assert.deepStrictEqual(sync._sourceStrikes.get(3), [121], 'old strikes pruned');
             assert.strictEqual(sync._evictedSources.has(3), false, 'not evicted on stale strikes');
         });

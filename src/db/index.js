@@ -362,7 +362,7 @@ class Database {
     async _autoIncrementKeyAction(tableName, col, sourceDdl){
         let key = validation.extractKeyForColumn(sourceDdl, col);
 
-        if(key && key.type === 'primary' && !(await this._hasPrimaryKey(tableName)))
+        if(key && key.type === 'primary' && !(await this.hasPrimaryKey(tableName)))
             return 'ADD PRIMARY KEY (`' + col + '`)';
 
         if(key && key.type === 'unique' && key.name)
@@ -378,7 +378,7 @@ class Database {
     // failed probe answers "yes": the caller then adds a UNIQUE key, which is
     // valid either way, while a wrong "no" produces an ADD PRIMARY KEY that a
     // table with one rejects outright (errno 1068).
-    async _hasPrimaryKey(tableName){
+    async hasPrimaryKey(tableName){
         try {
             let rows = await this.doQueryStrict(
                 "SELECT index_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? AND index_name = 'PRIMARY' LIMIT 1",
@@ -396,7 +396,7 @@ class Database {
     // never from a guess, and the ADD is IF NOT EXISTS so a concurrent startup that won
     // the race is not an error. A refused ADD returns false and the caller leaves the
     // stale key alone: the rebuild would only be refused too, with no signal.
-    async _ensureKeyRebuildColumn(table, column){
+    async ensureKeyRebuildColumn(table, column){
         let spec = KEY_REBUILD_PRECONDITION_COLUMNS.find(c => c.table === table && c.column === column);
         if(!spec) return false;
         try {
@@ -956,7 +956,7 @@ class Database {
                             [this.dbName]
                         );
                         let haveColumn = colRows.length > 0 ||
-                            await this._ensureKeyRebuildColumn('anchor_actions', 'section_index');
+                            await this.ensureKeyRebuildColumn('anchor_actions', 'section_index');
                         if(!haveColumn){
                             logger.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
                                 'the widened key for ANCHOR v7 bundle sections cannot be built on this replica');
@@ -1031,7 +1031,7 @@ class Database {
                             [this.dbName]
                         );
                         let haveColumn = colRows.length > 0 ||
-                            await this._ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
+                            await this.ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
                         if(!haveColumn){
                             logger.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
                                 'the archive reward identity stays ambiguous on this replica');

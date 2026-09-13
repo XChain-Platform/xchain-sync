@@ -92,7 +92,7 @@ for (const k of Object.keys(PINNED)) {
 }
 Object.freeze(PINNED);
 
-function _envKey(chain, network) {
+function envKey(chain, network) {
     return 'CHECKPOINT_VALIDATORS_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
@@ -119,11 +119,11 @@ function _parseValidatorSetEnv(raw) {
 // unusable. Never throws: this is on the per-verify read path, and startup already
 // refused an invalid explicit value.
 function _fromEnv(chain, network) {
-    const raw = process.env[_envKey(chain, network)];
+    const raw = process.env[envKey(chain, network)];
     if (!raw) return null;
     const { set, error } = _parseValidatorSetEnv(raw);
     if (error) {
-        logger.warn('[pinnedValidators] ' + _envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
+        logger.warn('[pinnedValidators] ' + envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
         return null;
     }
     return set;
@@ -171,14 +171,14 @@ for (const k of Object.keys(PINNED_CHECKPOINTS)) {
 }
 Object.freeze(PINNED_CHECKPOINTS);
 
-function _seedEnvKey(chain, network) {
+function seedEnvKey(chain, network) {
     return 'CHECKPOINT_SEED_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
 // Parse + lightly validate an env-supplied seed checkpoint into { seed, error }, the
 // same absent-versus-invalid split as _parseValidatorSetEnv. state_root is the field
 // the forward walk anchors successor-set proofs to, so it is required and a string.
-function _parseSeedEnv(raw) {
+function parseSeedEnv(raw) {
     let cp;
     try { cp = JSON.parse(raw); } catch (e) { return { seed: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return { seed: null, error: 'is not a JSON object' };
@@ -192,12 +192,12 @@ function _parseSeedEnv(raw) {
 
 // Resolve the env-supplied seed for (chain, network), or null when it is absent or
 // unusable. Never throws, for the same reason _fromEnv does not.
-function _seedFromEnv(chain, network) {
-    const raw = process.env[_seedEnvKey(chain, network)];
+function seedFromEnv(chain, network) {
+    const raw = process.env[seedEnvKey(chain, network)];
     if (!raw) return null;
-    const { seed, error } = _parseSeedEnv(raw);
+    const { seed, error } = parseSeedEnv(raw);
     if (error) {
-        logger.warn('[pinnedValidators] ' + _seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
+        logger.warn('[pinnedValidators] ' + seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
         return null;
     }
     return seed;
@@ -212,7 +212,7 @@ function _seedFromEnv(chain, network) {
  */
 function getPinnedCheckpoint(chain, network) {
     if (chain == null || network == null) return null;
-    const env = _seedFromEnv(chain, network);
+    const env = seedFromEnv(chain, network);
     if (env) return env;
     const entry = PINNED_CHECKPOINTS[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
     return entry || null;
@@ -222,10 +222,10 @@ function getPinnedCheckpoint(chain, network) {
 // both halves non-empty. Mirrors config.js bootstrapDepthEnvKey's shape rule.
 const _OVERRIDE_PREFIXES = [
     { prefix: 'CHECKPOINT_VALIDATORS_', parse: _parseValidatorSetEnv, what: 'pinned validator set' },
-    { prefix: 'CHECKPOINT_SEED_',       parse: _parseSeedEnv,         what: 'pinned seed checkpoint' },
+    { prefix: 'CHECKPOINT_SEED_',       parse: parseSeedEnv,         what: 'pinned seed checkpoint' },
 ];
 
-function _isChainNetworkShaped(prefix, envKey) {
+function isChainNetworkShaped(prefix, envKey) {
     if (envKey.indexOf(prefix) !== 0) return false;
     const rest = envKey.slice(prefix.length);
     const sep  = rest.lastIndexOf('_');
@@ -252,7 +252,7 @@ function assertPinnedEnvOverrides(env) {
     const bad = [];
     for (const envKey of Object.keys(source)) {
         for (const { prefix, parse, what } of _OVERRIDE_PREFIXES) {
-            if (!_isChainNetworkShaped(prefix, envKey)) continue;
+            if (!isChainNetworkShaped(prefix, envKey)) continue;
             const raw = source[envKey];
             if (raw === undefined || raw === null || raw === '') break;   // absent: inert, not an error
             const { error } = parse(raw);

@@ -153,22 +153,22 @@ class SnapshotStreamWriter {
         // A disconnect fires 'close' on the response before the stream drains.
         // Flag it, wake any pending drain wait (via the abort signal), and destroy
         // the gzip stream so its buffered chunks are freed.
-        this._onClose = () => this._abort();
+        this._onClose = () => this.abort();
         // A gzip error (e.g. a write after the piped socket died) must also release
         // a pending drain wait rather than hang it, and must not throw unhandled.
-        this._onError = () => this._abort();
+        this._onError = () => this.abort();
         res.once('close', this._onClose);
         gzip.once('error', this._onError);
     }
 
-    _abort(){
+    abort(){
         if(this.aborted) return;
         this.aborted = true;
         this._ac.abort();
         if(!this.gzip.destroyed) this.gzip.destroy();
     }
 
-    _abortError(){
+    abortError(){
         let e = new Error('snapshot stream aborted by client disconnect');
         e.aborted = true;
         return e;
@@ -178,7 +178,7 @@ class SnapshotStreamWriter {
     // (immediately if the buffer has room, else after 'drain'). Rejects with an
     // aborted-tagged error if the client has gone away, so the caller stops.
     async write(chunk){
-        if(this.aborted) throw this._abortError();
+        if(this.aborted) throw this.abortError();
         // write() returns false when the internal buffer crosses the high-water
         // mark: pause and wait for 'drain' so we never outrun a slow reader.
         if(this.gzip.write(chunk)) return;
@@ -187,23 +187,23 @@ class SnapshotStreamWriter {
         } catch(e){
             // AbortError (client closed) or a gzip error surfaced by once(): either
             // way the stream is gone, so report it as an abort.
-            throw this._abortError();
+            throw this.abortError();
         }
     }
 
     // Normal completion: detach the disconnect handlers and flush-close the stream.
     finish(){
-        this._detach();
+        this.detach();
         if(!this.gzip.destroyed) this.gzip.end();
     }
 
     // Error/abort teardown: detach handlers and drop any buffered output.
     dispose(){
-        this._detach();
+        this.detach();
         if(!this.gzip.destroyed) this.gzip.destroy();
     }
 
-    _detach(){
+    detach(){
         this._res.removeListener('close', this._onClose);
         this.gzip.removeListener('error', this._onError);
     }
@@ -288,7 +288,7 @@ class SnapshotBuilder {
     // answers the request itself with 503 + Retry-After (fail fast rather than
     // queue: a queued acquire would still pin the caller and hide the overload
     // from the client's retry logic) and returns false.
-    _acquireSnapshotSlot(db, res){
+    acquireSnapshotSlot(db, res){
         let inflight = this._inflightSnapshots.get(db) || 0;
         if(inflight >= this._snapshotCap(db)){
             this.snapshotsRejected = (this.snapshotsRejected || 0) + 1;
@@ -303,7 +303,7 @@ class SnapshotBuilder {
         return true;
     }
 
-    _releaseSnapshotSlot(db){
+    releaseSnapshotSlot(db){
         let inflight = this._inflightSnapshots.get(db) || 0;
         if(inflight <= 1) this._inflightSnapshots.delete(db);
         else this._inflightSnapshots.set(db, inflight - 1);
@@ -333,15 +333,15 @@ class SnapshotBuilder {
     async streamFullSnapshot(db, res){
         // Concurrency gate: reject with 503 instead of pinning yet
         // another pool connection when the per-Database stream cap is reached.
-        if(!this._acquireSnapshotSlot(db, res)) return;
+        if(!this.acquireSnapshotSlot(db, res)) return;
         try {
-            await this._streamFullSnapshotLocked(db, res);
+            await this.streamFullSnapshotLocked(db, res);
         } finally {
-            this._releaseSnapshotSlot(db);
+            this.releaseSnapshotSlot(db);
         }
     }
 
-    async _streamFullSnapshotLocked(db, res){
+    async streamFullSnapshotLocked(db, res){
         let startedAt = Date.now();
         let conn = await db.beginReadSnapshot();
         let snapshotOpen = true;
@@ -482,15 +482,15 @@ class SnapshotBuilder {
     async streamIncrementalSnapshot(db, sinceBlock, res, coin, opts){
         // Concurrency gate: same per-Database stream cap as the full
         // snapshot; both hold a REPEATABLE READ pool connection end-to-end.
-        if(!this._acquireSnapshotSlot(db, res)) return;
+        if(!this.acquireSnapshotSlot(db, res)) return;
         try {
-            await this._streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts);
+            await this.streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts);
         } finally {
-            this._releaseSnapshotSlot(db);
+            this.releaseSnapshotSlot(db);
         }
     }
 
-    async _streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts){
+    async streamIncrementalSnapshotLocked(db, sinceBlock, res, coin, opts){
         // opts.skipLookups: omit the append-only `.index` lookup tables (index_*,
         // and for the decoder pubkeys/events) from this response. A truncated /
         // fast-chain replica syncs those separately via the id-cursor paged route
@@ -684,7 +684,7 @@ class SnapshotBuilder {
                        ((dbType === 'decoder' && decoderFullDump.has(table)) ||
                         (dbType === 'indexer' && indexerFullDump.has(table)))){
                         if(skipLookups) continue;
-                        first = await this._streamLookupPaged(writer, db, table, conn, first);
+                        first = await this.streamLookupPaged(writer, db, table, conn, first);
                         continue;
                     }
 
@@ -698,7 +698,7 @@ class SnapshotBuilder {
                     // lookupSet tables it is NOT synced out of band, so it must still be
                     // streamed under skipLookups rather than skipped.
                     if(dbType === 'indexer' && table === 'events' && indexerFullDump.has(table)){
-                        first = await this._streamLookupPaged(writer, db, table, conn, first);
+                        first = await this.streamLookupPaged(writer, db, table, conn, first);
                         continue;
                     }
 
@@ -945,7 +945,7 @@ class SnapshotBuilder {
     // array (or gzip buffer) all at once. `first` tracks whether any table key has
     // been written yet (for the inter-table comma); returns the updated value.
     // Uses the shared REPEATABLE READ conn, so paging is consistent across batches.
-    async _streamLookupPaged(writer, db, table, conn, first){
+    async streamLookupPaged(writer, db, table, conn, first){
         let col = replicatedTables.lookupCursorColumn(table);
         let after = 0;
         let wrote = false;

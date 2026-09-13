@@ -449,18 +449,18 @@ describe('ClientSync: bootstrap size wall', function(){
 
     it('falls back to RateLimit-Reset when Retry-After is absent', function(){
         ({ sync } = makeSync());
-        assert.strictEqual(sync._rateLimitRetryAfterSeconds(rateLimitError({ 'ratelimit-reset': '900' })), 900);
-        assert.strictEqual(sync._rateLimitRetryAfterSeconds(rateLimitError({})), 0);
-        assert.strictEqual(sync._rateLimitRetryAfterSeconds(new Error('nope')), null);
+        assert.strictEqual(sync.rateLimitRetryAfterSeconds(rateLimitError({ 'ratelimit-reset': '900' })), 900);
+        assert.strictEqual(sync.rateLimitRetryAfterSeconds(rateLimitError({})), 0);
+        assert.strictEqual(sync.rateLimitRetryAfterSeconds(new Error('nope')), null);
     });
 
     it('the size wall has one definition, shared with the incremental fallback', function(){
         ({ sync } = makeSync());
-        assert.strictEqual(sync._isContentLengthOverflow(sizeError()), true);
+        assert.strictEqual(sync.isContentLengthOverflow(sizeError()), true);
         // axios raises the same wall by message alone on some transports.
-        assert.strictEqual(sync._isContentLengthOverflow(new Error('maxContentLength exceeded')), true);
-        assert.strictEqual(sync._isContentLengthOverflow(new Error('ECONNRESET')), false);
-        assert.strictEqual(sync._isContentLengthOverflow(null), false);
+        assert.strictEqual(sync.isContentLengthOverflow(new Error('maxContentLength exceeded')), true);
+        assert.strictEqual(sync.isContentLengthOverflow(new Error('ECONNRESET')), false);
+        assert.strictEqual(sync.isContentLengthOverflow(null), false);
     });
 });
 

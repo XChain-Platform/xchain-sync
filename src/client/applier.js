@@ -312,7 +312,7 @@ class ClientApplier {
                 // reads _lastComputedRoots after commit and HALTs on divergence.
                 if(isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
                     let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
-                    let touchedKeys  = isActivation ? [] : await this._collectSmtTouchedKeys(data);
+                    let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
                     this._lastComputedRoots = await computeFollowerRoots(
                         this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
                 } else {
@@ -369,7 +369,7 @@ class ClientApplier {
     // resolves the surrogate ids to canonical strings. NO cap: every touched pair
     // must be recomputed (unlike the balance-cache rebuild, which can fall back to a
     // full recompute). Runs inside the apply txn so freshly-inserted index rows resolve.
-    async _collectSmtTouchedKeys(data){
+    async collectSmtTouchedKeys(data){
         let pairs   = new Set();
         let addrIds = new Set();
         let tickIds = new Set();
@@ -785,7 +785,7 @@ class ClientApplier {
                 // signal anywhere that it happened. Fail loud instead, so the repair's
                 // caller (ClientSync._maybeVerifyCompleteness) sees exactly which
                 // table/row collided rather than reporting the same short count forever.
-                let suspect = this._suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
+                let suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
 
                 // A natural-key collision on this class has two causes and only one of
                 // them needs a human. A STALE GENERATION is the healable one: the source
@@ -796,10 +796,10 @@ class ClientApplier {
                 // the table. A GENUINE conflict is the other: the id the local row holds
                 // is one the source ALSO serves, so retiring it would destroy a live row.
                 if(suspect.length){
-                    let retired = await this._retireStaleNaturalKeyRows(table, batch, rows, suspect);
+                    let retired = await this.retireStaleNaturalKeyRows(table, batch, rows, suspect);
                     if(retired.length){
                         await this.db.doQuery(query, args);
-                        suspect = this._suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
+                        suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
                     }
                     for(let w of suspect){
                         let code = Number(w.Code || w.code || 0);
@@ -818,7 +818,7 @@ class ClientApplier {
     // Warnings from an id-keyed INSERT IGNORE that the re-send contract does NOT admit.
     // A benign re-delivery can only ever warn "Duplicate entry '<id>' for key 'PRIMARY'";
     // everything else means IGNORE dropped a row the caller needed to land.
-    _suspectIgnoreWarnings(warnings){
+    suspectIgnoreWarnings(warnings){
         let suspect = [];
         for(let w of (warnings || [])){
             let code    = Number(w.Code || w.code || 0);
@@ -840,7 +840,7 @@ class ClientApplier {
     // Safe to delete: the replica's data rows carry the SOURCE's status/lookup ids
     // verbatim (they are replicated, not minted locally), so nothing the source still
     // serves points at a retired generation's id.
-    async _retireStaleNaturalKeyRows(table, batch, pageRows, warnings){
+    async retireStaleNaturalKeyRows(table, batch, pageRows, warnings){
         let retired = [];
         let indexNames = [];
         for(let w of warnings){

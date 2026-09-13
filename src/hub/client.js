@@ -145,14 +145,14 @@ class HubClient {
     // otherwise). Older hubs ignore an unknown param and return the full tree, so
     // this is safe to deploy ahead of the hub change (and must be: a sync without
     // the flag against a redacting hub loses its DB passwords).
-    _configParams(cursor){
+    configParams(cursor){
         return { since_updated_at: cursor, include_secrets: true };
     }
 
     // One warning, not one per poll: a redacted response means this service asked
     // for credentials and is not authorized for them, so every DB pool built from
     // the result will fail to authenticate several layers away from the cause.
-    _warnIfRedacted(result){
+    warnIfRedacted(result){
         if(!result || typeof result !== 'object' || result.secrets_redacted !== true) return;
         if(this._warnedRedacted) return;
         this._warnedRedacted = true;
@@ -183,7 +183,7 @@ class HubClient {
         let result = await this._call({
             jsonrpc: '2.0',
             method:  'getallconfigs',
-            params:  this._configParams(deltaCursor),
+            params:  this.configParams(deltaCursor),
             id:      1
         }, 10000);
         // _call returns null when every endpoint failed; preserve that signal so
@@ -201,7 +201,7 @@ class HubClient {
             result = await this._call({
                 jsonrpc: '2.0',
                 method:  'getallconfigs',
-                params:  this._configParams(0),
+                params:  this.configParams(0),
                 id:      1
             }, 10000);
             if(result === null) return null;
@@ -226,13 +226,13 @@ class HubClient {
             result = await this._call({
                 jsonrpc: '2.0',
                 method:  'getallconfigs',
-                params:  this._configParams(0),
+                params:  this.configParams(0),
                 id:      1
             }, 10000);
             if(result === null) return null;
         }
 
-        this._warnIfRedacted(result);
+        this.warnIfRedacted(result);
         this.configs = this._applyConfigResult(result);
         // Bind the (possibly advanced) cursor to the endpoint that answered.
         this._watermarkEndpointIdx = this._lastGoodIdx;

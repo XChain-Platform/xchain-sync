@@ -35,7 +35,7 @@ module.exports = {
     // to persist the truncated-replica join floor (_bootstrapBase): an in-memory-only
     // field is lost on restart, dropping the join-block recompute skip and the
     // truncation floor that protects against an in-window reorg below `base`.
-    async _ensureSyncStateTable(){
+    async ensureSyncStateTable(){
         if(this._syncStateReady) return;
         await this.doQuery(
             "CREATE TABLE IF NOT EXISTS sync_state (" +
@@ -52,7 +52,7 @@ module.exports = {
     // "no persisted value" and falls back to its in-memory default).
     async getSyncState(key){
         try {
-            await this._ensureSyncStateTable();
+            await this.ensureSyncStateTable();
             let rows = await this.doQuery("SELECT state_value FROM sync_state WHERE state_key=? LIMIT 1", [key]);
             return (rows && rows.length) ? rows[0].state_value : null;
         } catch(e){
@@ -65,7 +65,7 @@ module.exports = {
     // logged, never thrown, so it cannot abort a bootstrap/catch-up.
     async setSyncState(key, value){
         try {
-            await this._ensureSyncStateTable();
+            await this.ensureSyncStateTable();
             await this.doQuery(
                 "INSERT INTO sync_state (state_key, state_value) VALUES (?, ?) " +
                 "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=CURRENT_TIMESTAMP",
@@ -82,7 +82,7 @@ module.exports = {
     // never thrown, so it cannot abort a bootstrap/catch-up.
     async deleteSyncState(key){
         try {
-            await this._ensureSyncStateTable();
+            await this.ensureSyncStateTable();
             await this.doQuery("DELETE FROM sync_state WHERE state_key=?", [key]);
             return true;
         } catch(e){

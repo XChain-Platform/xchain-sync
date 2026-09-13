@@ -87,7 +87,7 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
             _lastDispenserReconcileAt: 1000,
             _catchUpCount: 3,
             _dispenserReconcileInFlight: false,
-            _recordUpstreamStatus: sinon.stub(),
+            recordUpstreamStatus: sinon.stub(),
             _logGap: sinon.stub(),
             _incrementalCatchUp: sinon.stub().resolves(),
             _maybeVerifyCompleteness: sinon.stub().resolves(),

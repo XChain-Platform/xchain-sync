@@ -153,10 +153,10 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
     // finished are sequential, not concurrent, and would read as a cap breach.
     function instrumentSemaphore(builder) {
         const observed = { peak: 0, inflight: 0, acquired: 0, refused: 0 };
-        const acquire = builder._acquireSnapshotSlot.bind(builder);
-        const release = builder._releaseSnapshotSlot.bind(builder);
+        const acquire = builder.acquireSnapshotSlot.bind(builder);
+        const release = builder.releaseSnapshotSlot.bind(builder);
 
-        builder._acquireSnapshotSlot = (db, res) => {
+        builder.acquireSnapshotSlot = (db, res) => {
             const ok = acquire(db, res);
             if (ok) {
                 observed.acquired++;
@@ -167,7 +167,7 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
             }
             return ok;
         };
-        builder._releaseSnapshotSlot = (db) => {
+        builder.releaseSnapshotSlot = (db) => {
             observed.inflight--;
             return release(db);
         };

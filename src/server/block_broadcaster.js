@@ -123,7 +123,7 @@ class BlockBroadcaster {
         // Inbound messages from the subscriber. The only message type understood
         // is a heartbeat carrying the subscriber's last applied block height;
         // anything else is ignored silently (the channel is otherwise push-only).
-        ws.on('message', (data) => this._handleClientMessage(ws, data));
+        ws.on('message', (data) => this.handleClientMessage(ws, data));
 
         let status = this.getStatus(chain, network, type);
         if(status){
@@ -166,7 +166,7 @@ class BlockBroadcaster {
     // far the subscriber has applied blocks to its replica DB. Malformed JSON or
     // unrecognised message types are ignored silently (the channel is otherwise
     // server-to-client push only).
-    _handleClientMessage(ws, data){
+    handleClientMessage(ws, data){
         let msg;
         try {
             msg = JSON.parse(typeof data === 'string' ? data : data.toString());

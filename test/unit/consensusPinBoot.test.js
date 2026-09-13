@@ -24,7 +24,6 @@ const path   = require('path');
 const sinon  = require('sinon');
 
 const coins  = require('../../src/coins');
-const api = require('../../src/api.js');
 
 const API_PATH = path.join(__dirname, '..', '..', 'src', 'api.js');
 
@@ -63,6 +62,11 @@ describe('sync boot consensus-pin verification', function(){
 
         const stub = sinon.stub(coins, 'verifyConsensusPin')
             .throws(new Error('CONSENSUS CONFIG PIN MISMATCH (test)'));
+        // Required HERE, not at the top of the file, and it must stay here: the
+        // entry point patches console globally the moment it is loaded, so a
+        // top-level require would do that to every suite in the tier rather than
+        // to this one case. The stub above is armed first for the same reason.
+        const api  = require('../../src/api.js');
         await assert.rejects(() => api.startApi(), /CONSENSUS CONFIG PIN MISMATCH/);
         assert.strictEqual(stub.callCount, 1, 'the first network must throw before any further work');
         assert.strictEqual(stub.firstCall.args[0], coins.NETWORKS[0]);

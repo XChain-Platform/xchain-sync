@@ -336,8 +336,8 @@ class ClientSync {
         // consecutive sweep, then at most every 6 h. A gap that GROWS re-alerts
         // immediately regardless of the repeat window, because a widening gap is a
         // new fault rather than the known one.
-        this._replicaGapAlertSweeps   = this._numericSetting('REPLICA_GAP_ALERT_SWEEPS', 2, 1);
-        this._replicaGapAlertRepeatMs = this._numericSetting('REPLICA_GAP_ALERT_REPEAT_MS', 21600000, 0);
+        this._replicaGapAlertSweeps   = this.numericSetting('REPLICA_GAP_ALERT_SWEEPS', 2, 1);
+        this._replicaGapAlertRepeatMs = this.numericSetting('REPLICA_GAP_ALERT_REPEAT_MS', 21600000, 0);
 
         // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
         // testnet, which mints blocks at ~10/sec and is tens of millions of
@@ -469,22 +469,22 @@ class ClientSync {
     // Multi-source Byzantine quorum helpers.
 
     // Stable comparison key for a source's committed hash tuple.
-    _hashTupleKey(h){
+    hashTupleKey(h){
         if(!h) return 'null';
         return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash);
     }
 
     // Sources still eligible to vote (configured minus evicted).
-    _activeSourceCount(){ return this.sources.length - this._evictedSources.size; }
+    activeSourceCount(){ return this.sources.length - this._evictedSources.size; }
 
     // Effective quorum, clamped to the number of active (non-evicted) sources so an
     // eviction lowers the denominator rather than making quorum permanently unreachable.
-    _effectiveQuorum(){ return Math.min(this.sourceQuorum, Math.max(1, this._activeSourceCount())); }
+    effectiveQuorum(){ return Math.min(this.sourceQuorum, Math.max(1, this.activeSourceCount())); }
 
     // Record a divergence strike against a source for a block, prune the sliding
     // window, and evict once the threshold is reached (subject to the keep-quorum-
     // viable guard). Idempotent per (source, block).
-    _strikeSource(sourceIndex, blockIndex){
+    strikeSource(sourceIndex, blockIndex){
         if(this._evictedSources.has(sourceIndex)) return;
         let strikes = this._sourceStrikes.get(sourceIndex) || [];
         if(!strikes.length || strikes[strikes.length - 1] !== blockIndex) strikes.push(blockIndex);
@@ -496,17 +496,17 @@ class ClientSync {
             ' dissented from the quorum majority at block ' + blockIndex + ' (' + strikes.length + '/' +
             this._sourceEvictThreshold + ' within ' + this._sourceStrikeWindow + ' blocks) for ' +
             this.chain + '/' + this.network + '/' + this.dbType);
-        if(strikes.length >= this._sourceEvictThreshold) this._evictSource(sourceIndex);
+        if(strikes.length >= this._sourceEvictThreshold) this.evictSource(sourceIndex);
     }
 
     // Evict a Byzantine-suspected source: remove it from the active quorum denominator,
     // close its WebSocket (reconnect is suppressed for evicted sources), and alert.
     // Never evicts below two active sources, or cross-source verification collapses to
     // a single-source posture.
-    _evictSource(sourceIndex){
+    evictSource(sourceIndex){
         if(this._evictedSources.has(sourceIndex)) return;
         let label = this.sources[sourceIndex] || ('#' + sourceIndex);
-        if(this._activeSourceCount() - 1 < 2){
+        if(this.activeSourceCount() - 1 < 2){
             getLogger().error('SOURCE EVICTION SUPPRESSED: ' + label + ' reached the strike threshold but ' +
                 'evicting it would leave fewer than 2 active sources for ' + this.chain + '/' + this.network +
                 '/' + this.dbType + '. Retaining it; per-block no-source-quorum halts still guard safety.');
@@ -523,15 +523,15 @@ class ClientSync {
         getLogger().error('It reached ' + this._sourceEvictThreshold + ' divergence strikes within ' +
             this._sourceStrikeWindow + ' blocks (dissented from the quorum majority). Its WebSocket is');
         getLogger().error('closed and it is removed from the active quorum denominator (now ' +
-            this._activeSourceCount() + ' active source(s)). A quorum still stands behind every applied');
+            this.activeSourceCount() + ' active source(s)). A quorum still stands behind every applied');
         getLogger().error('block. Investigate the evicted source for a fork/Byzantine fault.');
         getLogger().error('================================================================');
     }
 
     // /status getters for the Byzantine quorum surface.
-    getSourceQuorum(){ return this._effectiveQuorum(); }
+    getSourceQuorum(){ return this.effectiveQuorum(); }
     getConfiguredSourceCount(){ return this.sources.length; }
-    getActiveSourceCount(){ return this._activeSourceCount(); }
+    getActiveSourceCount(){ return this.activeSourceCount(); }
     getEvictedSources(){ return [...this._evictedSources].map(i => this.sources[i] || ('#' + i)); }
     getSourcesAgreeing(){ return this._lastSourcesAgreeing; }
 
@@ -874,7 +874,7 @@ class ClientSync {
                 let e = lastErr.get(p.tableName) || {};
                 return { table: p.tableName, errno: e.errno || null, message: e.message || null };
             });
-            await this._haltOnSchemaFailure(source, failed);
+            await this.haltOnSchemaFailure(source, failed);
             return;
         }
         getLogger().info('Schema applied from ' + source);
@@ -888,7 +888,7 @@ class ClientSync {
     // so FK-ordering misses and brief ALTER contention never trigger it. Only
     // persistent faults (disk-full, permissions, malformed DDL, lock-timeout
     // that outlasts the retry cap) reach here.
-    async _haltOnSchemaFailure(source, failedTables){
+    async haltOnSchemaFailure(source, failedTables){
         if(this._halted) return;
         let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
         this._halted = {
@@ -917,7 +917,7 @@ class ClientSync {
     // ceiling (SNAPSHOT_MAX_CONTENT). One definition for both the incremental
     // fallback and the bootstrap halt, so the two can never disagree on what the
     // size wall looks like.
-    _isContentLengthOverflow(e){
+    isContentLengthOverflow(e){
         if(!e) return false;
         return e.code === 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED' ||
                !!(e.message && e.message.includes('maxContentLength'));
@@ -927,7 +927,7 @@ class ClientSync {
     // a rate-limit. Reads Retry-After first, then express-rate-limit's
     // RateLimit-Reset; returns 0 when neither header is present so the caller can
     // still report the 429 itself.
-    _rateLimitRetryAfterSeconds(e){
+    rateLimitRetryAfterSeconds(e){
         let resp = e && e.response;
         if(!resp || resp.status !== 429) return null;
         let headers = resp.headers || {};
@@ -942,7 +942,7 @@ class ClientSync {
     // chasing DDL). Reached only from the bootstrap path, where the payload size
     // is a property of the chain rather than of this attempt, so no retry, source
     // rotation, or process restart can change the outcome.
-    async _haltOnSnapshotTooLarge(source, cause){
+    async haltOnSnapshotTooLarge(source, cause){
         if(this._halted) return;
         let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
         let detail = [{ limit_bytes: this.config['SNAPSHOT_MAX_CONTENT'] || null,
@@ -1129,7 +1129,7 @@ class ClientSync {
                     // to a secondary is tolerated (not counted) so an unreachable spare
                     // cannot DoS bootstrap, but a shortfall below quorum is warned loudly.
                     if(this.config['VERIFY_HASHES']){
-                        let need = Math.max(0, this._effectiveQuorum() - 1);
+                        let need = Math.max(0, this.effectiveQuorum() - 1);
                         let agreed = 0;
                         for(let i = 1; i < this.sources.length && agreed < need; i++){
                             let verdict = await this._verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
@@ -1138,7 +1138,7 @@ class ClientSync {
                         }
                         if(agreed < need){
                             getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
-                                ' agreeing source(s) of the ' + this._effectiveQuorum() + ' required for quorum for ' +
+                                ' agreeing source(s) of the ' + this.effectiveQuorum() + ' required for quorum for ' +
                                 this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
                                 'bootstrap tip is under-verified until live quorum forms.');
                         }
@@ -1165,14 +1165,14 @@ class ClientSync {
             // and then 429'd its own snapshot budget. The operator remedy
             // (reseed truncated via SYNC_BOOTSTRAP_DEPTH, or raise the ceiling) is
             // a decision no retry can make.
-            if(this._isContentLengthOverflow(e)){
-                await this._haltOnSnapshotTooLarge(source, e);
+            if(this.isContentLengthOverflow(e)){
+                await this.haltOnSnapshotTooLarge(source, e);
                 return false;
             }
             // Name a 429 rather than burying it in the axios dump: the snapshot
             // limiter is hourly (SNAPSHOT_RATE_FULL) while this ladder retries in
             // seconds, so an operator reading the log must see the wait it implies.
-            let retryAfter = this._rateLimitRetryAfterSeconds(e);
+            let retryAfter = this.rateLimitRetryAfterSeconds(e);
             if(retryAfter !== null){
                 getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
                     this.chain + '/' + this.network + '/' + this.dbType +
@@ -1379,7 +1379,7 @@ class ClientSync {
 
     // Per-page row count for _syncLookupTablesPaged. Bounded so no single request
     // approaches SNAPSHOT_MAX_CONTENT (the server clamps to its own ceiling too).
-    _lookupPageSize(){
+    lookupPageSize(){
         let n = parseInt(this.config['LOOKUP_PAGE_SIZE'], 10);
         if(isNaN(n) || n < 1) n = 50000;
         return Math.min(100000, n);
@@ -1400,7 +1400,7 @@ class ClientSync {
     // mode and not something the ordinary path can do.
     async _syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
-        let pageSize = this._lookupPageSize();
+        let pageSize = this.lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
         let fromZero = (opts && opts.fromZero) || null;
         for(let table of tables){
@@ -1775,7 +1775,7 @@ class ClientSync {
             // no progress. Fall back to a full bootstrap (the same path start() uses
             // for an empty replica) so the node self-recovers instead of looping
             // forever and requiring a manual DB wipe.
-            let isSizeError = this._isContentLengthOverflow(e);
+            let isSizeError = this.isContentLengthOverflow(e);
             if(isSizeError){
                 // A truncated replica (SYNC_BOOTSTRAP_DEPTH) exists precisely because
                 // its full-history snapshot exceeds SNAPSHOT_MAX_CONTENT and cannot be
@@ -2075,7 +2075,7 @@ class ClientSync {
     // tables are fully paged in out of band via the id-cursor route, so they stay
     // under the strict count check. Derived from the topology, not a hardcoded copy,
     // so it tracks any change to the decoder block-scoped/tx-scoped sets.
-    _truncatedWindowedTables(){
+    truncatedWindowedTables(){
         let t = replicatedTables.getTopology('decoder');
         return new Set([].concat(t.blockScoped || [], t.txScoped || [], t.actionScoped || []));
     }
@@ -2103,7 +2103,7 @@ class ClientSync {
             let effectiveExcludes = excludeTables;
             if(this.isTruncated()){
                 effectiveExcludes = new Set(excludeTables || []);
-                let windowed = this._truncatedWindowedTables();
+                let windowed = this.truncatedWindowedTables();
                 for(let tbl of windowed) effectiveExcludes.add(tbl);
                 getLogger().info('Truncated replica: skipping block-windowed tables from the decoder ' +
                     'completeness count check (' + [...windowed].join(', ') + '); append-only lookups stay strict.');
@@ -2163,7 +2163,7 @@ class ClientSync {
         let remoteHeight = opts && Number(opts.remoteHeight);
         let localHeight  = opts && Number(opts.localHeight);
         let sameHeight   = Number.isFinite(remoteHeight) && Number.isFinite(localHeight) && remoteHeight === localHeight;
-        let exactParity  = (sameHeight && this.dbType === 'indexer') ? this._exactParityTables() : null;
+        let exactParity  = (sameHeight && this.dbType === 'indexer') ? this.exactParityTables() : null;
         for(let table of Object.keys(remoteCounts)){
             // Callers can exclude a table whose drift is expected between convergence
             // passes (e.g. `dispensers` between replace-table reconciles) so a known,
@@ -2343,7 +2343,7 @@ class ClientSync {
     // set it directly, env second so an operator can set it on a build whose config
     // loader predates the key, and never NaN (a NaN threshold would either alert on
     // every sweep or never).
-    _numericSetting(key, fallback, min){
+    numericSetting(key, fallback, min){
         let raw = (this.config && this.config[key] != null && this.config[key] !== '')
             ? this.config[key] : process.env[key];
         let n = Number(raw);
@@ -2411,12 +2411,12 @@ class ClientSync {
                 let closed = this._replicaGaps.get(table);
                 this._replicaGaps.delete(table);
                 if(closed.alerts || closed.sweeps >= this._replicaGapAlertSweeps)
-                    getLogger().warn('REPLICA_GAP_CLOSED: ' + this._replicaLabel() + ' table ' + table +
+                    getLogger().warn('REPLICA_GAP_CLOSED: ' + this.replicaLabel() + ' table ' + table +
                         ' now matches the source (was short ' + closed.lastDelta + ' row(s) for ' +
-                        this._gapAgeMinutes(closed, now) + ' min across ' + closed.sweeps + ' sweep(s)).');
+                        this.gapAgeMinutes(closed, now) + ' min across ' + closed.sweeps + ' sweep(s)).');
             }
-            if(escalate.length) this._alertPersistentReplicaGaps(escalate, now, o.source);
-            await this._recordReplicaGaps(now);
+            if(escalate.length) this.alertPersistentReplicaGaps(escalate, now, o.source);
+            await this.recordReplicaGaps(now);
         } catch(e){
             // Advisory reporting layer; a failure here must not disturb the sweep.
             getLogger().error(util.format('Replica-gap tracking failed (advisory, continuing):', e.message || e));
@@ -2426,16 +2426,16 @@ class ClientSync {
     // The loud line. Separate tag from TABLE_COUNT_MISMATCH on purpose: the mismatch
     // line is a detection, this one is a verdict, and a monitor keyed on the verdict
     // tag cannot be desensitised by the detections.
-    _alertPersistentReplicaGaps(entries, now, source){
+    alertPersistentReplicaGaps(entries, now, source){
         let detail = entries.map(e => {
             let trend = e.lastDelta > e.firstDelta ? 'GROWING from ' + e.firstDelta
                       : (e.lastDelta < e.firstDelta ? 'closing from ' + e.firstDelta : 'unchanged');
             return e.table + ' short ' + e.lastDelta + ' row(s) (source ' + e.sourceCount +
                 ' vs local ' + e.localCount + ', delta ' + trend + ', first seen ' +
-                this._gapAgeMinutes(e, now) + ' min ago across ' + e.sweeps + ' equal-height sweep(s)' +
+                this.gapAgeMinutes(e, now) + ' min ago across ' + e.sweeps + ' equal-height sweep(s)' +
                 (e.repairAttempts ? ', ' + e.repairAttempts + ' self-repair pass(es) did NOT close it' : '') + ')';
         }).join('; ');
-        getLogger().error('REPLICA_GAP_PERSISTENT: ' + this._replicaLabel() +
+        getLogger().error('REPLICA_GAP_PERSISTENT: ' + this.replicaLabel() +
             ' is missing replicated rows that repeated sweeps are not closing at block ' +
             (entries[0].lastBlock != null ? entries[0].lastBlock : 'unknown') +
             (source ? ' against ' + source : '') + ': ' + detail +
@@ -2449,7 +2449,7 @@ class ClientSync {
     // channel the parity counters use, never a consensus gate, never throws). Written
     // only while persistent gaps exist, and cleared exactly once when the last one
     // closes so no key can report a gap that is gone.
-    async _recordReplicaGaps(now){
+    async recordReplicaGaps(now){
         let persistent = this.getReplicaGaps();
         try {
             if(!this.db || typeof this.db.setSyncState !== 'function') return;
@@ -2493,11 +2493,11 @@ class ClientSync {
             }));
     }
 
-    _replicaLabel(){
+    replicaLabel(){
         return this.chain + '/' + this.network + '/' + this.dbType + ' follower';
     }
 
-    _gapAgeMinutes(entry, now){
+    gapAgeMinutes(entry, now){
         return Math.round(Math.max(0, now - entry.firstSeenAt) / 60000);
     }
 
@@ -2506,7 +2506,7 @@ class ClientSync {
     // tableLifecycle so there is no second hand-maintained list; snapshot / local /
     // hub-mirror / follower-derived / lookup classes (where extra local rows can be
     // legitimate) are excluded by construction.
-    _exactParityTables(){
+    exactParityTables(){
         if(!this._exactParityTableSet){
             this._exactParityTableSet = new Set(tableLifecycle.tablesWhere(t =>
                 t.owner === 'indexer' && /^stream:/.test(t.replication) && t.replicaRollback === 'mirror'));
@@ -2564,7 +2564,7 @@ class ClientSync {
         try {
             let all = [];
             let afterTx = null, afterAddr = null;
-            let pageSize = this._lookupPageSize();
+            let pageSize = this.lookupPageSize();
             for(let guard = 0; guard < 1000000; guard++){
                 let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
                     '?limit=' + pageSize +
@@ -2729,7 +2729,7 @@ class ClientSync {
             }
             // Keep the server's own replication verdict. Unconditional: the height guard
             // above is exactly what a stalled upstream stops satisfying.
-            this._recordUpstreamStatus(sourceIndex, event);
+            this.recordUpstreamStatus(sourceIndex, event);
             // Check for gaps on status update. Use a strict '>' (not '>='): a
             // server exactly one block ahead is the normal steady state (that
             // next block arrives over the live WS stream), so only a shortfall of
@@ -2891,7 +2891,7 @@ class ClientSync {
         // source has reported and no group can reach quorum. The 2-source case behaves
         // exactly as before (quorum 2; a 1-1 split has no majority and halts), while a
         // larger set tolerates a Byzantine minority.
-        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this._activeSourceCount() > 1){
+        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1){
             // An evicted source's in-flight delivery is ignored for the tally.
             if(this._evictedSources.has(sourceIndex)) return;
 
@@ -2911,17 +2911,17 @@ class ClientSync {
                 let idx = Number(idxStr);
                 if(this._evictedSources.has(idx)) continue;
                 reportedCount++;
-                let key = this._hashTupleKey(pending[idxStr]);
+                let key = this.hashTupleKey(pending[idxStr]);
                 if(!groups.has(key)) groups.set(key, []);
                 groups.get(key).push(idx);
             }
-            let quorum  = this._effectiveQuorum();
-            let activeN = this._activeSourceCount();
+            let quorum  = this.effectiveQuorum();
+            let activeN = this.activeSourceCount();
 
             // The CURRENT arrival's own group. Applying is gated on IT reaching quorum,
             // so we only ever apply the block payload we actually hold, and (under the
             // majority default) the winning group is unique.
-            let currentKey   = this._hashTupleKey(pending[sourceIndex]);
+            let currentKey   = this.hashTupleKey(pending[sourceIndex]);
             let currentGroup = groups.get(currentKey) || [];
 
             if(currentGroup.length >= quorum){
@@ -2930,7 +2930,7 @@ class ClientSync {
                 for(let idxStr of Object.keys(pending)){
                     let idx = Number(idxStr);
                     if(this._evictedSources.has(idx)) continue;
-                    if(this._hashTupleKey(pending[idxStr]) !== currentKey) this._strikeSource(idx, blockIndex);
+                    if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
                 }
                 this._lastSourcesAgreeing = currentGroup.length;
                 this.pendingHashes.delete(blockIndex);
@@ -3139,7 +3139,7 @@ class ClientSync {
             getLogger().error('further blocks). Operator must investigate and clear before resuming.');
         } else if(this._halted.reason === 'no-source-quorum'){
             getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
-            getLogger().error('SOURCE_QUORUM (' + this._effectiveQuorum() + ' of ' + this._activeSourceCount() +
+            getLogger().error('SOURCE_QUORUM (' + this.effectiveQuorum() + ' of ' + this.activeSourceCount() +
                 ' active). The replica cannot determine which chain is canonical, so it must not');
             getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
             getLogger().error('the contending sources and clear before this validator can resume.');
@@ -3320,7 +3320,7 @@ class ClientSync {
     // Record one source's self-reported replication evidence off its status event.
     // A server that predates the fields reports nothing, which stays UNKNOWN here
     // rather than being read as healthy: `undefined` is not `false`.
-    _recordUpstreamStatus(sourceIndex, event){
+    recordUpstreamStatus(sourceIndex, event){
         let stale = (typeof event.replica_stale === 'boolean') ? event.replica_stale : null;
         let secondsBehind = (typeof event.replica_seconds_behind === 'number'
                              && Number.isFinite(event.replica_seconds_behind))
@@ -3364,7 +3364,7 @@ class ClientSync {
     // dbType so the indexer and decoder replicas of one chain don't clobber each
     // other (they share neither DB nor floor, but the key space is shared if they
     // ever did).
-    _bootstrapBaseKey(){ return 'bootstrap_base:' + this.dbType; }
+    bootstrapBaseKey(){ return 'bootstrap_base:' + this.dbType; }
 
     // Persist the truncation join floor durably so it survives a restart. Guarded:
     // the durable store is optional (older db instances / test mocks may not expose
@@ -3373,7 +3373,7 @@ class ClientSync {
     async _persistBootstrapBase(base){
         if(base === null || base === undefined) return;
         if(!this.db || typeof this.db.setSyncState !== 'function') return;
-        await this.db.setSyncState(this._bootstrapBaseKey(), String(base));
+        await this.db.setSyncState(this.bootstrapBaseKey(), String(base));
     }
 
     // Clear the truncation join floor, in-memory and durable. Called after a
@@ -3383,7 +3383,7 @@ class ClientSync {
     async _clearBootstrapBase(){
         this._bootstrapBase = null;
         if(!this.db || typeof this.db.deleteSyncState !== 'function') return;
-        await this.db.deleteSyncState(this._bootstrapBaseKey());
+        await this.db.deleteSyncState(this.bootstrapBaseKey());
     }
 
     // Reload the persisted truncation join floor at startup. Only overwrites the
@@ -3395,7 +3395,7 @@ class ClientSync {
     async _loadBootstrapBase(){
         if(this._bootstrapBase !== null && this._bootstrapBase !== undefined) return;
         if(!this.db || typeof this.db.getSyncState !== 'function') return;
-        let v = await this.db.getSyncState(this._bootstrapBaseKey());
+        let v = await this.db.getSyncState(this.bootstrapBaseKey());
         if(v === null || v === undefined) return;
         let n = Number(v);
         if(Number.isFinite(n)){
@@ -3706,7 +3706,7 @@ class ClientSync {
             if(seed){
                 let r = await this._followCheckpointForward(cp, seed);
                 if(r.verdict === 'ok'){
-                    this._recordVerifiedCheckpointSeq(cp.checkpoint_seq);
+                    this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
                     getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
                         this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
                     return;
@@ -3724,14 +3724,14 @@ class ClientSync {
             return;
         }
         // 2. Its committed roots must equal the replica's OWN recomputed roots at that height.
-        let cmp = await this._checkpointRootsMatchLocal(cp);
+        let cmp = await this.checkpointRootsMatchLocal(cp);
         if(cmp.status === 'missing') return;                     // height not recomputed here (truncated bootstrap)
         if(cmp.status === 'mismatch'){
             await this._haltOnDivergence(cp.block_index, cmp.mismatches,
                 this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
             return;
         }
-        this._recordVerifiedCheckpointSeq(cp.checkpoint_seq);
+        this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
         getLogger().info('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
@@ -3739,7 +3739,7 @@ class ClientSync {
 
     // Advance the high-water mark of verified checkpoint sequences. Monotonic: a later
     // verify never lowers it, so a subsequent regressed seq is rejected by the anchor.
-    _recordVerifiedCheckpointSeq(seq){
+    recordVerifiedCheckpointSeq(seq){
         if(typeof seq !== 'number') return;
         if(this._lastVerifiedCheckpointSeq === null || seq > this._lastVerifiedCheckpointSeq)
             this._lastVerifiedCheckpointSeq = seq;
@@ -3747,7 +3747,7 @@ class ClientSync {
 
     // Compare a checkpoint's committed roots to the replica's OWN recomputed
     // state_tree_roots row. Returns { status: 'match'|'mismatch'|'missing', mismatches }.
-    async _checkpointRootsMatchLocal(c){
+    async checkpointRootsMatchLocal(c){
         let rows = await this.db.doQuery(
             'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [c.block_index]);
         if(!rows || !rows.length) return { status: 'missing', mismatches: [] };
@@ -3807,7 +3807,7 @@ class ClientSync {
 
         // Bootstrap: the seed is the out-of-band trust root; the replica's own recompute
         // at seed.block_index must match it, else the replica is on a different chain.
-        let seedCmp = await this._checkpointRootsMatchLocal(seed);
+        let seedCmp = await this.checkpointRootsMatchLocal(seed);
         if(seedCmp.status === 'missing') return { verdict: 'wait' };
         if(seedCmp.status === 'mismatch') return { verdict: 'divergence', mismatches: seedCmp.mismatches };
 
@@ -3838,7 +3838,7 @@ class ClientSync {
                         a: 'quorum-signed (federation)',
                         b: 'INVALID at block ' + next.block_index + ' under the authoritative oracle_publish set at snapshot ' + next.snapshot_block }] };
                 // Attest `next` so its rows extend the trusted frontier for the next step.
-                let cmp = await this._checkpointRootsMatchLocal(next);
+                let cmp = await this.checkpointRootsMatchLocal(next);
                 if(cmp.status === 'missing') return { verdict: 'wait' };
                 if(cmp.status === 'mismatch') return { verdict: 'divergence', mismatches: cmp.mismatches };
                 trusted = next; from = next.block_index + 1; advanced = true;

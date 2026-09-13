@@ -258,7 +258,7 @@ class ServerPoller {
 
         if(this.lastPolledBlock === null){
             this.lastPolledBlock = currentBlock;
-            this.lastPolledBlockHash = await this._sourceBlockHash(currentBlock);
+            this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
             await this._updateStatus();
             return;
         }
@@ -270,7 +270,7 @@ class ServerPoller {
         // forked at or below it. Roll back one block and re-read the prior hash so a
         // deeper reorg is walked back over subsequent polls.
         if(this.lastPolledBlockHash !== null){
-            let srcHash = await this._sourceBlockHash(this.lastPolledBlock);
+            let srcHash = await this.sourceBlockHash(this.lastPolledBlock);
             if(srcHash !== null && srcHash !== this.lastPolledBlockHash){
                 // Net-forward reorg: the chain forked at or below lastPolledBlock. Resolve
                 // the TRUE fork point WITHIN THIS POLL by walking down over the recorded
@@ -287,7 +287,7 @@ class ServerPoller {
                 // fresh. Bounded by the recorded-hash window (RECENT_HASH_CAP); a fork
                 // below it stops at the deepest recorded height (cold-start fallback,
                 // same as before), where the follower's recompute/remediation is the net.
-                let forkBlock = await this._resolveForkPoint(this.lastPolledBlock);
+                let forkBlock = await this.resolveForkPoint(this.lastPolledBlock);
                 logger.info('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
                 if(this.transparencyLog)
                     await this.transparencyLog.pruneFrom(forkBlock);
@@ -332,7 +332,7 @@ class ServerPoller {
             // a divergence no delivery interruption caused. Walking the
             // recorded pre-reorg hashes down from currentBlock resolves the full depth
             // in THIS poll, so the one reorg event carries the true fork point.
-            let forkBlock = await this._resolveForkPoint(currentBlock + 1);
+            let forkBlock = await this.resolveForkPoint(currentBlock + 1);
             logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
 
             // Prune the source's own transparency log first (indexer only; decoder
@@ -363,7 +363,7 @@ class ServerPoller {
             // disabling the guard for that step as before.
             this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
                 ? this.recentBroadcastHashes.get(this.lastPolledBlock)
-                : await this._sourceBlockHash(this.lastPolledBlock);
+                : await this.sourceBlockHash(this.lastPolledBlock);
             await this._updateStatus();
             return;
         }
@@ -471,9 +471,9 @@ class ServerPoller {
     // recorded-hash window (RECENT_HASH_CAP). A fork below the window stops at
     // the deepest recorded height (cold-start fallback), where the follower's
     // recompute/remediation is the net.
-    async _resolveForkPoint(forkBlock){
+    async resolveForkPoint(forkBlock){
         while(forkBlock - 1 >= 1 && this.recentBroadcastHashes.has(forkBlock - 1)){
-            let belowSrc = await this._sourceBlockHash(forkBlock - 1);
+            let belowSrc = await this.sourceBlockHash(forkBlock - 1);
             if(belowSrc !== null && belowSrc !== this.recentBroadcastHashes.get(forkBlock - 1))
                 forkBlock = forkBlock - 1;   // this height also changed; fork is deeper
             else
@@ -484,7 +484,7 @@ class ServerPoller {
 
     // Source content hash at a block, for net-forward reorg detection. Indexer uses
     // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
-    async _sourceBlockHash(blockIndex){
+    async sourceBlockHash(blockIndex){
         let row = await this.db.getBlockHashRow(blockIndex);
         if(!row) return null;
         return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
@@ -512,7 +512,7 @@ class ServerPoller {
             let recorded = await this.transparencyLog.getRecordedHash(blockIndex);
             if(recorded !== null) return recorded;
         }
-        return await this._sourceBlockHash(blockIndex);
+        return await this.sourceBlockHash(blockIndex);
     }
 
     // Build a complete block payload for broadcasting.

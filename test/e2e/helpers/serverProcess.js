@@ -281,7 +281,7 @@ class ServerProcess {
         // that rolls back then readvances to an equal-or-higher tip is missed
         // entirely and the replica is left with stale orphaned blocks.
         this.poller.lastPolledBlockHash = (this.poller.lastPolledBlock !== null)
-            ? await this.poller._sourceBlockHash(this.poller.lastPolledBlock) : null;
+            ? await this.poller.sourceBlockHash(this.poller.lastPolledBlock) : null;
         // Pre-populate recentBroadcastHashes for the blocks already present at start,
         // mirroring a production poller that has been running and streamed them. The
         // net-forward reorg walk-back reads these PRE-reorg hashes to descend to the
@@ -293,7 +293,7 @@ class ServerProcess {
         if(this.poller.lastPolledBlock !== null){
             let floor = Math.max(1, this.poller.lastPolledBlock - 255);
             for(let bi = floor; bi <= this.poller.lastPolledBlock; bi++){
-                let h = await this.poller._sourceBlockHash(bi);
+                let h = await this.poller.sourceBlockHash(bi);
                 if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);
             }
         }
