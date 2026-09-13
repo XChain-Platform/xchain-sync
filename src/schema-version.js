@@ -154,6 +154,21 @@
  *       decoders window, and this bump is what makes the ordering enforced
  *       instead of advisory. The 2026-07-24 pubkeys widening rides along.
  *       Indexer is unaffected by this key and stays at 11.
+ *  12 - (indexer only) `leg_ordinal SMALLINT UNSIGNED NOT NULL DEFAULT 0` added to
+ *       `destroys` and `sends`, plus a composite (action_index, leg_ordinal) index
+ *       on each, by the 2026-09-13-destroys-sends-leg-ordinal migration. Both
+ *       tables are stream:action wire-replicated and a multi-leg SEND or DESTROY
+ *       writes one row per leg under a single action_index, so the column is where
+ *       the broadcast order of those legs is recorded. A v11 follower has no column
+ *       to receive the streamed value: under ClientApplier's strict apply the row
+ *       fails the block, and where it flows through, every leg lands on the implicit
+ *       default and the follower answers leg order from nothing while its source
+ *       answers from the wire. Nothing here enters a block-hash preimage: `destroys`
+ *       and `sends` are DERIVED in src/tableLifecycle.js, a deterministic projection
+ *       of already-hashed actions in no hash class of their own, rolled back by
+ *       `action_index >= ?`, which is agnostic to the row's column set. The
+ *       migration is mode=auto, so it self-heals fleet-wide on the forced restart.
+ *       Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -170,19 +185,13 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 11, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 12, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-09-12',
+        through: '2026-09-13',
         accounted: [
-            '2026-09-12-bridge-tables.sql',
-            '2026-09-12-token-bridge-fields.sql',
-            // Index-only DDL on an already-replicated table: it adds no column a
-            // follower could fail to store, so it accounts at this version rather
-            // than forcing a bump. Enumerated because the tail of a shared date has
-            // to be complete or the gate reads the cursor as covering it.
-            '2026-09-12-state-tree-roots-block-index-idx.sql'
+            '2026-09-13-destroys-sends-leg-ordinal.sql'
         ]
     },
     decoder: {
