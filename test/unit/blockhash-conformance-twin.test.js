@@ -16,11 +16,11 @@
  * Static drift-lock for the consensus block-hash CONFORMANCE PAIR.
  *
  * xchain-sync/src/BlockHasher.js computeBlockHashes() is a hand-ported twin of
- * xchain-indexer/src/db.js getBlockHashes(): same consensus SELECTs, same
+ * xchain-indexer/src/db/actions.js getBlockHashes(): same consensus SELECTs, same
  * special-address canonicalization, same chaining/version fold, hashed through
  * the same getDataHash/jsonStringify pair. Unlike the whole-file twins locked
  * in rollback-coverage.test.js (stateHash.js, merkle.js, ...), the two live
- * inside DIFFERENT host structures (a db.js method vs a class here), so
+ * inside DIFFERENT host structures (a db/actions.js mixin method vs a class here), so
  * whole-file byte-identity cannot apply. This test extracts the
  * consensus-bearing pieces from BOTH repos' sources and asserts them equal
  * after stripping comments and collapsing whitespace:
@@ -136,24 +136,30 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         };
     }
 
-    it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db.js', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db.js');
+    it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db/shared.js', function(){
+        // The indexer split src/db.js into src/db/index.js plus per-feature mixins. The
+        // four cases below therefore read TWO different mixins: the constant is declared
+        // in the shared module every mixin imports, while getBlockHashes and its
+        // canonicalization/fold tail live in the actions mixin. Each case pins the exact
+        // file that holds what it compares, so a later move fails here by name rather
+        // than comparing against whatever else a directory-wide read happened to contain.
+        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/shared.js');
         if(!pair) return;
         const vSync    = pair.sync.match(/const BLOCK_HASH_VERSION = (\d+)/);
         const vIndexer = pair.indexer.match(/const BLOCK_HASH_VERSION = (\d+)/);
         assert.ok(vSync && vIndexer, 'BLOCK_HASH_VERSION constant missing on one side');
         assert.strictEqual(vSync[1], vIndexer[1],
             'BLOCK_HASH_VERSION drifted between xchain-sync/src/BlockHasher.js and ' +
-            'xchain-indexer/src/db.js; a version bump is a consensus break and MUST land on both sides');
+            'xchain-indexer/src/db/shared.js; a version bump is a consensus break and MUST land on both sides');
     });
 
     it('every consensus SQL literal matches, in gathering order', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db.js');
+        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
         if(!pair) return;
         const syncFn    = stripComments(extractFunction(pair.sync,
             /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js'));
         const indexerFn = stripComments(extractFunction(pair.indexer,
-            /async getBlockHashes\(block_index\)\{/, 'db.js'));
+            /async getBlockHashes\(block_index\)\{/, 'db/actions.js'));
         const syncSql    = sqlLiterals(syncFn);
         const indexerSql = sqlLiterals(indexerFn);
         assert.ok(syncSql.length >= 11,
@@ -210,10 +216,10 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db.js');
+        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
         if(!pair) return;
         const loopRe = /for \(const row of ledger\.(credits|debits|escrows)\)\s+row\.address = canonicalizeHashAddress\(row\.address\);/g;
-        for(const [name, src] of [['BlockHasher.js', pair.sync], ['db.js', pair.indexer]]){
+        for(const [name, src] of [['BlockHasher.js', pair.sync], ['db/actions.js', pair.indexer]]){
             const seen = new Set();
             let m;
             loopRe.lastIndex = 0;
@@ -225,7 +231,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('the hash-assembly tail (chaining + hash_version fold) is identical', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db.js');
+        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
         if(!pair) return;
         const tailRe = /let tables = \[[^]*?tables\.forEach\(table => \{[^]*?\}\);/;
         const tSync    = pair.sync.match(tailRe);

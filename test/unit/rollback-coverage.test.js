@@ -432,7 +432,7 @@ describe('Rollback coverage guard @regression', function(){
 
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
     // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
-    // byte-identical to xchain-indexer/src/db.js _stakeWeightsSql, or the follower's
+    // byte-identical to xchain-indexer/src/db/stakes.js _stakeWeightsSql, or the follower's
     // stakes_root (hence state_root) diverges from the source and the state-commitment
     // check false-halts. Both files carry the method verbatim; this extracts the body
     // and asserts whitespace-normalised equality. If you edit one, edit the other.
@@ -445,10 +445,14 @@ describe('Rollback coverage guard @regression', function(){
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db.js');
-        const indexerPath = indexerFile('src/db.js');
+        // The indexer split its 19k-line src/db.js into src/db/index.js plus per-feature
+        // mixins, and _stakeWeightsSql landed in the stakes mixin. Pin the exact file
+        // rather than the src/db/ directory: if the method is moved again, stakeSql()'s
+        // assert.ok fires by name here instead of silently finding a copy elsewhere.
+        const indexerPath = indexerFile('src/db/stakes.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(stakeSql(syncPath), stakeSql(indexerPath),
-            '_stakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (the stakes_root is consensus-critical)');
+            '_stakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db/stakes.js; keep them byte-identical (the stakes_root is consensus-critical)');
     });
 
     // Cross-repo drift guard for the SWQ source-cap windowed wrapper (SWQ-TRUNC-1
@@ -468,10 +472,12 @@ describe('Rollback coverage guard @regression', function(){
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db.js');
-        const indexerPath = indexerFile('src/db.js');
+        // Same split as above: the capped wrapper sits beside _stakeWeightsSql in the
+        // stakes mixin, and cappedSql()'s assert.ok is what fails loudly if it moves.
+        const indexerPath = indexerFile('src/db/stakes.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(cappedSql(syncPath), cappedSql(indexerPath),
-            '_cappedStakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db.js; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
+            '_cappedStakeWeightsSql drifted between xchain-sync/src/db.js and xchain-indexer/src/db/stakes.js; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
     });
 
     // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
