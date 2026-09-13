@@ -10,7 +10,7 @@
 //
 // SYNC_META_RETENTION_BLOCKS in CLIENT mode.
 //
-// The window used to be read in exactly one place, _startPollerForChain, so a client
+// The window used to be read in exactly one place, startPollerForChain, so a client
 // never built a TransparencyLog and never pruned. The source's own
 // DELETE FROM sync_meta is not carried over replication either (ServerPoller streams
 // one row per block, ClientApplier only INSERT IGNOREs), so a configured window was
@@ -179,12 +179,12 @@ describe('sync_meta count parity while the client window is armed', function(){
             const counts = { sync_meta: 1000, blocks: 1000 };
 
             const armed = clientSync(baseConfig({ SYNC_META_RETENTION_BLOCKS: 500 }));
-            const armedMismatches = await armed._verifyTableCounts(counts, undefined, {});
+            const armedMismatches = await armed.verifyTableCounts(counts, undefined, {});
             assert.deepStrictEqual(armedMismatches.map(m => m.table), ['blocks'],
                 'a pruning client must not report its own retention as a replication hole');
 
             const off = clientSync(baseConfig({ SYNC_META_RETENTION_BLOCKS: 0 }));
-            const offMismatches = await off._verifyTableCounts(counts, undefined, {});
+            const offMismatches = await off.verifyTableCounts(counts, undefined, {});
             assert.deepStrictEqual(offMismatches.map(m => m.table).sort(), ['blocks', 'sync_meta'],
                 'with no window nothing is pruned locally, so sync_meta stays strictly compared');
         } finally {

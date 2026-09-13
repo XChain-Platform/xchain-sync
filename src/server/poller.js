@@ -48,7 +48,7 @@ const logger = getLogger();
 // rather than against a fresh (post-reorg) source read that always matches.
 const RECENT_HASH_CAP = 256;
 
-// A per-table read in _buildBlockPayload may legitimately fail because the source
+// A per-table read in buildBlockPayload may legitimately fail because the source
 // runs an older schema that lacks the table/column (errno 1146 missing table, 1054
 // unknown column): that table is simply absent from this block's payload, harmless.
 // EVERY OTHER error (deadlock 1213, lock-wait timeout 1205, connection drop, etc.)
@@ -127,7 +127,7 @@ class ServerPoller {
             ]);
         }
 
-        // Count of consecutive _poll() failures so _updateStatus can surface
+        // Count of consecutive _poll() failures so updateStatus can surface
         // a stale-status signal to /health callers when the poller is wedged.
         this.pollErrorCount = 0;
 
@@ -153,7 +153,7 @@ class ServerPoller {
             logger.error(util.format('Transparency backfill failed for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (continuing with live polling):', e));
         }
 
-        await this._updateStatus();
+        await this.updateStatus();
 
         while(this.running){
             let blocksProcessed = 0;
@@ -165,7 +165,7 @@ class ServerPoller {
                 logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e));
                 // Update status so the poll_error_count field is current even while
                 // lastPolledBlock is frozen at the last-good value.
-                await this._updateStatus().catch(() => {});
+                await this.updateStatus().catch(() => {});
             }
             // Skip sleep when the batch cap was hit (backlog likely remains)
             if(blocksProcessed < 100)
@@ -250,7 +250,7 @@ class ServerPoller {
         // source-DB outage with null - the same answer a genuinely empty source
         // gives - and the early return below then makes an unreachable database
         // indistinguishable from an idle chain: pollErrorCount stays 0, the loop in
-        // start() never logs, and _updateStatus keeps publishing a fresh status with
+        // start() never logs, and updateStatus keeps publishing a fresh status with
         // poll_error_count 0 while the poller is blind. Rethrow instead, so the outage
         // surfaces as a counted poll failure. An empty source still returns null.
         let currentBlock = await this.db.getLastBlock(null, { rethrow: true });
@@ -259,7 +259,7 @@ class ServerPoller {
         if(this.lastPolledBlock === null){
             this.lastPolledBlock = currentBlock;
             this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
-            await this._updateStatus();
+            await this.updateStatus();
             return;
         }
 
@@ -315,7 +315,7 @@ class ServerPoller {
                 // for that step rather than falsely confirming.
                 this.lastPolledBlockHash = (this.lastPolledBlock >= 0 && this.recentBroadcastHashes.has(this.lastPolledBlock))
                     ? this.recentBroadcastHashes.get(this.lastPolledBlock) : null;
-                await this._updateStatus();
+                await this.updateStatus();
                 return;
             }
         }
@@ -364,7 +364,7 @@ class ServerPoller {
             this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
                 ? this.recentBroadcastHashes.get(this.lastPolledBlock)
                 : await this.sourceBlockHash(this.lastPolledBlock);
-            await this._updateStatus();
+            await this.updateStatus();
             return;
         }
 
@@ -388,7 +388,7 @@ class ServerPoller {
             // apply-time recompute (deepdive H-P2). During a catch-up burst the
             // pin still bounds every read to one view (the batch tip), so blocks
             // B < snapTip carry tip-state updated_rows; those blocks ship
-            // state_hash NULL (burst exemption in _buildBlockPayload) because the
+            // state_hash NULL (burst exemption in buildBlockPayload) because the
             // follower's apply-time recompute at B would otherwise halt on the
             // future value, while the batch as a whole converges to exact tip
             // state by its last block.
@@ -403,7 +403,7 @@ class ServerPoller {
                 if(snapTip != null) streamTo = snapTip;
                 while(this.lastPolledBlock < streamTo && blocksProcessed < 100){
                     let nextBlock = this.lastPolledBlock + 1;
-                    let payload = await this._buildBlockPayload(nextBlock, snapConn, snapTip);
+                    let payload = await this.buildBlockPayload(nextBlock, snapConn, snapTip);
                     if(payload){
                         // Record in transparency log (indexer only; decoder has no synthetic hashes)
                         if(this.transparencyLog){
@@ -451,7 +451,7 @@ class ServerPoller {
         }
 
         // Refresh status on EVERY poll, not only when blocks advanced. The replication
-        // verdict _updateStatus carries is the one field whose failure mode also stops
+        // verdict updateStatus carries is the one field whose failure mode also stops
         // block advancement: a native SQL replica that stops applying freezes the served
         // tip, so a refresh gated on blocksProcessed > 0 never runs again and REST and the
         // periodic WebSocket status keep republishing the last healthy replica_stale:false
@@ -459,7 +459,7 @@ class ServerPoller {
         // cost no extra source read (streamTo is the tip this poll already read) and no
         // extra WebSocket traffic (updateStatus only writes the broadcaster's map; the
         // status push is api.js's own timer).
-        await this._updateStatus(streamTo);
+        await this.updateStatus(streamTo);
 
         return blocksProcessed;
     }
@@ -528,7 +528,7 @@ class ServerPoller {
     // viewTip: the pinned snapshot's own tip (db.getLastBlock(conn)); when it sits
     // ahead of block_index (catch-up burst) the indexer payload's state_hash is
     // shipped NULL, see the burst-exemption comment at the state_hash assignment.
-    async _buildBlockPayload(block_index, conn, viewTip){
+    async buildBlockPayload(block_index, conn, viewTip){
         let hashRow = await this.db.getBlockHashRow(block_index, conn);
         if(!hashRow) return null;
 
@@ -1020,7 +1020,7 @@ class ServerPoller {
         }));
     }
 
-    async _updateStatus(sourceBlockHeight){
+    async updateStatus(sourceBlockHeight){
         let hashRow = this.lastPolledBlock ? await this.db.getBlockHashRow(this.lastPolledBlock) : null;
         let status = {
             dbType:              this.dbType,

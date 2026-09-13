@@ -14,7 +14,7 @@
  * Tier 1 Fuzz: ClientApplier
  *
  * Tests that applyBlock, applyFullSnapshot, applyIncrementalSnapshot, and
- * _insertRows never crash for any generated input. Also verifies transaction
+ * insertRows never crash for any generated input. Also verifies transaction
  * safety (commit XOR rollback), INSERT IGNORE correctness, and batching.
  */
 
@@ -191,14 +191,14 @@ describe('Tier 1 - ClientApplier @tier1', function () {
         });
     });
 
-    describe('_insertRows', function () {
+    describe('insertRows', function () {
 
         it('never throws for any table name and row array', function () {
             return fc.assert(fc.asyncProperty(
                 fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), minLength: 1, maxLength: 30 }),
                 mixedRows(),
                 async (table, rows) => {
-                    await applier._insertRows(table, rows);
+                    await applier.insertRows(table, rows);
                 }
             ), { numRuns: NUM_RUNS });
         });
@@ -214,7 +214,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 rowArray(genericDataRow(), 1, 3),
                 async (table, rows) => {
                     db.doQuery.resetHistory();
-                    await applier._insertRows(table, rows);
+                    await applier.insertRows(table, rows);
                     if (db.doQuery.callCount > 0) {
                         let query = db.doQuery.firstCall.args[0];
                         assert.ok(query.startsWith('INSERT IGNORE'),
@@ -230,7 +230,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 rowArray(genericDataRow(), 1, 3),
                 async (table, rows) => {
                     db.doQuery.resetHistory();
-                    await applier._insertRows(table, rows);
+                    await applier.insertRows(table, rows);
                     if (db.doQuery.callCount > 0) {
                         let query = db.doQuery.firstCall.args[0];
                         assert.ok(query.startsWith('INSERT INTO'),
@@ -249,7 +249,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                     let rows = [];
                     for (let i = 0; i < count; i++) rows.push({ id: i });
                     db.doQuery.resetHistory();
-                    await applier._insertRows('test_table', rows);
+                    await applier.insertRows('test_table', rows);
                     assert.strictEqual(db.doQuery.callCount, Math.ceil(count / 100));
                 }
             ), { numRuns: 50 });
@@ -263,7 +263,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 ),
                 async (rows) => {
                     db.doQuery.resetHistory();
-                    await applier._insertRows('test_table', rows);
+                    await applier.insertRows('test_table', rows);
                     if (db.doQuery.callCount > 0) {
                         let args = db.doQuery.firstCall.args[1];
                         // Every second arg (the 'val' column) should be null
@@ -280,7 +280,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 fc.constantFrom([], null, undefined),
                 async (rows) => {
                     db.doQuery.resetHistory();
-                    await applier._insertRows('blocks', rows);
+                    await applier.insertRows('blocks', rows);
                     assert.strictEqual(db.doQuery.callCount, 0);
                 }
             ), { numRuns: 30 });

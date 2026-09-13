@@ -233,13 +233,13 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // (how far the poller has actually broadcast), not the source DB tip.
         // Using the source DB tip here hides poller lag: if the poller is wedged
         // or catching up, block_height would show a climbing source tip with no
-        // lag signal. The WS _updateStatus path (ServerPoller) correctly separates
+        // lag signal. The WS updateStatus path (ServerPoller) correctly separates
         // lastPolledBlock from the source tip; REST now matches those semantics.
         let broadcaster = syncService.getBroadcaster();
         // Read through getStatus, never statusData directly: it is the one accessor
         // that expires a measurement's freshness verdict, so a status cached before the
         // poller stopped measuring cannot certify this row (SYNC_STATUS_MAX_AGE_MS).
-        // The status object stored by ServerPoller._updateStatus has block_height
+        // The status object stored by ServerPoller.updateStatus has block_height
         // (polled position) and source_block_height (DB tip) already separated.
         let pollerStatus = (broadcaster && typeof broadcaster.getStatus === 'function')
             ? broadcaster.getStatus(chain, network, dbType || 'indexer') : null;
@@ -435,7 +435,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
     // entire tables still agrees on every hash. The hashes describe the
     // source's blockchain computation, not what actually landed downstream.
     // Publishing row counts gives followers an independent completeness
-    // signal: ClientSync._verifyAgainstSource compares these against its own
+    // signal: ClientSync.verifyAgainstSource compares these against its own
     // counts and flags any table the source has rows in but the follower does
     // not. Scoped to the per-block replicated set (see replicatedTables.js) so
     // legitimately-divergent snapshot-only / operator-local tables don't raise

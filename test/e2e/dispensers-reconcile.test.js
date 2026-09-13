@@ -229,7 +229,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
         server = buildServer(sourceDb, broadcaster, snapshotBuilder);
         await new Promise(r => server.listen(SERVER_PORT, r));
         poller.lastPolledBlock = await sourceDb.getLastBlock();
-        await poller._updateStatus();
+        await poller.updateStatus();
         pollInterval = setInterval(async () => { try { await poller._poll(); } catch(e){} }, 200);
     }
 
@@ -258,12 +258,12 @@ describe('E2E: Decoder dispensers reconcile', function() {
         return {
             sync,
             bootstrap: async () => {
-                await sync._bootstrapFromSnapshot();
+                await sync.bootstrapFromSnapshot();
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();
             },
             reconcile: () => sync._reconcileDispensers('http://127.0.0.1:' + SERVER_PORT),
             incrementalCatchUp: async (sinceBlock) => {
-                await sync._incrementalCatchUp(sinceBlock);
+                await sync.incrementalCatchUp(sinceBlock);
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();
             },
             stop: () => sync.stop()

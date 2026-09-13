@@ -13,7 +13,7 @@
  **********************************************************************
  * Tier 2 Fuzz: HubClient
  *
- * Tests that getIndexerConfigs and _parsePort never crash regardless of
+ * Tests that getIndexerConfigs and parsePort never crash regardless of
  * hub response shape, network errors, or input types.
  * Uses proxyquire to inject a faked axios without real HTTP calls.
  */
@@ -134,13 +134,13 @@ describe('Tier 2 - HubClient @tier2', function () {
         });
     });
 
-    describe('_parsePort', function () {
+    describe('parsePort', function () {
 
         it('never throws and always returns a non-negative integer', function () {
             fc.assert(fc.property(
                 portValue(), portValue(),
                 (primary, fallback) => {
-                    let result = HubClient._parsePort(primary, fallback);
+                    let result = HubClient.parsePort(primary, fallback);
                     assert.strictEqual(typeof result, 'number');
                     assert.ok(Number.isInteger(result), 'Expected integer, got: ' + result);
                     assert.ok(result >= 0, 'Expected non-negative, got: ' + result);
@@ -153,7 +153,7 @@ describe('Tier 2 - HubClient @tier2', function () {
                 fc.constantFrom(undefined, null, '', 'abc', NaN),
                 fc.constantFrom(undefined, null, '', 'abc', NaN),
                 (primary, fallback) => {
-                    let result = HubClient._parsePort(primary, fallback);
+                    let result = HubClient.parsePort(primary, fallback);
                     assert.strictEqual(result, 3306);
                 }
             ), { numRuns: 50 });
@@ -163,7 +163,7 @@ describe('Tier 2 - HubClient @tier2', function () {
             fc.assert(fc.property(
                 fc.integer({ min: 0, max: 65535 }),
                 (port) => {
-                    let result = HubClient._parsePort(port, undefined);
+                    let result = HubClient.parsePort(port, undefined);
                     assert.strictEqual(result, port);
                 }
             ), { numRuns: NUM_RUNS });
@@ -173,7 +173,7 @@ describe('Tier 2 - HubClient @tier2', function () {
             fc.assert(fc.property(
                 fc.integer({ min: 0, max: 65535 }),
                 (port) => {
-                    let result = HubClient._parsePort(String(port), undefined);
+                    let result = HubClient.parsePort(String(port), undefined);
                     assert.strictEqual(result, port);
                 }
             ), { numRuns: NUM_RUNS });
@@ -184,7 +184,7 @@ describe('Tier 2 - HubClient @tier2', function () {
                 fc.constantFrom(undefined, null, ''),
                 fc.integer({ min: 0, max: 65535 }),
                 (primary, fallback) => {
-                    let result = HubClient._parsePort(primary, fallback);
+                    let result = HubClient.parsePort(primary, fallback);
                     assert.strictEqual(result, fallback);
                 }
             ), { numRuns: NUM_RUNS });
@@ -194,7 +194,7 @@ describe('Tier 2 - HubClient @tier2', function () {
             fc.assert(fc.property(
                 fc.integer({ min: -10000, max: -1 }),
                 (port) => {
-                    let result = HubClient._parsePort(port, undefined);
+                    let result = HubClient.parsePort(port, undefined);
                     assert.strictEqual(result, 3306);
                 }
             ), { numRuns: NUM_RUNS });

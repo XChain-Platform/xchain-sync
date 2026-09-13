@@ -499,10 +499,10 @@ describe('ServerPoller', function(){
         });
     });
 
-    describe('_buildBlockPayload', function(){
+    describe('buildBlockPayload', function(){
         it('returns null when block hash row is missing', async function(){
             db.getBlockHashRow.resolves(null);
-            let result = await poller._buildBlockPayload(100);
+            let result = await poller.buildBlockPayload(100);
             assert.strictEqual(result, null);
         });
 
@@ -515,7 +515,7 @@ describe('ServerPoller', function(){
             db.getTransactions.resolves([{ tx_index: 1, block_index: 100, source_id: 10, tx_hash_id: 20 }]);
             db.getActions.resolves([{ action_index: 50, tx_index: 1 }]);
 
-            let payload = await poller._buildBlockPayload(100);
+            let payload = await poller.buildBlockPayload(100);
 
             assert.strictEqual(payload.type, 'block');
             assert.strictEqual(payload.chain, 'bitcoin');
@@ -539,7 +539,7 @@ describe('ServerPoller', function(){
             let derived = { id: 9, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 961500,
                 amount: '1.00000000', block_index: 961500, derive_block_index: 961700 };
             db.doQuery.withArgs(sinon.match(/vr\.derive_block_index BETWEEN \? AND \?/)).resolves([derived]);
-            let payload = await poller._buildBlockPayload(961700);
+            let payload = await poller.buildBlockPayload(961700);
             assert.ok(payload.data.validator_rewards, 'derived reward must ride the validator_rewards payload');
             assert.deepStrictEqual(payload.data.validator_rewards, [derived]);
             let q = db.doQuery.getCalls().find(c => /vr\.derive_block_index BETWEEN \? AND \?/.test(c.args[0]));
@@ -556,7 +556,7 @@ describe('ServerPoller', function(){
                 { execution_index: 10, emitted_action: 'SLASH', action_index: null, position: 0 }
             ]);
 
-            let payload = await poller._buildBlockPayload(100);
+            let payload = await poller.buildBlockPayload(100);
 
             assert.ok(db.getEmissionRowsForBlock.calledOnceWith(100),
                 'contract_emissions must be sourced via getEmissionRowsForBlock');
@@ -571,7 +571,7 @@ describe('ServerPoller', function(){
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
-            let payload = await poller._buildBlockPayload(100);
+            let payload = await poller.buildBlockPayload(100);
 
             assert.ok(payload.data['sync_meta'], 'sync_meta present in indexer payload');
             assert.strictEqual(payload.data['sync_meta'].length, 1);
@@ -591,7 +591,7 @@ describe('ServerPoller', function(){
             // Catch-up burst: the pinned view's tip sits ahead of the block being
             // built, so updated_rows carry tip-state and the follower's apply-time
             // recompute at B must be skipped via the existing NULL gate.
-            let payload = await poller._buildBlockPayload(100, null, 105);
+            let payload = await poller.buildBlockPayload(100, null, 105);
             assert.strictEqual(payload.state_hash, null,
                 'burst-built payload must ship state_hash NULL');
             assert.strictEqual(payload.ledger_hash, 'lh',
@@ -603,9 +603,9 @@ describe('ServerPoller', function(){
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
             });
-            let steady = await poller._buildBlockPayload(100, null, 100);
+            let steady = await poller.buildBlockPayload(100, null, 100);
             assert.strictEqual(steady.state_hash, 'sh', 'steady-state payload keeps state_hash');
-            let noTip = await poller._buildBlockPayload(100, null);
+            let noTip = await poller.buildBlockPayload(100, null);
             assert.strictEqual(noTip.state_hash, 'sh', 'unknown view tip keeps state_hash');
         });
 
@@ -618,7 +618,7 @@ describe('ServerPoller', function(){
             // Catch-up burst: state_root folds the follower-recomputed stakes_root, which
             // is read from live tip-state stake tables during a burst, so it must be NULLed
             // exactly like state_hash. balances_root/block_merkle_root are B-scoped and stay.
-            let burst = await poller._buildBlockPayload(1000000, null, 1000005);
+            let burst = await poller.buildBlockPayload(1000000, null, 1000005);
             assert.strictEqual(burst.state_root, null,
                 'burst-built payload must ship state_root NULL');
             assert.strictEqual(burst.balances_root, 'br',
@@ -626,7 +626,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(burst.block_merkle_root, 'bmr',
                 'block_merkle_root stays verified on the burst path');
 
-            let steady = await poller._buildBlockPayload(1000000, null, 1000000);
+            let steady = await poller.buildBlockPayload(1000000, null, 1000000);
             assert.strictEqual(steady.state_root, 'sr',
                 'steady-state payload keeps state_root');
         });
@@ -640,7 +640,7 @@ describe('ServerPoller', function(){
             // Decoder has no transparency log.
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
 
-            let payload = await decoderPoller._buildBlockPayload(100);
+            let payload = await decoderPoller.buildBlockPayload(100);
             assert.strictEqual(payload.data['sync_meta'], undefined, 'decoder payload has no sync_meta');
             assert.strictEqual(payload.block_hash, 'bh');
         });
@@ -653,7 +653,7 @@ describe('ServerPoller', function(){
             let blockRows = [{ block_index: 1, block_time: 100 }];
             db.getBlockScopedRows.resolves(blockRows);
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
             assert.ok(payload.data['blocks']);
         });
 
@@ -667,7 +667,7 @@ describe('ServerPoller', function(){
             db.getTransactions.resolves([]);
             db.getActions.resolves([]);
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
             assert.ok(payload); // Should not be null
             assert.strictEqual(payload.type, 'block');
         });
@@ -684,12 +684,12 @@ describe('ServerPoller', function(){
 
             let threw = false;
             try {
-                await poller._buildBlockPayload(1);
+                await poller.buildBlockPayload(1);
             } catch(e){
                 threw = true;
                 assert.strictEqual(e.errno, 1213);
             }
-            assert.ok(threw, 'a transient DB fault must propagate out of _buildBlockPayload');
+            assert.ok(threw, 'a transient DB fault must propagate out of buildBlockPayload');
         });
 
         it('fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression', async function(){
@@ -707,12 +707,12 @@ describe('ServerPoller', function(){
 
             let threw = false;
             try {
-                await poller._buildBlockPayload(1);
+                await poller.buildBlockPayload(1);
             } catch(e){
                 threw = true;
                 assert.strictEqual(e.errno, 1213);
             }
-            assert.ok(threw, 'a transient updated_rows fault must propagate out of _buildBlockPayload');
+            assert.ok(threw, 'a transient updated_rows fault must propagate out of buildBlockPayload');
         });
 
         it('fetches index_transactions by referenced IDs', async function(){
@@ -729,7 +729,7 @@ describe('ServerPoller', function(){
             db.getActions.resolves([]);
             db.doQuery.resolves([{ id: 1, hash: 'abc' }]);
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             // Assert the ID SET, not merely that a call happened: a missing hash id rides
             // green against the weaker assertion (see the state_hash_id regression below).
@@ -757,7 +757,7 @@ describe('ServerPoller', function(){
             db.getActions.resolves([]);
             db.doQuery.resolves([]);
 
-            await poller._buildBlockPayload(1);
+            await poller.buildBlockPayload(1);
 
             let idxCall = db.doQuery.getCalls().find(c => c.args[0].includes('index_transactions'));
             assert.ok(idxCall, 'index_transactions must be queried for the block hash ids');
@@ -780,7 +780,7 @@ describe('ServerPoller', function(){
             decoderDb.doQuery.resolves([]);
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
 
-            await decoderPoller._buildBlockPayload(1);
+            await decoderPoller.buildBlockPayload(1);
 
             let idxCall = decoderDb.doQuery.getCalls().find(c => c.args[0].includes('index_transactions'));
             assert.ok(idxCall);
@@ -801,7 +801,7 @@ describe('ServerPoller', function(){
             db.getActions.resolves([]);
             db.doQuery.resolves([{ id: 10 }]);
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             let addrCall = db.doQuery.getCalls().find(c => c.args[0].includes('index_addresses'));
             assert.ok(addrCall);
@@ -832,7 +832,7 @@ describe('ServerPoller', function(){
                 return [];
             });
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             // The new interned rows ride the live block payload (previously snapshot-only).
             assert.deepStrictEqual(payload.data['index_actions'],  [{ id: 7, action: 'NEWACTION' }]);
@@ -861,7 +861,7 @@ describe('ServerPoller', function(){
             decoderDb.getTransactions.resolves([{ tx_index: 1, source_id: 10 }]);
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
 
-            await decoderPoller._buildBlockPayload(1);
+            await decoderPoller.buildBlockPayload(1);
 
             // Decoder must never query the indexer-only interning tables.
             let touchedIndexerOnly = decoderDb.doQuery.getCalls().some(c =>
@@ -870,7 +870,7 @@ describe('ServerPoller', function(){
         });
     });
 
-    describe('_updateStatus', function(){
+    describe('updateStatus', function(){
         it('calls broadcaster.updateStatus with correct shape', async function(){
             poller.lastPolledBlock = 50;
             db.getBlockHashRow.resolves({
@@ -878,7 +878,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
 
-            await poller._updateStatus();
+            await poller.updateStatus();
 
             assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
             let args = broadcaster.updateStatus.firstCall.args;
@@ -890,7 +890,7 @@ describe('ServerPoller', function(){
 
         it('handles null lastPolledBlock', async function(){
             poller.lastPolledBlock = null;
-            await poller._updateStatus();
+            await poller.updateStatus();
             let status = broadcaster.updateStatus.firstCall.args[2];
             assert.strictEqual(status.block_height, null);
             assert.strictEqual(status.block_time, null);
@@ -904,7 +904,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
             let before = Date.now();
-            await poller._updateStatus();
+            await poller.updateStatus();
             let status = broadcaster.updateStatus.firstCall.args[2];
             assert.ok(typeof status.measured_at === 'number' && status.measured_at >= before,
                 'a successful poll dates its own observation');
@@ -913,7 +913,7 @@ describe('ServerPoller', function(){
             // published and the previous healthy object survives in the cache untouched.
             broadcaster.updateStatus.resetHistory();
             db.getBlockHashRow.rejects(new Error('replica read failed'));
-            await assert.rejects(() => poller._updateStatus());
+            await assert.rejects(() => poller.updateStatus());
             assert.strictEqual(broadcaster.updateStatus.called, false,
                 'a failed measurement publishes no status, so only its AGE can expose it');
         });
@@ -929,7 +929,7 @@ describe('ServerPoller', function(){
 
             it('reports fresh on a primary (not a replica at all)', async function(){
                 db.getReplicaStatus = sinon.stub().resolves({ isReplica: false, running: null, secondsBehind: null });
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, false);
                 assert.strictEqual(statusAfter().replica_seconds_behind, null);
             });
@@ -937,7 +937,7 @@ describe('ServerPoller', function(){
             it('reports fresh on a replica inside the lag ceiling', async function(){
                 config.SYNC_REPLICA_MAX_LAG_S = 120;
                 db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, false);
                 assert.strictEqual(statusAfter().replica_seconds_behind, 5);
             });
@@ -945,26 +945,26 @@ describe('ServerPoller', function(){
             it('reports stale past the lag ceiling', async function(){
                 config.SYNC_REPLICA_MAX_LAG_S = 120;
                 db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 900 });
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, true);
             });
 
             it('reports stale when the SQL thread stopped (Seconds_Behind NULL)', async function(){
                 db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: false, secondsBehind: null });
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, true,
                     'a stopped applier is unbounded lag; this is the failure that published lag 0');
             });
 
             it('fails closed when the replication status is unreadable', async function(){
                 db.getReplicaStatus = sinon.stub().resolves({ isReplica: null, running: null, secondsBehind: null });
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, true);
             });
 
             it('fails closed when the read throws', async function(){
                 db.getReplicaStatus = sinon.stub().rejects(new Error('boom'));
-                await poller._updateStatus(100);
+                await poller.updateStatus(100);
                 assert.strictEqual(statusAfter().replica_stale, true);
             });
         });
@@ -1006,7 +1006,7 @@ describe('ServerPoller', function(){
             assert.ok(db.getLastBlock.getCalls().some(c => c.args[0] === snap),
                 'getLastBlock must be re-read on the snapshot connection');
             // Every payload read observes the pinned view. (The FIRST getBlockHashRow
-            // call is the payload build; _updateStatus later re-reads it unpinned.)
+            // call is the payload build; updateStatus later re-reads it unpinned.)
             assert.strictEqual(db.getBlockHashRow.firstCall.args[1], snap);
             for(const call of db.getBlockScopedRows.getCalls())
                 assert.strictEqual(call.args[2], snap);

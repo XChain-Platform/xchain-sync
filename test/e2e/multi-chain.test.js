@@ -131,8 +131,8 @@ describe('E2E: Multi-Chain Synchronization', function() {
         return new Promise(resolve => httpServer.listen(SERVER_PORT, async () => {
             btcPoller.lastPolledBlock = await sourceDb.getLastBlock();
             ltcPoller.lastPolledBlock = await sourceDb.getLastBlock();
-            await btcPoller._updateStatus();
-            await ltcPoller._updateStatus();
+            await btcPoller.updateStatus();
+            await ltcPoller.updateStatus();
             resolve();
         }));
     }

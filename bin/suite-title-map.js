@@ -61,6 +61,11 @@
  *                                                  the same, with the moving
  *                                                  commit's {old: new} paths
  *                                                  applied to the pin first
+ *   node bin/suite-title-map.js --compare <pin> --name-map <file>
+ *                                                  the same for a renamed
+ *                                                  SYMBOL: {old: new} tokens
+ *                                                  applied inside each pinned
+ *                                                  title before comparing
  *
  ********************************************************************/
 
@@ -238,11 +243,29 @@ function expand(map, scriptName) {
 }
 
 /**
+ * Apply a declared {oldToken: newToken} map inside one title. Whole tokens only,
+ * so renaming `_handleEvent` never rewrites `_handleEventQueue`.
+ *
+ * @param {string} title
+ * @param {object} names the renaming commit's declared symbol map
+ * @returns {string}
+ */
+function applyNameMap(title, names) {
+    let out = title;
+    for (const [from, to] of Object.entries(names || {}))
+        out = out.replace(new RegExp(`(?<![A-Za-z0-9_$])${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_$])`, 'g'), to);
+    return out;
+}
+
+/**
  * Pin against tree, script by script. `renames` is the moving commit's declared
  * {oldPath: newPath}; a pin entry is compared under its new name so a pure move
- * reports no difference while a move that changed a title still does.
+ * reports no difference while a move that changed a title still does. `names`
+ * does the same for a renamed SYMBOL a title happens to quote: a suite that
+ * names the method it covers has a title that a pure rename legitimately
+ * changes, and without this every one of those reads as a dropped test.
  */
-function compare(pin, fresh, renames, only) {
+function compare(pin, fresh, renames, only, symbolMap) {
     const differences = [];
     // A run narrowed to one script compares that script only: every other
     // script in the pin is absent because it was not collected, which is not a
@@ -259,7 +282,8 @@ function compare(pin, fresh, renames, only) {
             continue;
         }
         const mapped = {};
-        for (const rel of Object.keys(before)) mapped[renames[rel] || rel] = before[rel];
+        for (const rel of Object.keys(before))
+            mapped[renames[rel] || rel] = before[rel].map((t) => applyNameMap(t, symbolMap));
         const files = Array.from(new Set(Object.keys(mapped).concat(Object.keys(after)))).sort();
         for (const rel of files) {
             if (!mapped[rel]) { differences.push({ script: name, kind: 'file_added', file: rel }); continue; }
@@ -281,6 +305,7 @@ function parseArgs(argv) {
         else if (argv[i] === '--script') { opts.script = argv[i + 1]; i += 1; }
         else if (argv[i] === '--compare') { opts.compare = path.resolve(argv[i + 1]); i += 1; }
         else if (argv[i] === '--rename-map') { opts.renameMap = path.resolve(argv[i + 1]); i += 1; }
+        else if (argv[i] === '--name-map') { opts.nameMap = path.resolve(argv[i + 1]); i += 1; }
         else if (argv[i] === '--help' || argv[i] === '-h') opts.help = true;
     }
     return opts;
@@ -297,10 +322,12 @@ function main() {
     if (opts.compare) {
         const pin = JSON.parse(fs.readFileSync(opts.compare, 'utf8'));
         const renames = opts.renameMap ? JSON.parse(fs.readFileSync(opts.renameMap, 'utf8')) : {};
-        const differences = compare(pin, map, renames, opts.script);
+        const names = opts.nameMap ? JSON.parse(fs.readFileSync(opts.nameMap, 'utf8')) : {};
+        const differences = compare(pin, map, renames, opts.script, names);
         if (!differences.length) {
             console.log(`suite identity holds against ${path.relative(REPO_ROOT, opts.compare)}`
-                + `${opts.renameMap ? ' through the declared rename map' : ''}`);
+                + `${opts.renameMap ? ' through the declared rename map' : ''}`
+                + `${opts.nameMap ? ' and the declared name map' : ''}`);
             return;
         }
         console.log(`${differences.length} difference(s) against ${path.relative(REPO_ROOT, opts.compare)}:`);
@@ -341,4 +368,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildMap, collect, mochaArgsFor, splitCommand, compare, expand, portableTitle };
+module.exports = { buildMap, collect, mochaArgsFor, splitCommand, compare, expand, portableTitle, applyNameMap };

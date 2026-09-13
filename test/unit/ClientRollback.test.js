@@ -844,7 +844,7 @@ describe('ClientRollback', function(){
         });
     });
 
-    describe('_rollbackDecoder', function(){
+    describe('rollbackDecoder', function(){
         let decoderDb, decoderRollback;
 
         beforeEach(function(){
@@ -853,8 +853,8 @@ describe('ClientRollback', function(){
             decoderRollback = new ClientRollback(decoderDb, util, undefined, 'regtest');
         });
 
-        it('routes a decoder DB through _rollbackDecoder', async function(){
-            let spy = sinon.spy(decoderRollback, '_rollbackDecoder');
+        it('routes a decoder DB through rollbackDecoder', async function(){
+            let spy = sinon.spy(decoderRollback, 'rollbackDecoder');
             await decoderRollback.rollback(50);
             assert.strictEqual(spy.calledOnceWith(50), true);
         });

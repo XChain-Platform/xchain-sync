@@ -129,7 +129,7 @@ class TestDatabase {
 
     async getBlockHashRow(block_index, conn) {
         // Mirror src/db.js: the fourth (replication-integrity) state_hash is
-        // surfaced via the state_hash_id join so ServerPoller._buildBlockPayload can
+        // surfaced via the state_hash_id join so ServerPoller.buildBlockPayload can
         // ship it and a follower with VERIFY_STATE_HASH can recompute + compare.
         // NULL for blocks that never stored one (the common fixture case), which the
         // follower skips exactly as it does for pre-feature blocks.

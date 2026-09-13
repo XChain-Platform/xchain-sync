@@ -164,10 +164,10 @@ module.exports = {
         // Per-chain replication exclude (client mode). Comma-separated list of
         // `coin:network:dbType` keys (e.g. `DOGE:testnet:indexer`) that the client
         // must NOT replicate. A discovered chain whose key is listed is skipped in
-        // _discoverChains, so no ClientSync is started for it and it can never
-        // crash-loop the process. Used to drop a chain that cannot full-snapshot
-        // bootstrap (fast chains with tens of millions of blocks) until the
-        // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is deployed.
+        // discoverChains, so no ClientSync is started for it and it can never
+        // crash-loop the process. It drops a chain that cannot full-snapshot
+        // bootstrap (fast chains with tens of millions of blocks) wherever the
+        // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is not in place.
         // Trimmed + deduplicated; empty/unset -> [] (no chain excluded).
         config['SYNC_EXCLUDE'] = [...new Set(
             (process.env.SYNC_EXCLUDE || '')
@@ -385,7 +385,7 @@ module.exports = {
         // and the row-count check structurally cannot see (equal count, different
         // content). Read on BOTH sides: a server (SYNC_MODE=server) publishes the
         // deterministic-subset checksum on /status; a client recomputes + compares in
-        // _verifyAgainstSource. OFF by default because computing it scans the
+        // verifyAgainstSource. OFF by default because computing it scans the
         // deterministic subset of index_addresses (an index on block_index is advisable
         // before enabling on a high-volume chain).
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
@@ -489,7 +489,7 @@ module.exports = {
         config['SYNC_REPLICA_MAX_LAG_S'] = parseIntMin1(process.env.SYNC_REPLICA_MAX_LAG_S, 120);
 
         // Measurement-freshness window for a cached status object (server mode).
-        // ServerPoller._updateStatus overwrites BlockBroadcaster.statusData only on a
+        // ServerPoller.updateStatus overwrites BlockBroadcaster.statusData only on a
         // SUCCESSFUL database read and its callers swallow the rejection, so a throw, a
         // hung query or a stopped poller leaves the last HEALTHY status in the cache and
         // every reader keeps re-serving it: the 60s status broadcast, the new-subscriber

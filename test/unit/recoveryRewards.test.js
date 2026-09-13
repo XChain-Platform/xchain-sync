@@ -56,7 +56,7 @@ describe('collectRedrivenValidatorRewards', function(){
         // Regression: a narrow projection (source_id, signing_pubkey_id, reward_type,
         // round_reference, amount, block_index) omits the validator_rewards AUTO_INCREMENT id.
         // These rows merge into the same payload array as SELECT * block-scoped rows, and
-        // ClientApplier._insertRows keys its column list off rows[0], so a shape mismatch makes
+        // ClientApplier.insertRows keys its column list off rows[0], so a shape mismatch makes
         // the replica mint a divergent local id. Must select the full row.
         let captured = null;
         let db = { doQuery: async (sql) => { captured = sql; return []; } };

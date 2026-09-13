@@ -540,25 +540,25 @@ describe('ClientApplier', function(){
         });
     });
 
-    describe('_insertRows', function(){
+    describe('insertRows', function(){
         it('does nothing for empty rows', async function(){
-            await applier._insertRows('blocks', []);
+            await applier.insertRows('blocks', []);
             assert.strictEqual(db.doQuery.called, false);
         });
 
         it('does nothing for null rows', async function(){
-            await applier._insertRows('blocks', null);
+            await applier.insertRows('blocks', null);
             assert.strictEqual(db.doQuery.called, false);
         });
 
         it('uses INSERT IGNORE for index tables', async function(){
-            await applier._insertRows('index_actions', [{ id: 1, name: 'test' }]);
+            await applier.insertRows('index_actions', [{ id: 1, name: 'test' }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.startsWith('INSERT IGNORE'));
         });
 
         it('uses INSERT for non-index tables', async function(){
-            await applier._insertRows('blocks', [{ block_index: 1 }]);
+            await applier.insertRows('blocks', [{ block_index: 1 }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.startsWith('INSERT INTO'));
             assert.ok(!query.includes('IGNORE'));
@@ -570,7 +570,7 @@ describe('ClientApplier', function(){
         // instead of skipping them). Pin both so a future edit can't silently drop
         // either mode (the F-2 divergence class) and pass CI.
         it('uses INSERT IGNORE for append-only merkle_epochs', async function(){
-            await applier._insertRows('merkle_epochs', [{ epoch: 1, root: 'aa' }]);
+            await applier.insertRows('merkle_epochs', [{ epoch: 1, root: 'aa' }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.startsWith('INSERT IGNORE'), 'merkle_epochs must be INSERT IGNORE');
             assert.ok(!query.includes('ON DUPLICATE KEY UPDATE'));
@@ -582,7 +582,7 @@ describe('ClientApplier', function(){
         // IGNORE is a no-op, while a plain INSERT aborts the whole apply transaction.
         for(const table of ['rollcalls', 'rollcall_absences']){
             it('uses INSERT IGNORE for the re-deliverable ' + table, async function(){
-                await applier._insertRows(table, [{ epoch_height: 1000, close_block: 1100 }]);
+                await applier.insertRows(table, [{ epoch_height: 1000, close_block: 1100 }]);
                 let query = db.doQuery.firstCall.args[0];
                 assert.ok(query.startsWith('INSERT IGNORE'), table + ' must be INSERT IGNORE');
                 assert.ok(!query.includes('ON DUPLICATE KEY UPDATE'),
@@ -592,7 +592,7 @@ describe('ClientApplier', function(){
 
         for(const table of ['markets', 'attest_validator_stats']){
             it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every carried column', async function(){
-                await applier._insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
+                await applier.insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
                 let query = db.doQuery.firstCall.args[0];
                 assert.ok(query.startsWith('INSERT INTO'), table + ' upsert starts as INSERT (not IGNORE)');
                 assert.ok(!query.startsWith('INSERT IGNORE'), table + ' must not be INSERT IGNORE');
@@ -611,7 +611,7 @@ describe('ClientApplier', function(){
         // mints its own id locally, so replicating the source's rewrites the replica's
         // PRIMARY KEY onto a number another surviving row holds.
         it('keeps refreshing markets.id, whose id space is source-assigned end to end', async function(){
-            await applier._insertRows('markets', [{ id: 1, a: 'x' }]);
+            await applier.insertRows('markets', [{ id: 1, a: 'x' }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.includes('`id`'), 'markets must still carry the source id');
             assert.ok(query.includes('`id` = VALUES(`id`)'), 'markets must still refresh id');
@@ -626,18 +626,18 @@ describe('ClientApplier', function(){
         it('batches inserts in groups of 100', async function(){
             let rows = [];
             for(let i = 0; i < 250; i++) rows.push({ id: i });
-            await applier._insertRows('actions', rows);
+            await applier.insertRows('actions', rows);
             assert.strictEqual(db.doQuery.callCount, 3); // 100 + 100 + 50
         });
 
         it('handles null column values', async function(){
-            await applier._insertRows('actions', [{ id: 1, name: null }]);
+            await applier.insertRows('actions', [{ id: 1, name: null }]);
             let args = db.doQuery.firstCall.args[1];
             assert.strictEqual(args[1], null);
         });
 
         it('handles undefined column values as null', async function(){
-            await applier._insertRows('actions', [{ id: 1, name: undefined }]);
+            await applier.insertRows('actions', [{ id: 1, name: undefined }]);
             let args = db.doQuery.firstCall.args[1];
             assert.strictEqual(args[1], null);
         });
@@ -649,7 +649,7 @@ describe('ClientApplier', function(){
         // inherit that id at all.
         describe('blocks surrogate id (item 808)', function(){
             it('strips the source id so the replica assigns its own', async function(){
-                await applier._insertRows('blocks', [{ id: 27681, block_index: 3147670, block_time: 5 }]);
+                await applier.insertRows('blocks', [{ id: 27681, block_index: 3147670, block_time: 5 }]);
                 let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
                 assert.ok(!insert.includes('`id`'), 'the source surrogate id must not be replicated');
                 assert.ok(insert.includes('`block_index`') && insert.includes('`block_time`'),
@@ -657,7 +657,7 @@ describe('ClientApplier', function(){
             });
 
             it('deletes the existing row for that block_index first, so a re-send is idempotent', async function(){
-                await applier._insertRows('blocks', [{ id: 27681, block_index: 3147670 }]);
+                await applier.insertRows('blocks', [{ id: 27681, block_index: 3147670 }]);
                 let calls = db.doQuery.getCalls().map(c => c.args[0]);
                 let delIdx = calls.findIndex(q => /^DELETE FROM `blocks`/.test(q));
                 let insIdx = calls.findIndex(q => /^INSERT/.test(q));
@@ -669,7 +669,7 @@ describe('ClientApplier', function(){
             });
 
             it('scopes the delete to the applied blocks only, never the whole table', async function(){
-                await applier._insertRows('blocks', [
+                await applier.insertRows('blocks', [
                     { id: 1, block_index: 10 },
                     { id: 2, block_index: 11 }
                 ]);
@@ -679,7 +679,7 @@ describe('ClientApplier', function(){
             });
 
             it('does not use IGNORE or UPSERT, which would drop or overwrite a block', async function(){
-                await applier._insertRows('blocks', [{ id: 1, block_index: 10 }]);
+                await applier.insertRows('blocks', [{ id: 1, block_index: 10 }]);
                 let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
                 assert.ok(!insert.startsWith('INSERT IGNORE'), 'IGNORE would silently skip the block');
                 assert.ok(!insert.includes('ON DUPLICATE KEY UPDATE'),
@@ -690,12 +690,12 @@ describe('ClientApplier', function(){
                 // block_index is a plain INDEX, not UNIQUE, so an unscoped insert cannot
                 // be de-duplicated afterwards; refuse instead of corrupting the table.
                 await assert.rejects(
-                    () => applier._insertRows('blocks', [{ id: 1, block_time: 5 }]),
+                    () => applier.insertRows('blocks', [{ id: 1, block_time: 5 }]),
                     /missing its natural key block_index/);
             });
 
             it('leaves a legacy row that carries no id untouched', async function(){
-                await applier._insertRows('blocks', [{ block_index: 10, block_time: 5 }]);
+                await applier.insertRows('blocks', [{ block_index: 10, block_time: 5 }]);
                 let calls = db.doQuery.getCalls().map(c => c.args[0]);
                 assert.ok(!calls.some(q => /^DELETE/.test(q)), 'no id to strip means no delete is needed');
                 assert.ok(calls.some(q => /^INSERT INTO `blocks`/.test(q)));
@@ -713,7 +713,7 @@ describe('ClientApplier', function(){
         // (validator_pubkey, provider_id) is what identifies the row.
         describe('attest_validator_stats surrogate id (strip-only class)', function(){
             it('strips the source id so the replica keeps its own', async function(){
-                await applier._insertRows('attest_validator_stats',
+                await applier.insertRows('attest_validator_stats',
                     [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
                 let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
                 assert.ok(!insert.includes('`id`'),
@@ -723,7 +723,7 @@ describe('ClientApplier', function(){
             });
 
             it('still upserts on the natural key, so a re-dump refreshes the counters', async function(){
-                await applier._insertRows('attest_validator_stats',
+                await applier.insertRows('attest_validator_stats',
                     [{ id: 42, validator_pubkey: 'aa', provider_id: 'http_get', fulfilled_count: 3 }]);
                 let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
                 assert.ok(insert.includes('ON DUPLICATE KEY UPDATE'), 'the full-dump upsert must survive the strip');
@@ -732,7 +732,7 @@ describe('ClientApplier', function(){
             });
 
             it('issues no DELETE: the natural key is composite and a scoped delete would drop siblings', async function(){
-                await applier._insertRows('attest_validator_stats', [
+                await applier.insertRows('attest_validator_stats', [
                     { id: 1, validator_pubkey: 'aa', provider_id: 'http_get' },
                     { id: 2, validator_pubkey: 'aa', provider_id: 'other' }
                 ]);
@@ -742,7 +742,7 @@ describe('ClientApplier', function(){
             });
 
             it('leaves a row that carries no id alone', async function(){
-                await applier._insertRows('attest_validator_stats',
+                await applier.insertRows('attest_validator_stats',
                     [{ validator_pubkey: 'aa', provider_id: 'http_get' }]);
                 let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
                 assert.ok(insert.includes('`validator_pubkey`') && insert.includes('`provider_id`'));
@@ -750,24 +750,24 @@ describe('ClientApplier', function(){
 
             it('refuses a row that carries only the stripped id rather than inserting nothing', async function(){
                 await assert.rejects(
-                    () => applier._insertRows('attest_validator_stats', [{ id: 7 }]),
+                    () => applier.insertRows('attest_validator_stats', [{ id: 7 }]),
                     /carries only the stripped surrogate id/);
             });
         });
 
         it('backtick-wraps column names', async function(){
-            await applier._insertRows('blocks', [{ 'block_index': 1 }]);
+            await applier.insertRows('blocks', [{ 'block_index': 1 }]);
             let query = db.doQuery.firstCall.args[0];
             assert.ok(query.includes('`block_index`'));
         });
 
         it('throws on an invalid table name without querying (fail closed)', async function(){
-            await assert.rejects(() => applier._insertRows('bad;name', [{ id: 1 }]), /Rejected table name/);
+            await assert.rejects(() => applier.insertRows('bad;name', [{ id: 1 }]), /Rejected table name/);
             assert.strictEqual(db.doQuery.called, false);
         });
 
         it('throws on an invalid column name without querying (fail closed)', async function(){
-            await assert.rejects(() => applier._insertRows('blocks', [{ 'bad-col': 1 }]), /Rejected column name/);
+            await assert.rejects(() => applier.insertRows('blocks', [{ 'bad-col': 1 }]), /Rejected column name/);
             assert.strictEqual(db.doQuery.called, false);
         });
     });
@@ -844,7 +844,7 @@ describe('ClientApplier: anchor_actions bundle sections', function(){
             action_index: 41, section_index: i, version: 7,
             chain: ['BTC', 'DOGE', 'LTC'][i], network: 'regtest', block_index: 900 + i
         }));
-        await applier._insertRows('anchor_actions', sections);
+        await applier.insertRows('anchor_actions', sections);
         assert.ok(db.doQuery.calledOnce, 'one batched INSERT for the three rows');
         let sql = db.doQuery.firstCall.args[0];
         assert.ok(/`section_index`/.test(sql),

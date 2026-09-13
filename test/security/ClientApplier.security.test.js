@@ -37,7 +37,7 @@ function createMockUtil(){
     };
 }
 
-// Malformed identifiers FAIL CLOSED: _insertRows/_upsertRows throw so the apply
+// Malformed identifiers FAIL CLOSED: insertRows/_upsertRows throw so the apply
 // transaction rolls back and the block/snapshot is retried or the client halts.
 // (A silent skip would drop the table's rows while the transaction still commits,
 // leaving the replica permanently short with no divergence signal.)
@@ -57,18 +57,18 @@ describe('ClientApplier security', function(){
         sinon.restore();
     });
 
-    // ── _insertRows: table name validation ──
+    // ── insertRows: table name validation ──
 
-    describe('_insertRows: table name validation', function(){
+    describe('insertRows: table name validation', function(){
 
         it('allows valid table name', async function(){
-            await applier._insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
+            await applier.insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
             assert.strictEqual(db.doQuery.called, true);
         });
 
         async function assertInsertRejectsTable(table){
             await assert.rejects(
-                () => applier._insertRows(table, [{ id: 1 }]),
+                () => applier.insertRows(table, [{ id: 1 }]),
                 /Rejected table name/
             );
             assert.strictEqual(db.doQuery.called, false);
@@ -103,12 +103,12 @@ describe('ClientApplier security', function(){
         });
     });
 
-    // ── _insertRows: column name validation ──
+    // ── insertRows: column name validation ──
 
-    describe('_insertRows: column name validation', function(){
+    describe('insertRows: column name validation', function(){
 
         it('allows valid column names', async function(){
-            await applier._insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
+            await applier.insertRows('blocks', [{ block_index: 1, block_time: 100 }]);
             assert.strictEqual(db.doQuery.called, true);
         });
 
@@ -116,7 +116,7 @@ describe('ClientApplier security', function(){
             let row = {};
             row[col] = 1;
             await assert.rejects(
-                () => applier._insertRows('blocks', [row]),
+                () => applier.insertRows('blocks', [row]),
                 /Rejected column name/
             );
             assert.strictEqual(db.doQuery.called, false);

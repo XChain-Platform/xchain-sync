@@ -311,7 +311,7 @@ class SnapshotBuilder {
 
     // Discover all tables in the database and return them in dependency order.
     // Priority tables come first, trailing tables last, everything else alphabetically in between.
-    async _getOrderedTables(db, conn){
+    async getOrderedTables(db, conn){
         let rows = await db.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
             [db.dbName],
@@ -375,25 +375,25 @@ class SnapshotBuilder {
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
 
-            let tableOrder = await this._getOrderedTables(db, conn);
+            let tableOrder = await this.getOrderedTables(db, conn);
             let first = true;
             let totalRows = 0;
-            // NO per-table catch: any read error here fails the WHOLE snapshot. This loop
-            // used to log 'Error reading table X' and continue, which published
-            // syntactically valid JSON with that table simply absent (a COUNT(*)
-            // lock-wait/timeout on one large table was enough) while still advertising
-            // block_height at the tip. ClientApplier.applyFullSnapshot DELETEs every
-            // snapshot-eligible local table and re-inserts only the tables the payload
-            // carries, so a populated `actions`/`markets` reached the replica EMPTY and the
-            // replica then advanced to the advertised tip; a single-source deployment runs
-            // no post-apply content check to notice (ClientSync._bootstrapRotateSources
-            // cross-verifies only when sources.length > 1), so the divergence was permanent
-            // and silent. Failing loud instead: the outer catch disposes the writer, so the
-            // closing '}}' is never emitted, and the client's JSON.parse of the truncated
-            // download throws and retries. The legitimate `if(count === 0) continue;` below
-            // stands - a genuinely empty table is still omitted; only real errors abort.
-            // A client-disconnect abort already broke out of the loop before this change
-            // and still does, now via the same path.
+            // NO per-table catch: any read error here fails the WHOLE snapshot. Logging the
+            // error and continuing would publish syntactically valid JSON with that table
+            // simply absent (a COUNT(*) lock-wait or timeout on one large table is enough)
+            // while still advertising block_height at the tip. ClientApplier.applyFullSnapshot
+            // DELETEs every snapshot-eligible local table and re-inserts only the tables the
+            // payload carries, so a populated `actions`/`markets` would reach the replica
+            // EMPTY and the replica would then advance to the advertised tip; a single-source
+            // deployment runs no post-apply content check to notice
+            // (ClientSync.bootstrapRotateSources cross-verifies only when sources.length > 1),
+            // so that divergence would be permanent and silent.
+            //
+            // So it fails loud: the outer catch disposes the writer, the closing '}}' is
+            // never emitted, and the client's JSON.parse of the truncated download throws
+            // and retries. The legitimate `if(count === 0) continue;` below stands - a
+            // genuinely empty table is still omitted; only real errors abort. A
+            // client-disconnect abort breaks out of the loop through this same path.
             for(let table of tableOrder){
                 let count = await db.getTableCount(table, conn);
                 if(count === 0) continue;
@@ -540,7 +540,7 @@ class SnapshotBuilder {
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
 
-            let tableOrder = await this._getOrderedTables(db, conn);
+            let tableOrder = await this.getOrderedTables(db, conn);
             let first = true;
 
             // Scoping rules per dbType.
@@ -567,7 +567,7 @@ class SnapshotBuilder {
             // DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
             // (replicatedTables `special`) is a post-replace equality sanity check, not a
             // backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
-            // leaves the replica ahead, which _verifyTableCounts does not report.
+            // leaves the replica ahead, which verifyTableCounts does not report.
             let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
 
             // Indexer block-scoped set. These tables carry a block_index but no
@@ -912,7 +912,7 @@ class SnapshotBuilder {
             // as a sibling key. The action_index window above can't reach a surviving
             // row (created below the window) that was mutated in place during the
             // catch-up range, so carry its current full state here for the follower to
-            // UPSERT (ClientApplier._applyUpdatedRows). Indexer only; decoder has none
+            // UPSERT (ClientApplier.applyUpdatedRows). Indexer only; decoder has none
             // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
             // the snapshot's block height. Window starts at sinceBlock to match the
             // `block_index >= sinceBlock` data scoping above (over-inclusion is a
@@ -1065,7 +1065,7 @@ class SnapshotBuilder {
     // landing on an already-served page after that page shipped left the client's
     // assembled walk carrying a torn cross-instant image, which
     // applyDispensersReplace then wrote in as authoritative. The count backstop
-    // (_verifyTableCounts) structurally cannot see it: an UPDATE leaves counts
+    // (verifyTableCounts) structurally cannot see it: an UPDATE leaves counts
     // equal on both sides. A single SELECT is statement-consistent in InnoDB, so
     // one response can never mix instants; dispensers is small next to the
     // multi-million-row lookups that forced paging onto the id-cursor rail. The

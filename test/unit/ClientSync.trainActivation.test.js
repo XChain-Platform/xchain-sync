@@ -112,7 +112,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
     it('HALTS at the activation height when the build lacks the required rule set, naming the set and the height', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
 
         assert.strictEqual(applier.applyBlock.called, false, 'the boundary block must NOT be applied');
         assert.strictEqual(sync.isHalted(), true, 'a follower without the rule set must halt');
@@ -144,7 +144,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
     it('does NOT halt, and adds no log noise, when the build implements the required rule set', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('1.0.0', { mainnet: 0 }));
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
 
         assert.ok(applier.applyBlock.calledOnce, 'the block is applied');
         assert.strictEqual(sync.isHalted(), false);
@@ -158,7 +158,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
     it('is inert before the activation height: the block applies and the verdict is pending', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
 
-        await sync._applyBlockEvent(block(969999));
+        await sync.applyBlockEvent(block(969999));
 
         assert.ok(applier.applyBlock.calledOnce, 'the rolling-upgrade window keeps the follower advancing');
         assert.strictEqual(sync.isHalted(), false);
@@ -174,14 +174,14 @@ describe('ClientSync: platform-train activation halt @regression', function(){
 
     it('is quiet on every apply except the periodic reminder while pending', async function(){
         const { sync } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
-        for(let i = 0; i < 59; i++) await sync._applyBlockEvent(block(900000 + i));
+        for(let i = 0; i < 59; i++) await sync.applyBlockEvent(block(900000 + i));
         const pendingLines = errStub.getCalls().filter(c => /TRAIN ACTIVATION PENDING/.test(c.args.join(' ')));
         assert.strictEqual(pendingLines.length, 1, 'one announcement per 60 applies, not one per block');
     });
 
     it('stays halted across a restart, the same way a divergence halt does', async function(){
         const first = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
-        await first.sync._applyBlockEvent(block(970000));
+        await first.sync.applyBlockEvent(block(970000));
         assert.strictEqual(first.sync.isHalted(), true);
 
         // A new process over the same replica: nothing in memory survives, only the
@@ -206,7 +206,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
             data: Buffer.from(JSON.stringify({ schema_version: 1, block_height: 970003, since_block: 969990, tables: {} }))
         });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.strictEqual(applier.applyIncrementalSnapshot.called, false, 'the window must not be applied');
         assert.strictEqual(sync.isHalted(), true);
@@ -222,7 +222,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
             data: Buffer.from(JSON.stringify({ schema_version: 1, block_height: 969999, since_block: 969990, tables: {} }))
         });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(applier.applyIncrementalSnapshot.calledOnce);
         assert.strictEqual(sync.isHalted(), false);
@@ -231,12 +231,12 @@ describe('ClientSync: platform-train activation halt @regression', function(){
 
     it('refuses a full bootstrap snapshot whose tip reaches the boundary', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
-        sync._fetchAndApplySchema = sinon.stub().resolves();
+        sync.fetchAndApplySchema = sinon.stub().resolves();
         sinon.stub(axios, 'get').resolves({
             data: Buffer.from(JSON.stringify({ schema_version: 1, block_height: 970000, tables: {} }))
         });
 
-        const ok = await sync._bootstrapRotateSources();
+        const ok = await sync.bootstrapRotateSources();
 
         assert.strictEqual(ok, false, 'the round reports failure so the retry ladder stops on the halt');
         assert.strictEqual(applier.applyFullSnapshot.called, false, 'nothing may be seeded');
@@ -248,7 +248,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
     it('halts an off-BTC follower at any height: it has no BTC clock to prove the boundary is ahead', async function(){
         const { sync, applier } = build(db, 'dogecoin', armed('9.0.0', { mainnet: 970000 }));
 
-        await sync._applyBlockEvent(block(5000000));
+        await sync.applyBlockEvent(block(5000000));
 
         assert.strictEqual(applier.applyBlock.called, false);
         assert.strictEqual(sync.isHalted(), true);
@@ -258,7 +258,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
     it('does not halt an off-BTC follower whose build implements the required rule set', async function(){
         const { sync, applier } = build(db, 'litecoin', armed('1.0.0', { mainnet: 0 }));
 
-        await sync._applyBlockEvent(block(4800000));
+        await sync.applyBlockEvent(block(4800000));
 
         assert.ok(applier.applyBlock.calledOnce);
         assert.strictEqual(sync.isHalted(), false);
@@ -269,7 +269,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
         const { sync, applier } = build(db, 'bitcoin', null);
         sync._resolveTrainActivationRequirement = () => { throw new Error('boom'); };
 
-        await sync._applyBlockEvent(block(1));
+        await sync.applyBlockEvent(block(1));
 
         assert.strictEqual(applier.applyBlock.called, false);
         assert.strictEqual(sync.isHalted(), true);
@@ -278,9 +278,9 @@ describe('ClientSync: platform-train activation halt @regression', function(){
 
     it('a divergence halt already in force is not overwritten by the gate', async function(){
         const { sync } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
-        await sync._haltOnDivergence(100, [{ field: 'contract_hash', a: 'x', b: 'y' }], [], 'cross-source-divergence');
+        await sync.haltOnDivergence(100, [{ field: 'contract_hash', a: 'x', b: 'y' }], [], 'cross-source-divergence');
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
 
         assert.strictEqual(sync.getHaltInfo().reason, 'cross-source-divergence');
         assert.strictEqual(sync.getHaltInfo().blockIndex, 100);
@@ -311,11 +311,11 @@ describe('ClientSync: the release manifest is the source of the train requiremen
         }));
         const { sync, applier } = build(db, 'bitcoin', undefined, { RELEASE_MANIFEST_PATH: file });
 
-        await sync._applyBlockEvent(block(969999));
+        await sync.applyBlockEvent(block(969999));
         assert.ok(applier.applyBlock.calledOnce, 'below the boundary the block applies');
         assert.strictEqual(sync.trainActivation.status, 'pending');
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
         assert.strictEqual(applier.applyBlock.callCount, 1, 'the boundary block must not be applied');
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().mismatches[0].required, '9.0.0');
@@ -326,7 +326,7 @@ describe('ClientSync: the release manifest is the source of the train requiremen
         fs.writeFileSync(file, JSON.stringify({ platform_version: '0.18.0', components: {} }));
         const { sync, applier } = build(db, 'bitcoin', undefined, { RELEASE_MANIFEST_PATH: file });
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
 
         assert.ok(applier.applyBlock.calledOnce);
         assert.strictEqual(sync.isHalted(), false);
@@ -338,7 +338,7 @@ describe('ClientSync: the release manifest is the source of the train requiremen
         fs.writeFileSync(file, '{ not json');
         const { sync, applier } = build(db, 'bitcoin', undefined, { RELEASE_MANIFEST_PATH: file });
 
-        await sync._applyBlockEvent(block(1));
+        await sync.applyBlockEvent(block(1));
 
         assert.strictEqual(applier.applyBlock.called, false);
         assert.strictEqual(sync.isHalted(), true);
@@ -352,7 +352,7 @@ describe('ClientSync: the release manifest is the source of the train requiremen
         // an install with no manifest to require one.
         sinon.stub(fs, 'existsSync').returns(false);
 
-        await sync._applyBlockEvent(block(970000));
+        await sync.applyBlockEvent(block(970000));
 
         assert.ok(applier.applyBlock.calledOnce);
         assert.strictEqual(sync.isHalted(), false);

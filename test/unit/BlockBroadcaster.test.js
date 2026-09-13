@@ -243,7 +243,7 @@ describe('BlockBroadcaster', function(){
         });
     });
 
-    // statusData is overwrite-only and ServerPoller._updateStatus writes it only on a
+    // statusData is overwrite-only and ServerPoller.updateStatus writes it only on a
     // SUCCESSFUL database read, with its callers swallowing the rejection. So a failed,
     // hung or stopped poller leaves the last HEALTHY object in the cache and every
     // reader keeps re-serving it: the 60s broadcast, the new-subscriber snapshot, the

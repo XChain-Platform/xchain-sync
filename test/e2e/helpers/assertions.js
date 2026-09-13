@@ -48,7 +48,7 @@ for (let [table, cols] of Object.entries(HARNESS_EXCLUSIONS)) {
 // rows. sync_meta rows land shortly after the block they describe, so a
 // catch-up snapshot built in that window can miss the newest ones with
 // nothing to re-deliver them later; production treats this as a count-based
-// health signal, not an error (ClientSync._verifyTableCounts). The index_*
+// health signal, not an error (ClientSync.verifyTableCounts). The index_*
 // dedup tables are append-only and never pruned on rollback, so after a
 // reorg the source can retain residue rows from orphaned blocks that a
 // replica which never saw those blocks correctly never receives; any later

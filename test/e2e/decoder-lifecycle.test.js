@@ -285,7 +285,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
 
         // Drive the poller manually; match the indexer e2e harness pattern.
         poller.lastPolledBlock = await sourceDb.getLastBlock();
-        await poller._updateStatus();
+        await poller.updateStatus();
         pollInterval = setInterval(async () => {
             try { await poller._poll(); } catch(e){}
         }, 200);
@@ -306,12 +306,12 @@ describe('E2E: Decoder DB Lifecycle', function() {
         return {
             sync,
             bootstrap: async () => {
-                await sync._bootstrapFromSnapshot();
+                await sync.bootstrapFromSnapshot();
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();
             },
-            connectLive: () => sync._connectWebSockets(),
+            connectLive: () => sync.connectWebSockets(),
             incrementalCatchUp: async (sinceBlock) => {
-                await sync._incrementalCatchUp(sinceBlock);
+                await sync.incrementalCatchUp(sinceBlock);
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();
             },
             rollback: async (toBlock) => {

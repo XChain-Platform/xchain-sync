@@ -43,7 +43,7 @@ function tablesWithAutoIncrement(sqlDir){
 // UPSERT one: upsertFullDumpTables builds `ON DUPLICATE KEY UPDATE` over every
 // carried column, so an unstripped AUTO_INCREMENT id becomes `id` = VALUES(`id`)
 // against the replica's PRIMARY KEY, and on a source id another surviving row
-// already holds that is ER_DUP_ENTRY 1062 (outside ClientSync._healSchemaIfStale's
+// already holds that is ER_DUP_ENTRY 1062 (outside ClientSync.healSchemaIfStale's
 // {1146, 1054} heal set, so the apply aborts and re-fails forever). That is how
 // attest_validator_stats broke when indexer migration
 // 2026-08-19-attest-validator-stats-surrogate-id gave it a surrogate id.

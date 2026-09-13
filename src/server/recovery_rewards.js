@@ -62,7 +62,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         //
         // SELECT vr.* rather than a column subset is load-bearing. These rows are merged
         // into the SAME payload array as the block-scoped rows (which use SELECT *), and
-        // ClientApplier._insertRows derives its INSERT column list from rows[0] only. A
+        // ClientApplier.insertRows derives its INSERT column list from rows[0] only. A
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a redriven-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.

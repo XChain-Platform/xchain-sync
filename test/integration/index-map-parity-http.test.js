@@ -11,7 +11,7 @@
 // END-TO-END advisory index-map parity over real HTTP. A real Express server
 // publishes index_map_checksum on /status (computed with the SHIPPED
 // BlockHasher.computeIndexMapChecksum over a real source DB), and the SHIPPED
-// ClientSync._verifyAgainstSource fetches /status over HTTP, recomputes over a
+// ClientSync.verifyAgainstSource fetches /status over HTTP, recomputes over a
 // real replica DB, and compares. Exercises the full transport + client consume
 // path the pure-DB drill (index-map-parity.test.js) could not.
 //
@@ -144,7 +144,7 @@ describe('Integration: index-map parity over HTTP (e2e)', function() {
 
     it('faithful replica: /status checksum matches, no mismatch, no counter', async function() {
         await stamp(replicaDb, STAMPED);                       // ensure faithful
-        await clientSync._verifyAgainstSource('http://127.0.0.1:' + PORT, H);
+        await clientSync.verifyAgainstSource('http://127.0.0.1:' + PORT, H);
         assert.strictEqual(sawParityWarn(), false, 'no parity warning on a faithful replica');
         let c = await realReplica.getSyncState(countKey);
         assert.strictEqual(c, null, 'counter unset when everything agrees');
@@ -155,7 +155,7 @@ describe('Integration: index-map parity over HTTP (e2e)', function() {
         await realReplica.doQuery("UPDATE index_addresses SET address=? WHERE id=1002",
             ['bc1qstamped0MALLORY00000000000000000mmmmmmm']);
 
-        await clientSync._verifyAgainstSource('http://127.0.0.1:' + PORT, H);
+        await clientSync.verifyAgainstSource('http://127.0.0.1:' + PORT, H);
 
         assert.strictEqual(sawParityWarn(), true, 'parity mismatch must be logged');
         assert.strictEqual(clientSync.isHalted(), false, 'advisory: client must NOT halt');
@@ -172,7 +172,7 @@ describe('Integration: index-map parity over HTTP (e2e)', function() {
         await realReplica.doQuery("INSERT INTO index_addresses (`id`,`address`,`block_index`) VALUES (?,?,NULL)",
             [2001, 'bc1qapiseed00000000000000000000000000seed1']);
 
-        await clientSync._verifyAgainstSource('http://127.0.0.1:' + PORT, H);
+        await clientSync.verifyAgainstSource('http://127.0.0.1:' + PORT, H);
 
         assert.strictEqual(sawParityWarn(), false, 'no false alarm once faithful (NULL-block excluded)');
         let c = await realReplica.getSyncState(countKey);

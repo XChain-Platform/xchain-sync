@@ -56,7 +56,7 @@ class ClientRollback {
         // which would silently run the legacy unscoped reset on a fleet whose source
         // indexer runs the scoped one. That is the divergence this gate exists to prevent,
         // so an un-wired construction site must fail loudly at construction instead.
-        // The production wiring (SyncService._startClientSyncForChain) passes cfg.network.
+        // The production wiring (SyncService.startClientSyncForChain) passes cfg.network.
         if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
             throw new Error('ClientRollback: network is required and must be one of ' +
                 Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
@@ -71,7 +71,7 @@ class ClientRollback {
         // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
         // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
         // skipped (with a warning) rather than run with a wrong value. The production wiring
-        // (SyncService._startClientSyncForChain) always passes cfg.coin.
+        // (SyncService.startClientSyncForChain) always passes cfg.coin.
         this.coin = coin;
         let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
         if(delay === undefined){
@@ -94,7 +94,7 @@ class ClientRollback {
         this.indexTables  = rollbackLists.indexTables;
         this.dataTables   = rollbackLists.dataTables;
 
-        // ── Decoder-DB rollback (used by _rollbackDecoder) ──
+        // ── Decoder-DB rollback (used by rollbackDecoder) ──
         // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
         // are deleted before the block-scoped transactions row that gave them their
         // tx_index scope. index_*/pubkeys/events are append-only and left untouched
@@ -137,7 +137,7 @@ class ClientRollback {
     async rollback(block_index){
         let dbType = (this.db && this.db.dbType) || 'indexer';
         if(dbType === 'decoder'){
-            return this._rollbackDecoder(block_index);
+            return this.rollbackDecoder(block_index);
         }
         return this._rollbackIndexer(block_index);
     }
@@ -946,12 +946,12 @@ class ClientRollback {
             // IDX-2 (mirror of xchain-indexer/src/rollback.js): the dangling-tick sweep
             // above misses a market whose pair was FIRST traded only in the orphaned range
             // while both its ticks survive (issued in earlier surviving blocks). The source
-            // deletes that markets row; the replica used to keep it, and no replication
-            // channel could remove it - markets rides the snapshot as an UPSERT full-dump
-            // (SnapshotBuilder indexerFullDump), which refreshes present rows and never
-            // deletes absent ones. The result was a stale, zeroed OHLCV row that
-            // xchain-explorer served forever, invisible to every guard (markets is unhashed,
-            // outside /status table counts, and _verifyTableCounts only reports remote >
+            // deletes that markets row, and no replication channel can remove it from a
+            // replica - markets rides the snapshot as an UPSERT full-dump (SnapshotBuilder
+            // indexerFullDump), which refreshes present rows and never deletes absent ones.
+            // Without this sweep a replica keeps a stale, zeroed OHLCV row that
+            // xchain-explorer serves forever, invisible to every guard (markets is unhashed,
+            // outside /status table counts, and verifyTableCounts only reports remote >
             // local). Scoped to the pairs this rollback orphaned, each dropped only when no
             // surviving orders/order_matches row references either orientation - the same
             // predicate the source applies.
@@ -1193,7 +1193,7 @@ class ClientRollback {
     // tx_index scope. events is left untouched: it has no block_index and no
     // monotonic cursor, so per-block rollback isn't possible without a schema
     // change (decoder review Finding D).
-    async _rollbackDecoder(block_index){
+    async rollbackDecoder(block_index){
         let timer = this.util.startTimer();
         logger.info('Starting decoder rollback to block ' + block_index + '...');
 

@@ -15,7 +15,7 @@
  * decoder replica follows live.
  *
  * DISPENSERS_RECONCILE_MAX_INTERVAL_MS used to be sampled only from inside
- * _incrementalCatchUp, and every caller of that method is an exceptional path
+ * incrementalCatchUp, and every caller of that method is an exceptional path
  * (resume, block gap, empty-replica refusal, head fork). A decoder replica that
  * bootstrapped and then followed cleanly never evaluated the bound at all, so
  * the one cadence it claims to protect against (no catch-ups) was the one it
@@ -89,8 +89,8 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
             _dispenserReconcileInFlight: false,
             recordUpstreamStatus: sinon.stub(),
             _logGap: sinon.stub(),
-            _incrementalCatchUp: sinon.stub().resolves(),
-            _maybeVerifyCompleteness: sinon.stub().resolves(),
+            incrementalCatchUp: sinon.stub().resolves(),
+            maybeVerifyCompleteness: sinon.stub().resolves(),
             _reconcileDispensers: sinon.stub().resolves(),
             dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
         };
@@ -100,7 +100,7 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
     function tick(ctx, nowMs){
         let clock = sinon.useFakeTimers({ now: nowMs, toFake: ['Date'] });
         try {
-            return ClientSync.prototype._handleEvent.call(ctx,
+            return ClientSync.prototype.handleEvent.call(ctx,
                 { type: 'status', block_height: 500 }, 0);
         } finally {
             clock.restore();
@@ -116,8 +116,8 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
         assert.strictEqual(ctx._reconcileDispensers.calledOnce, true);
         assert.strictEqual(ctx._reconcileDispensers.firstCall.args[0], 'http://source1:3006');
         // The completeness sweep still runs afterwards, and the catch-up path is untouched.
-        assert.strictEqual(ctx._maybeVerifyCompleteness.calledOnce, true);
-        assert.strictEqual(ctx._incrementalCatchUp.called, false);
+        assert.strictEqual(ctx.maybeVerifyCompleteness.calledOnce, true);
+        assert.strictEqual(ctx.incrementalCatchUp.called, false);
     });
 
     it('does not advance the every-Nth catch-up counter', async function(){

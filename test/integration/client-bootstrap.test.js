@@ -120,7 +120,7 @@ describe('Integration: Client Bootstrap', function() {
             await fixtures.seedBlocks(sourceDb, 1, 10);
 
             let cs = createClientSync();
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
 
             let sourceBlockCount  = await testDb.getRowCount(sourceDb, 'blocks');
             let replicaBlockCount = await testDb.getRowCount(replicaDb, 'blocks');
@@ -141,7 +141,7 @@ describe('Integration: Client Bootstrap', function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
 
             let cs = createClientSync();
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
 
             let sourceAddrCount  = await testDb.getRowCount(sourceDb, 'index_addresses');
             let replicaAddrCount = await testDb.getRowCount(replicaDb, 'index_addresses');
@@ -157,7 +157,7 @@ describe('Integration: Client Bootstrap', function() {
             await fixtures.seedBlocks(sourceDb, 1, 1, { creditAmount: '99999999999999999' });
 
             let cs = createClientSync();
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
 
             let credits = await replicaDb.doQuery("SELECT amount FROM credits");
             assert.strictEqual(credits.length, 1);
@@ -170,13 +170,13 @@ describe('Integration: Client Bootstrap', function() {
             this.timeout(15000);
             await fixtures.seedBlocks(sourceDb, 1, 5);
             let cs = createClientSync();
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
 
             let countAfterBootstrap = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(countAfterBootstrap, 5);
 
             await fixtures.seedBlocks(sourceDb, 6, 10);
-            await cs._incrementalCatchUp(6);
+            await cs.incrementalCatchUp(6);
 
             let countAfterCatchUp = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(countAfterCatchUp, 10);
@@ -198,7 +198,7 @@ describe('Integration: Client Bootstrap', function() {
             // Replica already has blocks 1-5 (e.g. from a prior run before restart).
             await fixtures.seedBlocks(sourceDb, 1, 5);
             let cs = createClientSync();
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 5);
 
             // New blocks land on the source while the client is down.
@@ -207,7 +207,7 @@ describe('Integration: Client Bootstrap', function() {
             // Restart: a fresh ClientSync whose start() reads lastAppliedBlock from
             // the populated replica and runs the startup incremental catch-up.
             let cs2 = createClientSync();
-            sinon.stub(cs2, '_connectWebSockets').callsFake(() => { cs2.running = false; });
+            sinon.stub(cs2, 'connectWebSockets').callsFake(() => { cs2.running = false; });
             await cs2.start();
 
             // Catch-up must complete to the source tip (see the off-by-one note above).

@@ -136,11 +136,11 @@ describe('Integration: ServerPoller', function() {
         });
     });
 
-    describe('_buildBlockPayload', function() {
+    describe('buildBlockPayload', function() {
         it('builds payload with correct structure from real DB', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
 
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.strictEqual(payload.type, 'block');
             assert.strictEqual(payload.chain, 'bitcoin');
@@ -153,7 +153,7 @@ describe('Integration: ServerPoller', function() {
 
         it('includes block-scoped table rows', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.ok(payload.data.blocks);
             assert.strictEqual(payload.data.blocks.length, 1);
@@ -161,7 +161,7 @@ describe('Integration: ServerPoller', function() {
 
         it('includes transactions', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.ok(payload.data.transactions);
             assert.strictEqual(payload.data.transactions.length, 1);
@@ -169,7 +169,7 @@ describe('Integration: ServerPoller', function() {
 
         it('includes action-scoped rows (credits)', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.ok(payload.data.credits);
             assert.strictEqual(payload.data.credits.length, 1);
@@ -178,7 +178,7 @@ describe('Integration: ServerPoller', function() {
 
         it('includes index_transactions referenced by block', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.ok(payload.data.index_transactions);
             assert.ok(payload.data.index_transactions.length >= 3); // ledger, actions, contract hashes
@@ -186,14 +186,14 @@ describe('Integration: ServerPoller', function() {
 
         it('includes index_addresses referenced by transactions', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
-            let payload = await poller._buildBlockPayload(1);
+            let payload = await poller.buildBlockPayload(1);
 
             assert.ok(payload.data.index_addresses);
             assert.ok(payload.data.index_addresses.length >= 1);
         });
 
         it('returns null for non-existent block', async function() {
-            let payload = await poller._buildBlockPayload(999);
+            let payload = await poller.buildBlockPayload(999);
             assert.strictEqual(payload, null);
         });
     });
@@ -204,7 +204,7 @@ describe('Integration: ServerPoller', function() {
     // feeds a consensus hash followers recompute, so the only acceptable evidence is
     // byte-identity against a REAL database, not a mock: these run the same block
     // through both paths on the same rows and compare the serialized payloads.
-    describe('_buildBlockPayload action-scoped probe', function() {
+    describe('buildBlockPayload action-scoped probe', function() {
         // Same build with the probe removed from the db object, which is the pre-fix
         // query-every-table path verbatim.
         // getNonEmptyActionScopedTables lives on TestDatabase's PROTOTYPE, so it is
@@ -215,7 +215,7 @@ describe('Integration: ServerPoller', function() {
             sourceDb.getNonEmptyActionScopedTables = undefined;
             try {
                 assert.strictEqual(typeof sourceDb.getNonEmptyActionScopedTables, 'undefined');
-                return await poller._buildBlockPayload(blockIndex);
+                return await poller.buildBlockPayload(blockIndex);
             } finally {
                 delete sourceDb.getNonEmptyActionScopedTables;
             }
@@ -224,7 +224,7 @@ describe('Integration: ServerPoller', function() {
         it('emits a byte-identical payload on a block that has rows', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
 
-            let probed   = await poller._buildBlockPayload(1);
+            let probed   = await poller.buildBlockPayload(1);
             let unprobed = await buildUnprobed(1);
 
             assert.ok(probed.data.credits && probed.data.credits.length === 1,
@@ -236,7 +236,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 2);
             await sourceDb.doQuery("DELETE FROM credits");
 
-            let probed   = await poller._buildBlockPayload(2);
+            let probed   = await poller.buildBlockPayload(2);
             let unprobed = await buildUnprobed(2);
 
             assert.ok(!probed.data.credits, 'no action-scoped rows in this block');
@@ -247,7 +247,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
             const spy = sinon.spy(sourceDb, 'getActionScopedRows');
 
-            await poller._buildBlockPayload(1);
+            await poller.buildBlockPayload(1);
             const probedFetches = spy.getCalls().map(c => c.args[0]);
             spy.resetHistory();
 
@@ -285,12 +285,12 @@ describe('Integration: ServerPoller', function() {
         });
     });
 
-    describe('_updateStatus', function() {
+    describe('updateStatus', function() {
         it('updates broadcaster status with real block data', async function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
             poller.lastPolledBlock = 5;
 
-            await poller._updateStatus();
+            await poller.updateStatus();
 
             assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
             let args = broadcaster.updateStatus.firstCall.args;

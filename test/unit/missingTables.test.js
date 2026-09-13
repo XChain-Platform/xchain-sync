@@ -76,7 +76,7 @@ describe('missingReplicatedTables', function(){
     });
 });
 
-describe('ClientSync._warnMissingTables', function(){
+describe('ClientSync.warnMissingTables', function(){
 
     function makeSync(dbOverrides, dbType){
         let db = Object.assign({
@@ -119,7 +119,7 @@ describe('ClientSync._warnMissingTables', function(){
             listExistingTables: sinon.stub().resolves(presentExcept('indexer', BET_TABLES))
         });
 
-        await sync._warnMissingTables();
+        await sync.warnMissingTables();
 
         let calls = warnStub.getCalls().filter(c => String(c.args[0]).indexOf('MISSING_REPLICATED_TABLES') === 0);
         assert.strictEqual(calls.length, 1, 'expected exactly one missing-table WARN');
@@ -133,7 +133,7 @@ describe('ClientSync._warnMissingTables', function(){
 
     it('stays silent when the schema is complete', async function(){
         let { sync } = makeSync();
-        await sync._warnMissingTables();
+        await sync.warnMissingTables();
         let calls = warnStub.getCalls().filter(c => String(c.args[0]).indexOf('MISSING_REPLICATED_TABLES') === 0);
         assert.strictEqual(calls.length, 0);
         assert.deepStrictEqual(sync.getMissingTables(), []);
@@ -143,7 +143,7 @@ describe('ClientSync._warnMissingTables', function(){
         let { sync } = makeSync({
             listExistingTables: sinon.stub().resolves(presentExcept('indexer', ['bets']))
         });
-        await sync._warnMissingTables();
+        await sync.warnMissingTables();
         assert.deepStrictEqual(sync.getMissingTables(), ['bets']);
     });
 
@@ -151,7 +151,7 @@ describe('ClientSync._warnMissingTables', function(){
         let { sync } = makeSync({
             listExistingTables: sinon.stub().rejects(new Error('connection lost'))
         });
-        await sync._warnMissingTables();  // must not reject
+        await sync.warnMissingTables();  // must not reject
         assert.strictEqual(sync.getMissingTables(), null);
         assert.ok(errorStub.called, 'the failure itself should be logged');
     });
@@ -170,10 +170,10 @@ describe('ClientSync._warnMissingTables', function(){
             getBlockHashRow: sinon.stub().resolves({ block_index: 100 }),
             listExistingTables: sinon.stub().resolves(presentExcept('indexer', ['bets']))
         });
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
-        let connect = sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
-        let warn = sinon.spy(sync, '_warnMissingTables');
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
+        let connect = sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
+        let warn = sinon.spy(sync, 'warnMissingTables');
 
         await sync.start();
 

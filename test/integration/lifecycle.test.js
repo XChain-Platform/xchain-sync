@@ -137,14 +137,14 @@ describe('Integration: Full Lifecycle', function() {
                 HASH_CONFIRM_TIMEOUT: 1000
             };
             let cs = new ClientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
             cs.lastAppliedBlock = 10;
             cs.lastHashes = await replicaDb.getBlockHashRow(10);
 
             let replicaBlocks = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(replicaBlocks, 10);
 
-            cs._connectWebSockets();
+            cs.connectWebSockets();
             // Poll the socket to OPEN: blocks 11-15 are broadcast once each, so a
             // subscription still handshaking would never see them.
             await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);

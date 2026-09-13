@@ -88,19 +88,19 @@ describe('ClientSync', function(){
         });
     });
 
-    describe('_warnTrustPosture', function(){
+    describe('warnTrustPosture', function(){
         it('warns when running single-source (no cross-source rejection)', function(){
             config.SYNC_SOURCES = 'http://only-source:3006';
             let s = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
             let warn = sinon.stub(console, 'warn');
-            s._warnTrustPosture();
+            s.warnTrustPosture();
             assert.ok(warn.getCalls().some(c => /SINGLE-SOURCE/.test(c.args[0])));
         });
 
         it('does not warn about single-source with 2+ sources', function(){
             // default config has two sources
             let warn = sinon.stub(console, 'warn');
-            sync._warnTrustPosture();
+            sync.warnTrustPosture();
             assert.ok(!warn.getCalls().some(c => /SINGLE-SOURCE/.test(c.args[0])));
         });
 
@@ -108,13 +108,13 @@ describe('ClientSync', function(){
             let decoderDb = createMockDb(); decoderDb.dbType = 'decoder';
             let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier, config, util);
             let warn = sinon.stub(console, 'warn');
-            s._warnTrustPosture();
+            s.warnTrustPosture();
             assert.ok(warn.getCalls().some(c => /decoder replication has no hash-based rejection/.test(c.args[0])));
         });
 
         it('indexer with 2+ sources emits no SINGLE-SOURCE warning, but DOES warn the checkpoint anchor is off', function(){
             let warn = sinon.stub(console, 'warn');
-            sync._warnTrustPosture();
+            sync.warnTrustPosture();
             // Cross-source quorum alone only outvotes a Byzantine minority; a
             // consensus-relevant replica with no active checkpoint anchor is warned
             // that all-sources-collude is undefended.
@@ -130,7 +130,7 @@ describe('ClientSync', function(){
             let cfg = { ...config, VERIFY_CHECKPOINT_QUORUM: true };
             let s = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, cfg, util);
             let warn = sinon.stub(console, 'warn');
-            s._warnTrustPosture();
+            s.warnTrustPosture();
             delete process.env[ENVKEY];
             assert.strictEqual(warn.callCount, 0, 'no warnings once the anchor is active with a pinned set');
         });
@@ -209,18 +209,18 @@ describe('ClientSync', function(){
     describe('start', function(){
         it('passes lastAppliedBlock + 1 to incremental catch-up when resuming a populated replica', async function(){
             db.getLastBlock.resolves(100);
-            sinon.stub(sync, '_fetchAndApplySchema').resolves();
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+            sinon.stub(sync, 'fetchAndApplySchema').resolves();
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
 
             await sync.start();
 
-            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
+            assert.strictEqual(sync.incrementalCatchUp.calledOnce, true);
             // Must request the NEXT needed block, not the last already-applied one.
             // The server uses inclusive >= bounds, so passing 100 re-delivers block
             // 100's already-applied rows and the non-ignore INSERT throws on the
             // UNIQUE action_index, rolling back the whole catch-up (silent freeze).
-            assert.strictEqual(sync._incrementalCatchUp.firstCall.args[0], 101);
+            assert.strictEqual(sync.incrementalCatchUp.firstCall.args[0], 101);
         });
 
         it('reconciles the source schema on resume, BEFORE catch-up (creates zero-row tables added post-bootstrap)', async function(){
@@ -233,44 +233,44 @@ describe('ClientSync', function(){
             // catch-up so the first applied/verified block sees a complete schema.
             db.getLastBlock.resolves(100);
             let order = [];
-            sinon.stub(sync, '_fetchAndApplySchema').callsFake(async () => { order.push('schema'); });
-            sinon.stub(sync, '_incrementalCatchUp').callsFake(async () => { order.push('catchup'); });
-            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+            sinon.stub(sync, 'fetchAndApplySchema').callsFake(async () => { order.push('schema'); });
+            sinon.stub(sync, 'incrementalCatchUp').callsFake(async () => { order.push('catchup'); });
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
 
             await sync.start();
 
-            assert.strictEqual(sync._fetchAndApplySchema.calledOnce, true);
-            assert.strictEqual(sync._fetchAndApplySchema.firstCall.args[0], sync.sources[0]);
+            assert.strictEqual(sync.fetchAndApplySchema.calledOnce, true);
+            assert.strictEqual(sync.fetchAndApplySchema.firstCall.args[0], sync.sources[0]);
             assert.deepStrictEqual(order, ['schema', 'catchup'], 'schema reconcile must precede catch-up');
         });
 
         it('does NOT reconcile schema on the empty-replica bootstrap path (bootstrap fetches it itself)', async function(){
             db.getLastBlock.resolves(null);
-            sinon.stub(sync, '_bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
-            sinon.stub(sync, '_fetchAndApplySchema').resolves();
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+            sinon.stub(sync, 'bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
+            sinon.stub(sync, 'fetchAndApplySchema').resolves();
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
 
             await sync.start();
 
             // The resume-path reconcile must not double-fetch on the bootstrap path
-            // (_bootstrapFromSnapshot already applies the schema).
-            assert.strictEqual(sync._fetchAndApplySchema.called, false);
+            // (bootstrapFromSnapshot already applies the schema).
+            assert.strictEqual(sync.fetchAndApplySchema.called, false);
         });
 
         it('bootstraps from a full snapshot when the replica is empty', async function(){
             db.getLastBlock.resolves(null);
             // A successful bootstrap commits a tip, required now that start() refuses
             // to enter live-follow while lastAppliedBlock is still null.
-            sinon.stub(sync, '_bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            sinon.stub(sync, '_connectWebSockets').callsFake(() => { sync.running = false; });
+            sinon.stub(sync, 'bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
 
             await sync.start();
 
-            assert.strictEqual(sync._bootstrapFromSnapshot.calledOnce, true);
-            assert.strictEqual(sync._incrementalCatchUp.called, false);
-            assert.strictEqual(sync._connectWebSockets.calledOnce, true);
+            assert.strictEqual(sync.bootstrapFromSnapshot.calledOnce, true);
+            assert.strictEqual(sync.incrementalCatchUp.called, false);
+            assert.strictEqual(sync.connectWebSockets.calledOnce, true);
         });
     });
 
@@ -283,8 +283,8 @@ describe('ClientSync', function(){
         it('start() refuses live-follow when bootstrap leaves the replica empty', async function(){
             db.getLastBlock.resolves(null);
             // Bootstrap returns without committing a tip (the swallow it used to do).
-            sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
-            let connect = sinon.stub(sync, '_connectWebSockets');
+            sinon.stub(sync, 'bootstrapFromSnapshot').resolves();
+            let connect = sinon.stub(sync, 'connectWebSockets');
 
             await assert.rejects(() => sync.start(), /Refusing to enter live-follow/);
             assert.strictEqual(connect.called, false, 'must not open WebSockets onto an empty replica');
@@ -292,71 +292,71 @@ describe('ClientSync', function(){
 
         it('start() propagates a permanent bootstrap failure without live-following', async function(){
             db.getLastBlock.resolves(null);
-            sinon.stub(sync, '_bootstrapFromSnapshot').rejects(new Error('all sync sources exhausted'));
-            let connect = sinon.stub(sync, '_connectWebSockets');
+            sinon.stub(sync, 'bootstrapFromSnapshot').rejects(new Error('all sync sources exhausted'));
+            let connect = sinon.stub(sync, 'connectWebSockets');
 
             await assert.rejects(() => sync.start(), /all sync sources exhausted/);
             assert.strictEqual(connect.called, false);
         });
 
-        it('_bootstrapFromSnapshot rejects with BootstrapExhaustedError once all retry rounds exhaust', async function(){
+        it('bootstrapFromSnapshot rejects with BootstrapExhaustedError once all retry rounds exhaust', async function(){
             // The typed error is what lets the live WS event chain distinguish
             // permanent exhaustion (escalate to process.exit) from transient
             // handler errors (log and continue); pin the type at the throw site.
             config.BOOTSTRAP_MAX_RETRIES   = 0;
             config.BOOTSTRAP_RETRY_BASE_MS = 1;
             config.BOOTSTRAP_RETRY_MAX_MS  = 1;
-            sinon.stub(sync, '_bootstrapRotateSources').resolves(false);
+            sinon.stub(sync, 'bootstrapRotateSources').resolves(false);
 
-            await assert.rejects(() => sync._bootstrapFromSnapshot(),
+            await assert.rejects(() => sync.bootstrapFromSnapshot(),
                 e => e instanceof ClientSync.BootstrapExhaustedError && /sources exhausted/.test(e.message));
         });
 
-        it('_handleBlock refuses to apply a non-genesis block onto an empty replica', async function(){
+        it('handleBlock refuses to apply a non-genesis block onto an empty replica', async function(){
             sync.lastAppliedBlock = null;
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-            await sync._handleBlock(
+            await sync.handleBlock(
                 { type: 'block', block_index: 5, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' }, 0);
 
             assert.strictEqual(applier.applyBlock.called, false, 'must not apply onto an empty DB');
-            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
+            assert.strictEqual(sync.incrementalCatchUp.calledOnce, true);
         });
     });
 
-    describe('_handleEvent', function(){
-        it('routes block events to _handleBlock', async function(){
-            sinon.stub(sync, '_handleBlock').resolves();
-            await sync._handleEvent({ type: 'block', block_index: 10 }, 0);
-            assert.strictEqual(sync._handleBlock.calledOnce, true);
+    describe('handleEvent', function(){
+        it('routes block events to handleBlock', async function(){
+            sinon.stub(sync, 'handleBlock').resolves();
+            await sync.handleEvent({ type: 'block', block_index: 10 }, 0);
+            assert.strictEqual(sync.handleBlock.calledOnce, true);
         });
 
-        it('routes reorg events to _handleReorg', async function(){
-            sinon.stub(sync, '_handleReorg').resolves();
-            await sync._handleEvent({ type: 'reorg', block_index: 10 }, 0);
-            assert.strictEqual(sync._handleReorg.calledOnce, true);
+        it('routes reorg events to handleReorg', async function(){
+            sinon.stub(sync, 'handleReorg').resolves();
+            await sync.handleEvent({ type: 'reorg', block_index: 10 }, 0);
+            assert.strictEqual(sync.handleReorg.calledOnce, true);
         });
 
         it('detects gap on status event and triggers catch-up', async function(){
             sync.lastAppliedBlock = 50;
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            await sync._handleEvent({ type: 'status', block_height: 55 }, 0);
-            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
-            assert.strictEqual(sync._incrementalCatchUp.firstCall.args[0], 51);
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            await sync.handleEvent({ type: 'status', block_height: 55 }, 0);
+            assert.strictEqual(sync.incrementalCatchUp.calledOnce, true);
+            assert.strictEqual(sync.incrementalCatchUp.firstCall.args[0], 51);
         });
 
         it('does not trigger catch-up when no gap', async function(){
             sync.lastAppliedBlock = 50;
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            await sync._handleEvent({ type: 'status', block_height: 51 }, 0);
-            assert.strictEqual(sync._incrementalCatchUp.called, false);
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            await sync.handleEvent({ type: 'status', block_height: 51 }, 0);
+            assert.strictEqual(sync.incrementalCatchUp.called, false);
         });
 
         it('does not trigger catch-up when lastAppliedBlock is null', async function(){
             sync.lastAppliedBlock = null;
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
-            await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
-            assert.strictEqual(sync._incrementalCatchUp.called, false);
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+            await sync.handleEvent({ type: 'status', block_height: 100 }, 0);
+            assert.strictEqual(sync.incrementalCatchUp.called, false);
         });
 
         it('runs the completeness sweep against the source that sent the status tick @regression', async function(){
@@ -365,12 +365,12 @@ describe('ClientSync', function(){
             // so a single-source replica runs no completeness check without this wiring.
             config.COMPLETENESS_CHECK_INTERVAL = 60000;
             sync.lastAppliedBlock = 100;
-            sinon.stub(sync, '_maybeVerifyCompleteness').resolves();
+            sinon.stub(sync, 'maybeVerifyCompleteness').resolves();
 
-            await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
+            await sync.handleEvent({ type: 'status', block_height: 100 }, 0);
 
-            assert.strictEqual(sync._maybeVerifyCompleteness.calledOnce, true);
-            assert.strictEqual(sync._maybeVerifyCompleteness.firstCall.args[0], 'http://source1:3006');
+            assert.strictEqual(sync.maybeVerifyCompleteness.calledOnce, true);
+            assert.strictEqual(sync.maybeVerifyCompleteness.firstCall.args[0], 'http://source1:3006');
         });
 
         // The server publishes its own replication verdict on every status tick. Dropping
@@ -380,7 +380,7 @@ describe('ClientSync', function(){
         describe('upstream replication evidence', function(){
             beforeEach(function(){
                 sync.lastAppliedBlock = 100;
-                sinon.stub(sync, '_maybeVerifyCompleteness').resolves();
+                sinon.stub(sync, 'maybeVerifyCompleteness').resolves();
             });
 
             it('is unknown, not fresh, before any status event', function(){
@@ -389,7 +389,7 @@ describe('ClientSync', function(){
             });
 
             it('keeps the source height, staleness verdict and lag from a status event', async function(){
-                await sync._handleEvent({
+                await sync.handleEvent({
                     type: 'status', block_height: 100, source_block_height: 140,
                     replica_stale: true, replica_seconds_behind: 900
                 }, 0);
@@ -398,14 +398,14 @@ describe('ClientSync', function(){
             });
 
             it('re-reads the verdict on a status tick that does not advance the height', async function(){
-                await sync._handleEvent({
+                await sync.handleEvent({
                     type: 'status', block_height: 100, source_block_height: 100,
                     replica_stale: false, replica_seconds_behind: 2
                 }, 0);
                 assert.strictEqual(sync.getUpstreamReplicaState().stale, false);
 
                 // The upstream replica stops applying: its height never moves again.
-                await sync._handleEvent({
+                await sync.handleEvent({
                     type: 'status', block_height: 100, source_block_height: 100,
                     replica_stale: true, replica_seconds_behind: null
                 }, 0);
@@ -413,17 +413,17 @@ describe('ClientSync', function(){
             });
 
             it('reads a server older than the fields as unknown rather than fresh', async function(){
-                await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
+                await sync.handleEvent({ type: 'status', block_height: 100 }, 0);
                 assert.deepStrictEqual(sync.getUpstreamReplicaState(),
                     { stale: null, secondsBehind: null, sourceHeight: null });
             });
 
             it('takes the worst verdict across sources and ignores an evicted one', async function(){
-                await sync._handleEvent({
+                await sync.handleEvent({
                     type: 'status', block_height: 100, source_block_height: 100,
                     replica_stale: false, replica_seconds_behind: 1
                 }, 0);
-                await sync._handleEvent({
+                await sync.handleEvent({
                     type: 'status', block_height: 100, source_block_height: 130,
                     replica_stale: true, replica_seconds_behind: 700
                 }, 1);
@@ -437,7 +437,7 @@ describe('ClientSync', function(){
         });
     });
 
-    describe('_maybeVerifyCompleteness', function(){
+    describe('maybeVerifyCompleteness', function(){
         beforeEach(function(){
             config.COMPLETENESS_CHECK_INTERVAL = 60000;
             sync.lastAppliedBlock = 100;
@@ -448,7 +448,7 @@ describe('ClientSync', function(){
         });
 
         it('reports a shortfall against the primary source at equal heights', async function(){
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
 
             assert.strictEqual(axios.get.calledOnce, true);
             assert.ok(/\/status\/indexer\/bitcoin\/mainnet$/.test(axios.get.firstCall.args[0]));
@@ -460,31 +460,31 @@ describe('ClientSync', function(){
         it('does not sweep while the replica is behind the source', async function(){
             // A shortfall while behind is ordinary lag: reporting it would train
             // operators to ignore the one signal this check exists to give them.
-            await sync._maybeVerifyCompleteness('http://source1:3006', 140);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 140);
             assert.strictEqual(axios.get.called, false);
         });
 
         it('throttles to COMPLETENESS_CHECK_INTERVAL', async function(){
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
             assert.strictEqual(axios.get.callCount, 1, 'the second tick inside the window must not re-sweep');
         });
 
         it('is inert when the interval is 0', async function(){
             config.COMPLETENESS_CHECK_INTERVAL = 0;
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
             assert.strictEqual(axios.get.called, false);
         });
 
         it('does not sweep once halted on a divergence', async function(){
             sync._halted = { blockIndex: 100, reason: 'test' };
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
             assert.strictEqual(axios.get.called, false);
         });
 
         it('logs and continues when the source is unreachable', async function(){
             axios.get.rejects(new Error('ECONNREFUSED'));
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
             let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
             assert.ok(/Periodic completeness sweep failed/.test(logged));
         });
@@ -498,7 +498,7 @@ describe('ClientSync', function(){
         async function sweep(tableCounts){
             axios.get.resolves({ data: { block_height: 100, table_counts: tableCounts } });
             sync._lastCompletenessSweepAt = 0;
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
         }
 
         function errorLines(){
@@ -586,7 +586,7 @@ describe('ClientSync', function(){
         it('reports that the client self-repair pass failed to close a short lookup', async function(){
             // The shape that went unnoticed: the client detects a short append-only
             // lookup, re-pages it, and the gap is still there on the next sweep.
-            sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+            sinon.stub(sync, 'syncLookupTablesPaged').resolves();
             await sweep({ index_transactions: 10 });
             await sweep({ index_transactions: 10 });
 
@@ -603,7 +603,7 @@ describe('ClientSync', function(){
 
             axios.get.rejects(new Error('ECONNREFUSED'));
             sync._lastCompletenessSweepAt = 0;
-            await sync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await sync.maybeVerifyCompleteness('http://source1:3006', 100);
 
             assert.strictEqual(sync.getReplicaGaps().length, 1,
                 'an unreachable source is not evidence the gap closed');
@@ -622,20 +622,20 @@ describe('ClientSync', function(){
 
             // Bootstrap-time checks run the same comparison mid-dump: they must not
             // count toward persistence.
-            await decoderSync._verifyDecoderCompleteness('http://source1:3006', 100);
-            await decoderSync._verifyDecoderCompleteness('http://source1:3006', 100);
+            await decoderSync.verifyDecoderCompleteness('http://source1:3006', 100);
+            await decoderSync.verifyDecoderCompleteness('http://source1:3006', 100);
             assert.deepStrictEqual(decoderSync.getReplicaGaps(), []);
 
             decoderSync._lastCompletenessSweepAt = 0;
-            await decoderSync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await decoderSync.maybeVerifyCompleteness('http://source1:3006', 100);
             decoderSync._lastCompletenessSweepAt = 0;
-            await decoderSync._maybeVerifyCompleteness('http://source1:3006', 100);
+            await decoderSync.maybeVerifyCompleteness('http://source1:3006', 100);
             assert.strictEqual(decoderSync.getReplicaGaps().length, 1);
             assert.ok(/REPLICA_GAP_PERSISTENT/.test(errorLines()));
         });
     });
 
-    describe('_handleBlock', function(){
+    describe('handleBlock', function(){
         let blockEvent;
 
         beforeEach(function(){
@@ -653,7 +653,7 @@ describe('ClientSync', function(){
 
         it('skips blocks already applied', async function(){
             sync.lastAppliedBlock = 101;
-            await sync._handleBlock(blockEvent, 0);
+            await sync.handleBlock(blockEvent, 0);
             assert.strictEqual(applier.applyBlock.called, false);
         });
 
@@ -665,35 +665,35 @@ describe('ClientSync', function(){
             sync.lastAppliedBlock = 100;
             sync.lastHashes = { ledger_hash: 'lh100' };
 
-            await sync._handleBlock(blockEvent, 0);
+            await sync.handleBlock(blockEvent, 0);
             assert.strictEqual(hashVerifier.verifyChainContinuity.calledOnce, true);
         });
 
         it('triggers catch-up on chain continuity failure', async function(){
             sinon.stub(hashVerifier, 'verifyChainContinuity').returns({ valid: false, reason: 'Block gap' });
-            sinon.stub(sync, '_incrementalCatchUp').resolves();
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-            await sync._handleBlock(blockEvent, 0);
-            assert.strictEqual(sync._incrementalCatchUp.calledOnce, true);
+            await sync.handleBlock(blockEvent, 0);
+            assert.strictEqual(sync.incrementalCatchUp.calledOnce, true);
             assert.strictEqual(applier.applyBlock.called, false);
         });
 
         describe('cross-source verification', function(){
             it('applies block when two sources match', async function(){
                 // Source 0 sends block
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
                 assert.strictEqual(applier.applyBlock.called, false); // waiting for source 1
 
                 // Source 1 sends same block with same hashes
-                await sync._handleBlock(blockEvent, 1);
+                await sync.handleBlock(blockEvent, 1);
                 assert.strictEqual(applier.applyBlock.calledOnce, true);
             });
 
             it('does not apply block when sources have mismatched hashes', async function(){
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
 
                 let mismatchedEvent = { ...blockEvent, ledger_hash: 'DIFFERENT' };
-                await sync._handleBlock(mismatchedEvent, 1);
+                await sync.handleBlock(mismatchedEvent, 1);
 
                 assert.strictEqual(applier.applyBlock.called, false);
             });
@@ -701,7 +701,7 @@ describe('ClientSync', function(){
             it('applies from primary after timeout when only one source responds', async function(){
                 let clock = sinon.useFakeTimers();
 
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
                 assert.strictEqual(applier.applyBlock.called, false);
 
                 // Advance past timeout
@@ -716,7 +716,7 @@ describe('ClientSync', function(){
 
                 // Source 1 (non-primary) delivers first; before the fix no timer was
                 // armed and the block would stall until the next block forced catch-up.
-                await sync._handleBlock(blockEvent, 1);
+                await sync.handleBlock(blockEvent, 1);
                 assert.strictEqual(applier.applyBlock.called, false);
                 assert.strictEqual(sync._applyTimers.has(blockEvent.block_index), true,
                     '_applyTimers must be armed when the non-primary source arrives first');
@@ -732,11 +732,11 @@ describe('ClientSync', function(){
                 let clock = sinon.useFakeTimers();
 
                 // Source 1 arrives first: timer armed
-                await sync._handleBlock(blockEvent, 1);
+                await sync.handleBlock(blockEvent, 1);
                 assert.strictEqual(sync._applyTimers.has(blockEvent.block_index), true);
 
                 // Source 0 arrives before timeout: block applied immediately, timer NOT re-armed
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
                 assert.strictEqual(applier.applyBlock.calledOnce, true);
 
                 // Ensure no delayed second apply fires after the original timer would have expired
@@ -756,7 +756,7 @@ describe('ClientSync', function(){
             });
 
             it('applies block immediately without waiting', async function(){
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
                 assert.strictEqual(applier.applyBlock.calledOnce, true);
             });
         });
@@ -770,7 +770,7 @@ describe('ClientSync', function(){
             });
 
             it('applies block immediately', async function(){
-                await sync._handleBlock(blockEvent, 0);
+                await sync.handleBlock(blockEvent, 0);
                 assert.strictEqual(applier.applyBlock.calledOnce, true);
             });
         });
@@ -791,21 +791,21 @@ describe('ClientSync', function(){
             }
 
             it('rewinds the orphaned head and catches up from the forked height', async function(){
-                // A bare catch-up cannot reach the fork: _runIncrementalCatchUp resolves
+                // A bare catch-up cannot reach the fork: runIncrementalCatchUp resolves
                 // `since` from the DB tip, not from the argument, so with the orphan
                 // still committed the client asks the source for /since/101 and either
                 // 404s at the source's own tip or stacks later blocks on the orphan.
                 // The rewind is what moves the tip.
                 let s = decoderSync();
-                sinon.stub(s, '_incrementalCatchUp').resolves();
+                sinon.stub(s, 'incrementalCatchUp').resolves();
 
-                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'FORKED' }, 0);
+                await s.handleBlock({ type: 'block', block_index: 100, block_hash: 'FORKED' }, 0);
 
                 assert.strictEqual(s.rollback.rollback.calledOnceWith(100), true,
                     'the orphaned tip is actually unwound');
                 assert.strictEqual(s.lastAppliedBlock, 99, 'the committed tip moves below the fork');
-                assert.strictEqual(s._incrementalCatchUp.calledOnce, true);
-                assert.strictEqual(s._incrementalCatchUp.firstCall.args[0], 100,
+                assert.strictEqual(s.incrementalCatchUp.calledOnce, true);
+                assert.strictEqual(s.incrementalCatchUp.firstCall.args[0], 100,
                     'and the replacement block is re-fetched, not skipped over');
                 // The forked head must NOT be silently applied.
                 assert.strictEqual(applier.applyBlock.called, false);
@@ -813,37 +813,37 @@ describe('ClientSync', function(){
 
             it('does not trigger catch-up when the head block re-arrives with the same hash', async function(){
                 let s = decoderSync();
-                sinon.stub(s, '_incrementalCatchUp').resolves();
+                sinon.stub(s, 'incrementalCatchUp').resolves();
 
                 // Normal multi-source duplicate of the current tip: plain skip, no catch-up.
-                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'hash100' }, 0);
+                await s.handleBlock({ type: 'block', block_index: 100, block_hash: 'hash100' }, 0);
 
-                assert.strictEqual(s._incrementalCatchUp.called, false);
+                assert.strictEqual(s.incrementalCatchUp.called, false);
                 assert.strictEqual(applier.applyBlock.called, false);
             });
 
             it('does not false-trigger before any block_hash is stored (fresh boot)', async function(){
                 let s = decoderSync();
                 s.lastHashes = null;
-                sinon.stub(s, '_incrementalCatchUp').resolves();
+                sinon.stub(s, 'incrementalCatchUp').resolves();
 
-                await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'whatever' }, 0);
+                await s.handleBlock({ type: 'block', block_index: 100, block_hash: 'whatever' }, 0);
 
-                assert.strictEqual(s._incrementalCatchUp.called, false);
+                assert.strictEqual(s.incrementalCatchUp.called, false);
             });
         });
     });
 
-    describe('_applyBlockEvent', function(){
+    describe('applyBlockEvent', function(){
         it('calls applier.applyBlock', async function(){
             let event = { block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' };
-            await sync._applyBlockEvent(event);
+            await sync.applyBlockEvent(event);
             assert.strictEqual(applier.applyBlock.calledOnce, true);
             assert.strictEqual(applier.applyBlock.firstCall.args[0], event);
         });
 
         it('updates lastAppliedBlock and lastHashes', async function(){
-            await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             assert.strictEqual(sync.lastAppliedBlock, 10);
             assert.strictEqual(sync.lastHashes.ledger_hash, 'l');
         });
@@ -851,55 +851,55 @@ describe('ClientSync', function(){
         it('cleans up old pendingHashes entries', async function(){
             sync.pendingHashes.set(5, { 0: {} });
             sync.pendingHashes.set(15, { 0: {} });
-            await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             assert.strictEqual(sync.pendingHashes.has(5), false);
             assert.strictEqual(sync.pendingHashes.has(15), true);
         });
 
         it('handles apply error gracefully', async function(){
             applier.applyBlock.rejects(new Error('apply fail'));
-            await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             // Should not throw; error is caught and logged
             assert.strictEqual(console.error.called, true);
         });
 
         it('re-applies the source schema when the apply hits a missing table', async function(){
             applier.applyBlock.rejects(Object.assign(new Error('no table'), { errno: 1146 }));
-            let heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
-            await sync._applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            let heal = sinon.stub(sync, 'fetchAndApplySchema').resolves();
+            await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             assert.strictEqual(heal.calledOnce, true);
             assert.strictEqual(heal.firstCall.args[0], 'http://source1:3006');
         });
     });
 
-    describe('_healSchemaIfStale', function(){
+    describe('healSchemaIfStale', function(){
         let heal;
         beforeEach(function(){
-            heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
+            heal = sinon.stub(sync, 'fetchAndApplySchema').resolves();
         });
 
         it('heals on missing table (1146) and missing column (1054)', async function(){
-            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), true);
+            assert.strictEqual(await sync.healSchemaIfStale({ errno: 1146 }), true);
             sync._lastSchemaHeal = null; // reset the debounce between cases
-            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1054 }), true);
+            assert.strictEqual(await sync.healSchemaIfStale({ errno: 1054 }), true);
             assert.strictEqual(heal.callCount, 2);
         });
 
         it('ignores non-schema errors and null errors', async function(){
-            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1062 }), false);
-            assert.strictEqual(await sync._healSchemaIfStale(new Error('plain')), false);
-            assert.strictEqual(await sync._healSchemaIfStale(null), false);
+            assert.strictEqual(await sync.healSchemaIfStale({ errno: 1062 }), false);
+            assert.strictEqual(await sync.healSchemaIfStale(new Error('plain')), false);
+            assert.strictEqual(await sync.healSchemaIfStale(null), false);
             assert.strictEqual(heal.called, false);
         });
 
         it('debounces to one heal per minute', async function(){
-            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), true);
-            assert.strictEqual(await sync._healSchemaIfStale({ errno: 1146 }), false);
+            assert.strictEqual(await sync.healSchemaIfStale({ errno: 1146 }), true);
+            assert.strictEqual(await sync.healSchemaIfStale({ errno: 1146 }), false);
             assert.strictEqual(heal.callCount, 1);
         });
     });
 
-    describe('_runIncrementalCatchUp schema self-heal', function(){
+    describe('runIncrementalCatchUp schema self-heal', function(){
         it('heals and retries ONCE when the catch-up apply hits a missing table', async function(){
             db.getLastBlock.resolves(5);
             let snapshot = { schema_version: 'x', block_height: 9, tables: {} };
@@ -909,9 +909,9 @@ describe('ClientSync', function(){
             applier.applyIncrementalSnapshot
                 .onFirstCall().rejects(Object.assign(new Error('no table'), { errno: 1146 }))
                 .onSecondCall().resolves();
-            let heal = sinon.stub(sync, '_fetchAndApplySchema').resolves();
+            let heal = sinon.stub(sync, 'fetchAndApplySchema').resolves();
 
-            await sync._runIncrementalCatchUp();
+            await sync.runIncrementalCatchUp();
 
             assert.strictEqual(heal.calledOnce, true);
             assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 2);
@@ -927,15 +927,15 @@ describe('ClientSync', function(){
             // first failure heals + retries, the second failure is debounced:
             // exactly two apply attempts, no spin.
             applier.applyIncrementalSnapshot.rejects(Object.assign(new Error('no table'), { errno: 1146 }));
-            sinon.stub(sync, '_fetchAndApplySchema').resolves();
+            sinon.stub(sync, 'fetchAndApplySchema').resolves();
 
-            await sync._runIncrementalCatchUp();
+            await sync.runIncrementalCatchUp();
 
             assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 2);
         });
     });
 
-    describe('_handleReorg', function(){
+    describe('handleReorg', function(){
         // A live reorg only ever arrives once the replica holds a committed tip (the WS
         // is opened after start()'s non-null guard), so these exercise the reachable
         // below-tip rollback path with a real tip.
@@ -943,32 +943,32 @@ describe('ClientSync', function(){
 
         it('calls rollback with the event block_index', async function(){
             let event = { type: 'reorg', chain: 'bitcoin', network: 'mainnet', block_index: 50 };
-            await sync._handleReorg(event);
+            await sync.handleReorg(event);
             assert.strictEqual(rollback.rollback.calledOnce, true);
             assert.strictEqual(rollback.rollback.firstCall.args[0], 50);
         });
 
         it('resets lastAppliedBlock to block_index - 1', async function(){
             db.getBlockHashRow.resolves({ ledger_hash: 'l49', actions_hash: 'a49', contract_hash: 'c49' });
-            await sync._handleReorg({ block_index: 50 });
+            await sync.handleReorg({ block_index: 50 });
             assert.strictEqual(sync.lastAppliedBlock, 49);
         });
 
         it('loads new lastHashes from DB', async function(){
             let hashes = { ledger_hash: 'l49', actions_hash: 'a49', contract_hash: 'c49' };
             db.getBlockHashRow.resolves(hashes);
-            await sync._handleReorg({ block_index: 50 });
+            await sync.handleReorg({ block_index: 50 });
             assert.strictEqual(sync.lastHashes, hashes);
         });
 
         it('sets lastHashes to null when rolling back to block 0', async function(){
-            await sync._handleReorg({ block_index: 0 });
+            await sync.handleReorg({ block_index: 0 });
             assert.strictEqual(sync.lastHashes, null);
         });
 
         it('handles rollback error gracefully', async function(){
             rollback.rollback.rejects(new Error('rollback fail'));
-            await sync._handleReorg({ block_index: 50 });
+            await sync.handleReorg({ block_index: 50 });
             assert.strictEqual(console.error.called, true);
         });
 
@@ -980,7 +980,7 @@ describe('ClientSync', function(){
         // but guarded so a future WS-ordering change cannot re-open it.
         it('null tip: ignores the reorg entirely (no rollback, no cursor advance)', async function(){
             sync.lastAppliedBlock = null;
-            await sync._handleReorg({ block_index: 5000 });
+            await sync.handleReorg({ block_index: 5000 });
             assert.strictEqual(rollback.rollback.called, false, 'nothing to roll back with no committed tip');
             assert.strictEqual(sync.lastAppliedBlock, null, 'the cursor must NOT be inflated from server data');
             assert.strictEqual(sync.isHalted(), false, 'a null-tip reorg is a benign no-op, not a halt');
@@ -1033,12 +1033,12 @@ describe('ClientSync', function(){
         });
     });
 
-    describe('_verifyTableCounts (replica-completeness)', function(){
+    describe('verifyTableCounts (replica-completeness)', function(){
         it('flags a table the source has rows in but the follower has zeroed', async function(){
             // The core gap this guards: ledger/actions/contract hashes still agree,
             // yet contract_stakes never replicated to the follower.
             db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, contract_stakes: 0 })[t];
-            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 5000, contract_stakes: 7 });
+            let mismatches = await sync.verifyTableCounts({ blocks: 100, actions: 5000, contract_stakes: 7 });
             assert.strictEqual(mismatches.length, 1);
             assert.strictEqual(mismatches[0].table, 'contract_stakes');
             assert.strictEqual(mismatches[0].sourceCount, 7);
@@ -1049,7 +1049,7 @@ describe('ClientSync', function(){
         it('reports a table missing entirely from the follower as a full shortfall', async function(){
             // getTableCount throws (table absent in this replica's schema) → treated as 0.
             db.getTableCount = async () => { throw new Error('no such table'); };
-            let mismatches = await sync._verifyTableCounts({ attests: 3 });
+            let mismatches = await sync.verifyTableCounts({ attests: 3 });
             assert.strictEqual(mismatches.length, 1);
             assert.strictEqual(mismatches[0].table, 'attests');
             assert.strictEqual(mismatches[0].localCount, 0);
@@ -1064,22 +1064,22 @@ describe('ClientSync', function(){
             // because source count is 0 too, no mismatch was raised either. Result:
             // ER_NO_SUCH_TABLE logged forever, table never created.
             let healed = [];
-            sync._healSchemaIfStale = async (e) => { healed.push(e.errno); return true; };
+            sync.healSchemaIfStale = async (e) => { healed.push(e.errno); return true; };
             let err = new Error("Table 'X.polls' doesn't exist"); err.errno = 1146;
             db.getTableCount = async () => { throw err; };
 
-            let mismatches = await sync._verifyTableCounts({ polls: 0 });
+            let mismatches = await sync.verifyTableCounts({ polls: 0 });
             assert.deepStrictEqual(healed, [1146], 'missing table must trigger the schema heal');
             // Source has 0 rows, so it is correctly NOT a count mismatch.
             assert.strictEqual(mismatches.length, 0);
         });
 
         it('does not fault the completeness check when the schema heal itself throws', async function(){
-            sync._healSchemaIfStale = async () => { throw new Error('DDL rejected'); };
+            sync.healSchemaIfStale = async () => { throw new Error('DDL rejected'); };
             let err = new Error('missing'); err.errno = 1146;
             db.getTableCount = async () => { throw err; };
             // Advisory path: still returns, still reports the shortfall.
-            let mismatches = await sync._verifyTableCounts({ polls: 4 });
+            let mismatches = await sync.verifyTableCounts({ polls: 4 });
             assert.strictEqual(mismatches.length, 1);
             assert.strictEqual(mismatches[0].localCount, 0);
         });
@@ -1088,7 +1088,7 @@ describe('ClientSync', function(){
             db.getTableCount = async (t) => ({ blocks: 100, actions: 5000, deposits: 12 })[t];
             // Without a same-height gate a follower ahead on a table is not flagged: the
             // /status counts and the local count can straddle a block (ordinary skew).
-            let mismatches = await sync._verifyTableCounts({ blocks: 100, actions: 4999, deposits: 12 });
+            let mismatches = await sync.verifyTableCounts({ blocks: 100, actions: 4999, deposits: 12 });
             assert.strictEqual(mismatches.length, 0);
         });
 
@@ -1097,7 +1097,7 @@ describe('ClientSync', function(){
             // collapse on validator_rewards) leaves the replica strictly ahead; the
             // shortfall-only check was structurally blind to it (#5610).
             db.getTableCount = async (t) => ({ validator_rewards: 12, actions: 5000 })[t];
-            let mismatches = await sync._verifyTableCounts({ validator_rewards: 10, actions: 5000 }, undefined,
+            let mismatches = await sync.verifyTableCounts({ validator_rewards: 10, actions: 5000 }, undefined,
                 { remoteHeight: 900, localHeight: 900 });
             assert.strictEqual(mismatches.length, 1);
             assert.deepStrictEqual(mismatches[0], { table: 'validator_rewards', sourceCount: 10, localCount: 12, delta: -2, reason: 'replica-ahead' });
@@ -1106,22 +1106,22 @@ describe('ClientSync', function(){
         it('replica-ahead is gated on equal heights and on the registry exact-parity class', async function(){
             db.getTableCount = async (t) => ({ validator_rewards: 12, events: 50, markets: 9 })[t];
             // Height skew: no replica-ahead report (ordinary lag between the status read and the local count).
-            let skew = await sync._verifyTableCounts({ validator_rewards: 10 }, undefined, { remoteHeight: 899, localHeight: 900 });
+            let skew = await sync.verifyTableCounts({ validator_rewards: 10 }, undefined, { remoteHeight: 899, localHeight: 900 });
             assert.strictEqual(skew.length, 0);
             // Same height, but events (snapshot class) and markets (snapshot/special) may legitimately differ.
-            let classed = await sync._verifyTableCounts({ events: 40, markets: 8 }, undefined, { remoteHeight: 900, localHeight: 900 });
+            let classed = await sync.verifyTableCounts({ events: 40, markets: 8 }, undefined, { remoteHeight: 900, localHeight: 900 });
             assert.strictEqual(classed.length, 0);
             // Shortfalls keep their shape and stay reported regardless of the gate.
             db.getTableCount = async () => 3;
-            let short = await sync._verifyTableCounts({ validator_rewards: 5 }, undefined, { remoteHeight: 900, localHeight: 900 });
+            let short = await sync.verifyTableCounts({ validator_rewards: 5 }, undefined, { remoteHeight: 900, localHeight: 900 });
             assert.deepStrictEqual(short, [{ table: 'validator_rewards', sourceCount: 5, localCount: 3, delta: 2 }]);
         });
 
         it('treats absent/invalid table_counts as nothing to check (older source builds)', async function(){
             db.getTableCount = async () => 100;
-            assert.deepStrictEqual(await sync._verifyTableCounts(undefined), []);
-            assert.deepStrictEqual(await sync._verifyTableCounts(null), []);
-            assert.deepStrictEqual(await sync._verifyTableCounts({ blocks: 'not-a-number' }), []);
+            assert.deepStrictEqual(await sync.verifyTableCounts(undefined), []);
+            assert.deepStrictEqual(await sync.verifyTableCounts(null), []);
+            assert.deepStrictEqual(await sync.verifyTableCounts({ blocks: 'not-a-number' }), []);
         });
 
         it('skips a malicious table name without passing it to getTableCount', async function(){
@@ -1132,7 +1132,7 @@ describe('ClientSync', function(){
             let queried = [];
             db.getTableCount = async (t) => { queried.push(t); return 0; };
             let evilKey = 'blocks` WHERE 1=1 UNION SELECT password FROM mysql.user -- ';
-            let mismatches = await sync._verifyTableCounts({ [evilKey]: 999, blocks: 100 });
+            let mismatches = await sync.verifyTableCounts({ [evilKey]: 999, blocks: 100 });
 
             assert.ok(!queried.includes(evilKey), 'malicious key must never reach getTableCount');
             assert.deepStrictEqual(queried, ['blocks'], 'only the valid identifier is queried');
@@ -1142,7 +1142,7 @@ describe('ClientSync', function(){
 
     describe('decoder bootstrap completeness', function(){
         // Regression guard: a truncated/stale decoder full snapshot must not be
-        // accepted silently. The indexer-only hash path (_verifyAgainstSource)
+        // accepted silently. The indexer-only hash path (verifyAgainstSource)
         // short-circuits for decoder, so bootstrap must run a row-count cross-check
         // against the second source independent of the VERIFY_HASHES flag.
 
@@ -1153,13 +1153,13 @@ describe('ClientSync', function(){
             return { s, decoderDb };
         }
 
-        describe('_verifyDecoderCompleteness', function(){
+        describe('verifyDecoderCompleteness', function(){
             it('flags a truncated snapshot loudly when the source has more rows', async function(){
                 let { s, decoderDb } = decoderSync(config);
                 decoderDb.getTableCount = async (t) => ({ blocks: 100, transactions: 0 })[t];
                 sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 100, transactions: 4200 } } });
 
-                await s._verifyDecoderCompleteness('http://source2:3006', 500);
+                await s.verifyDecoderCompleteness('http://source2:3006', 500);
 
                 // The shortfall must surface as a loud TABLE_COUNT_MISMATCH, not be swallowed.
                 let logged = console.error.getCalls().some(c =>
@@ -1172,7 +1172,7 @@ describe('ClientSync', function(){
                 decoderDb.getTableCount = async (t) => ({ blocks: 100, transactions: 4200 })[t];
                 sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 100, transactions: 4200 } } });
 
-                await s._verifyDecoderCompleteness('http://source2:3006', 500);
+                await s.verifyDecoderCompleteness('http://source2:3006', 500);
 
                 let mismatch = console.error.getCalls().some(c =>
                     typeof c.args[0] === 'string' && c.args[0].indexOf('TABLE_COUNT_MISMATCH') !== -1);
@@ -1182,52 +1182,52 @@ describe('ClientSync', function(){
             it('is a no-op for non-decoder dbType', async function(){
                 // sync is the default indexer instance from the outer beforeEach.
                 sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 9 } } });
-                await sync._verifyDecoderCompleteness('http://source2:3006', 500);
+                await sync.verifyDecoderCompleteness('http://source2:3006', 500);
                 assert.strictEqual(axios.get.called, false);
             });
         });
 
-        describe('_bootstrapFromSnapshot wiring', function(){
+        describe('bootstrapFromSnapshot wiring', function(){
             it('runs the decoder completeness check even when VERIFY_HASHES is false', async function(){
                 let cfg = Object.assign({}, config, { VERIFY_HASHES: false });
                 let { s } = decoderSync(cfg);
-                sinon.stub(s, '_fetchAndApplySchema').resolves();
-                sinon.stub(s, '_verifyDecoderCompleteness').resolves();
-                sinon.stub(s, '_verifyAgainstSource').resolves();
+                sinon.stub(s, 'fetchAndApplySchema').resolves();
+                sinon.stub(s, 'verifyDecoderCompleteness').resolves();
+                sinon.stub(s, 'verifyAgainstSource').resolves();
                 sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
 
-                await s._bootstrapFromSnapshot();
+                await s.bootstrapFromSnapshot();
 
-                assert.strictEqual(s._verifyDecoderCompleteness.calledOnce, true,
+                assert.strictEqual(s.verifyDecoderCompleteness.calledOnce, true,
                     'decoder completeness check must run regardless of VERIFY_HASHES');
-                assert.strictEqual(s._verifyDecoderCompleteness.firstCall.args[0], 'http://source2:3006');
-                assert.strictEqual(s._verifyDecoderCompleteness.firstCall.args[1], 500);
+                assert.strictEqual(s.verifyDecoderCompleteness.firstCall.args[0], 'http://source2:3006');
+                assert.strictEqual(s.verifyDecoderCompleteness.firstCall.args[1], 500);
                 // The indexer-only hash path must never run for decoder.
-                assert.strictEqual(s._verifyAgainstSource.called, false);
+                assert.strictEqual(s.verifyAgainstSource.called, false);
             });
 
             it('does not run the decoder check in single-source mode', async function(){
                 let cfg = Object.assign({}, config, { SYNC_SOURCES: 'http://source1:3006' });
                 let { s } = decoderSync(cfg);
-                sinon.stub(s, '_fetchAndApplySchema').resolves();
-                sinon.stub(s, '_verifyDecoderCompleteness').resolves();
+                sinon.stub(s, 'fetchAndApplySchema').resolves();
+                sinon.stub(s, 'verifyDecoderCompleteness').resolves();
                 sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
 
-                await s._bootstrapFromSnapshot();
+                await s.bootstrapFromSnapshot();
 
-                assert.strictEqual(s._verifyDecoderCompleteness.called, false);
+                assert.strictEqual(s.verifyDecoderCompleteness.called, false);
             });
 
             it('takes the indexer hash path (not the decoder check) for indexer dbType', async function(){
-                sinon.stub(sync, '_fetchAndApplySchema').resolves();
-                sinon.stub(sync, '_verifyAgainstSource').resolves();
-                sinon.stub(sync, '_verifyDecoderCompleteness').resolves();
+                sinon.stub(sync, 'fetchAndApplySchema').resolves();
+                sinon.stub(sync, 'verifyAgainstSource').resolves();
+                sinon.stub(sync, 'verifyDecoderCompleteness').resolves();
                 sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
 
-                await sync._bootstrapFromSnapshot();
+                await sync.bootstrapFromSnapshot();
 
-                assert.strictEqual(sync._verifyAgainstSource.calledOnce, true);
-                assert.strictEqual(sync._verifyDecoderCompleteness.called, false);
+                assert.strictEqual(sync.verifyAgainstSource.calledOnce, true);
+                assert.strictEqual(sync.verifyDecoderCompleteness.called, false);
             });
         });
     });

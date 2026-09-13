@@ -216,7 +216,7 @@ class HubClient {
         // alarm (a hub that lost config state is an operator event), drop the cache,
         // reset the cursor and re-fetch the full tree once, exactly as the failover
         // block above does.
-        if(this.lastWatermark > 0 && this.configs && this._hubConfigRegressed(result)){
+        if(this.lastWatermark > 0 && this.configs && this.hubConfigRegressed(result)){
             logger.error('HubClient: HUB CONFIG REGRESSION: hub served seq ' + (Number(result.seq) || 0) +
                           '/watermark ' + (Number(result.watermark) || 0) + ', below last-seen ' + this.lastSeq +
                           '/' + this.lastWatermark +
@@ -247,7 +247,7 @@ class HubClient {
     // from an older snapshot). A missing watermark is the full tree (handled by
     // _applyConfigResult) and a zero watermark means an empty configs table, so
     // neither counts; the next poll re-fetches in full either way.
-    _hubConfigRegressed(result){
+    hubConfigRegressed(result){
         let wrapped = result && typeof result === 'object' && result.configs && typeof result.configs === 'object' && ('seq' in result);
         if(!wrapped || result.watermark === undefined || result.watermark === null) return false;
         let watermark = Number(result.watermark) || 0;
@@ -356,7 +356,7 @@ class HubClient {
                         network: network,
                         dbType:  dbType,
                         db_host: mod.db_host || mod.host || '127.0.0.1',
-                        db_port: HubClient._parsePort(mod.db_port, mod.port),
+                        db_port: HubClient.parsePort(mod.db_port, mod.port),
                         db_name: mod.name,
                         db_user: mod.user,
                         db_pass: mod.pass
@@ -369,7 +369,7 @@ class HubClient {
 
     // Falls back to 3306 when the value is absent, empty or non-numeric, and handles
     // a literal 0 correctly, unlike the `parseInt(x) || default` shorthand.
-    static _parsePort(primary, fallback){
+    static parsePort(primary, fallback){
         let val = primary !== undefined && primary !== null && primary !== '' ? primary : fallback;
         if(val === undefined || val === null || val === '') return 3306;
         let parsed = parseInt(val, 10);

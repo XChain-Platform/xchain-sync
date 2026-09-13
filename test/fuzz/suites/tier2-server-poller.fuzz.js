@@ -13,7 +13,7 @@
  **********************************************************************
  * Tier 2 Fuzz: ServerPoller
  *
- * Tests that _buildBlockPayload never crashes regardless of what the mocked
+ * Tests that buildBlockPayload never crashes regardless of what the mocked
  * source database returns. Exercises the 40+ table reads, try/catch error
  * handling per table, and payload assembly logic.
  */
@@ -53,14 +53,14 @@ describe('Tier 2 - ServerPoller @tier2', function () {
         sinon.restore();
     });
 
-    describe('_buildBlockPayload', function () {
+    describe('buildBlockPayload', function () {
 
         it('returns null when getBlockHashRow returns null', function () {
             return fc.assert(fc.asyncProperty(
                 blockIndex(),
                 async (bi) => {
                     db.getBlockHashRow.resolves(null);
-                    let result = await poller._buildBlockPayload(bi);
+                    let result = await poller.buildBlockPayload(bi);
                     assert.strictEqual(result, null);
                 }
             ), { numRuns: NUM_RUNS });
@@ -83,7 +83,7 @@ describe('Tier 2 - ServerPoller @tier2', function () {
                     db.getActions.resolves([]);
                     db.doQuery.resolves([]);
 
-                    let result = await poller._buildBlockPayload(hashRow.block_index);
+                    let result = await poller.buildBlockPayload(hashRow.block_index);
                     assert.ok(result !== null);
                 }
             ), { numRuns: NUM_RUNS });
@@ -100,7 +100,7 @@ describe('Tier 2 - ServerPoller @tier2', function () {
                 }),
                 async (hashRow) => {
                     db.getBlockHashRow.resolves(hashRow);
-                    let result = await poller._buildBlockPayload(hashRow.block_index);
+                    let result = await poller.buildBlockPayload(hashRow.block_index);
 
                     assert.strictEqual(result.type, 'block');
                     assert.strictEqual(result.chain, 'bitcoin');
@@ -137,7 +137,7 @@ describe('Tier 2 - ServerPoller @tier2', function () {
                     db.getActions.resolves([]);
                     db.doQuery.resolves([]);
 
-                    let result = await poller._buildBlockPayload(1);
+                    let result = await poller.buildBlockPayload(1);
                     assert.ok(result !== null);
                 }
             ), { numRuns: NUM_RUNS });
@@ -159,7 +159,7 @@ describe('Tier 2 - ServerPoller @tier2', function () {
                     db.getActionScopedRows.resolves([]);
                     db.doQuery.resolves([]);
 
-                    let result = await poller._buildBlockPayload(1);
+                    let result = await poller.buildBlockPayload(1);
                     assert.ok(result !== null);
                     assert.strictEqual(typeof result.data, 'object');
                 }

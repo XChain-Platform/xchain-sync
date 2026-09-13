@@ -421,7 +421,7 @@ describe('Database.beginReadSnapshot()', function () {
 
     it('acquires a DEDICATED connection and runs SET / START TRANSACTION on it', async function () {
         let conn = fakeConn();
-        sinon.stub(db, '_acquirePoolConnection').resolves(conn);
+        sinon.stub(db, 'acquirePoolConnection').resolves(conn);
         let returned = await db.beginReadSnapshot();
         // The dedicated connection is RETURNED (not stashed on transactionConnection).
         assert.strictEqual(returned, conn);
@@ -435,7 +435,7 @@ describe('Database.beginReadSnapshot()', function () {
         let shared = fakeConn();
         db.transactionConnection = shared;     // a writer transaction is in flight
         let conn = fakeConn();
-        sinon.stub(db, '_acquirePoolConnection').resolves(conn);
+        sinon.stub(db, 'acquirePoolConnection').resolves(conn);
         await db.beginReadSnapshot();
         assert.strictEqual(db.transactionConnection, shared, 'writer connection left intact');
         assert.ok(shared.release.notCalled, 'snapshot does not release the writer connection');
@@ -444,7 +444,7 @@ describe('Database.beginReadSnapshot()', function () {
     it('on query error: releases the dedicated connection and throws (shared field untouched)', async function () {
         let conn = fakeConn();
         conn.query.rejects(new Error('snap fail'));
-        sinon.stub(db, '_acquirePoolConnection').resolves(conn);
+        sinon.stub(db, 'acquirePoolConnection').resolves(conn);
         await assert.rejects(
             () => db.beginReadSnapshot(),
             /beginReadSnapshot error/
@@ -1350,13 +1350,13 @@ describe('Database.getTableCount()', function () {
         assert.strictEqual(result, 42);
     });
 
-    // getTableCount used to read through the fail-soft doQuery, which outside a
-    // transaction logs the SqlError and returns []; `rows[0].cnt` then threw a
+    // getTableCount must not read through the fail-soft doQuery, which outside a
+    // transaction logs the SqlError and returns []: `rows[0].cnt` then throws a
     // TypeError with no errno, so every errno-based caller (notably
-    // ClientSync._verifyTableCounts, whose catch routes errno 1146 into a schema
-    // heal that CREATEs the missing table) never actually fired. Observed live
-    // on a production replica: `bet_resolves` stayed absent for two days across
-    // 11,542 identical errors. This asserts the DATABASE's error survives the call.
+    // ClientSync.verifyTableCounts, whose catch routes errno 1146 into a schema
+    // heal that CREATEs the missing table) never fires, and a missing table stays
+    // missing however many times the error repeats. This asserts the DATABASE's
+    // error survives the call.
     it('propagates the database error with errno intact when the table is absent', async function () {
         const err = new Error("Table 'db.bet_resolves' doesn't exist");
         err.errno = 1146; err.sqlState = '42S02'; err.code = 'ER_NO_SUCH_TABLE';
@@ -1397,7 +1397,7 @@ describe('Database.listExistingTables()', function () {
 
     // Strict, so a failure to LIST is never read as "nothing exists": an empty set
     // would empty table_counts and make an incomplete replica look complete to
-    // _verifyTableCounts, which is the M-17 fail-soft trap one layer up.
+    // verifyTableCounts, which is the M-17 fail-soft trap one layer up.
     it('THROWS rather than reporting an empty schema when the listing fails', async function () {
         const err = new Error('connection lost'); err.errno = 2013;
         const conn = fakeConn();

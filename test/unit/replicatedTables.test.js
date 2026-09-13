@@ -34,7 +34,7 @@ describe('replicatedTables', function(){
             assert.ok(tables.includes('sync_meta'),
                       'expected replicated set to include sync_meta for completeness counting');
             // ...but it must NOT leak into the per-scope lists ServerPoller iterates,
-            // or _buildBlockPayload would read the not-yet-recorded row (ordering trap).
+            // or buildBlockPayload would read the not-yet-recorded row (ordering trap).
             let topo = getTopology('indexer');
             for(let scope of ['blockScoped', 'txScoped', 'actionScoped', 'index']){
                 assert.ok(!topo[scope].includes('sync_meta'),

@@ -146,7 +146,7 @@ describe('Integration: SPV sub-tree shadow columns, cross-twin replication timin
         this.timeout(30000);
         await stageBlocks();
 
-        const payload = await poller._buildBlockPayload(TIP);
+        const payload = await poller.buildBlockPayload(TIP);
         assert.ok(payload, 'no payload built for block ' + TIP);
 
         // Both tables are registered `stream:block` in tableLifecycle, so they ride
@@ -168,7 +168,7 @@ describe('Integration: SPV sub-tree shadow columns, cross-twin replication timin
         this.timeout(30000);
         await stageBlocks();
 
-        const payload = await poller._buildBlockPayload(TIP);
+        const payload = await poller.buildBlockPayload(TIP);
         const applier = new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK);
 
         const row = await withShadowArmed(0, async () => {
@@ -211,7 +211,7 @@ describe('Integration: SPV sub-tree shadow columns, cross-twin replication timin
         // Positive run, kept in this test so the two roots are produced from the same
         // staged data on the same MariaDB.
         await stageBlocks();
-        let payload = await poller._buildBlockPayload(TIP);
+        let payload = await poller.buildBlockPayload(TIP);
         let applier = new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK);
         const withJournal = await withShadowArmed(0, async () => {
             await applier.applyBlock(payload);
@@ -223,7 +223,7 @@ describe('Integration: SPV sub-tree shadow columns, cross-twin replication timin
         // replicated yet, which is the ONE failure mode the spec says a live venue
         // would have shown and nothing else could.
         await stageBlocks();
-        payload = await poller._buildBlockPayload(TIP);
+        payload = await poller.buildBlockPayload(TIP);
         delete payload.data.escrow_leaf_journal;
         applier = new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK);
         const withoutJournal = await withShadowArmed(0, async () => {

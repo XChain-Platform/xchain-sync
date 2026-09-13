@@ -62,9 +62,9 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(sync.getHaltInfo(), null);
     });
 
-    it('_haltOnDivergence sets the halt, persists it durably, and clears pending hashes', async function(){
+    it('haltOnDivergence sets the halt, persists it durably, and clears pending hashes', async function(){
         sync.pendingHashes.set(101, {});
-        await sync._haltOnDivergence(101, mism, ['http://a:3006', 'http://b:3006'], 'cross-source-divergence');
+        await sync.haltOnDivergence(101, mism, ['http://a:3006', 'http://b:3006'], 'cross-source-divergence');
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().blockIndex, 101);
@@ -76,20 +76,20 @@ describe('ClientSync: divergence halt @regression', function(){
     });
 
     it('a halted client REFUSES to apply blocks', async function(){
-        await sync._haltOnDivergence(101, mism, ['http://a:3006', 'http://b:3006']);
-        await sync._applyBlockEvent({ block_index: 102, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
+        await sync.haltOnDivergence(101, mism, ['http://a:3006', 'http://b:3006']);
+        await sync.applyBlockEvent({ block_index: 102, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
         assert.strictEqual(applier.applyBlock.called, false, 'no block may be applied while halted');
     });
 
     it('is idempotent: a second divergence does not double-record or change the halt block', async function(){
-        await sync._haltOnDivergence(101, mism, []);
-        await sync._haltOnDivergence(102, mism, []);
+        await sync.haltOnDivergence(101, mism, []);
+        await sync.haltOnDivergence(102, mism, []);
         assert.strictEqual(sync.getHaltInfo().blockIndex, 101, 'stays halted at the first contested block');
         assert.strictEqual(db.recordHalt.callCount, 1);
     });
 
     it('clearHalt resumes the client and clears the durable record', async function(){
-        await sync._haltOnDivergence(101, mism, []);
+        await sync.haltOnDivergence(101, mism, []);
         assert.strictEqual(sync.isHalted(), true);
 
         const was = await sync.clearHalt();
@@ -98,7 +98,7 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.ok(db.clearHalt.calledOnceWith('indexer'), 'durable halt record must be cleared');
 
         // Applying works again after a clear.
-        await sync._applyBlockEvent({ block_index: 103, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
+        await sync.applyBlockEvent({ block_index: 103, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
         assert.ok(applier.applyBlock.calledOnce, 'client resumes applying after an operator clear');
     });
 
@@ -209,7 +209,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
             // committed hashes the source CLAIMS (deliberately not the rows' hash)
             ledger_hash: 'forged_ledger', actions_hash: 'forged_actions', contract_hash: 'forged_contract'
         };
-        await sync._applyBlockEvent(event);
+        await sync.applyBlockEvent(event);
 
         assert.ok(applier.applyBlock.calledOnce, 'block is applied, THEN recomputed');
         assert.strictEqual(sync.isHalted(), true, 'recompute mismatch must halt');
@@ -226,7 +226,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
             actions_hash:  vectors.expected.actions_hash,
             contract_hash: vectors.expected.contract_hash
         });
-        await sync._applyBlockEvent(event);
+        await sync.applyBlockEvent(event);
 
         assert.ok(applier.applyBlock.calledOnce);
         assert.strictEqual(sync.isHalted(), false, 'a verified block must not halt');
@@ -237,7 +237,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
     it('skips recompute when VERIFY_RECOMPUTE is disabled (opt-out for plain replicas)', async function(){
         config['VERIFY_RECOMPUTE'] = false;
         const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'forged', actions_hash: 'forged', contract_hash: 'forged' };
-        await sync._applyBlockEvent(event);
+        await sync.applyBlockEvent(event);
         assert.strictEqual(sync.isHalted(), false, 'no recompute, no halt when opted out');
         assert.strictEqual(db.doQuery.called, false, 'recompute queries must not run when disabled');
         assert.strictEqual(sync.lastAppliedBlock, vectors.block_index);
@@ -246,7 +246,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
     it('a recompute DB error is logged but does NOT halt (no self-inflicted fork on infra faults)', async function(){
         db.doQuery = sinon.stub().rejects(new Error('transient DB error'));
         const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' };
-        await sync._applyBlockEvent(event);
+        await sync.applyBlockEvent(event);
         assert.strictEqual(sync.isHalted(), false, 'an infra error must not halt the validator');
         assert.strictEqual(sync.lastAppliedBlock, vectors.block_index, 'block still advances on a recompute error');
     });
@@ -360,7 +360,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
 
     it('the LIVE path still fails open: a persistent error does not throw without failClosed', async function(){
         sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('infra fault'));
-        const mismatches = await sync._verifyRecompute({ block_index: 500, ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
+        const mismatches = await sync.verifyRecompute({ block_index: 500, ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
 
         assert.strictEqual(mismatches, null, 'live path returns null (fail-open) on a recompute error');
         assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 1, 'no retries on the live path');
@@ -385,7 +385,7 @@ describe('ClientSync: state_hash apply-time integrity halt @regression', functio
 
     it('HALTS when the apply-time state_hash recompute disagrees with the source', async function(){
         sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync._applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
+        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
 
         assert.ok(applier.applyBlock.calledOnce, 'block is applied, THEN the state_hash recomputed');
         assert.strictEqual(sync.isHalted(), true, 'a state_hash mismatch must halt');
@@ -398,7 +398,7 @@ describe('ClientSync: state_hash apply-time integrity halt @regression', functio
 
     it('does NOT halt when the recomputed state_hash matches (clean block advances)', async function(){
         sync.blockHasher.computeStateHash = sinon.stub().resolves('AGREED_STATE');
-        await sync._applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'AGREED_STATE' });
+        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'AGREED_STATE' });
 
         assert.strictEqual(sync.isHalted(), false, 'a matching state_hash must not halt');
         assert.strictEqual(sync.lastAppliedBlock, 200, 'verified block advances the tip');
@@ -406,7 +406,7 @@ describe('ClientSync: state_hash apply-time integrity halt @regression', functio
 
     it('SKIPS the check (no recompute, no halt) when the source sent a NULL state_hash (pre-feature block)', async function(){
         sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync._applyBlockEvent({ block_index: 200, block_time: 1, state_hash: null });
+        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: null });
 
         assert.strictEqual(sync.blockHasher.computeStateHash.called, false,
             'a NULL state_hash must skip the recompute entirely (fail-soft against a back-level source)');
@@ -417,7 +417,7 @@ describe('ClientSync: state_hash apply-time integrity halt @regression', functio
     it('opts out cleanly when VERIFY_STATE_HASH=false (throwaway mirrors)', async function(){
         config['VERIFY_STATE_HASH'] = false;
         sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync._applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
+        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
 
         assert.strictEqual(sync.blockHasher.computeStateHash.called, false, 'no recompute when opted out');
         assert.strictEqual(sync.isHalted(), false, 'no halt when opted out, even on a would-be mismatch');

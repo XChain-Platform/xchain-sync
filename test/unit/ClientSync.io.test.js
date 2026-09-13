@@ -9,9 +9,9 @@
 // contact legal@dankest.llc.
 
 // ClientSync IO/branch coverage. NEW tests only.
-// Covers _fetchAndApplySchema, _bootstrapFromSnapshot, _runIncrementalCatchUp,
-// _incrementalCatchUp, _verifyAgainstSource, _verifyDecoderCompleteness (catch),
-// _connectWebSocket/_scheduleReconnect, stop, _scheduleHeartbeat/_flushHeartbeat/
+// Covers fetchAndApplySchema, bootstrapFromSnapshot, runIncrementalCatchUp,
+// incrementalCatchUp, verifyAgainstSource, verifyDecoderCompleteness (catch),
+// connectWebSocket/_scheduleReconnect, stop, _scheduleHeartbeat/flushHeartbeat/
 // _sendRestHeartbeat, and several small branches.
 
 const assert     = require('assert');
@@ -73,7 +73,7 @@ function makeSync(configOverrides, dbOverrides){
     return { sync, db, applier, rb, hv, util, config };
 }
 
-describe('ClientSync: _fetchAndApplySchema', function(){
+describe('ClientSync: fetchAndApplySchema', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -91,7 +91,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
         // information_schema check returns [] → table absent
         db.doQuery.onFirstCall().resolves([]);
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         // Two doQuery calls: info_schema check + CREATE TABLE
         assert.strictEqual(db.doQuery.callCount, 2);
@@ -106,7 +106,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
         // info_schema returns a row → table exists
         db.doQuery.onFirstCall().resolves([{ TABLE_NAME: 'goodtable' }]);
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         assert.ok(db.addMissingColumns.calledOnce, 'addMissingColumns must be called for existing table');
     });
@@ -116,7 +116,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
             tables: { emptytable: '' }
         }});
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         assert.strictEqual(db.doQuery.called, false, 'empty DDL must be skipped');
     });
@@ -130,7 +130,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
         }});
         db.doQuery.resolves([]);
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('Rejected table name') !== -1),
@@ -148,7 +148,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
         }});
         db.doQuery.resolves([]);
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('Rejected DDL') !== -1),
@@ -169,13 +169,13 @@ describe('ClientSync: _fetchAndApplySchema', function(){
         db.doQuery.resolves([]);
 
         // Should not throw
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
     });
 
     it('logs outer catch when axios.get rejects', async function(){
         sinon.stub(axios, 'get').rejects(new Error('network fail'));
 
-        await sync._fetchAndApplySchema('http://src1:3006');
+        await sync.fetchAndApplySchema('http://src1:3006');
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('Failed to fetch schema') !== -1),
@@ -183,7 +183,7 @@ describe('ClientSync: _fetchAndApplySchema', function(){
     });
 });
 
-describe('ClientSync: _bootstrapFromSnapshot', function(){
+describe('ClientSync: bootstrapFromSnapshot', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -196,7 +196,7 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: '' }));
 
         // A misconfigured replica must not proceed to live-follow on an empty DB.
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /no sync sources configured/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /no sync sources configured/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('No sync sources configured') !== -1));
@@ -205,11 +205,11 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
 
     it('happy path with raw (non-gzipped) buffer', async function(){
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         let payload = Buffer.from(JSON.stringify({ block_height: 100, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
         assert.ok(applier.applyFullSnapshot.calledOnce, 'applyFullSnapshot must be called');
         assert.strictEqual(sync.lastAppliedBlock, 100);
@@ -218,66 +218,66 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
     it('applies the full snapshot under the shared write lock (M-21)', async function(){
         // The full-snapshot apply is also the runtime recovery fallback for an
         // oversized incremental catch-up, where live-follow is active. It must run
-        // under _withApplyLock so a concurrent live-block apply or cross-source
+        // under withApplyLock so a concurrent live-block apply or cross-source
         // fallback timer cannot open a second write transaction and clobber the
         // snapshot's DELETE+reload mid-flight.
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
-        let lockSpy = sinon.spy(sync, '_withApplyLock');
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
+        let lockSpy = sinon.spy(sync, 'withApplyLock');
         let payload = Buffer.from(JSON.stringify({ block_height: 7, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
         assert.ok(applier.applyFullSnapshot.calledOnce, 'applyFullSnapshot must be called');
-        assert.ok(lockSpy.calledOnce, 'applyFullSnapshot must be wrapped in _withApplyLock');
+        assert.ok(lockSpy.calledOnce, 'applyFullSnapshot must be wrapped in withApplyLock');
         // The lock must wrap the apply, not merely run alongside it.
         assert.ok(lockSpy.calledBefore(applier.applyFullSnapshot),
-            '_withApplyLock must be entered before applyFullSnapshot runs');
+            'withApplyLock must be entered before applyFullSnapshot runs');
     });
 
     it('happy path with gzipped buffer', async function(){
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         let rawBuf = Buffer.from(JSON.stringify({ block_height: 5, tables: {} }));
         let gzBuf  = zlib.gzipSync(rawBuf);
         sinon.stub(axios, 'get').resolves({ data: gzBuf });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
         assert.ok(applier.applyFullSnapshot.calledOnce);
         assert.strictEqual(sync.lastAppliedBlock, 5);
     });
 
-    it('indexer + 2 sources + VERIFY_HASHES calls _verifyAgainstSource', async function(){
+    it('indexer + 2 sources + VERIFY_HASHES calls verifyAgainstSource', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
             VERIFY_HASHES: true
         }));
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
-        sinon.stub(sync, '_verifyAgainstSource').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'verifyAgainstSource').resolves();
         let payload = Buffer.from(JSON.stringify({ block_height: 50, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
-        assert.ok(sync._verifyAgainstSource.calledOnce);
-        assert.strictEqual(sync._verifyAgainstSource.firstCall.args[0], 'http://src2:3006');
+        assert.ok(sync.verifyAgainstSource.calledOnce);
+        assert.strictEqual(sync.verifyAgainstSource.firstCall.args[0], 'http://src2:3006');
     });
 
-    it('decoder + 2 sources calls _verifyDecoderCompleteness', async function(){
+    it('decoder + 2 sources calls verifyDecoderCompleteness', async function(){
         ({ sync, db, applier } = makeSync(
             { SYNC_SOURCES: 'http://src1:3006,http://src2:3006', VERIFY_HASHES: false },
             { dbType: 'decoder' }
         ));
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
-        sinon.stub(sync, '_verifyDecoderCompleteness').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'verifyDecoderCompleteness').resolves();
         let payload = Buffer.from(JSON.stringify({ block_height: 20, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
-        assert.ok(sync._verifyDecoderCompleteness.calledOnce);
+        assert.ok(sync.verifyDecoderCompleteness.calledOnce);
     });
 
     it('catch/retry: rotates sources and THROWS on repeated failure (no swallow)', async function(){
@@ -287,10 +287,10 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
             BOOTSTRAP_MAX_RETRIES: 0
         }));
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(new Error('snap fail'));
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1),
@@ -303,10 +303,10 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
             SYNC_SOURCES: 'http://src1:3006',
             BOOTSTRAP_MAX_RETRIES: 0
         }));
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(new Error('snap fail'));
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1));
@@ -321,14 +321,14 @@ describe('ClientSync: _bootstrapFromSnapshot', function(){
             BOOTSTRAP_MAX_RETRIES: 3
         }));
         let sleep = sinon.stub(sync.util, 'sleep').resolves();   // make backoff instant
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         let payload = Buffer.from(JSON.stringify({ block_height: 42, tables: {} }));
         let get = sinon.stub(axios, 'get');
         get.onCall(0).rejects(new Error('transient'));
         get.onCall(1).rejects(new Error('transient'));
         get.onCall(2).resolves({ data: payload });
 
-        await sync._bootstrapFromSnapshot();
+        await sync.bootstrapFromSnapshot();
 
         assert.ok(applier.applyFullSnapshot.calledOnce, 'eventually applies the snapshot');
         assert.strictEqual(sync.lastAppliedBlock, 42);
@@ -368,10 +368,10 @@ describe('ClientSync: bootstrap size wall', function(){
             BOOTSTRAP_MAX_RETRIES: 5
         }));
         let sleep = sinon.stub(sync.util, 'sleep').resolves();
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         let get = sinon.stub(axios, 'get').rejects(sizeError());
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /snapshot-too-large/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /snapshot-too-large/);
 
         // One attempt, not six: retrying cannot shrink the payload, and each extra
         // request is one more token off the source's hourly snapshot budget.
@@ -385,10 +385,10 @@ describe('ClientSync: bootstrap size wall', function(){
     it('persists the halt so the restart lands idle rather than back at the wall', async function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sinon.stub(sync.util, 'sleep').resolves();
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(sizeError());
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /operator must clear the halt/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /operator must clear the halt/);
 
         assert.ok(db.recordHalt.calledOnce, 'halt must survive the process');
         assert.strictEqual(db.recordHalt.firstCall.args[2], 'snapshot-too-large');
@@ -406,10 +406,10 @@ describe('ClientSync: bootstrap size wall', function(){
             BOOTSTRAP_MAX_RETRIES: 5
         }));
         sinon.stub(sync.util, 'sleep').resolves();
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         let get = sinon.stub(axios, 'get').rejects(sizeError());
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /snapshot-too-large/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /snapshot-too-large/);
 
         assert.strictEqual(get.callCount, 1, 'must not rotate onto an identical payload');
     });
@@ -420,10 +420,10 @@ describe('ClientSync: bootstrap size wall', function(){
             BOOTSTRAP_MAX_RETRIES: 2
         }));
         sinon.stub(sync.util, 'sleep').resolves();
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(new Error('ECONNRESET'));
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         assert.strictEqual(sync.isHalted(), false, 'a transient fault must not halt');
         assert.strictEqual(db.recordHalt.called, false);
@@ -435,10 +435,10 @@ describe('ClientSync: bootstrap size wall', function(){
             BOOTSTRAP_MAX_RETRIES: 0
         }));
         sinon.stub(sync.util, 'sleep').resolves();
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').rejects(rateLimitError({ 'retry-after': '2400' }));
 
-        await assert.rejects(() => sync._bootstrapFromSnapshot(), /all sync sources exhausted/);
+        await assert.rejects(() => sync.bootstrapFromSnapshot(), /all sync sources exhausted/);
 
         let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
         assert.ok(logged.indexOf('HTTP 429') !== -1, 'the 429 must be named, not buried in the axios dump');
@@ -464,7 +464,7 @@ describe('ClientSync: bootstrap size wall', function(){
     });
 });
 
-describe('ClientSync _bootstrapFromHeight', function(){
+describe('ClientSync bootstrapFromHeight', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -492,10 +492,10 @@ describe('ClientSync _bootstrapFromHeight', function(){
 
     it('seeds [base..tip] from one incremental snapshot and records the join block', async function(){
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         stubTransport({ tip: 1000000, base: 950000 });
 
-        let ok = await sync._bootstrapFromHeight(50000);
+        let ok = await sync.bootstrapFromHeight(50000);
 
         assert.strictEqual(ok, true);
         assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'applies one incremental snapshot');
@@ -509,11 +509,11 @@ describe('ClientSync _bootstrapFromHeight', function(){
         // second paging pass after apply pulls the (T1..T2] index_* rows so the
         // terminal recompute and first live block resolve non-NULL consensus hashes.
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
-        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         stubTransport({ tip: 1000000, base: 950000 });
 
-        await sync._bootstrapFromHeight(50000);
+        await sync.bootstrapFromHeight(50000);
 
         assert.ok(paged.calledTwice, 'paged before and re-paged after the block window');
         assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'block window applied once');
@@ -523,11 +523,11 @@ describe('ClientSync _bootstrapFromHeight', function(){
 
     it('clamps base to 0 when depth exceeds the tip', async function(){
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         // tip 30, depth 50000 -> base must clamp to 0. Server echoes since_block=0.
         stubTransport({ tip: 30, snapshot: { schema_version: SCHEMA_VERSION.indexer, block_height: 30, since_block: 0, tables: {} } });
 
-        await sync._bootstrapFromHeight(50000);
+        await sync.bootstrapFromHeight(50000);
 
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
         assert.ok(snapCall.args[0].indexOf('/since/0') !== -1, 'requests since/0 when depth > tip');
@@ -537,44 +537,44 @@ describe('ClientSync _bootstrapFromHeight', function(){
 
     it('throws when the source tip is unavailable (so the retry wrapper can restart)', async function(){
         ({ sync, db, applier } = makeSync());
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         sinon.stub(axios, 'get').callsFake(async (url) => {
             if(url.indexOf('/status/') !== -1) return { data: {} }; // no height fields
             return { data: Buffer.from('{}') };
         });
 
-        await assert.rejects(() => sync._bootstrapFromHeight(50000), /source tip unavailable/);
+        await assert.rejects(() => sync.bootstrapFromHeight(50000), /source tip unavailable/);
         assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
     });
 
     it('VERIFY_RECOMPUTE: recomputes the terminal block and HALTS on mismatch', async function(){
         ({ sync, db, applier } = makeSync({ VERIFY_RECOMPUTE: true }));
-        sinon.stub(sync, '_fetchAndApplySchema').resolves();
+        sinon.stub(sync, 'fetchAndApplySchema').resolves();
         stubTransport({ tip: 1000000, base: 950000 });
         db.getBlockHashRow.resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-        sinon.stub(sync, '_verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh' }]);
-        let halt = sinon.stub(sync, '_haltOnDivergence').resolves();
+        sinon.stub(sync, 'verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh' }]);
+        let halt = sinon.stub(sync, 'haltOnDivergence').resolves();
 
-        await sync._bootstrapFromHeight(50000);
+        await sync.bootstrapFromHeight(50000);
 
-        assert.ok(sync._verifyRecompute.calledOnce, 'terminal block recomputed');
-        assert.strictEqual(sync._verifyRecompute.firstCall.args[0].block_index, 1000000);
+        assert.ok(sync.verifyRecompute.calledOnce, 'terminal block recomputed');
+        assert.strictEqual(sync.verifyRecompute.firstCall.args[0].block_index, 1000000);
         assert.ok(halt.calledOnce, 'halts durably on a terminal mismatch');
     });
 
     it('retry wrapper throws (never live-follows empty) when no sources configured', async function(){
         ({ sync } = makeSync({ SYNC_SOURCES: '' }));
-        await assert.rejects(() => sync._bootstrapFromHeightRetry(50000), /no sync sources configured/);
+        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), /no sync sources configured/);
     });
 
     it('retry wrapper retries with backoff then succeeds', async function(){
         ({ sync, db, applier } = makeSync({ BOOTSTRAP_MAX_RETRIES: 3 }));
         let sleep = sinon.stub(sync.util, 'sleep').resolves();
-        let fromHeight = sinon.stub(sync, '_bootstrapFromHeight');
+        let fromHeight = sinon.stub(sync, 'bootstrapFromHeight');
         fromHeight.onCall(0).rejects(new Error('transient'));
         fromHeight.onCall(1).resolves(true);
 
-        await sync._bootstrapFromHeightRetry(50000);
+        await sync.bootstrapFromHeightRetry(50000);
 
         assert.strictEqual(fromHeight.callCount, 2);
         assert.ok(sleep.calledOnce, 'backed off once between rounds');
@@ -582,12 +582,12 @@ describe('ClientSync _bootstrapFromHeight', function(){
 
     it('retry wrapper THROWS on exhaustion', async function(){
         ({ sync } = makeSync({ BOOTSTRAP_MAX_RETRIES: 0 }));
-        sinon.stub(sync, '_bootstrapFromHeight').rejects(new Error('boom'));
-        await assert.rejects(() => sync._bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
+        sinon.stub(sync, 'bootstrapFromHeight').rejects(new Error('boom'));
+        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
     });
 });
 
-describe('ClientSync _syncLookupTablesPaged', function(){
+describe('ClientSync syncLookupTablesPaged', function(){
     let sync, db, applier, rt;
     beforeEach(function(){
         sinon.stub(console, 'log');
@@ -609,7 +609,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         get.onCall(0).resolves(page([{ id: 1 }, { id: 2 }], true, 2));
         get.onCall(1).resolves(page([{ id: 3 }], false, 3));
 
-        await sync._syncLookupTablesPaged('http://src:3006');
+        await sync.syncLookupTablesPaged('http://src:3006');
 
         assert.strictEqual(get.callCount, 2, 'two pages fetched');
         assert.ok(get.firstCall.args[0].indexOf('after_id=0') !== -1, 'first page from id 0');
@@ -627,7 +627,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         db.doQuery.resolves([{ m: 8547252 }]); // replica already holds up to this id
         let get = sinon.stub(axios, 'get').resolves(page([], false, 8547252));
 
-        await sync._syncLookupTablesPaged('http://src:3006');
+        await sync.syncLookupTablesPaged('http://src:3006');
 
         assert.ok(get.firstCall.args[0].indexOf('after_id=8547252') !== -1, 'cursor starts at replica max id');
         assert.strictEqual(applier.applyIncrementalSnapshot.called, false, 'empty page applies nothing');
@@ -639,7 +639,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         db.doQuery.resolves([{ m: 0 }]);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: 99, has_more: false, rows: [] })) });
 
-        await assert.rejects(() => sync._syncLookupTablesPaged('http://src:3006'), /schema mismatch/);
+        await assert.rejects(() => sync.syncLookupTablesPaged('http://src:3006'), /schema mismatch/);
     });
 
     it('stops if has_more is true but the cursor cannot advance (no infinite spin)', async function(){
@@ -648,7 +648,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         db.doQuery.resolves([{ m: 0 }]);
         let get = sinon.stub(axios, 'get').resolves(page([{ id: 5 }], true, 0)); // has_more but max_id <= afterId
 
-        await sync._syncLookupTablesPaged('http://src:3006');
+        await sync.syncLookupTablesPaged('http://src:3006');
 
         assert.strictEqual(get.callCount, 1, 'stopped after one page despite has_more');
     });
@@ -661,7 +661,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         let get = sinon.stub(axios, 'get').resolves(
             { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.decoder, table: 'pubkeys', max_id: 42, has_more: false, rows: [] })) });
 
-        await sync._syncLookupTablesPaged('http://src:3006');
+        await sync.syncLookupTablesPaged('http://src:3006');
 
         let maxQ = db.doQuery.getCalls().find(c => /MAX\(`id`\)/.test(c.args[0]));
         assert.ok(maxQ, 'queries MAX(id) for pubkeys (surrogate key added by fix #4413)');
@@ -716,11 +716,11 @@ describe('ClientSync truncated catch-up', function(){
         // makeSync builds ClientSync('bitcoin','mainnet'); depth keyed '<TICKER>:<NETWORK>'.
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
         assert.ok(sync._truncatedDepth >= 1, 'chain is in truncated mode');
-        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(paged.calledTwice, 'lookups paged before AND re-paged after the block window');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
@@ -730,13 +730,13 @@ describe('ClientSync truncated catch-up', function(){
     it('re-pages lookups AFTER the block window apply so (T1..T2] FK targets are present before recompute', async function(){
         // Regression: the skip_lookups snapshot is taken at the source tip T2 > the
         // paging high-water T1, so blocks (T1..T2] reference index_* rows not pulled
-        // in the first page. The second _syncLookupTablesPaged must run after apply.
+        // in the first page. The second syncLookupTablesPaged must run after apply.
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
-        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(paged.calledTwice, 'paged twice: before and after the block window');
         assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'block window applied once');
@@ -747,11 +747,11 @@ describe('ClientSync truncated catch-up', function(){
     it('full-history chain does NOT page lookups and uses no skip_lookups (unchanged path)', async function(){
         ({ sync, db, applier } = makeSync()); // no depth -> _truncatedDepth 0
         assert.strictEqual(sync._truncatedDepth, 0);
-        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(paged.notCalled, 'no paged lookup sync for full-history chains');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
@@ -762,11 +762,11 @@ describe('ClientSync truncated catch-up', function(){
         // Depth is keyed by chain:network (not dbType), so it truncates the decoder too.
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }, { dbType: 'decoder' }));
         assert.ok(sync._truncatedDepth >= 1, 'decoder picks up the chain depth (gate removed)');
-        let paged = sinon.stub(sync, '_syncLookupTablesPaged').resolves();
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         db.getLastBlock.resolves(100);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.decoder, block_height: 105, since_block: 101, tables: {} })) });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(paged.calledTwice, 'decoder pages lookups before AND re-pages after the window');
         let snapCall = axios.get.getCalls().find(c => c.args[0].indexOf('/snapshot/') !== -1);
@@ -783,38 +783,38 @@ describe('ClientSync: oversized catch-up fallback routes by truncation', functio
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('truncated replica: size error routes to _bootstrapFromHeightRetry, NOT the full snapshot @regression', async function(){
+    it('truncated replica: size error routes to bootstrapFromHeightRetry, NOT the full snapshot @regression', async function(){
         // The full snapshot of a SYNC_BOOTSTRAP_DEPTH chain is oversized by definition,
         // so falling back to it would crash-loop. Route to the bounded height bootstrap.
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
         assert.ok(sync._truncatedDepth >= 1, 'chain is truncated');
-        sinon.stub(sync, '_syncLookupTablesPaged').resolves();
-        let heightRetry = sinon.stub(sync, '_bootstrapFromHeightRetry').resolves();
-        let fullSnap    = sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+        sinon.stub(sync, 'syncLookupTablesPaged').resolves();
+        let heightRetry = sinon.stub(sync, 'bootstrapFromHeightRetry').resolves();
+        let fullSnap    = sinon.stub(sync, 'bootstrapFromSnapshot').resolves();
         db.getLastBlock.resolves(100);
         let sizeErr = new Error('maxContentLength size of X exceeded');
         sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
         sinon.stub(axios, 'get').rejects(sizeErr);
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(heightRetry.calledOnceWithExactly(sync._truncatedDepth),
-            '_bootstrapFromHeightRetry must be called with the truncation depth');
+            'bootstrapFromHeightRetry must be called with the truncation depth');
         assert.strictEqual(fullSnap.called, false,
             'the full snapshot must NOT be fetched on a truncated replica');
     });
 
-    it('full-history replica: size error still routes to _bootstrapFromSnapshot (unchanged) @regression', async function(){
+    it('full-history replica: size error still routes to bootstrapFromSnapshot (unchanged) @regression', async function(){
         ({ sync, db, applier } = makeSync()); // _truncatedDepth 0
         assert.strictEqual(sync._truncatedDepth, 0);
-        let heightRetry = sinon.stub(sync, '_bootstrapFromHeightRetry').resolves();
-        let fullSnap    = sinon.stub(sync, '_bootstrapFromSnapshot').resolves();
+        let heightRetry = sinon.stub(sync, 'bootstrapFromHeightRetry').resolves();
+        let fullSnap    = sinon.stub(sync, 'bootstrapFromSnapshot').resolves();
         db.getLastBlock.resolves(100);
         let sizeErr = new Error('maxContentLength size of X exceeded');
         sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
         sinon.stub(axios, 'get').rejects(sizeErr);
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(fullSnap.calledOnce, 'full-history replica keeps the full-snapshot fallback');
         assert.strictEqual(heightRetry.called, false, 'height retry must not run for a full-history replica');
@@ -833,10 +833,10 @@ describe('ClientSync: decoder completeness check on a truncated replica', functi
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
         sync._bootstrapBase = 950000; // isTruncated() -> true
         assert.ok(sync.isTruncated(), 'replica is truncated');
-        let vtc = sinon.stub(sync, '_verifyTableCounts').resolves([]);
+        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
         sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1, index_transactions: 1 } } });
 
-        await sync._verifyDecoderCompleteness('http://src1:3006', 100);
+        await sync.verifyDecoderCompleteness('http://src1:3006', 100);
 
         assert.ok(vtc.calledOnce);
         let excludes = vtc.firstCall.args[1];
@@ -851,10 +851,10 @@ describe('ClientSync: decoder completeness check on a truncated replica', functi
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
         sync._bootstrapBase = null; // isTruncated() -> false
         assert.strictEqual(sync.isTruncated(), false);
-        let vtc = sinon.stub(sync, '_verifyTableCounts').resolves([]);
+        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
         sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1 } } });
 
-        await sync._verifyDecoderCompleteness('http://src1:3006', 100, new Set(['dispensers']));
+        await sync.verifyDecoderCompleteness('http://src1:3006', 100, new Set(['dispensers']));
 
         let excludes = vtc.firstCall.args[1];
         assert.ok(excludes.has('dispensers'), 'caller-supplied excludes pass through');
@@ -874,12 +874,12 @@ describe('ClientSync: indexer head-fork re-delivery', function(){
         ({ sync, db, applier } = makeSync()); // indexer
         sync.lastAppliedBlock = 100;
         sync.lastHashes = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-        await sync._handleBlock({ type: 'block', block_index: 100,
+        await sync.handleBlock({ type: 'block', block_index: 100,
             ledger_hash: 'lh100-FORKED', actions_hash: 'ah100', contract_hash: 'ch100' }, 0);
 
-        assert.ok(sync._incrementalCatchUp.calledOnce, 'a forked tip re-delivery must trigger catch-up');
+        assert.ok(sync.incrementalCatchUp.calledOnce, 'a forked tip re-delivery must trigger catch-up');
         assert.strictEqual(applier.applyBlock.called, false, 'the orphaned tip is not applied');
     });
 
@@ -887,12 +887,12 @@ describe('ClientSync: indexer head-fork re-delivery', function(){
         ({ sync, db, applier } = makeSync());
         sync.lastAppliedBlock = 100;
         sync.lastHashes = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-        await sync._handleBlock({ type: 'block', block_index: 100,
+        await sync.handleBlock({ type: 'block', block_index: 100,
             ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' }, 0);
 
-        assert.strictEqual(sync._incrementalCatchUp.called, false, 'a true duplicate must not trigger catch-up');
+        assert.strictEqual(sync.incrementalCatchUp.called, false, 'a true duplicate must not trigger catch-up');
         assert.strictEqual(applier.applyBlock.called, false);
     });
 
@@ -900,15 +900,15 @@ describe('ClientSync: indexer head-fork re-delivery', function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sync.lastAppliedBlock = 100;
         sync.lastHashes = { block_hash: 'bh100' };
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-        await sync._handleBlock({ type: 'block', block_index: 100, block_hash: 'bh100-FORKED' }, 0);
+        await sync.handleBlock({ type: 'block', block_index: 100, block_hash: 'bh100-FORKED' }, 0);
 
-        assert.ok(sync._incrementalCatchUp.calledOnce, 'decoder fork detection unchanged');
+        assert.ok(sync.incrementalCatchUp.calledOnce, 'decoder fork detection unchanged');
     });
 });
 
-describe('ClientSync _verifyRecompute join-block skip', function(){
+describe('ClientSync verifyRecompute join-block skip', function(){
     let sync;
     beforeEach(function(){
         sinon.stub(console, 'log');
@@ -921,7 +921,7 @@ describe('ClientSync _verifyRecompute join-block skip', function(){
         sync._bootstrapBase = 950000;
         let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes');
 
-        let result = await sync._verifyRecompute({ block_index: 950000 }, { ledger_hash: 'lh' });
+        let result = await sync.verifyRecompute({ block_index: 950000 }, { ledger_hash: 'lh' });
 
         assert.strictEqual(result, null, 'join block treated as clean');
         assert.strictEqual(compute.called, false, 'computeBlockHashes never invoked for the join block');
@@ -933,7 +933,7 @@ describe('ClientSync _verifyRecompute join-block skip', function(){
         let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
             .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
-        let result = await sync._verifyRecompute({ block_index: 950001 },
+        let result = await sync.verifyRecompute({ block_index: 950001 },
             { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
         assert.strictEqual(result, null, 'matching block is clean');
@@ -946,13 +946,13 @@ describe('ClientSync _verifyRecompute join-block skip', function(){
         let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
             .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
-        await sync._verifyRecompute({ block_index: 0 }, { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+        await sync.verifyRecompute({ block_index: 0 }, { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
         assert.ok(compute.calledOnceWith(0), 'no skip when not a truncated replica');
     });
 });
 
-describe('ClientSync: _runIncrementalCatchUp', function(){
+describe('ClientSync: runIncrementalCatchUp', function(){
     let sync, db, applier;
 
     beforeEach(function(){
@@ -964,7 +964,7 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
     it('returns early when no sources configured', async function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: '' }));
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
     });
@@ -975,7 +975,7 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
         let payload = Buffer.from(JSON.stringify({ block_height: 20, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.ok(applier.applyIncrementalSnapshot.calledOnce);
         assert.strictEqual(sync.lastAppliedBlock, 20);
@@ -991,7 +991,7 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
         db.getLastBlock.resolves(10);
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 15, tables: {} })) });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.deepStrictEqual(db.getLastBlock.firstCall.args[1], { rethrow: true });
     });
@@ -1004,7 +1004,7 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
 
         // Caught by the pass's own catch: it must NOT reject out of the in-flight
         // runner, whose callers (WS event handlers) have no catch of their own.
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         assert.strictEqual(axios.get.called, false, 'no snapshot window requested');
         assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
@@ -1016,7 +1016,7 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
         let payload = Buffer.from(JSON.stringify({ block_height: 15, tables: {} }));
         sinon.stub(axios, 'get').resolves({ data: payload });
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         let url = axios.get.firstCall.args[0];
         assert.ok(url.indexOf('/since/11') !== -1, 'since=11 when dbTip=10');
@@ -1028,14 +1028,14 @@ describe('ClientSync: _runIncrementalCatchUp', function(){
         db.getLastBlock.resolves(5);
         sinon.stub(axios, 'get').rejects(new Error('inc fail'));
 
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Incremental catch-up failed') !== -1));
     });
 });
 
-describe('ClientSync: _incrementalCatchUp coalescing', function(){
+describe('ClientSync: incrementalCatchUp coalescing', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1044,13 +1044,13 @@ describe('ClientSync: _incrementalCatchUp coalescing', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('calls _runIncrementalCatchUp once when no in-flight', async function(){
+    it('calls runIncrementalCatchUp once when no in-flight', async function(){
         ({ sync, db } = makeSync());
-        sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        sinon.stub(sync, 'runIncrementalCatchUp').resolves();
 
-        await sync._incrementalCatchUp(1);
+        await sync.incrementalCatchUp(1);
 
-        assert.strictEqual(sync._runIncrementalCatchUp.callCount, 1);
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1);
     });
 
     it('sets _catchUpPending when already in-flight', async function(){
@@ -1060,21 +1060,21 @@ describe('ClientSync: _incrementalCatchUp coalescing', function(){
         // that the call does not start a second runner.
         let neverResolve = new Promise(() => {});
         sync._catchUpInFlight = neverResolve;
-        sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        sinon.stub(sync, 'runIncrementalCatchUp').resolves();
 
         // Call it (do NOT await; the in-flight guard returns synchronously)
-        sync._incrementalCatchUp(1);
+        sync.incrementalCatchUp(1);
 
         assert.strictEqual(sync._catchUpPending, true, '_catchUpPending must be set');
-        assert.strictEqual(sync._runIncrementalCatchUp.called, false,
-            '_runIncrementalCatchUp must not start when already in-flight');
+        assert.strictEqual(sync.runIncrementalCatchUp.called, false,
+            'runIncrementalCatchUp must not start when already in-flight');
     });
 
     it('re-runs once when _catchUpPending and progress was made', async function(){
         ({ sync, db } = makeSync());
         let runCount = 0;
         sync.running = true;
-        sinon.stub(sync, '_runIncrementalCatchUp').callsFake(async function(){
+        sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
             runCount++;
             if(runCount === 1){
                 // Simulate progress + pending request arriving during first run
@@ -1084,24 +1084,24 @@ describe('ClientSync: _incrementalCatchUp coalescing', function(){
             // Second run: no more pending
         });
 
-        await sync._incrementalCatchUp(1);
+        await sync.incrementalCatchUp(1);
 
-        assert.strictEqual(sync._runIncrementalCatchUp.callCount, 2,
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 2,
             'must re-run exactly once when pending + progress');
     });
 
     it('does not re-run when pending but no progress was made', async function(){
         ({ sync, db } = makeSync());
         sync.running = true;
-        sinon.stub(sync, '_runIncrementalCatchUp').callsFake(async function(){
+        sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
             // Simulate pending arriving but no progress (lastAppliedBlock unchanged)
             sync._catchUpPending = true;
             // lastAppliedBlock stays null
         });
 
-        await sync._incrementalCatchUp(1);
+        await sync.incrementalCatchUp(1);
 
-        assert.strictEqual(sync._runIncrementalCatchUp.callCount, 1,
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1,
             'must not loop forever when no progress');
     });
 });
@@ -1137,7 +1137,7 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
             ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
 
         // Only source 0 delivers; the confirmation timer will fire unmatched.
-        await sync._handleBlock(event, 0);
+        await sync.handleBlock(event, 0);
         assert.ok(sync._applyTimers.has(6), 'confirmation timer armed for block 6');
 
         clock.tick(1000); // fire the HASH_CONFIRM_TIMEOUT
@@ -1150,12 +1150,12 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
         clock.restore();
     });
 
-    it('_incrementalCatchUp refuses to run single-source while a strict block is pending', async function(){
+    it('incrementalCatchUp refuses to run single-source while a strict block is pending', async function(){
         ({ sync, db, applier } = makeStrictSync());
-        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        let runner = sinon.stub(sync, 'runIncrementalCatchUp').resolves();
         sync._strictConfirmPending.add(6);
 
-        await sync._incrementalCatchUp(6);
+        await sync.incrementalCatchUp(6);
 
         assert.strictEqual(runner.callCount, 0,
             'catch-up must not fetch+apply the strict-rejected block single-source');
@@ -1166,9 +1166,9 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
 
     it('catch-up proceeds normally once no strict block is pending', async function(){
         ({ sync, db, applier } = makeStrictSync());
-        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
+        let runner = sinon.stub(sync, 'runIncrementalCatchUp').resolves();
         // _strictConfirmPending is empty (the default), so the gate is inert.
-        await sync._incrementalCatchUp(6);
+        await sync.incrementalCatchUp(6);
         assert.strictEqual(runner.callCount, 1, 'gate is inert when nothing is strict-pending');
     });
 
@@ -1177,30 +1177,30 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
         ({ sync, db, applier } = makeStrictSync());
         sync.lastAppliedBlock = 5;
         sync.lastHashes = null;
-        sinon.stub(sync, '_applyBlockEvent').resolves(); // isolate from the heavy apply path
+        sinon.stub(sync, 'applyBlockEvent').resolves(); // isolate from the heavy apply path
         let event0 = { type: 'block', block_index: 6, ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
 
-        await sync._handleBlock(event0, 0);
+        await sync.handleBlock(event0, 0);
         clock.tick(1000);
         assert.ok(sync._strictConfirmPending.has(6), 'block 6 is strict-pending after timeout');
 
         // Second source delivers block 6 with identical hashes: the pair now matches.
         let event1 = { type: 'block', block_index: 6, ledger_hash: 'L6', actions_hash: 'A6', contract_hash: 'C6' };
-        await sync._handleBlock(event1, 1);
+        await sync.handleBlock(event1, 1);
 
         assert.ok(!sync._strictConfirmPending.has(6),
             'cross-source confirmation must clear the strict block');
-        assert.ok(sync._applyBlockEvent.calledOnce, 'the confirmed block applies through the normal path');
+        assert.ok(sync.applyBlockEvent.calledOnce, 'the confirmed block applies through the normal path');
 
         // Gate now inert: catch-up runs again.
         clock.restore();
-        let runner = sinon.stub(sync, '_runIncrementalCatchUp').resolves();
-        await sync._incrementalCatchUp(7);
+        let runner = sinon.stub(sync, 'runIncrementalCatchUp').resolves();
+        await sync.incrementalCatchUp(7);
         assert.strictEqual(runner.callCount, 1, 'catch-up unblocked after confirmation');
     });
 });
 
-describe('ClientSync: _verifyAgainstSource', function(){
+describe('ClientSync: verifyAgainstSource', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1213,7 +1213,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
         sinon.stub(axios, 'get');
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         assert.strictEqual(axios.get.called, false);
     });
@@ -1232,7 +1232,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
             table_counts:  null
         }});
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let logCalls = console.log.getCalls().map(c => c.args[0]);
         assert.ok(logCalls.some(m => m && m.indexOf('Hash verification passed') !== -1));
@@ -1252,7 +1252,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
             table_counts:  null
         }});
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('HASH MISMATCH') !== -1));
@@ -1268,14 +1268,14 @@ describe('ClientSync: _verifyAgainstSource', function(){
             table_counts:  null
         }});
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         // No hash comparison logging
         let logCalls = console.log.getCalls().map(c => c.args[0]);
         assert.ok(!logCalls.some(m => m && m.indexOf('Hash verification passed') !== -1));
     });
 
-    it('calls _haltOnDivergence when VERIFY_RECOMPUTE=true and recompute has mismatches', async function(){
+    it('calls haltOnDivergence when VERIFY_RECOMPUTE=true and recompute has mismatches', async function(){
         ({ sync, db } = makeSync({ VERIFY_HASHES: true, VERIFY_RECOMPUTE: true }));
         db.getBlockHashRow.resolves({
             ledger_hash:   'lh1',
@@ -1288,12 +1288,12 @@ describe('ClientSync: _verifyAgainstSource', function(){
             contract_hash: 'ch1',
             table_counts:  null
         }});
-        sinon.stub(sync, '_verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh1' }]);
-        sinon.stub(sync, '_haltOnDivergence').resolves();
+        sinon.stub(sync, 'verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh1' }]);
+        sinon.stub(sync, 'haltOnDivergence').resolves();
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
-        assert.ok(sync._haltOnDivergence.calledOnce, '_haltOnDivergence must be called on recompute mismatch');
+        assert.ok(sync.haltOnDivergence.calledOnce, 'haltOnDivergence must be called on recompute mismatch');
     });
 
     it('logs TABLE_COUNT_MISMATCH when source has more rows', async function(){
@@ -1311,7 +1311,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
             table_counts:  { blocks: 100 } // remote has 100
         }});
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('TABLE_COUNT_MISMATCH') !== -1));
@@ -1332,7 +1332,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
             table_counts:  { blocks: 100 }
         }});
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let logCalls = console.log.getCalls().map(c => c.args[0]);
         assert.ok(logCalls.some(m => m && m.indexOf('Table-count verification passed') !== -1));
@@ -1342,7 +1342,7 @@ describe('ClientSync: _verifyAgainstSource', function(){
         ({ sync, db } = makeSync({ VERIFY_HASHES: true }));
         sinon.stub(axios, 'get').rejects(new Error('net fail'));
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Hash verification failed') !== -1));
@@ -1364,14 +1364,14 @@ describe('ClientSync: _verifyAgainstSource', function(){
             contract_hash: 'ch-remote',
             table_counts:  null
         }});
-        sinon.stub(sync, '_haltOnDivergence').resolves();
+        sinon.stub(sync, 'haltOnDivergence').resolves();
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(!errCalls.some(m => m && m.indexOf('HASH MISMATCH') !== -1),
             'tip skew must not raise a HASH MISMATCH');
-        assert.strictEqual(sync._haltOnDivergence.called, false,
+        assert.strictEqual(sync.haltOnDivergence.called, false,
             'tip skew must not halt');
     });
 
@@ -1389,17 +1389,17 @@ describe('ClientSync: _verifyAgainstSource', function(){
             contract_hash: 'ch-remote',
             table_counts:  null
         }});
-        sinon.stub(sync, '_haltOnDivergence').resolves();
+        sinon.stub(sync, 'haltOnDivergence').resolves();
 
-        await sync._verifyAgainstSource('http://src1:3006', 100);
+        await sync.verifyAgainstSource('http://src1:3006', 100);
 
-        assert.ok(sync._haltOnDivergence.calledOnce,
+        assert.ok(sync.haltOnDivergence.calledOnce,
             'same-height mismatch must halt like the live dual-source path');
-        assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'cross-source-divergence');
+        assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'cross-source-divergence');
     });
 });
 
-describe('ClientSync: _verifyDecoderCompleteness catch', function(){
+describe('ClientSync: verifyDecoderCompleteness catch', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1412,7 +1412,7 @@ describe('ClientSync: _verifyDecoderCompleteness catch', function(){
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
         sinon.stub(axios, 'get').rejects(new Error('decoder fail'));
 
-        await sync._verifyDecoderCompleteness('http://src2:3006', 100);
+        await sync.verifyDecoderCompleteness('http://src2:3006', 100);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Decoder completeness check failed') !== -1));
@@ -1466,17 +1466,17 @@ describe('ClientSync: heartbeat', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('_flushHeartbeat returns early when lastAppliedBlock is null', function(){
+    it('flushHeartbeat returns early when lastAppliedBlock is null', function(){
         ({ sync, db } = makeSync());
         sync.lastAppliedBlock = null;
         // Without the early return it would iterate wsConns and sources; axios.post
         // never firing is the signal that it bailed out instead.
         let postStub = sinon.stub(axios, 'post').resolves();
-        sync._flushHeartbeat();
+        sync.flushHeartbeat();
         assert.strictEqual(postStub.called, false);
     });
 
-    it('_flushHeartbeat sends WS message to OPEN connections and clears timer', function(){
+    it('flushHeartbeat sends WS message to OPEN connections and clears timer', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock = 42;
         let sendStub = sinon.stub();
@@ -1486,7 +1486,7 @@ describe('ClientSync: heartbeat', function(){
         sync._hbTimer = setTimeout(() => {}, 9999);
         sinon.stub(axios, 'post').resolves();
 
-        sync._flushHeartbeat();
+        sync.flushHeartbeat();
 
         assert.ok(sendStub.calledOnce, 'send must be called for OPEN connection');
         let msg = JSON.parse(sendStub.firstCall.args[0]);
@@ -1501,22 +1501,22 @@ describe('ClientSync: heartbeat', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock  = 10;
         sync._hbLastSentBlock  = null;
-        sinon.stub(sync, '_flushHeartbeat');
+        sinon.stub(sync, 'flushHeartbeat');
 
         sync._scheduleHeartbeat();
 
-        assert.ok(sync._flushHeartbeat.calledOnce, 'must flush immediately on first heartbeat');
+        assert.ok(sync.flushHeartbeat.calledOnce, 'must flush immediately on first heartbeat');
     });
 
     it('_scheduleHeartbeat flushes immediately when >= 10 blocks advanced', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock = 110;
         sync._hbLastSentBlock = 100; // delta = 10
-        sinon.stub(sync, '_flushHeartbeat');
+        sinon.stub(sync, 'flushHeartbeat');
 
         sync._scheduleHeartbeat();
 
-        assert.ok(sync._flushHeartbeat.calledOnce);
+        assert.ok(sync.flushHeartbeat.calledOnce);
     });
 
     it('_scheduleHeartbeat arms a 5s timer when delta < 10 and no timer running', function(){
@@ -1525,16 +1525,16 @@ describe('ClientSync: heartbeat', function(){
         sync._hbLastSentBlock = 100; // delta = 5
         sync._hbTimer = null;
         let clock = sinon.useFakeTimers();
-        sinon.stub(sync, '_flushHeartbeat');
+        sinon.stub(sync, 'flushHeartbeat');
 
         sync._scheduleHeartbeat();
 
-        assert.strictEqual(sync._flushHeartbeat.called, false, 'must not flush immediately');
+        assert.strictEqual(sync.flushHeartbeat.called, false, 'must not flush immediately');
         assert.notStrictEqual(sync._hbTimer, null, 'timer must be set');
 
         clock.tick(5000);
 
-        assert.ok(sync._flushHeartbeat.calledOnce, 'must flush after 5s timer');
+        assert.ok(sync.flushHeartbeat.calledOnce, 'must flush after 5s timer');
         clock.restore();
     });
 
@@ -1585,7 +1585,7 @@ describe('ClientSync: heartbeat', function(){
     });
 });
 
-describe('ClientSync: _connectWebSocket', function(){
+describe('ClientSync: connectWebSocket', function(){
     let ClientSyncWS, fakeWsInstance, FakeWS;
 
     beforeEach(function(){
@@ -1634,7 +1634,7 @@ describe('ClientSync: _connectWebSocket', function(){
         let { sync } = makeSyncWS();
         sync.running = true;
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         assert.strictEqual(sync.wsConns[0], fakeWsInstance);
         assert.ok(fakeWsInstance.listenerCount('open')    > 0);
@@ -1652,7 +1652,7 @@ describe('ClientSync: _connectWebSocket', function(){
 
         try {
             let { sync } = makeSyncWS({ VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false, VERIFY_STATE_COMMITMENT: false });
-            sync._connectWebSocket('http://src1:3006', 0);
+            sync.connectWebSocket('http://src1:3006', 0);
             let logCalls = console.log.getCalls().map(c => c.args[0]);
             assert.ok(logCalls.some(m => m && m.indexOf('?sync_mode=infra-only') !== -1),
                 'infra-only mode must be in the subscribe URL');
@@ -1678,31 +1678,31 @@ describe('ClientSync: _connectWebSocket', function(){
         syncT.running = false; // _scheduleReconnect no-ops when not running
 
         // Should not throw
-        syncT._connectWebSocket('http://src1:3006', 0);
+        syncT.connectWebSocket('http://src1:3006', 0);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('WebSocket connection error') !== -1));
     });
 
-    it('message handler: calls _handleEvent for a valid block event', async function(){
+    it('message handler: calls handleEvent for a valid block event', async function(){
         let { sync } = makeSyncWS();
         sync.running = true;
-        sinon.stub(sync, '_handleEvent').resolves();
+        sinon.stub(sync, 'handleEvent').resolves();
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         let validEvent = JSON.stringify({ type: 'block', block_index: 5, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
         await fakeWsInstance.emit('message', Buffer.from(validEvent));
 
-        assert.ok(sync._handleEvent.calledOnce, '_handleEvent must be called for valid event');
+        assert.ok(sync.handleEvent.calledOnce, 'handleEvent must be called for valid event');
     });
 
     it('message handler: logs invalid WS event', async function(){
         let { sync } = makeSyncWS();
         sync.running = true;
-        sinon.stub(sync, '_handleEvent').resolves();
+        sinon.stub(sync, 'handleEvent').resolves();
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         let invalidEvent = JSON.stringify({ type: 'unknown_type', block_index: 5 });
         await fakeWsInstance.emit('message', Buffer.from(invalidEvent));
@@ -1714,9 +1714,9 @@ describe('ClientSync: _connectWebSocket', function(){
     it('message handler: logs on malformed JSON', async function(){
         let { sync } = makeSyncWS();
         sync.running = true;
-        sinon.stub(sync, '_handleEvent').resolves();
+        sinon.stub(sync, 'handleEvent').resolves();
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         await fakeWsInstance.emit('message', Buffer.from('{not json'));
 
@@ -1725,17 +1725,17 @@ describe('ClientSync: _connectWebSocket', function(){
         assert.ok(errCalls.some(m => m && m.indexOf('Error parsing WebSocket message') !== -1));
     });
 
-    it('message handler: logs when _handleEvent rejects', async function(){
+    it('message handler: logs when handleEvent rejects', async function(){
         let { sync } = makeSyncWS();
         sync.running = true;
-        sinon.stub(sync, '_handleEvent').rejects(new Error('handle boom'));
+        sinon.stub(sync, 'handleEvent').rejects(new Error('handle boom'));
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         // A well-formed event passes validation and reaches the serialized event
         // chain; its rejection is surfaced by the chain's .catch.
         await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
-        await sync._wsEventChain;   // let the .then(_handleEvent).catch settle
+        await sync._wsEventChain;   // let the .then(handleEvent).catch settle
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('Error handling WebSocket message') !== -1));
@@ -1743,19 +1743,19 @@ describe('ClientSync: _connectWebSocket', function(){
 
     it('message handler: escalates mid-stream bootstrap exhaustion to process.exit(1)', async function(){
         // Permanent bootstrap exhaustion reached from live WS handling (the size-cap
-        // fallback in _runIncrementalCatchUp) must honor the supervised-restart
+        // fallback in runIncrementalCatchUp) must honor the supervised-restart
         // contract, not be swallowed by the chain's log-and-continue catch: a
         // swallowed exhaustion leaves the process alive but permanently stalled.
         let { sync } = makeSyncWS();
         sync.running = true;
         let exit = sinon.stub(process, 'exit');
-        sinon.stub(sync, '_handleEvent')
+        sinon.stub(sync, 'handleEvent')
             .rejects(new ClientSyncWS.BootstrapExhaustedError('all sync sources exhausted'));
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
-        await sync._wsEventChain;   // let the .then(_handleEvent).catch settle
+        await sync._wsEventChain;   // let the .then(handleEvent).catch settle
 
         assert.ok(exit.calledOnceWithExactly(1), 'must exit(1) for a supervised restart');
         let errCalls = console.error.getCalls().map(c => c.args[0]);
@@ -1766,9 +1766,9 @@ describe('ClientSync: _connectWebSocket', function(){
         let { sync } = makeSyncWS();
         sync.running = true;
         let exit = sinon.stub(process, 'exit');
-        sinon.stub(sync, '_handleEvent').rejects(new Error('transient boom'));
+        sinon.stub(sync, 'handleEvent').rejects(new Error('transient boom'));
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
 
         await fakeWsInstance.emit('message', Buffer.from(JSON.stringify({ type: 'block', block_index: 5 })));
         await sync._wsEventChain;
@@ -1782,7 +1782,7 @@ describe('ClientSync: _connectWebSocket', function(){
         let { sync } = makeSyncWS();
         sync.running = false; // prevent actual reconnect timer
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
         fakeWsInstance.emit('close');
 
         let logCalls = console.log.getCalls().map(c => c.args[0]);
@@ -1792,7 +1792,7 @@ describe('ClientSync: _connectWebSocket', function(){
     it('error handler: logs the error message', function(){
         let { sync } = makeSyncWS();
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
         fakeWsInstance.emit('error', { message: 'ECONNREFUSED' });
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
@@ -1803,12 +1803,12 @@ describe('ClientSync: _connectWebSocket', function(){
         let { sync } = makeSyncWS();
         sync.running = false;
         let clock = sinon.useFakeTimers();
-        sinon.stub(sync, '_connectWebSocket');
+        sinon.stub(sync, 'connectWebSocket');
 
         sync._scheduleReconnect('http://src1:3006', 0);
         clock.tick(10000);
 
-        assert.strictEqual(sync._connectWebSocket.called, false);
+        assert.strictEqual(sync.connectWebSocket.called, false);
         clock.restore();
     });
 
@@ -1817,33 +1817,33 @@ describe('ClientSync: _connectWebSocket', function(){
         sync.running = true;
         let clock = sinon.useFakeTimers();
 
-        sinon.stub(sync, '_connectWebSocket');
+        sinon.stub(sync, 'connectWebSocket');
         // Only the schedule, not the one registered in constructor
         sync._scheduleReconnect('http://src1:3006', 0);
-        assert.strictEqual(sync._connectWebSocket.called, false);
+        assert.strictEqual(sync.connectWebSocket.called, false);
 
         clock.tick(101);
 
-        assert.ok(sync._connectWebSocket.calledOnce, 'must reconnect after delay');
+        assert.ok(sync.connectWebSocket.calledOnce, 'must reconnect after delay');
         clock.restore();
     });
 
-    it('_connectWebSockets iterates all sources', function(){
+    it('connectWebSockets iterates all sources', function(){
         let { sync } = makeSyncWS({ SYNC_SOURCES: 'http://src1:3006,http://src2:3006' });
-        sinon.stub(sync, '_connectWebSocket');
+        sinon.stub(sync, 'connectWebSocket');
 
-        sync._connectWebSockets();
+        sync.connectWebSockets();
 
-        assert.strictEqual(sync._connectWebSocket.callCount, 2);
-        assert.strictEqual(sync._connectWebSocket.firstCall.args[0], 'http://src1:3006');
-        assert.strictEqual(sync._connectWebSocket.secondCall.args[0], 'http://src2:3006');
+        assert.strictEqual(sync.connectWebSocket.callCount, 2);
+        assert.strictEqual(sync.connectWebSocket.firstCall.args[0], 'http://src1:3006');
+        assert.strictEqual(sync.connectWebSocket.secondCall.args[0], 'http://src2:3006');
     });
 
     it('open handler: logs connected message', function(){
         let { sync } = makeSyncWS();
         sync.running = false;
 
-        sync._connectWebSocket('http://src1:3006', 0);
+        sync.connectWebSocket('http://src1:3006', 0);
         fakeWsInstance.emit('open');
 
         let logCalls = console.log.getCalls().map(c => c.args[0]);
@@ -1851,7 +1851,7 @@ describe('ClientSync: _connectWebSocket', function(){
     });
 });
 
-describe('ClientSync: _handleEvent lastKnownServerBlock branches', function(){
+describe('ClientSync: handleEvent lastKnownServerBlock branches', function(){
     let sync, db;
 
     beforeEach(function(){
@@ -1863,9 +1863,9 @@ describe('ClientSync: _handleEvent lastKnownServerBlock branches', function(){
     it('does not update lastKnownServerBlock on block event when incoming <= current', async function(){
         ({ sync, db } = makeSync());
         sync.lastKnownServerBlock = 200;
-        sinon.stub(sync, '_handleBlock').resolves();
+        sinon.stub(sync, 'handleBlock').resolves();
 
-        await sync._handleEvent({ type: 'block', block_index: 100 }, 0);
+        await sync.handleEvent({ type: 'block', block_index: 100 }, 0);
 
         assert.strictEqual(sync.lastKnownServerBlock, 200, 'must not decrease lastKnownServerBlock');
     });
@@ -1874,9 +1874,9 @@ describe('ClientSync: _handleEvent lastKnownServerBlock branches', function(){
         ({ sync, db } = makeSync());
         sync.lastKnownServerBlock = 200;
         sync.lastAppliedBlock = 200;
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
 
-        await sync._handleEvent({ type: 'status', block_height: 100 }, 0);
+        await sync.handleEvent({ type: 'status', block_height: 100 }, 0);
 
         assert.strictEqual(sync.lastKnownServerBlock, 200, 'must not decrease lastKnownServerBlock');
     });
@@ -1891,30 +1891,30 @@ describe('ClientSync: misc branch coverage', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('_haltOnDivergence: uses defaults when mismatches/sources are falsy', async function(){
+    it('haltOnDivergence: uses defaults when mismatches/sources are falsy', async function(){
         ({ sync, db } = makeSync());
 
-        await sync._haltOnDivergence(50, null, null, 'test-reason');
+        await sync.haltOnDivergence(50, null, null, 'test-reason');
 
         assert.deepStrictEqual(sync._halted.mismatches, []);
         assert.deepStrictEqual(sync._halted.sources, []);
     });
 
-    it('_haltOnDivergence: logs on recordHalt failure but still halts in memory', async function(){
+    it('haltOnDivergence: logs on recordHalt failure but still halts in memory', async function(){
         ({ sync, db } = makeSync());
         db.recordHalt.rejects(new Error('db error'));
 
-        await sync._haltOnDivergence(50, [], [], 'test-reason');
+        await sync.haltOnDivergence(50, [], [], 'test-reason');
 
         assert.ok(sync.isHalted(), 'must still be halted even when recordHalt fails');
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('CRITICAL') !== -1));
     });
 
-    it('_verifyRecompute: returns null for decoder dbType', async function(){
+    it('verifyRecompute: returns null for decoder dbType', async function(){
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
 
-        let result = await sync._verifyRecompute({ block_index: 5 });
+        let result = await sync.verifyRecompute({ block_index: 5 });
 
         assert.strictEqual(result, null);
     });
@@ -1950,7 +1950,7 @@ describe('ClientSync: misc branch coverage', function(){
         assert.strictEqual(sync._halted, null, '_halted must still be cleared');
     });
 
-    it('_flushHeartbeat: swallows ws.send error', function(){
+    it('flushHeartbeat: swallows ws.send error', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock = 10;
         // WS that throws on send
@@ -1958,16 +1958,16 @@ describe('ClientSync: misc branch coverage', function(){
         sinon.stub(axios, 'post').resolves();
 
         // Should not throw
-        sync._flushHeartbeat();
+        sync.flushHeartbeat();
 
         assert.strictEqual(sync._hbLastSentBlock, 10);
     });
 
-    it('_verifyTableCounts: treats NaN local count as 0', async function(){
+    it('verifyTableCounts: treats NaN local count as 0', async function(){
         ({ sync, db } = makeSync());
         db.getTableCount.resolves(NaN);
 
-        let mismatches = await sync._verifyTableCounts({ blocks: 5 });
+        let mismatches = await sync.verifyTableCounts({ blocks: 5 });
 
         // local=NaN → reset to 0 → remote(5) > local(0) → mismatch
         assert.strictEqual(mismatches.length, 1);
@@ -2004,20 +2004,20 @@ describe('ClientSync: small branches', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('_handleBlock (decoder): logs gap and triggers catch-up when blockIndex > lastApplied+1', async function(){
+    it('handleBlock (decoder): logs gap and triggers catch-up when blockIndex > lastApplied+1', async function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sync.lastAppliedBlock = 10;
         sync.lastHashes = { block_hash: 'h10' };
-        sinon.stub(sync, '_incrementalCatchUp').resolves();
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
 
         // blockIndex=13, gap of 2
-        await sync._handleBlock({ type: 'block', block_index: 13, block_hash: 'h13' }, 0);
+        await sync.handleBlock({ type: 'block', block_index: 13, block_hash: 'h13' }, 0);
 
-        assert.ok(sync._incrementalCatchUp.calledOnce, 'catch-up must be triggered on decoder gap');
+        assert.ok(sync.incrementalCatchUp.calledOnce, 'catch-up must be triggered on decoder gap');
         assert.strictEqual(applier.applyBlock.called, false);
     });
 
-    it('_handleBlock: STRICT mode rejects on timeout and records the strict block (M-22)', async function(){
+    it('handleBlock: STRICT mode rejects on timeout and records the strict block (M-22)', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
             VERIFY_HASHES: true,
@@ -2035,7 +2035,7 @@ describe('ClientSync: small branches', function(){
             ledger_hash: 'lh101', actions_hash: 'ah101', contract_hash: 'ch101'
         };
         // Source 0 sends, source 1 never sends
-        await sync._handleBlock(event, 0);
+        await sync.handleBlock(event, 0);
 
         assert.strictEqual(applier.applyBlock.called, false, 'must not apply before timeout');
 
@@ -2056,7 +2056,7 @@ describe('ClientSync: small branches', function(){
         clock.restore();
     });
 
-    it('_handleBlock: HALT_ON_DIVERGENCE=true calls _haltOnDivergence on hash mismatch', async function(){
+    it('handleBlock: HALT_ON_DIVERGENCE=true calls haltOnDivergence on hash mismatch', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
             VERIFY_HASHES: true,
@@ -2066,7 +2066,7 @@ describe('ClientSync: small branches', function(){
         sync.lastAppliedBlock = 100;
         sync.lastHashes = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
         sinon.stub(sync.hashVerifier, 'verifyChainContinuity').returns({ valid: true });
-        sinon.stub(sync, '_haltOnDivergence').resolves();
+        sinon.stub(sync, 'haltOnDivergence').resolves();
 
         let event0 = {
             type: 'block', block_index: 101,
@@ -2077,10 +2077,10 @@ describe('ClientSync: small branches', function(){
             ledger_hash: 'lhB', actions_hash: 'ahB', contract_hash: 'chB'
         };
 
-        await sync._handleBlock(event0, 0);
-        await sync._handleBlock(event1, 1);
+        await sync.handleBlock(event0, 0);
+        await sync.handleBlock(event1, 1);
 
-        assert.ok(sync._haltOnDivergence.calledOnce, '_haltOnDivergence must be called on hash mismatch');
+        assert.ok(sync.haltOnDivergence.calledOnce, 'haltOnDivergence must be called on hash mismatch');
         assert.strictEqual(applier.applyBlock.called, false, 'must not apply contested blocks');
     });
 
@@ -2092,7 +2092,7 @@ describe('ClientSync: small branches', function(){
     // ClientApplier sets _lastComputedRoots only under isStateCommitmentActive and
     // clears it at applyBlock entry, so a non-null value plus a null wire root is a
     // locally-decidable contract violation, not "nothing to check".
-    describe('_applyBlockEvent: state-commitment roots withheld at an active height', function(){
+    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
 
         function makeCommitSync(){
             let made = makeSync({ VERIFY_STATE_COMMITMENT: true, VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false });
@@ -2101,45 +2101,45 @@ describe('ClientSync: small branches', function(){
             made.applier._lastComputedRoots = {
                 balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
             };
-            sinon.stub(made.sync, '_haltOnDivergence').resolves();
+            sinon.stub(made.sync, 'haltOnDivergence').resolves();
             return made;
         }
 
         it('HALTS with state-commitment-missing when the source omits balances_root', async function(){
             let { sync } = makeCommitSync();
 
-            await sync._applyBlockEvent({
+            await sync.applyBlockEvent({
                 type: 'block', block_index: 101,
                 balances_root: null, block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
             });
 
-            assert.ok(sync._haltOnDivergence.calledOnce, 'a withheld balances_root must halt');
-            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-missing');
-            assert.deepStrictEqual(sync._haltOnDivergence.firstCall.args[1].map(m => m.field), ['balances_root']);
+            assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld balances_root must halt');
+            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-missing');
+            assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['balances_root']);
             assert.strictEqual(sync.lastAppliedBlock, 100, 'a halted block must not advance the tip');
         });
 
         it('HALTS when only block_merkle_root is withheld (a correct balances_root is not a pass)', async function(){
             let { sync } = makeCommitSync();
 
-            await sync._applyBlockEvent({
+            await sync.applyBlockEvent({
                 type: 'block', block_index: 101,
                 balances_root: 'b'.repeat(64), block_merkle_root: null, state_root: 's'.repeat(64)
             });
 
-            assert.ok(sync._haltOnDivergence.calledOnce, 'a withheld block_merkle_root must halt');
-            assert.deepStrictEqual(sync._haltOnDivergence.firstCall.args[1].map(m => m.field), ['block_merkle_root']);
+            assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld block_merkle_root must halt');
+            assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['block_merkle_root']);
         });
 
         it('does NOT halt on a null state_root: ServerPoller nulls it for catch-up-burst blocks', async function(){
             let { sync } = makeCommitSync();
 
-            await sync._applyBlockEvent({
+            await sync.applyBlockEvent({
                 type: 'block', block_index: 101,
                 balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: null
             });
 
-            assert.strictEqual(sync._haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
+            assert.strictEqual(sync.haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
             assert.strictEqual(sync.lastAppliedBlock, 101, 'the block still applies');
         });
 
@@ -2147,25 +2147,25 @@ describe('ClientSync: small branches', function(){
             let { sync, applier } = makeCommitSync();
             applier._lastComputedRoots = null;   // pre-flag-day, or a skipped/duplicate apply
 
-            await sync._applyBlockEvent({
+            await sync.applyBlockEvent({
                 type: 'block', block_index: 101,
                 balances_root: null, block_merkle_root: null, state_root: null
             });
 
-            assert.strictEqual(sync._haltOnDivergence.called, false, 'pre-flag-day nulls stay a skip');
+            assert.strictEqual(sync.haltOnDivergence.called, false, 'pre-flag-day nulls stay a skip');
             assert.strictEqual(sync.lastAppliedBlock, 101);
         });
 
         it('still halts with state-commitment-divergence on a root MISMATCH', async function(){
             let { sync } = makeCommitSync();
 
-            await sync._applyBlockEvent({
+            await sync.applyBlockEvent({
                 type: 'block', block_index: 101,
                 balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
             });
 
-            assert.ok(sync._haltOnDivergence.calledOnce);
-            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+            assert.ok(sync.haltOnDivergence.calledOnce);
+            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
         });
 
         // A post-commit verification ERROR must not launder the commitment gate.
@@ -2185,8 +2185,8 @@ describe('ClientSync: small branches', function(){
             let event = { type: 'block', block_index: 101, state_hash: 'sh'.repeat(32),
                 balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) };
 
-            await sync._applyBlockEvent(event);
-            assert.strictEqual(sync._haltOnDivergence.called, false,
+            await sync.applyBlockEvent(event);
+            assert.strictEqual(sync.haltOnDivergence.called, false,
                 'the swallowed read error itself does not halt');
             assert.strictEqual(sync.lastAppliedBlock, 100, 'and does not advance the tip');
 
@@ -2194,11 +2194,11 @@ describe('ClientSync: small branches', function(){
             applier._lastComputedRoots = null;
             readStub.resolves(event.state_hash);   // the transient read has recovered
 
-            await sync._applyBlockEvent(event);
+            await sync.applyBlockEvent(event);
 
-            assert.ok(sync._haltOnDivergence.calledOnce,
+            assert.ok(sync.haltOnDivergence.calledOnce,
                 'the retry must run the commitment comparison it skipped the first time');
-            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
             assert.strictEqual(sync.lastAppliedBlock, 100,
                 'an unverified block must never advance the tip');
         });
@@ -2209,24 +2209,24 @@ describe('ClientSync: small branches', function(){
             // re-compared against roots the gate has no business re-checking.
             let { sync, applier } = makeCommitSync();
 
-            await sync._applyBlockEvent({ type: 'block', block_index: 101,
+            await sync.applyBlockEvent({ type: 'block', block_index: 101,
                 balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
             assert.strictEqual(sync.lastAppliedBlock, 101, 'the clean block applied');
             assert.strictEqual(sync._unverifiedRoots, null, 'the stash is cleared once verified');
 
             applier._lastComputedRoots = null;
-            await sync._applyBlockEvent({ type: 'block', block_index: 101,
+            await sync.applyBlockEvent({ type: 'block', block_index: 101,
                 balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
-            assert.strictEqual(sync._haltOnDivergence.called, false,
+            assert.strictEqual(sync.haltOnDivergence.called, false,
                 'a duplicate of an already-verified block is still a skip, not a divergence');
         });
     });
 
-    it('_applyBlockEvent sets lastHashes to {block_hash} for decoder dbType', async function(){
+    it('applyBlockEvent sets lastHashes to {block_hash} for decoder dbType', async function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sync.lastAppliedBlock = null;
 
-        await sync._applyBlockEvent({
+        await sync.applyBlockEvent({
             block_index: 5,
             block_hash:  'bh5',
             ledger_hash: 'lh5',
@@ -2237,7 +2237,7 @@ describe('ClientSync: small branches', function(){
         assert.deepStrictEqual(sync.lastHashes, { block_hash: 'bh5' });
     });
 
-    it('_handleReorg: exceeds MAX_ROLLBACK_DEPTH → HALTS and does NOT rollback', async function(){
+    it('handleReorg: exceeds MAX_ROLLBACK_DEPTH → HALTS and does NOT rollback', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }));
         sync.lastAppliedBlock = 100;
@@ -2246,7 +2246,7 @@ describe('ClientSync: small branches', function(){
         let rollbackStub = rb.rollback;
 
         // Reorg to block 10 → depth = 100 - 10 + 1 = 91 > 5
-        await sync._handleReorg({ type: 'reorg', block_index: 10 });
+        await sync.handleReorg({ type: 'reorg', block_index: 10 });
 
         assert.strictEqual(rollbackStub.called, false, 'rollback must NOT be called when depth exceeded');
         // Fail closed: record a durable halt rather than returning and serving the fork.
@@ -2257,12 +2257,12 @@ describe('ClientSync: small branches', function(){
 
     // The decoder track has no VERIFY_RECOMPUTE/VERIFY_STATE_HASH net, so the
     // max-depth halt is its only guard against permanently serving the fork.
-    it('_handleReorg: decoder track also HALTS on max-depth exceed', async function(){
+    it('handleReorg: decoder track also HALTS on max-depth exceed', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }, { dbType: 'decoder' }));
         sync.lastAppliedBlock = 100;
 
-        await sync._handleReorg({ type: 'reorg', block_index: 10 }); // depth = 91 > 5
+        await sync.handleReorg({ type: 'reorg', block_index: 10 }); // depth = 91 > 5
 
         assert.strictEqual(rb.rollback.called, false);
         assert.ok(sync.isHalted(), 'decoder must halt durably; it has no recompute fallback');
@@ -2274,25 +2274,25 @@ describe('ClientSync: small branches', function(){
     // advance. depth = tip - block_index + 1 goes <= 0 above the tip, so it never trips
     // MAX_ROLLBACK_DEPTH; the old code then ran a no-op rollback and set
     // lastAppliedBlock = block_index - 1, inflating the tip past real data and wedging
-    // the replica (every later canonical block is then dropped by _handleBlock).
-    it('_handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)', async function(){
+    // the replica (every later canonical block is then dropped by handleBlock).
+    it('handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync());
         sync.lastAppliedBlock = 100;
 
-        await sync._handleReorg({ type: 'reorg', block_index: 105 }); // above tip
+        await sync.handleReorg({ type: 'reorg', block_index: 105 }); // above tip
 
         assert.strictEqual(rb.rollback.called, false, 'must not roll back an above-tip target');
         assert.strictEqual(sync.isHalted(), false, 'an above-tip reorg is a no-op, not a halt');
         assert.strictEqual(sync.lastAppliedBlock, 100, 'the cursor must NOT advance past applied data');
     });
 
-    it('_handleReorg: a legitimate below-tip reorg still rolls back and moves the cursor', async function(){
+    it('handleReorg: a legitimate below-tip reorg still rolls back and moves the cursor', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync()); // MAX_ROLLBACK_DEPTH default 10
         sync.lastAppliedBlock = 100;
 
-        await sync._handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6 <= 10
+        await sync.handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6 <= 10
 
         assert.strictEqual(rb.rollback.calledOnceWith(95), true, 'below-tip reorg must roll back to the target');
         assert.strictEqual(sync.isHalted(), false);
@@ -2328,7 +2328,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
         let get = sinon.stub(axios, 'get');
         get.onCall(0).resolves(page([{ id: 1 }], false, 1));
 
-        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_transactions']) });
+        await sync.syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_transactions']) });
 
         assert.ok(get.firstCall.args[0].indexOf('after_id=0') !== -1,
             'a repair pass must start at id 0, or the hole stays unreachable');
@@ -2343,7 +2343,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
         let get = sinon.stub(axios, 'get');
         get.onCall(0).resolves(page([], false, 500));
 
-        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_addresses']) });
+        await sync.syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_addresses']) });
 
         assert.ok(get.firstCall.args[0].indexOf('after_id=500') !== -1,
             'an unnamed table keeps the cheap cursor-seeded page');
@@ -2368,7 +2368,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
                 rows: [{ id: 1, status: 'open' }, { id: 2, status: 'closed' }, { id: 3, status: 'completed' }]
             })) });
 
-        await sync._syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_statuses']) });
+        await sync.syncLookupTablesPaged('http://src:3006', { fromZero: new Set(['index_statuses']) });
 
         assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 1);
         assert.deepStrictEqual(applier.applyIncrementalSnapshot.firstCall.args[1], { strictIgnoreCheck: true },
@@ -2386,7 +2386,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
                 max_id: 1, has_more: false, rows: [{ id: 1, status: 'open' }]
             })) });
 
-        await sync._syncLookupTablesPaged('http://src:3006');
+        await sync.syncLookupTablesPaged('http://src:3006');
 
         assert.strictEqual(applier.applyIncrementalSnapshot.callCount, 1);
         assert.strictEqual(applier.applyIncrementalSnapshot.firstCall.args[1], undefined,
@@ -2396,7 +2396,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
     it('excludes the events operational log from the count check, whose counts cannot converge', async function(){
         ({ sync, db } = makeSync());
         db.getTableCount = sinon.stub().resolves(0);
-        let mismatches = await sync._verifyTableCounts({ events: 415 }, undefined, {});
+        let mismatches = await sync.verifyTableCounts({ events: 415 }, undefined, {});
         assert.deepStrictEqual(mismatches, [],
             'events is applied INSERT IGNORE over an independently generated id, so a delta is structural');
     });
@@ -2404,7 +2404,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
     it('KEEPS index_transactions strict, because that check is what found the mainnet hole', async function(){
         ({ sync, db } = makeSync());
         db.getTableCount = sinon.stub().resolves(186003);
-        let mismatches = await sync._verifyTableCounts({ index_transactions: 187972 }, undefined, {});
+        let mismatches = await sync.verifyTableCounts({ index_transactions: 187972 }, undefined, {});
         assert.strictEqual(mismatches.length, 1, 'a short lookup must still be reported');
         assert.strictEqual(mismatches[0].table, 'index_transactions');
         assert.strictEqual(mismatches[0].delta, 1969);

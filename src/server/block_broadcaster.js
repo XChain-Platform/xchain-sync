@@ -183,7 +183,7 @@ class BlockBroadcaster {
     }
 
     updateStatus(chain, network, statusObj){
-        // dbType is part of the statusObj per ServerPoller._updateStatus.
+        // dbType is part of the statusObj per ServerPoller.updateStatus.
         // Fall back to 'indexer' for backward compat with code that doesn't set it.
         let dbType = (statusObj && statusObj.dbType) || 'indexer';
         this.statusData.set(this._key(chain, network, dbType), statusObj);
@@ -191,9 +191,9 @@ class BlockBroadcaster {
 
     // The ONE read path for a cached status object, freshness enforced.
     //
-    // statusData is an overwrite-only cache that ServerPoller._updateStatus writes only
+    // statusData is an overwrite-only cache that ServerPoller.updateStatus writes only
     // on a SUCCESSFUL database read, and its callers swallow the rejection
-    // (ServerPoller.js: `await this._updateStatus().catch(() => {})`). So a throw, a
+    // (ServerPoller.js: `await this.updateStatus().catch(() => {})`). So a throw, a
     // hung query or a stopped poller leaves the last HEALTHY object in place and every
     // reader here keeps re-serving it: the periodic broadcast, the new-subscriber
     // snapshot, the validator-lag view and REST /status. Nothing downstream can catch
@@ -207,7 +207,7 @@ class BlockBroadcaster {
     // say why. Heights and hashes are deliberately KEPT: they are the diagnostics an
     // operator needs during exactly this outage, and nulling block_height would make a
     // measurement failure indistinguishable from a source at height 0. An undated object
-    // (never written by _updateStatus) is returned as-is, never demoted on a guess.
+    // (never written by updateStatus) is returned as-is, never demoted on a guess.
     getStatus(chain, network, dbType){
         let status = this.statusData.get(this._key(chain, network, dbType));
         if(!status || typeof status.measured_at !== 'number') return status || null;

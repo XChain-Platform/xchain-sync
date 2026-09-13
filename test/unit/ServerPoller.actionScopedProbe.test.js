@@ -11,10 +11,10 @@
 /*********************************************************************
  * ServerPoller: the action-scoped non-empty-table probe.
  *
- * _buildBlockPayload used to call getActionScopedRows once per table in the
- * lifecycle registry (86 today), empty ones included, so the per-block
- * round-trip count grew with every replicated table added. It now asks
- * getNonEmptyActionScopedTables once and fetches only the tables that answer.
+ * buildBlockPayload asks getNonEmptyActionScopedTables once per block and fetches
+ * only the tables that answer. Calling getActionScopedRows for every table in the
+ * lifecycle registry instead, empty ones included, would make the per-block
+ * round-trip count grow with every replicated table added.
  *
  * The property under test is not "fewer queries" but "fewer queries AND the
  * same bytes": payload.data feeds a consensus hash followers recompute, so
@@ -86,14 +86,14 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
 
     it('emits a payload byte-identical to the unprobed build while querying only non-empty tables', async function(){
         // Baseline: no probe on the db at all, which is the pre-fix path verbatim.
-        let baseline = await poller._buildBlockPayload(7);
+        let baseline = await poller.buildBlockPayload(7);
         let baselineFetches = db.getActionScopedRows.getCalls().length;
 
         let probedDb = createMockDb();
         probedDb.getNonEmptyActionScopedTables =
             sinon.stub().resolves(new Set(['sends', 'credits']));
         let probedPoller = createPoller(probedDb);
-        let probed = await probedPoller._buildBlockPayload(7);
+        let probed = await probedPoller.buildBlockPayload(7);
 
         assert.strictEqual(JSON.stringify(probed), JSON.stringify(baseline),
             'probed payload must be byte-identical to the unprobed build');
@@ -137,7 +137,7 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
             { execution_index: 11, emitted_action: 'SLASH', action_index: null, position: 0 }
         ]);
 
-        let payload = await poller._buildBlockPayload(7);
+        let payload = await poller.buildBlockPayload(7);
 
         assert.strictEqual(db.getEmissionRowsForBlock.callCount, 1);
         assert.deepStrictEqual(payload.data['contract_emissions'], [
@@ -148,7 +148,7 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
     });
 
     it('falls back to querying every table when the probe throws', async function(){
-        let baseline = await poller._buildBlockPayload(7);
+        let baseline = await poller.buildBlockPayload(7);
         let baselineFetches = db.getActionScopedRows.getCalls().length;
 
         let failingDb = createMockDb();
@@ -156,7 +156,7 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
             sinon.stub().rejects(Object.assign(new Error('lock wait timeout'), { errno: 1205 }));
         let failingPoller = createPoller(failingDb);
 
-        let payload = await failingPoller._buildBlockPayload(7);
+        let payload = await failingPoller.buildBlockPayload(7);
 
         assert.strictEqual(JSON.stringify(payload), JSON.stringify(baseline),
             'a probe fault must cost round-trips, never rows');
@@ -165,14 +165,14 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
     });
 
     it('falls back when the probe returns something that is not a Set', async function(){
-        let baseline = await poller._buildBlockPayload(7);
+        let baseline = await poller.buildBlockPayload(7);
         let baselineFetches = db.getActionScopedRows.getCalls().length;
 
         let oddDb = createMockDb();
         oddDb.getNonEmptyActionScopedTables = sinon.stub().resolves(null);
         let oddPoller = createPoller(oddDb);
 
-        let payload = await oddPoller._buildBlockPayload(7);
+        let payload = await oddPoller.buildBlockPayload(7);
 
         assert.strictEqual(JSON.stringify(payload), JSON.stringify(baseline));
         assert.strictEqual(oddDb.getActionScopedRows.getCalls().length, baselineFetches);
@@ -182,7 +182,7 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
         process.env.SYNC_QUERY_METRIC_INTERVAL_MS = '1';
         try {
             db.getNonEmptyActionScopedTables = sinon.stub().resolves(new Set(['sends', 'credits']));
-            await poller._buildBlockPayload(7);
+            await poller.buildBlockPayload(7);
 
             let line = console.log.getCalls()
                 .map(c => String(c.args[0]))

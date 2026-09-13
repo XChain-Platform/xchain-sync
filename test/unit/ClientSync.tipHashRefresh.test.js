@@ -11,7 +11,7 @@
  **********************************************************************
  * ClientSync: lastAppliedBlock / lastHashes are a PAIR describing ONE block.
  *
- * _handleBlock's fork-at-head guard treats a re-delivery at blockIndex ===
+ * handleBlock's fork-at-head guard treats a re-delivery at blockIndex ===
  * lastAppliedBlock whose hashes differ from lastHashes as a lost 1-block reorg.
  * The snapshot-apply paths advanced only the height, so after a catch-up
  * lastHashes still held the PRE-catch-up tip's hashes: the next delivery of the
@@ -86,7 +86,7 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
 
     it('leaves lastHashes describing the new tip, not the pre-catch-up tip', async function(){
         let { sync } = makeSync();
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
         assert.strictEqual(sync.lastAppliedBlock, 101, 'catch-up advanced the height');
         assert.strictEqual(sync.lastHashes.ledger_hash, HASHES[101].ledger_hash,
             'lastHashes must describe block 101, not the pre-catch-up tip 100');
@@ -95,11 +95,11 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
 
     it('does not report a bogus fork when the new tip is re-delivered after a catch-up', async function(){
         let { sync } = makeSync();
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
-        let catchUp = sinon.stub(sync, '_incrementalCatchUp').resolves();
+        let catchUp = sinon.stub(sync, 'incrementalCatchUp').resolves();
         errorStub.resetHistory();
-        await sync._handleBlock(eventFor(101), 0);
+        await sync.handleBlock(eventFor(101), 0);
 
         let forkLines = errorStub.getCalls().map(c => String(c.args[0]))
             .filter(l => l.indexOf('fork at head block') !== -1);
@@ -114,16 +114,16 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
         // the previous test means "no bogus alarm", not "the guard stopped working".
         //
         // It also pins the rewind: the orphaned tip must be rolled back BEFORE the
-        // catch-up, because _runIncrementalCatchUp resolves `since` from the DB tip and
+        // catch-up, because runIncrementalCatchUp resolves `since` from the DB tip and
         // would otherwise ask for /since/102 while the orphan is still block 101.
         let { sync } = makeSync();
-        await sync._runIncrementalCatchUp();
+        await sync.runIncrementalCatchUp();
 
-        let catchUp = sinon.stub(sync, '_incrementalCatchUp').resolves();
+        let catchUp = sinon.stub(sync, 'incrementalCatchUp').resolves();
         errorStub.resetHistory();
         let forked = eventFor(101);
         forked.ledger_hash = 'ff'.repeat(32);
-        await sync._handleBlock(forked, 0);
+        await sync.handleBlock(forked, 0);
 
         let forkLines = errorStub.getCalls().map(c => String(c.args[0]))
             .filter(l => l.indexOf('fork at head block') !== -1);

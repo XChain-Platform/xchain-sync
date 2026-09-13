@@ -37,7 +37,7 @@ const lifecycle = require('../../src/tableLifecycle');
 // BOTH sibling schemas, resolved the way the DB-backed suites do. Absent by default
 // in a standalone checkout; XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip fail instead.
 //
-// The DECODER half is not decoration. `ClientApplier._insertRows` serves indexer AND
+// The DECODER half is not decoration. `ClientApplier.insertRows` serves indexer AND
 // decoder replicas from the one frozen map, so a generated column appearing in the
 // decoder schema would reintroduce the errno-1906 halt on the decoder replication path
 // while a guard that scanned only the indexer stayed green. There are none there today,

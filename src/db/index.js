@@ -919,7 +919,7 @@ class Database {
             // first v7 bundle wedges it: anchor_actions is in neither ignoreTables nor
             // upsertFullDumpTables (ClientApplier), so its rows take a plain INSERT and
             // section 1 collides with section 0 on ER_DUP_ENTRY (1062). 1062 is not in
-            // ClientSync._healSchemaIfStale's {1146, 1054} heal set, so the apply
+            // ClientSync.healSchemaIfStale's {1146, 1054} heal set, so the apply
             // transaction rolls back and re-fails on every retry, forever. Same
             // unhealable-at-apply-time shape as the votes append-only key above.
             //
@@ -1132,7 +1132,7 @@ class Database {
     async getConnection(){
         if(this.transactionConnection)
             return this.transactionConnection;
-        return await this._acquirePoolConnection();
+        return await this.acquirePoolConnection();
     }
 
     // Acquire a fresh connection straight from the pool, bypassing the shared
@@ -1142,7 +1142,7 @@ class Database {
     // writer connection, or a concurrent /snapshot read and the live ServerPoller
     // writer would collide on one connection (and the snapshot's commit/release
     // would pull the connection out from under in-flight writes).
-    async _acquirePoolConnection(){
+    async acquirePoolConnection(){
         // Circuit breaker: reject immediately if open
         if(this.circuitState === 'open'){
             if(Date.now() < this.circuitOpenUntil)
@@ -1258,7 +1258,7 @@ class Database {
     // multiple snapshots run concurrently and keeps the live writer (ServerPoller,
     // TransparencyLog) off the snapshot's read view entirely.
     async beginReadSnapshot(){
-        let conn = await this._acquirePoolConnection();
+        let conn = await this.acquirePoolConnection();
         try {
             await conn.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
             await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');

@@ -23,7 +23,7 @@
  * see a mismatch. Mismatched versions cause those validators to refuse the
  * snapshot and log a clear error rather than silently corrupting replica state.
  * After bumping a key, that dbType's validators must be restarted (or will
- * restart automatically on the next bootstrap) so that _fetchAndApplySchema
+ * restart automatically on the next bootstrap) so that fetchAndApplySchema
  * re-runs against the new schema.
  *
  * Version history:

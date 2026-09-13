@@ -130,7 +130,7 @@ class ClientApplier {
         // a SEPARATE natural-key unique index instead (reward_unique / epoch / block_index)
         // and any warning there is the expected case, not a fault.
         //
-        // a from-zero lookup repair (ClientSync._syncLookupTablesPaged) exists
+        // a from-zero lookup repair (ClientSync.syncLookupTablesPaged) exists
         // precisely because a short index_* table needs its missing rows FORCED back in,
         // and INSERT IGNORE gives that repair no signal when a row it must land instead
         // collides on a DIFFERENT key (e.g. index_statuses' UNIQUE `status`) - a sign the
@@ -206,7 +206,7 @@ class ClientApplier {
         // the table is full-dumped with SELECT * and upserted over every carried column,
         // the applier would emit `id` = VALUES(`id`) against the replica's PRIMARY KEY:
         // on a source id another surviving replica row already holds that is ER_DUP_ENTRY
-        // (1062), outside ClientSync._healSchemaIfStale's {1146, 1054} heal set, so the
+        // (1062), outside ClientSync.healSchemaIfStale's {1146, 1054} heal set, so the
         // apply transaction aborts and re-fails on every retry. Exactly the production
         // wedge `blocks.id` was stripped for.
         //
@@ -214,7 +214,7 @@ class ClientApplier {
         // column driving DELETE ... WHERE <key> IN (...), and this table's natural key is
         // the COMPOSITE UNIQUE (validator_pubkey, provider_id). Deleting by
         // validator_pubkey alone would drop that validator's rows for every OTHER
-        // provider, and since _insertRows runs per batch a later batch's DELETE could
+        // provider, and since insertRows runs per batch a later batch's DELETE could
         // remove rows an earlier one just inserted: a recoverable wedge traded for silent
         // data loss.
         //
@@ -258,10 +258,10 @@ class ClientApplier {
 
         // rethrow, not the fail-soft default: this guard runs before beginTransaction, where
         // doQuery turns a query error into [], so a transient fault would read as "block not
-        // applied yet" and re-run _insertRows for a block already in the replica - credits,
+        // applied yet" and re-run insertRows for a block already in the replica - credits,
         // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
         // upsertFullDumpTables), and _rebuildBalancesTouchedBy would then run over the
-        // duplicated rows. Let the error propagate: _applyBlockEvent's catch logs it and
+        // duplicated rows. Let the error propagate: applyBlockEvent's catch logs it and
         // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
@@ -275,7 +275,7 @@ class ClientApplier {
             for(let table in data){
                 let rows = data[table];
                 if(!rows || rows.length === 0) continue;
-                await this._insertRows(table, rows);
+                await this.insertRows(table, rows);
             }
             // Rebuild balances if this payload touched credits/debits.
             // ServerPoller's per-block payload can't scope balances via the
@@ -292,7 +292,7 @@ class ClientApplier {
                 // can't reach (they live on rows created by an earlier block). Without
                 // this UPSERT every forward in-place mutation is silently dropped.
                 if(payload.updated_rows)
-                    await this._applyUpdatedRows(payload.updated_rows);
+                    await this.applyUpdatedRows(payload.updated_rows);
                 // Mirror the anchor-reward winner collapse: the source DELETEd the
                 // loser validator_rewards rows this block's reconcile-log rows pre-image
                 // (rows from EARLIER blocks the action-scoped delete never reaches).
@@ -421,7 +421,7 @@ class ClientApplier {
     // snapshotData: parsed JSON object with { schema_version, block_height, tables: { tableName: [rows...] } }
     //
     // On schema_version mismatch the validator must be restarted after the server is upgraded so
-    // that _fetchAndApplySchema re-runs against the new DDL before any rows are applied.
+    // that fetchAndApplySchema re-runs against the new DDL before any rows are applied.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
@@ -441,7 +441,7 @@ class ClientApplier {
             // source rows, so a table emptied on the source but still populated on
             // this replica would otherwise survive a re-bootstrap (the oversized-
             // incremental fallback applies a full snapshot over a NON-empty replica),
-            // and _verifyTableCounts only reports remote>local, so the stale rows
+            // and verifyTableCounts only reports remote>local, so the stale rows
             // would never surface. schema_version equality with the source was
             // enforced above, so the local table set mirrors the source's.
             // Enumeration failure must abort the apply: a missing table/column
@@ -451,7 +451,7 @@ class ClientApplier {
             // permissions). Those MUST propagate so the surrounding catch rolls
             // the transaction back and the bootstrap is retried; committing with
             // an un-enumerated table set leaves tables emptied on the source
-            // still populated locally, invisible to _verifyTableCounts. Mirrors
+            // still populated locally, invisible to verifyTableCounts. Mirrors
             // the narrow catch at the escrow-gate rederive below.
             let localTables = [];
             try {
@@ -499,7 +499,7 @@ class ClientApplier {
             for(let table of tables){
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
-                await this._insertRows(table, rows);
+                await this.insertRows(table, rows);
                 if(rows.length > 100)
                     logger.info('  ' + table + ': ' + rows.length + ' rows');
             }
@@ -547,7 +547,7 @@ class ClientApplier {
         }
     }
 
-    // opts.strictIgnoreCheck: see the SHOW WARNINGS block in _insertRows.
+    // opts.strictIgnoreCheck: see the SHOW WARNINGS block in insertRows.
     // Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
     // live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
     async applyIncrementalSnapshot(snapshotData, opts){
@@ -567,7 +567,7 @@ class ClientApplier {
             for(let table in snapshotData.tables){
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
-                await this._insertRows(table, rows, opts);
+                await this.insertRows(table, rows, opts);
             }
             // Rebuild balances if this snapshot touched credits/debits. The
             // incremental catch-up inserts new credit/debit rows, but the
@@ -580,7 +580,7 @@ class ClientApplier {
                 // ride a separate updated_rows map (the incremental's action_index
                 // window can't reach them), and the escrow gate is re-derived locally.
                 if(snapshotData.updated_rows)
-                    await this._applyUpdatedRows(snapshotData.updated_rows);
+                    await this.applyUpdatedRows(snapshotData.updated_rows);
                 // Mirror the anchor-reward winner collapses the catch-up window carried
                 // (reconcile-log rows at/above since_block pre-image the rows the source
                 // DELETEd); a replica that held the losers at since_block converges.
@@ -623,7 +623,7 @@ class ClientApplier {
         await this.db.beginTransaction();
         try {
             await this.db.doQuery('DELETE FROM `dispensers`');
-            if(rows.length) await this._insertRows('dispensers', rows);
+            if(rows.length) await this.insertRows('dispensers', rows);
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
@@ -632,7 +632,7 @@ class ClientApplier {
         }
     }
 
-    async _insertRows(table, rows, opts){
+    async insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
 
         let tableCheck = validation.validateIdentifier(table);
@@ -642,7 +642,7 @@ class ClientApplier {
             // duplicate guard prevents any retry, leaving the replica permanently short
             // those rows with no divergence signal. Throw so the apply transaction rolls
             // back and the block is retried or the client halts.
-            throw new Error('Rejected table name in _insertRows: ' + table + ' (' + tableCheck.reason + ')');
+            throw new Error('Rejected table name in insertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
 
         let useIgnore = this.ignoreTables.has(table);
@@ -679,7 +679,7 @@ class ClientApplier {
         if(naturalKey && columns.includes('id')){
             let keyCheck = validation.validateIdentifier(naturalKey);
             if(!keyCheck.valid)
-                throw new Error('Rejected natural key in _insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
+                throw new Error('Rejected natural key in insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
 
             columns = columns.filter(c => c !== 'id');
             if(columns.length === 0)
@@ -711,7 +711,7 @@ class ClientApplier {
             if(!colCheck.valid){
                 // Fail closed, not open: a `return` here drops the entire table's rows
                 // while the apply transaction still commits (see the table check above).
-                throw new Error('Rejected column name in _insertRows: ' + col + ' (' + colCheck.reason + ')');
+                throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
         let colList   = columns.map(c => '`' + c + '`').join(', ');
@@ -783,7 +783,7 @@ class ClientApplier {
                 // error like a truncated/NULL column) means IGNORE just silently dropped
                 // a row the repair needed to land, with the replica left short and no
                 // signal anywhere that it happened. Fail loud instead, so the repair's
-                // caller (ClientSync._maybeVerifyCompleteness) sees exactly which
+                // caller (ClientSync.maybeVerifyCompleteness) sees exactly which
                 // table/row collided rather than reporting the same short count forever.
                 let suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
 
@@ -972,7 +972,7 @@ class ClientApplier {
     // their stale values, so they must be UPSERTed (INSERT ... ON DUPLICATE KEY
     // UPDATE); a plain INSERT would collide on the row's UNIQUE action_index.
     // updated is a { table: [rows] } map; an old payload simply omits it.
-    async _applyUpdatedRows(updated){
+    async applyUpdatedRows(updated){
         if(!updated || typeof updated !== 'object') return;
         for(let table in updated){
             let rows = updated[table];
@@ -985,7 +985,7 @@ class ClientApplier {
     // written on both insert and update, so an already-present surviving row has
     // its mutated columns overwritten to the source's current values while a
     // not-yet-present row (e.g. created and mutated within the same window) is
-    // inserted. Identifier validation + binary decode mirror _insertRows.
+    // inserted. Identifier validation + binary decode mirror insertRows.
     async _upsertRows(table, rows){
         if(!rows || rows.length === 0) return;
 
@@ -998,7 +998,7 @@ class ClientApplier {
         }
 
         let columns = Object.keys(rows[0]);
-        // Same errno-1906 rule as _insertRows: a generated column may ride the wire
+        // Same errno-1906 rule as insertRows: a generated column may ride the wire
         // (the source reads with SELECT *) and must not be named in the write.
         let generated = generatedColumns(table);
         if(generated.size){

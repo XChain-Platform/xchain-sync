@@ -197,7 +197,7 @@ module.exports = {
     },
 
     // Discover in ONE round-trip which action-scoped tables actually carry rows in a
-    // block, so the payload builder can fetch only those. Without it _buildBlockPayload
+    // block, so the payload builder can fetch only those. Without it buildBlockPayload
     // issues getActionScopedRows once per table in the lifecycle registry (86 today),
     // empty ones included, and that count rises with every replicated table added
     // over time.

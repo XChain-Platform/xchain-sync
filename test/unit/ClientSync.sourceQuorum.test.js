@@ -55,7 +55,7 @@ function makeSync(sourcesCsv, extraConfig){
         // Downstream apply-time verification gates (recompute / state-hash / state-
         // commitment) are exercised in their own suites and need real DB fixtures; off
         // here so these tests isolate the cross-source QUORUM decision from apply-time
-        // recompute. The quorum logic runs entirely before _applyBlockEvent.
+        // recompute. The quorum logic runs entirely before applyBlockEvent.
         VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: false, VERIFY_STATE_COMMITMENT: false
     }, extraConfig || {});
     let sync = new ClientSync('bitcoin', 'mainnet', db, applier,
@@ -96,9 +96,9 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
     describe('3-source majority applies', function(){
         it('applies the block once 2 of 3 sources agree, without waiting for the 3rd', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0); // A: X
+            await sync.handleBlock(blockEvent(101, 'X'), 0); // A: X
             assert.strictEqual(applier.applyBlock.called, false, 'one report is below quorum');
-            await sync._handleBlock(blockEvent(101, 'X'), 1); // B: X -> quorum 2 reached
+            await sync.handleBlock(blockEvent(101, 'X'), 1); // B: X -> quorum 2 reached
             assert.strictEqual(applier.applyBlock.calledOnce, true, '2 of 3 agreeing applies');
             assert.strictEqual(sync.getSourcesAgreeing(), 2);
             assert.strictEqual(sync.isHalted(), false);
@@ -106,10 +106,10 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
 
         it('strikes the dissenting minority source when the majority applies', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0); // A: X
-            await sync._handleBlock(blockEvent(101, 'Y'), 2); // C: Y (dissent, no quorum yet)
+            await sync.handleBlock(blockEvent(101, 'X'), 0); // A: X
+            await sync.handleBlock(blockEvent(101, 'Y'), 2); // C: Y (dissent, no quorum yet)
             assert.strictEqual(applier.applyBlock.called, false);
-            await sync._handleBlock(blockEvent(101, 'X'), 1); // B: X -> quorum, C struck
+            await sync.handleBlock(blockEvent(101, 'X'), 1); // B: X -> quorum, C struck
             assert.strictEqual(applier.applyBlock.calledOnce, true);
             assert.deepStrictEqual(sync._sourceStrikes.get(2), [101], 'the dissenter C accrued one strike');
             assert.strictEqual((sync._sourceStrikes.get(0) || []).length, 0, 'majority sources are not struck');
@@ -124,10 +124,10 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             // Quorum is 3. Honest A,B,C agree on X every block; Byzantine D always says Y.
             for(let blk = 101; blk <= 103; blk++){
                 sync.lastAppliedBlock = blk - 1;
-                await sync._handleBlock(blockEvent(blk, 'X'), 0); // A
-                await sync._handleBlock(blockEvent(blk, 'Y'), 3); // D dissents
-                await sync._handleBlock(blockEvent(blk, 'X'), 1); // B -> quorum 3? no, 2 so far
-                await sync._handleBlock(blockEvent(blk, 'X'), 2); // C -> quorum 3 reached, D struck
+                await sync.handleBlock(blockEvent(blk, 'X'), 0); // A
+                await sync.handleBlock(blockEvent(blk, 'Y'), 3); // D dissents
+                await sync.handleBlock(blockEvent(blk, 'X'), 1); // B -> quorum 3? no, 2 so far
+                await sync.handleBlock(blockEvent(blk, 'X'), 2); // C -> quorum 3 reached, D struck
             }
             assert.strictEqual(applier.applyBlock.callCount, 3, 'every block still applied (liveness preserved)');
             assert.ok(sync.getEvictedSources().includes('http://d:3006'), 'the Byzantine source D was evicted');
@@ -140,7 +140,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             sync.running = true;
             sync._evictedSources.add(3);
             let clock = sinon.useFakeTimers();
-            let connect = sinon.stub(sync, '_connectWebSocket');
+            let connect = sinon.stub(sync, 'connectWebSocket');
             sync._scheduleReconnect('http://d:3006', 3);
             clock.tick(sync.config.CLIENT_RECONNECT_DELAY + 100);
             assert.strictEqual(connect.called, false, 'evicted source is not reconnected');
@@ -151,8 +151,8 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
     describe('no-source-quorum halt', function(){
         it('2-source tie (1-1 split, no majority) halts with reason no-source-quorum', async function(){
             let { sync, applier, db } = makeSync('http://a:3006,http://b:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0); // A: X
-            await sync._handleBlock(blockEvent(101, 'Y'), 1); // B: Y -> all reported, no majority
+            await sync.handleBlock(blockEvent(101, 'X'), 0); // A: X
+            await sync.handleBlock(blockEvent(101, 'Y'), 1); // B: Y -> all reported, no majority
             assert.strictEqual(applier.applyBlock.called, false, 'a contested block is never applied');
             assert.strictEqual(sync.isHalted(), true);
             assert.strictEqual(sync.getHaltInfo().reason, 'no-source-quorum');
@@ -161,10 +161,10 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
 
         it('4-source split with no majority (2-2) halts no-source-quorum', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006,http://d:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0);
-            await sync._handleBlock(blockEvent(101, 'X'), 1); // X:[A,B] = 2 < quorum 3
-            await sync._handleBlock(blockEvent(101, 'Y'), 2);
-            await sync._handleBlock(blockEvent(101, 'Y'), 3); // all reported, best group 2 < 3
+            await sync.handleBlock(blockEvent(101, 'X'), 0);
+            await sync.handleBlock(blockEvent(101, 'X'), 1); // X:[A,B] = 2 < quorum 3
+            await sync.handleBlock(blockEvent(101, 'Y'), 2);
+            await sync.handleBlock(blockEvent(101, 'Y'), 3); // all reported, best group 2 < 3
             assert.strictEqual(applier.applyBlock.called, false);
             assert.strictEqual(sync.isHalted(), true);
             assert.strictEqual(sync.getHaltInfo().reason, 'no-source-quorum');
@@ -172,8 +172,8 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
 
         it('log-only mode (HALT_ON_DIVERGENCE=false) refuses to apply but does not halt', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006', { HALT_ON_DIVERGENCE: false });
-            await sync._handleBlock(blockEvent(101, 'X'), 0);
-            await sync._handleBlock(blockEvent(101, 'Y'), 1);
+            await sync.handleBlock(blockEvent(101, 'X'), 0);
+            await sync.handleBlock(blockEvent(101, 'Y'), 1);
             assert.strictEqual(applier.applyBlock.called, false, 'contested block not applied in log-only mode');
             assert.strictEqual(sync.isHalted(), false, 'log-only mode does not halt');
         });
@@ -182,22 +182,22 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
     describe('backward-compatible 2-source behavior', function(){
         it('applies when both sources agree (unchanged from the pairwise path)', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0);
+            await sync.handleBlock(blockEvent(101, 'X'), 0);
             assert.strictEqual(applier.applyBlock.called, false);
-            await sync._handleBlock(blockEvent(101, 'X'), 1);
+            await sync.handleBlock(blockEvent(101, 'X'), 1);
             assert.strictEqual(applier.applyBlock.calledOnce, true);
         });
 
         it('single source applies immediately (quorum 1)', async function(){
             let { sync, applier } = makeSync('http://a:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0);
+            await sync.handleBlock(blockEvent(101, 'X'), 0);
             assert.strictEqual(applier.applyBlock.calledOnce, true);
         });
 
         it('applies from primary on quorum timeout when the second source is silent', async function(){
             let clock = sinon.useFakeTimers();
             let { sync, applier } = makeSync('http://a:3006,http://b:3006');
-            await sync._handleBlock(blockEvent(101, 'X'), 0);
+            await sync.handleBlock(blockEvent(101, 'X'), 0);
             assert.strictEqual(applier.applyBlock.called, false);
             await clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100);
             assert.strictEqual(applier.applyBlock.calledOnce, true, 'liveness fallback applies from primary');
@@ -233,12 +233,12 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
     });
 
     describe('bootstrap quorum cross-check', function(){
-        // Drive _bootstrapRotateSources with the snapshot fetch/apply stubbed out so the
+        // Drive bootstrapRotateSources with the snapshot fetch/apply stubbed out so the
         // test isolates the multi-source verify loop. sources[0] supplied the snapshot
         // (1 vote); the loop must seek SOURCE_QUORUM-1 additional agreeing sources.
         function stubBootstrap(sync, applier){
-            sinon.stub(sync, '_fetchAndApplySchema').resolves();
-            sinon.stub(sync, '_clearBootstrapBase').resolves();
+            sinon.stub(sync, 'fetchAndApplySchema').resolves();
+            sinon.stub(sync, 'clearBootstrapBase').resolves();
             sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ block_height: 500 })) });
             applier.applyFullSnapshot = sinon.stub().resolves();
         }
@@ -246,8 +246,8 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
         it('3 sources (quorum 2): stops after ONE agreeing secondary', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
             stubBootstrap(sync, applier);
-            let verify = sinon.stub(sync, '_verifyAgainstSource').resolves('agree');
-            let ok = await sync._bootstrapRotateSources();
+            let verify = sinon.stub(sync, 'verifyAgainstSource').resolves('agree');
+            let ok = await sync.bootstrapRotateSources();
             assert.strictEqual(ok, true);
             assert.strictEqual(verify.callCount, 1, 'one agreeing secondary reaches quorum 2');
             assert.strictEqual(verify.firstCall.args[0], 'http://b:3006');
@@ -256,29 +256,29 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
         it('4 sources (quorum 3): needs TWO agreeing secondaries', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006,http://d:3006');
             stubBootstrap(sync, applier);
-            let verify = sinon.stub(sync, '_verifyAgainstSource').resolves('agree');
-            await sync._bootstrapRotateSources();
+            let verify = sinon.stub(sync, 'verifyAgainstSource').resolves('agree');
+            await sync.bootstrapRotateSources();
             assert.strictEqual(verify.callCount, 2, 'two agreeing secondaries reach quorum 3');
         });
 
         it('skips an unreachable secondary and counts the next agreeing one toward quorum', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
             stubBootstrap(sync, applier);
-            let verify = sinon.stub(sync, '_verifyAgainstSource');
+            let verify = sinon.stub(sync, 'verifyAgainstSource');
             verify.onCall(0).resolves('unreachable'); // sources[1] down
             verify.onCall(1).resolves('agree');        // sources[2] agrees
-            await sync._bootstrapRotateSources();
+            await sync.bootstrapRotateSources();
             assert.strictEqual(verify.callCount, 2, 'falls through the unreachable source to the next');
         });
 
         it('a divergent secondary halts the bootstrap (returns false)', async function(){
             let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
             stubBootstrap(sync, applier);
-            sinon.stub(sync, '_verifyAgainstSource').callsFake(async () => {
+            sinon.stub(sync, 'verifyAgainstSource').callsFake(async () => {
                 sync._halted = { blockIndex: 500, reason: 'cross-source-divergence' };
                 return 'halted';
             });
-            let ok = await sync._bootstrapRotateSources();
+            let ok = await sync.bootstrapRotateSources();
             assert.strictEqual(ok, false, 'a divergence during bootstrap cross-check halts the round');
             assert.strictEqual(sync.isHalted(), true);
         });

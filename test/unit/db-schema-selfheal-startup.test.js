@@ -103,7 +103,7 @@ function applyDdl(state, sql) {
     if (uq) t.indexes[uq[1]] = uq[2].split(',').map(s => s.trim().replace(/`/g, ''));
 }
 
-// One follower startup, in SyncService._discoverChains order.
+// One follower startup, in SyncService.discoverChains order.
 async function startup(db) {
     await db.ensureReplicatedColumns();
     await db.ensureReplicaSecondaryIndexes();

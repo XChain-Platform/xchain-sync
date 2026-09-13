@@ -138,11 +138,11 @@ describe('Integration: Client Live Sync', function() {
             };
 
             let cs = new clientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
             cs.lastAppliedBlock = 5;
             cs.lastHashes = await replicaDb.getBlockHashRow(5);
 
-            cs._connectWebSockets();
+            cs.connectWebSockets();
             // Poll the socket to OPEN: the poll below broadcasts block 6 once, so a
             // subscription still handshaking would never see it.
             await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);
@@ -178,10 +178,10 @@ describe('Integration: Client Live Sync', function() {
             };
 
             let cs = new clientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
-            await cs._bootstrapFromSnapshot();
+            await cs.bootstrapFromSnapshot();
             cs.lastAppliedBlock = 5;
             cs.lastHashes = await replicaDb.getBlockHashRow(5);
-            cs._connectWebSockets();
+            cs.connectWebSockets();
             // Poll the socket to OPEN: blocks 6-10 are broadcast once each.
             await waitFor(() => cs.wsConns[0] && cs.wsConns[0].readyState === WebSocket.OPEN);
 
@@ -210,9 +210,9 @@ describe('Integration: Client Live Sync', function() {
 
             let applier = new ClientApplier(replicaDb, testDb.util);
 
-            // Block 5 already exists on the replica, so _buildBlockPayload may return
+            // Block 5 already exists on the replica, so buildBlockPayload may return
             // nothing for it; fall back to a stub payload to exercise the no-op path.
-            let payload = await poller._buildBlockPayload(5);
+            let payload = await poller.buildBlockPayload(5);
             if (!payload) {
                 poller.lastPolledBlock = 4;
                 await poller._poll();

@@ -197,7 +197,7 @@ describe('Rollback coverage guard @regression', function(){
             [],
             uncovered.length
                 ? `These tables are replicated by ServerPoller (decoder) but not handled by ` +
-                  `_rollbackDecoder: ${uncovered.join(', ')}. Add to decoderBlockTables / ` +
+                  `rollbackDecoder: ${uncovered.join(', ')}. Add to decoderBlockTables / ` +
                   `decoderTxScopedTables, or ROLLBACK_EXEMPT with a reason.`
                 : undefined
         );
@@ -991,7 +991,7 @@ describe('Rollback coverage guard @regression', function(){
     // that appear as a tx source/destination. An address first receives its deterministic
     // in-block id via many non-tx columns too (credits.address_id, contract_executions.caller_id,
     // injected cross-chain counterparties, action-data recipients). The explicit join in
-    // _buildBlockPayload only sees tx source/dest, so completeness depends on the generic
+    // buildBlockPayload only sees tx source/dest, so completeness depends on the generic
     // *_id reference pass ALSO covering index_addresses. If index_addresses is excluded from
     // that pass, a non-tx-interned address is never delivered at its intern block: the follower's
     // index map forks (a reorg crossing such an address fail-closed halts it today, and a

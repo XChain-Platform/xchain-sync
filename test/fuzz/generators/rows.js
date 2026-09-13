@@ -13,7 +13,7 @@
  **********************************************************************
  * fast-check arbitraries for complete DB row objects matching table schemas.
  *
- * Used by suites for _insertRows, applyBlock, and snapshot testing.
+ * Used by suites for insertRows, applyBlock, and snapshot testing.
  */
 
 const fc = require('fast-check');

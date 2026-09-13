@@ -6,7 +6,7 @@
 // This file is part of XChain Platform. Licensed under the GNU Affero
 // General Public License v3.0 or later; see LICENSE.md.
 
-// _fetchAndApplySchema needs a multi-pass, fail-closed halt: the old single-pass catch swallowed every DDL
+// fetchAndApplySchema needs a multi-pass, fail-closed halt: the old single-pass catch swallowed every DDL
 // error, so an FK-ordering miss self-healed across bootstrap re-routes but a genuine fault (permissions, disk,
 // lock, malformed DDL) left the table uncreated and the next snapshot apply looped forever on errno 1146/1054
 // with halted:false (no signal). The fix runs an ordering fixpoint so ordering misses resolve in one
@@ -60,7 +60,7 @@ function installDoQuery(db, policy){
     return created;
 }
 
-describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', function(){
+describe('ClientSync.fetchAndApplySchema multi-pass + fail-closed halt', function(){
     let db, sync;
     beforeEach(function(){
         db = createMockDb();
@@ -81,7 +81,7 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
             return 'ok';
         });
 
-        await sync._fetchAndApplySchema('http://a:3006');
+        await sync.fetchAndApplySchema('http://a:3006');
 
         assert.ok(created.has('A') && created.has('B'), 'both tables created');
         assert.strictEqual(sync.isHalted(), false, 'ordering miss must not halt');
@@ -94,7 +94,7 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
         }}});
         installDoQuery(db, () => { const e = new Error('access denied'); e.errno = 1142; return e; });
 
-        await sync._fetchAndApplySchema('http://a:3006');
+        await sync.fetchAndApplySchema('http://a:3006');
 
         assert.strictEqual(sync.isHalted(), true, 'genuine fault must halt');
         const info = sync.getHaltInfo();
@@ -119,7 +119,7 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
         refusal.errno = 1075;
         db.addMissingColumns = sinon.stub().rejects(refusal);
 
-        await sync._fetchAndApplySchema('http://a:3006');
+        await sync.fetchAndApplySchema('http://a:3006');
 
         assert.strictEqual(sync.isHalted(), true, 'a refused ALTER must halt, not pass silently');
         const info = sync.getHaltInfo();
@@ -130,7 +130,7 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
 
     it('does NOT halt on a schema-fetch transport failure (not a DDL fault)', async function(){
         sinon.stub(axios, 'get').rejects(new Error('ECONNREFUSED'));
-        await sync._fetchAndApplySchema('http://a:3006');
+        await sync.fetchAndApplySchema('http://a:3006');
         assert.strictEqual(sync.isHalted(), false, 'a fetch failure is left to the retry loop');
         assert.ok(db.recordHalt.notCalled);
     });
@@ -142,7 +142,7 @@ describe('ClientSync._fetchAndApplySchema multi-pass + fail-closed halt', functi
         installDoQuery(db, () => { const e = new Error('disk full'); e.errno = 1021; return e; });
         sync.sources = ['http://a:3006'];
 
-        const ok = await sync._bootstrapRotateSources();
+        const ok = await sync.bootstrapRotateSources();
         assert.strictEqual(ok, false, 'round returns false (does not proceed to snapshot download)');
         assert.strictEqual(sync.isHalted(), true);
     });

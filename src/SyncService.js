@@ -62,7 +62,7 @@ class SyncService {
 
         // Startup readiness, false until start() has discovered chains and begun
         // polling. api.js listens BEFORE start() runs and start() can sit in
-        // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
+        // waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
         // getChains() is empty and /health's per-chain loop finds nothing to
         // degrade on, so the probe read healthy while nothing was syncing.
         this.ready = false;
@@ -78,31 +78,31 @@ class SyncService {
     async start(){
         getLogger().info('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
 
-        await this._waitForHub();
+        await this.waitForHub();
 
-        // Server-mode shared components must exist BEFORE discovery: _discoverChains()
+        // Server-mode shared components must exist BEFORE discovery: discoverChains()
         // starts a ServerPoller per chain, and each poller captures this.broadcaster at
-        // construction. Creating them later (in _startServerMode, after discovery) left
-        // every poller with a null broadcaster and crashed on the first _updateStatus
+        // construction. Creating them later (in startServerMode, after discovery) left
+        // every poller with a null broadcaster and crashed on the first updateStatus
         // (TypeError: Cannot read properties of null (reading 'getSubscriberCount')).
         if(this.config['SYNC_MODE'] === 'server'){
             this.broadcaster     = new BlockBroadcaster(this.config);
             this.snapshotBuilder = new SnapshotBuilder(this.util);
         }
 
-        await this._discoverChains();
+        await this.discoverChains();
 
         if(this.databases.size === 0){
             getLogger().info('No indexer/decoder databases found. Waiting for hub config...');
         }
 
         if(this.config['SYNC_MODE'] === 'server'){
-            await this._startServerMode();
+            await this.startServerMode();
         } else {
-            await this._startClientMode();
+            await this.startClientMode();
         }
 
-        this._scheduleHubRepoll();
+        this.scheduleHubRepoll();
         this._startStateTreeMetric();
         this.startSyncMetaRetention();
 
@@ -158,7 +158,7 @@ class SyncService {
             + this.clientSyncs.size + ' client sync(s), ' + closed.size + ' pool(s) closed).');
     }
 
-    async _waitForHub(){
+    async waitForHub(){
         let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
         if(maxWaitMs === undefined || maxWaitMs === null)
             maxWaitMs = parseInt(process.env.MAX_HUB_WAIT_MS) || 300000;
@@ -187,7 +187,7 @@ class SyncService {
     // as indexer DBs but skip the transparency log (decoder content is
     // deterministic from the coin node; no synthetic chain-of-state hash
     // needed).
-    async _discoverChains(){
+    async discoverChains(){
         let indexerConfigs = await this.hubClient.getIndexerConfigs();
         let decoderConfigs = await this.hubClient.getDecoderConfigs();
         let allConfigs = indexerConfigs.concat(decoderConfigs);
@@ -334,9 +334,9 @@ class SyncService {
         if(newChains.length > 0){
             for(let { key, db, config: cfg } of newChains){
                 if(this.config['SYNC_MODE'] === 'server'){
-                    this._startPollerForChain(key, db, cfg);
+                    this.startPollerForChain(key, db, cfg);
                 } else {
-                    this._startClientSyncForChain(key, db, cfg);
+                    this.startClientSyncForChain(key, db, cfg);
                 }
             }
         }
@@ -344,8 +344,8 @@ class SyncService {
         return newChains;
     }
 
-    async _startServerMode(){
-        // Idempotent: these are normally created in start() before _discoverChains()
+    async startServerMode(){
+        // Idempotent: these are normally created in start() before discoverChains()
         // so pollers can capture a live broadcaster. Guard so a direct call (or future
         // refactor) still works without clobbering the instance the pollers already hold.
         if(!this.broadcaster)     this.broadcaster     = new BlockBroadcaster(this.config);
@@ -355,7 +355,7 @@ class SyncService {
         // ServerPoller reads dbType from db.dbType and switches table lists +
         // payload structure accordingly.
         for(let [key, { db, config: cfg }] of this.databases){
-            this._startPollerForChain(key, db, cfg);
+            this.startPollerForChain(key, db, cfg);
         }
 
         getLogger().info('Server mode started with ' + this.databases.size + ' poller(s)' +
@@ -365,7 +365,7 @@ class SyncService {
     // Start a poller for a single chain/network/dbType.
     // TransparencyLog is created only for indexer DBs. Decoder content is
     // deterministic from the coin node and doesn't need a synthetic hash chain.
-    _startPollerForChain(key, db, cfg){
+    startPollerForChain(key, db, cfg){
         if(this.pollers.has(key)) return;
 
         let log    = (cfg.dbType === 'indexer')
@@ -384,16 +384,16 @@ class SyncService {
         });
     }
 
-    async _startClientMode(){
+    async startClientMode(){
         // ClientSync reads dbType from db.dbType and threads it through URLs +
         // skips three-hash verification for decoder DBs.
         for(let [key, { db, config: cfg }] of this.databases){
-            this._startClientSyncForChain(key, db, cfg);
+            this.startClientSyncForChain(key, db, cfg);
         }
         getLogger().info('Client mode started with ' + this.databases.size + ' sync(s)');
     }
 
-    _startClientSyncForChain(key, db, cfg){
+    startClientSyncForChain(key, db, cfg){
         if(this.clientSyncs.has(key)) return;
 
         let applier  = new ClientApplier(db, this.util, cfg.coin, cfg.network);
@@ -410,13 +410,13 @@ class SyncService {
         });
     }
 
-    _scheduleHubRepoll(){
+    scheduleHubRepoll(){
         if(this._hubRepollTimer) return;
         // Handle retained so stop() can clear it: a re-poll that fires during the
         // drain discovers chains and builds fresh DB pools behind the close.
         this._hubRepollTimer = setInterval(async () => {
             try {
-                let newChains = await this._discoverChains();
+                let newChains = await this.discoverChains();
                 if(newChains.length > 0)
                     getLogger().info('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){

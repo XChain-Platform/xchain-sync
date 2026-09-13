@@ -14,7 +14,7 @@
 // replicated tables, while the block hashes commit the ledger/actions/contract
 // projections, state_hash commits the in-place mutation classes, the state
 // commitment covers balances + stakes, computeIndexMapChecksum covers
-// index_addresses, and _verifyTableCounts compares CARDINALITY only (and only
+// index_addresses, and verifyTableCounts compares CARDINALITY only (and only
 // flags remote > local). An equal-count content substitution in any other
 // replicated table therefore passed every check a follower ran.
 //
@@ -417,7 +417,7 @@ describe('Advisory table-content parity', function(){
 
         it('case 7: the advisory check never halts', function(){
             assert.ok(body.length > 200, '_verifyTableContentParity body not found; update this guard');
-            assert.ok(!/_haltOnDivergence|this\.halted\s*=/.test(body),
+            assert.ok(!/haltOnDivergence|this\.halted\s*=/.test(body),
                 'table-content parity is advisory: it must never halt a follower');
         });
 
@@ -433,8 +433,8 @@ describe('Advisory table-content parity', function(){
         });
 
         it('is wired into the decoder path too, which has no hashes at all', function(){
-            let start = src.indexOf('async _verifyDecoderCompleteness(');
-            assert.ok(start !== -1, '_verifyDecoderCompleteness not found; update this guard');
+            let start = src.indexOf('async verifyDecoderCompleteness(');
+            assert.ok(start !== -1, 'verifyDecoderCompleteness not found; update this guard');
             const decoderBody = src.slice(start, src.indexOf('\n    async ', start + 10));
             assert.ok(/_verifyTableContentParity\(/.test(decoderBody),
                 'the decoder DB has no ledger/actions/contract hash, so this is its only content signal');

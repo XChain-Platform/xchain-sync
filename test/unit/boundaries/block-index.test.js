@@ -148,7 +148,7 @@ describe('Boundary: Block Index Values', function(){
 
     describe('client skip logic', function(){
         it('skips block with index <= lastAppliedBlock', function(){
-            // Verifies the comparison ClientSync._handleBlock relies on to skip already-applied blocks.
+            // Verifies the comparison ClientSync.handleBlock relies on to skip already-applied blocks.
             let lastApplied = 10;
             assert.strictEqual(10 <= lastApplied, true);  // same block: skipped
             assert.strictEqual(9 <= lastApplied, true);   // earlier: skipped

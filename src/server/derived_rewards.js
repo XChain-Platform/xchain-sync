@@ -39,7 +39,7 @@
  * pre-flag-day writers (actions/anchor.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
  * push) backdate block_index and leave derive_block_index NULL; their rows remain
  * reachable by a snapshot whose window spans the earn-block only, and their shortfall
- * surfaces through ClientSync._verifyTableCounts.
+ * surfaces through ClientSync.verifyTableCounts.
  *
  ********************************************************************/
 
@@ -67,7 +67,7 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
         //
         // SELECT vr.* rather than a column subset is load-bearing. These rows are merged
         // into the SAME payload array as the block-scoped rows (which use SELECT *), and
-        // ClientApplier._insertRows derives its INSERT column list from rows[0] only. A
+        // ClientApplier.insertRows derives its INSERT column list from rows[0] only. A
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a derived-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.

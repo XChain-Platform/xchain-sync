@@ -127,7 +127,7 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
         this.timeout(40000);
         await withArmed(TIP, async () => {
             await stage();
-            const payload = await poller._buildBlockPayload(TIP);
+            const payload = await poller.buildBlockPayload(TIP);
             await new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK).applyBlock(payload);
 
             const armed = await rootsRow(replicaDb, TIP);
@@ -173,7 +173,7 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
         this.timeout(40000);
         await withArmed(TIP, async () => {
             await stage();
-            const payload = await poller._buildBlockPayload(TIP);
+            const payload = await poller.buildBlockPayload(TIP);
             await new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK).applyBlock(payload);
             const armed = await rootsRow(replicaDb, TIP);
 
@@ -198,7 +198,7 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
         this.timeout(60000);
         await withArmed(TIP, async () => {
             await stage();
-            const payload = await poller._buildBlockPayload(TIP);
+            const payload = await poller.buildBlockPayload(TIP);
             const applier = new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK);
 
             await applier.applyBlock(payload);
@@ -243,7 +243,7 @@ describe('Integration: the follower at an armed height, and a reorg across it', 
         this.timeout(60000);
         await withArmed(TIP, async () => {
             await stage();
-            const payload = await poller._buildBlockPayload(TIP);
+            const payload = await poller.buildBlockPayload(TIP);
             await new ClientApplier(replicaDb, testDb.util, CHAIN, NETWORK).applyBlock(payload);
             const threaded = await rootsRow(replicaDb, TIP);
             assert.ok(threaded && threaded.contract_state_root, 'setup: the armed block did not commit');

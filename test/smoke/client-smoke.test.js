@@ -229,7 +229,7 @@ describe('Smoke: Client Mode', function() {
             HASH_CONFIRM_TIMEOUT: 5000
         };
         let cs = new ClientSync('bitcoin', 'mainnet', replicaDb, applier, rollback, verifier, cfg, util);
-        await cs._bootstrapFromSnapshot();
+        await cs.bootstrapFromSnapshot();
 
         let replicaBlockCount = await replicaDb.doQuery("SELECT COUNT(*) as cnt FROM blocks");
         assert.strictEqual(Number(replicaBlockCount[0].cnt), 3);

@@ -12,7 +12,7 @@
 // production RDOGE replica: index_statuses stayed short by one row, hourly,
 // forever) needs INSERT IGNORE's silent per-row failures to surface when they
 // are NOT the table's own expected PRIMARY-key re-send. These pin
-// _insertRows({ strictIgnoreCheck: true }) doing exactly that, and pin that the
+// insertRows({ strictIgnoreCheck: true }) doing exactly that, and pin that the
 // ordinary (unflagged) apply path stays silent and cheap - it must, since every
 // block re-sends these tables' rows by design.
 
@@ -46,12 +46,12 @@ describe('ClientApplier strictIgnoreCheck', function(){
     afterEach(function(){ sinon.restore(); });
 
     it('is a no-op by default: no SHOW WARNINGS round trip on the ordinary apply path', async function(){
-        await applier._insertRows('index_statuses', [{ id: 1, status: 'open' }]);
+        await applier.insertRows('index_statuses', [{ id: 1, status: 'open' }]);
         assert.strictEqual(db.doQuery.callCount, 1, 'only the INSERT itself, no follow-up SHOW WARNINGS');
     });
 
     it('reads SHOW WARNINGS when strictIgnoreCheck is set and passes clean on no warnings', async function(){
-        await applier._insertRows('index_statuses', [{ id: 1, status: 'open' }], { strictIgnoreCheck: true });
+        await applier.insertRows('index_statuses', [{ id: 1, status: 'open' }], { strictIgnoreCheck: true });
         assert.strictEqual(db.doQuery.callCount, 2);
         assert.strictEqual(db.doQuery.secondCall.args[0], 'SHOW WARNINGS');
     });
@@ -61,7 +61,7 @@ describe('ClientApplier strictIgnoreCheck', function(){
             { Code: 1062, Message: "Duplicate entry '3' for key 'PRIMARY'" }
         ]);
         await assert.doesNotReject(() =>
-            applier._insertRows('index_statuses', [{ id: 3, status: 'completed' }], { strictIgnoreCheck: true }));
+            applier.insertRows('index_statuses', [{ id: 3, status: 'completed' }], { strictIgnoreCheck: true }));
     });
 
     it('throws loud on a collision against a DIFFERENT unique key (index_statuses.status)', async function(){
@@ -72,7 +72,7 @@ describe('ClientApplier strictIgnoreCheck', function(){
             { Code: 1062, Message: "Duplicate entry 'closed' for key 'status'" }
         ]);
         await assert.rejects(
-            () => applier._insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
+            () => applier.insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
             /silently dropped a row applying to `index_statuses`/);
     });
 
@@ -81,7 +81,7 @@ describe('ClientApplier strictIgnoreCheck', function(){
             { Code: 1265, Message: "Data truncated for column 'status' at row 1" }
         ]);
         await assert.rejects(
-            () => applier._insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
+            () => applier.insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
             /silently dropped a row applying to `index_statuses`/);
     });
 
@@ -90,7 +90,7 @@ describe('ClientApplier strictIgnoreCheck', function(){
             { Code: 1062, Message: "Duplicate entry 'closed' for key 'status'" }
         ]);
         await assert.rejects(
-            () => applier._insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
+            () => applier.insertRows('index_statuses', [{ id: 2, status: 'closed' }], { strictIgnoreCheck: true }),
             /needs a human to reconcile it/);
     });
 
@@ -101,7 +101,7 @@ describe('ClientApplier strictIgnoreCheck', function(){
         db.doQuery.onSecondCall().resolves([
             { Code: 1062, Message: "Duplicate entry '1-2-oracle_round-3-0' for key 'reward_unique'" }
         ]);
-        await assert.doesNotReject(() => applier._insertRows('validator_rewards',
+        await assert.doesNotReject(() => applier.insertRows('validator_rewards',
             [{ id: 99, source_id: 1, signing_pubkey_id: 2, reward_type: 'oracle_round', round_reference: 3, round_qualifier: 0 }],
             { strictIgnoreCheck: true }));
     });
@@ -184,7 +184,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
     it('converges the stale generation: rows match the source by id and by status', async function(){
         let db = lookupDb([{ id: 1, status: 'open' }, { id: 2, status: 'completed' }]);
         applier = new ClientApplier(db, util);
-        await applier._insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
+        await applier.insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
         assert.deepStrictEqual([...db.rows.entries()].sort((a, b) => a[0] - b[0]),
             [[1, 'open'], [3, 'completed'], [4, 'valid']]);
         assert.ok(db.log.some(q => /DELETE FROM `index_statuses`/.test(q.sql) && Number(q.args[0]) === 2),
@@ -194,7 +194,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
     it('logs one structured line naming the table, key, retired id and landed id', async function(){
         let db = lookupDb([{ id: 1, status: 'open' }, { id: 2, status: 'completed' }]);
         applier = new ClientApplier(db, util);
-        await applier._insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
+        await applier.insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
         let line = console.warn.getCalls().map(c => String(c.args[0] || ''))
             .find(m => /STALE_LOOKUP_GENERATION_RETIRED/.test(m));
         assert.ok(line, 'the retirement must leave a journal line');
@@ -207,7 +207,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
         // local row is live: retiring it would destroy a row the source still has.
         let db = lookupDb([{ id: 1, status: 'open' }, { id: 2, status: 'completed' }]);
         applier = new ClientApplier(db, util);
-        await assert.rejects(() => applier._insertRows('index_statuses',
+        await assert.rejects(() => applier.insertRows('index_statuses',
             [{ id: 1, status: 'open' }, { id: 2, status: 'closed' }, { id: 3, status: 'completed' }],
             { strictIgnoreCheck: true }),
             /needs a human to reconcile it/);
@@ -219,7 +219,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
         // it: the page proves nothing about it.
         let db = lookupDb([{ id: 1, status: 'open' }, { id: 90, status: 'completed' }]);
         applier = new ClientApplier(db, util);
-        await assert.rejects(() => applier._insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true }),
+        await assert.rejects(() => applier.insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true }),
             /needs a human to reconcile it/);
         assert.ok(!db.log.some(q => /DELETE FROM `index_statuses`/.test(q.sql)));
     });
@@ -227,10 +227,10 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
     it('the repair pass completes clean on the converged table', async function(){
         let db = lookupDb([{ id: 1, status: 'open' }, { id: 2, status: 'completed' }]);
         applier = new ClientApplier(db, util);
-        await applier._insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
+        await applier.insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true });
         db.log.length = 0;
         await assert.doesNotReject(() =>
-            applier._insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true }));
+            applier.insertRows('index_statuses', sourcePage, { strictIgnoreCheck: true }));
         assert.ok(!db.log.some(q => /DELETE FROM `index_statuses`/.test(q.sql)),
             'a converged table must retire nothing on the next pass');
         assert.deepStrictEqual([...db.rows.entries()].sort((a, b) => a[0] - b[0]),

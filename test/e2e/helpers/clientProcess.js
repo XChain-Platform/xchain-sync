@@ -61,11 +61,11 @@ class ClientProcess {
         // after the real handler settles, so it can never run ahead of the
         // decision it stands for, and a handler that throws (the WS chain logs
         // and continues) still counts as handled. ClientSync's serialized event
-        // chain calls this._handleEvent, so an own-property override on the
+        // chain calls this.handleEvent, so an own-property override on the
         // instance wraps it without touching the production class.
         this.eventsHandled = { block: 0, status: 0, reorg: 0, total: 0 };
-        let handleEvent = this.sync._handleEvent.bind(this.sync);
-        this.sync._handleEvent = async (event, sourceIndex) => {
+        let handleEvent = this.sync.handleEvent.bind(this.sync);
+        this.sync.handleEvent = async (event, sourceIndex) => {
             try {
                 return await handleEvent(event, sourceIndex);
             } finally {
@@ -78,7 +78,7 @@ class ClientProcess {
 
     // Bootstrap from server snapshot (blocking)
     async bootstrap() {
-        await this.sync._bootstrapFromSnapshot();
+        await this.sync.bootstrapFromSnapshot();
         this.sync.lastAppliedBlock = await this.replicaDb.getLastBlock();
         if (this.sync.lastAppliedBlock !== null) {
             this.sync.lastHashes = await this.replicaDb.getBlockHashRow(this.sync.lastAppliedBlock);
@@ -90,7 +90,7 @@ class ClientProcess {
     //    return), which would silently disable reconnect-after-disconnect (the very
     //    behavior the recovery tests exercise).
     //  - lastAppliedBlock must be initialized from the replica DB when resuming
-    //    without a fresh bootstrap. Gap detection in _handleEvent/_handleBlock guards
+    //    without a fresh bootstrap. Gap detection in handleEvent/handleBlock guards
     //    on `lastAppliedBlock !== null`; a resumed client whose replica already holds
     //    blocks but whose cursor is still null never detects the gap and can't catch
     //    up (ClientSync.start() does this init before connecting; connectLive must
@@ -117,7 +117,7 @@ class ClientProcess {
             }
         }
         this.sync.running = true;
-        this.sync._connectWebSockets();
+        this.sync.connectWebSockets();
     }
 
     async start() {
@@ -136,7 +136,7 @@ class ClientProcess {
             try { await this.sync._catchUpInFlight; } catch (e) {}
         }
         // Acquiring the apply lock guarantees any in-flight apply finished.
-        await this.sync._withApplyLock(() => {});
+        await this.sync.withApplyLock(() => {});
     }
 
     getLastAppliedBlock() {
@@ -157,7 +157,7 @@ class ClientProcess {
     }
 
     async incrementalCatchUp(sinceBlock) {
-        await this.sync._incrementalCatchUp(sinceBlock);
+        await this.sync.incrementalCatchUp(sinceBlock);
         this.sync.lastAppliedBlock = await this.replicaDb.getLastBlock();
         if (this.sync.lastAppliedBlock !== null) {
             this.sync.lastHashes = await this.replicaDb.getBlockHashRow(this.sync.lastAppliedBlock);

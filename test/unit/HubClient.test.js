@@ -365,46 +365,46 @@ describe('HubClient', function(){
         });
     });
 
-    describe('_hubConfigRegressed', function(){
+    describe('hubConfigRegressed', function(){
         it('is false when there is no prior watermark to regress against', function(){
-            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 1, watermark: 100 }), false);
+            assert.strictEqual(hub.hubConfigRegressed({ configs: {}, seq: 1, watermark: 100 }), false);
         });
 
         it('is true when watermark drops below the last-seen value', function(){
             hub.lastWatermark = 5000;
             hub.lastSeq = 5;
-            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 5, watermark: 100 }), true);
+            assert.strictEqual(hub.hubConfigRegressed({ configs: {}, seq: 5, watermark: 100 }), true);
         });
 
         it('is true when seq drops below the last-seen value even if watermark is unchanged', function(){
             hub.lastWatermark = 5000;
             hub.lastSeq = 5;
-            assert.strictEqual(hub._hubConfigRegressed({ configs: {}, seq: 1, watermark: 5000 }), true);
+            assert.strictEqual(hub.hubConfigRegressed({ configs: {}, seq: 1, watermark: 5000 }), true);
         });
 
         it('is false for a bare-map payload with no seq/configs wrapper', function(){
             hub.lastWatermark = 5000;
-            assert.strictEqual(hub._hubConfigRegressed({ btc: { main: {} } }), false);
+            assert.strictEqual(hub.hubConfigRegressed({ btc: { main: {} } }), false);
         });
     });
 
-    describe('_parsePort', function(){
+    describe('parsePort', function(){
         it('parses a numeric primary', function(){
-            assert.strictEqual(HubClient._parsePort('3307', undefined), 3307);
+            assert.strictEqual(HubClient.parsePort('3307', undefined), 3307);
         });
         it('uses the fallback when primary is absent/empty', function(){
-            assert.strictEqual(HubClient._parsePort('', '3308'), 3308);
-            assert.strictEqual(HubClient._parsePort(undefined, 3309), 3309);
+            assert.strictEqual(HubClient.parsePort('', '3308'), 3308);
+            assert.strictEqual(HubClient.parsePort(undefined, 3309), 3309);
         });
         it('preserves a literal 0 (does not fall through to default)', function(){
-            assert.strictEqual(HubClient._parsePort(0, 9999), 0);
+            assert.strictEqual(HubClient.parsePort(0, 9999), 0);
         });
         it('defaults to 3306 when both are absent', function(){
-            assert.strictEqual(HubClient._parsePort(undefined, undefined), 3306);
+            assert.strictEqual(HubClient.parsePort(undefined, undefined), 3306);
         });
         it('defaults to 3306 for a non-numeric or negative value', function(){
-            assert.strictEqual(HubClient._parsePort('abc', undefined), 3306);
-            assert.strictEqual(HubClient._parsePort('-1', undefined), 3306);
+            assert.strictEqual(HubClient.parsePort('abc', undefined), 3306);
+            assert.strictEqual(HubClient.parsePort('-1', undefined), 3306);
         });
     });
 

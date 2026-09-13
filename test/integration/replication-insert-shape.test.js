@@ -13,14 +13,14 @@
 // WHY THIS EXISTS. A production follower once could not replicate `contract_state`
 // at ALL on a strict-mode MariaDB, live for weeks, found only when something finally
 // ran a follower over a block carrying such a row. The mechanism was mundane: the
-// source reads block rows with SELECT *, `ClientApplier._insertRows` names every
+// source reads block rows with SELECT *, `ClientApplier.insertRows` names every
 // carried column, and one of them was GENERATED, which is errno 1906. Nothing about
 // that is specific to contract_state. It is the general shape "the applier meets a
 // column shape it has never met", and the registry lists 100-plus replicated tables
 // whose write path no test had ever executed.
 //
 // So this stops hunting instances. For every table the follower replicates through
-// _insertRows, it synthesizes one row FROM THE REAL SCHEMA (including the generated
+// insertRows, it synthesizes one row FROM THE REAL SCHEMA (including the generated
 // columns the source would ship, which is precisely the condition that broke the
 // production follower above) and requires the insert to land.
 //
@@ -44,7 +44,7 @@ const testDb  = require('./helpers/testDb');
 const ClientApplier = require('../../src/client/applier');
 const lifecycle     = require('../../src/tableLifecycle');
 
-// The classes that ride a block/catch-up payload into _insertRows. 'local',
+// The classes that ride a block/catch-up payload into insertRows. 'local',
 // 'follower-derived' and 'hub-mirror' tables are written by other paths and are not
 // this test's subject.
 const STREAMED = new Set(['stream:action', 'stream:block', 'stream:index',
@@ -175,7 +175,7 @@ describe('Integration: the applier can write every table it replicates', functio
 
         for(const table of targets){
             // Every column the SOURCE would ship, generated ones INCLUDED. That is the
-            // condition described above: before the fix, _insertRows named them and
+            // condition described above: before the fix, insertRows named them and
             // MariaDB rejected the statement under STRICT_TRANS_TABLES.
             const row = {};
             for(const col of schema.get(table)) row[String(col.c)] = synthValue(col);
@@ -184,7 +184,7 @@ describe('Integration: the applier can write every table it replicates', functio
             // already held rows and rejected this one.
             const before = await replicaDb.doQuery('SELECT COUNT(*) AS c FROM `' + table + '`', []);
             try {
-                await applier._insertRows(table, [row]);
+                await applier.insertRows(table, [row]);
             } catch(e){
                 const errno = e && e.errno;
                 if(APPLIER_ERRNOS.has(errno)){

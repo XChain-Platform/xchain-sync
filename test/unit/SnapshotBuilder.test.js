@@ -84,7 +84,7 @@ describe('SnapshotBuilder', function(){
         sinon.restore();
     });
 
-    describe('_getOrderedTables', function(){
+    describe('getOrderedTables', function(){
         it('orders priority tables first, trailing tables last, middle alphabetically', async function(){
             let db = createMockDb();
             db.doQuery.resolves([
@@ -97,7 +97,7 @@ describe('SnapshotBuilder', function(){
                 { table_name: 'index_actions' }   // priority (first)
             ]);
 
-            let ordered = await builder._getOrderedTables(db);
+            let ordered = await builder.getOrderedTables(db);
 
             // Priority tables come first in defined order
             assert.strictEqual(ordered[0], 'index_actions');
@@ -118,7 +118,7 @@ describe('SnapshotBuilder', function(){
                 { table_name: 'blocks' },
                 { table_name: 'custom_table' }
             ]);
-            let ordered = await builder._getOrderedTables(db);
+            let ordered = await builder.getOrderedTables(db);
             assert.strictEqual(ordered.length, 2);
             assert.strictEqual(ordered[0], 'blocks');
             assert.strictEqual(ordered[1], 'custom_table');
@@ -134,7 +134,7 @@ describe('SnapshotBuilder', function(){
                 { table_name: 'mempool_transactions' },
                 { table_name: 'oracle_prices' } // existing operator-local exclusion, sanity check
             ]);
-            let ordered = await builder._getOrderedTables(db);
+            let ordered = await builder.getOrderedTables(db);
             assert.deepStrictEqual(ordered, ['blocks']);
         });
     });
@@ -729,7 +729,7 @@ describe('SnapshotBuilder', function(){
         // gzip.end() flushes through the PassThrough (mirrors the pattern above).
         function run(start, res){ return new Promise(r => { res.on('finish', r); start(); }); }
 
-        describe('_getOrderedTables', function(){
+        describe('getOrderedTables', function(){
             it('drops operator-local tables and tolerates the uppercase TABLE_NAME variant', async function(){
                 let db = createMockDb();
                 db.doQuery.resolves([
@@ -739,7 +739,7 @@ describe('SnapshotBuilder', function(){
                     { TABLE_NAME: 'middle_upper' },      // uppercase fallback, middle
                     { table_name: 'blocks' }             // priority
                 ]);
-                let ordered = await builder._getOrderedTables(db);
+                let ordered = await builder.getOrderedTables(db);
                 assert.ok(!ordered.includes('icons'));
                 assert.ok(!ordered.includes('price_snapshots'));
                 assert.ok(!ordered.includes('pending_hub_pushes'));

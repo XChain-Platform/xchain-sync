@@ -145,7 +145,7 @@ module.exports = {
     //
     // doQueryStrict, so a failure to LIST is never silently read as "nothing
     // exists": that would empty table_counts and make an incomplete replica look
-    // complete to _verifyTableCounts. Callers fall back to probing instead.
+    // complete to verifyTableCounts. Callers fall back to probing instead.
     async listExistingTables(conn){
         let rows = await this.doQueryStrict(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
@@ -160,7 +160,7 @@ module.exports = {
     // SqlError and returns [], so `rows[0].cnt` then threw a TypeError with NO
     // errno. Every caller that classifies the failure by errno was therefore
     // reading a different error than the one the database raised, and the one
-    // that matters is ClientSync._verifyTableCounts: its catch routes errno 1146
+    // that matters is ClientSync.verifyTableCounts: its catch routes errno 1146
     // ("the source's schema moved ahead of this replica") into the debounced
     // schema heal that CREATEs the missing table. A TypeError carries no errno,
     // so that heal could never fire from here, and the replica stayed missing the

@@ -336,7 +336,7 @@ class BlockHasher {
     // projections, state_hash covers in-place mutations, the /status row counts cover
     // cardinality, and everything else was uncommitted.
     //
-    // Shape (published on /status, consumed by ClientSync._verifyAgainstSource):
+    // Shape (published on /status, consumed by ClientSync.verifyAgainstSource):
     //   { window, block, tables: { <table>: { n, h, id_max? } } }
     // Sparse by design: a table with no rows in the window is OMITTED rather than
     // carried as an empty digest, which keeps the status payload small on a quiet

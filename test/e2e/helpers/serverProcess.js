@@ -297,7 +297,7 @@ class ServerProcess {
                 if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);
             }
         }
-        await this.poller._updateStatus();
+        await this.poller.updateStatus();
 
         // Start polling loop
         // Serialize poll cycles. Production's ServerPoller.start() is a

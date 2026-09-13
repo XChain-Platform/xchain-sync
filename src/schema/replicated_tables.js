@@ -21,7 +21,7 @@
  *     index) to build the live block payloads it broadcasts.
  *   - The status/verification path counts rows in the same set to detect
  *     replica incompleteness (see api.buildStatusRow and
- *     ClientSync._verifyAgainstSource).
+ *     ClientSync.verifyAgainstSource).
  *
  * Keeping both consumers on one definition means the row-count completeness
  * check can never silently drift from the set of tables that are actually
@@ -43,7 +43,7 @@
  *                                     but that count is a post-replace equality sanity
  *                                     check, never a drift detector: a soft-expire leaves
  *                                     the counts equal and a hard-purge leaves the replica
- *                                     AHEAD, which _verifyTableCounts does not report.
+ *                                     AHEAD, which verifyTableCounts does not report.
  *                                     Parity rests entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync._reconcileDispensers.
@@ -98,17 +98,17 @@ const TOPOLOGY = {
         index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
         // Counted for completeness but NOT read by ServerPoller's per-scope loops.
         // dispensers converges only through the full snapshot plus the periodic
-        // re-dump/replace reconcile, and _incrementalCatchUp excludes it on every
+        // re-dump/replace reconcile, and incrementalCatchUp excludes it on every
         // non-reconcile cycle; see the header note on why its count detects nothing.
         special:      ['dispensers']
     },
 
     // Indexer schema: generated from the table-lifecycle registry. Notable
-    // structural facts that used to live in comments here now live with the
-    // registry entries; the two that trip people up: balances/events have no
+    // structural facts live with the registry entries rather than in comments
+    // here; the two that trip people up: balances/events have no
     // action_index column (the per-block action join would throw), and
     // sync_meta rides the `special` bucket because TransparencyLog.recordBlock
-    // writes the source row AFTER _buildBlockPayload runs, so a blockScoped
+    // writes the source row AFTER buildBlockPayload runs, so a blockScoped
     // read would always see the current block's row missing.
     indexer: lifecycle.streamTopology()
 };
@@ -212,12 +212,13 @@ function missingReplicatedTables(present, dbType){
 }
 
 // The cursor column for id-ordered paging of an append-only lookup table
-// (SnapshotBuilder.streamTableRowsById / ClientSync._syncLookupTablesPaged).
+// (SnapshotBuilder.streamTableRowsById / ClientSync.syncLookupTablesPaged).
 //
 // It is always the AUTO_INCREMENT `id`, and the decoder `pubkeys` table is why that
 // is stated rather than assumed: its PRIMARY KEY is `address_id`, which is NOT
-// monotonic with INSERT order, because a pubkeys row is inserted at first-SPEND while
-// its address_id was assigned earlier at first-SEEN. An address_id cursor therefore
+// monotonic with INSERT order, because a pubkeys row is inserted when its address
+// first SPENDS while its address_id was assigned earlier, when the address was first
+// SEEN. An address_id cursor therefore
 // skips a fresh row that lands below the replica's high-water mark permanently, and
 // the indexer's LEFT JOIN then resolves source_pubkey to NULL, which is a consensus
 // divergence. pubkeys carries a surrogate AUTO_INCREMENT `id` for exactly this, used

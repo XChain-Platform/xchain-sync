@@ -132,7 +132,7 @@ describe('E2E: state_hash fault injection - updated_rows drop -> state-hash-dive
         assert.ok(typeof sh === 'string' && sh.length === 64, 'state_hash computed and stored');
 
         // Build the real live payload (state_hash + updated_rows.attests carrying the flip).
-        let payload = await server.poller._buildBlockPayload(MUTATION_BLOCK, null, MUTATION_BLOCK);
+        let payload = await server.poller.buildBlockPayload(MUTATION_BLOCK, null, MUTATION_BLOCK);
         assert.ok(payload, 'poller built a payload for the mutation block');
         assert.strictEqual(payload.state_hash, sh, 'payload carries the committed state_hash');
         assert.ok(payload.updated_rows && Array.isArray(payload.updated_rows.attests)
@@ -145,7 +145,7 @@ describe('E2E: state_hash fault injection - updated_rows drop -> state-hash-dive
         this.timeout(30000);
         let { payload } = await primeThroughMutationBlock();
 
-        await client.sync._applyBlockEvent(payload);
+        await client.sync.applyBlockEvent(payload);
 
         assert.strictEqual(client.sync._halted, null, 'no halt when the flip is applied');
         assert.strictEqual(await replicaDb.getActiveHalt('indexer'), null, 'no durable halt row');
@@ -164,9 +164,9 @@ describe('E2E: state_hash fault injection - updated_rows drop -> state-hash-dive
         // Inject the fault: the follower silently drops the updated_rows upsert -- the
         // exact class (a dropped in-place mutation on a surviving row) the state_hash
         // was built to catch. The block-scoped data still applies normally.
-        let drop = sinon.stub(client.applier, '_applyUpdatedRows').resolves();
+        let drop = sinon.stub(client.applier, 'applyUpdatedRows').resolves();
 
-        await client.sync._applyBlockEvent(payload);
+        await client.sync.applyBlockEvent(payload);
 
         assert.ok(drop.called, 'the updated_rows apply path was exercised (and dropped)');
 
