@@ -38,8 +38,9 @@
  * merged into the normal `credits` payload. It is the exact FORWARD mirror of
  * ClientRollback's reverse delete: same join keys, same cooldown_end_block and
  * status='completed' predicate, GAS tick for the capability refund. They then flow
- * through the existing credits apply path, idempotent at the block/window boundary
- * exactly as normal action-scoped credits are. Indexer dbType only.
+ * through the existing credits apply path (the replica's row insert followed by its
+ * balance rebuild), idempotent at the block/window boundary exactly as normal
+ * action-scoped credits are. Indexer dbType only.
  *
  ********************************************************************/
 

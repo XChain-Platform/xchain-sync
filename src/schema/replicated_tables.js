@@ -36,31 +36,44 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
- *   - dispensers (decoder)            soft-expired by UPDATE and hard-purged later by
- *                                     purgeExpiredDispensers; neither mutation rides the
- *                                     per-block stream. It IS in the decoder `special`
- *                                     bucket so it joins the /status completeness count,
- *                                     but that count is a post-replace equality sanity
- *                                     check, never a drift detector: a soft-expire leaves
- *                                     the counts equal and a hard-purge leaves the replica
- *                                     AHEAD, which verifyTableCounts does not report.
- *                                     Parity rests entirely on the apply-side reconcile,
+ *   - dispensers (decoder)            soft-expired by an UPDATE of expired_block_index and
+ *                                     hard-purged later by purgeExpiredDispensers; neither
+ *                                     mutation rides the per-block stream. It IS in the
+ *                                     decoder `special` bucket so it joins the /status
+ *                                     completeness count, but that count is a post-replace
+ *                                     equality sanity check, never a drift detector: a
+ *                                     soft-expire leaves the counts equal and a hard-purge
+ *                                     leaves the replica AHEAD, which verifyTableCounts does
+ *                                     not report, because it records a mismatch only when
+ *                                     the remote count is the larger one. Parity rests
+ *                                     entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
- *                                     ClientSync._reconcileDispensers.
+ *                                     ClientSync._reconcileDispensers, whose cadence is set
+ *                                     by DISPENSERS_RECONCILE_EVERY and
+ *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
  *     cross_chain_matches,            processing, and pushed or retracted by the hub out
- *     oracle_prices,                  of band with block apply, so they cannot ride the
- *     capability_snapshots,           per-block stream. xchain-sync NEVER replicates them
- *     state_checkpoints,              on any channel, snapshots included. A serving node
- *     price_snapshots,                does not fall back to a local mirror either: the
- *     anchor_reward_attestations,     explorer reads the consensus-relevant ones from the
- *     attestation_responses,          MANDATORY co-located hub DB and fails loud without
- *     bridge_transfers,               it, rather than serving stale local rows. The set is
- *     policy_snapshots                every tableLifecycle entry with replication
- *                                     'hub-mirror'; that registry is the authority and
- *                                     this column is a reading aid.
+ *     oracle_prices,                  of band with block apply (its price and dex reorg
+ *     capability_snapshots,           pushes), so they cannot ride the per-block stream.
+ *     state_checkpoints,              xchain-sync NEVER replicates them on any channel: the
+ *     price_snapshots,                per-block stream, the incremental catch-up and the
+ *     anchor_reward_attestations,     full and incremental snapshots all exclude them, the
+ *     attestation_responses,          last through SnapshotBuilder.OPERATOR_LOCAL_TABLES. On
+ *     bridge_transfers,               a source node they converge through hub_db_sync. A
+ *     policy_snapshots                serving node does not fall back to a local mirror
+ *                                     either: the explorer reads the consensus-relevant ones
+ *                                     from the MANDATORY co-located hub DB and fails loud
+ *                                     without it (its checkpoint and match sources throw,
+ *                                     and it asserts the hub DB at startup) rather than
+ *                                     serving stale local rows. The set is every
+ *                                     tableLifecycle entry with replication 'hub-mirror';
+ *                                     that registry is the authority and this column is a
+ *                                     reading aid.
  *   - icons                           replication 'local': never leaves the node, on any
- *                                     channel, and is not a snapshot ride-along.
+ *                                     channel. The per-block stream, the incremental
+ *                                     catch-up and both snapshot kinds exclude it through
+ *                                     SnapshotBuilder.OPERATOR_LOCAL_TABLES, so it is not a
+ *                                     snapshot ride-along either.
  *
  ********************************************************************/
 

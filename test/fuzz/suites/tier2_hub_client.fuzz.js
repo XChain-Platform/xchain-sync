@@ -54,6 +54,7 @@ describe('Tier 2 - HubClient @tier2', function () {
                 async (response) => {
                     axiosStub.post.resolves({ data: { result: response } });
                     let result = await hub.getIndexerConfigs();
+                    // Should always return an array, never throw
                     assert.ok(Array.isArray(result));
                 }
             ), { numRuns: NUM_RUNS });

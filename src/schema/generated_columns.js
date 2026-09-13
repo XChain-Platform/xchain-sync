@@ -22,6 +22,12 @@
 // replicating a chain that writes contract state fails its block apply, rolls back,
 // retries the same block and never advances.
 //
+// The failure is wider than the one gate it belongs to. state_key_bin comes with the
+// state_key_collation flag-day, and contract_state rides the per-block stream on its
+// own, so the error surfaces the first time a follower applies a block that carries
+// contract state, and a suite that never replicates contract state passes straight
+// over it without ever naming the column.
+//
 // Frozen map rather than an information_schema lookup, deliberately: the applier's
 // insert path is on the hot loop and its query sequence is pinned by unit tests, so a
 // per-table schema probe would cost a round trip and change what those tests observe.
