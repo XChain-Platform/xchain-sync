@@ -10,9 +10,9 @@
 
 const assert = require('assert');
 const crypto = require('crypto');
-const { getReplicatedTables } = require('../../../src/replicatedTables');
+const { getReplicatedTables } = require('../../../src/schema/replicated_tables');
 const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/tableLifecycle');
-const BlockHasher = require('../../../src/BlockHasher');
+const BlockHasher = require('../../../src/client/block_hasher');
 const testDbModule = require('./testDb');
 
 // Columns excluded from the byte comparison because each side legitimately

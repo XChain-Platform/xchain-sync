@@ -31,21 +31,21 @@ const axios       = require('axios');
 const zlib        = require('zlib');
 const fs          = require('fs');
 const path        = require('path');
-const validation  = require('./validation');
-const trainActivation = require('./train_activation');
-const BlockHasher = require('./BlockHasher');
-const replicatedTables = require('./replicatedTables');
-const tableLifecycle = require('./tableLifecycle');
-const { SCHEMA_VERSION } = require('./schema-version');
-const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('./consensus-constants');
-const { bootstrapDepthKey } = require('./config');
-const checkpointVerifier = require('./checkpoint');
-const M = require('./merkle');
-const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
+const validation  = require('../util/validation');
+const trainActivation = require('../train_activation');
+const BlockHasher = require('./block_hasher');
+const replicatedTables = require('../schema/replicated_tables');
+const tableLifecycle = require('../tableLifecycle');
+const { SCHEMA_VERSION } = require('../schema/version');
+const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('../consensus-constants');
+const { bootstrapDepthKey } = require('../config');
+const checkpointVerifier = require('../checkpoint');
+const M = require('../merkle');
+const { getPinnedValidators, getPinnedCheckpoint } = require('./pinned_validators');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
 // façade that reaches the real sink once that has happened.
-const { getLogger } = require('./observability');
+const { getLogger } = require('../observability');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in _verifyTableCounts for the
@@ -3005,7 +3005,7 @@ class ClientSync {
         let candidates = [];
         if(this.config && this.config['RELEASE_MANIFEST_PATH'])
             candidates.push(String(this.config['RELEASE_MANIFEST_PATH']));
-        candidates.push(path.resolve(__dirname, '../../xchain-node/src/release-manifest.json'));
+        candidates.push(path.join(__dirname, '../../../xchain-node/src/release-manifest.json'));
         for(const file of candidates){
             let raw;
             try {
@@ -3938,7 +3938,9 @@ class ClientSync {
     }
 }
 
-module.exports = ClientSync;
 // Exposed for the WS-chain escalation tests and any caller that needs to
-// distinguish permanent bootstrap exhaustion from transient sync errors.
-module.exports.BootstrapExhaustedError = BootstrapExhaustedError;
+// distinguish permanent bootstrap exhaustion from transient sync errors. Hung on
+// the class rather than on module.exports so the file has ONE export shape.
+ClientSync.BootstrapExhaustedError = BootstrapExhaustedError;
+
+module.exports = ClientSync;

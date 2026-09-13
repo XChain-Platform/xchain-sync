@@ -17,7 +17,7 @@ const {
     extractColumnDefinition,
     isAutoIncrementDefinition,
     extractKeyForColumn
-} = require('../../src/validation');
+} = require('../../src/util/validation');
 
 describe('validation', function(){
 

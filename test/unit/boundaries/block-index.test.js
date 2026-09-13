@@ -10,10 +10,10 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ServerPoller  = require('../../../src/ServerPoller');
-const ClientApplier = require('../../../src/ClientApplier');
-const HashVerifier  = require('../../../src/HashVerifier');
-const Utility       = require('../../../src/utility');
+const ServerPoller  = require('../../../src/server/poller');
+const ClientApplier = require('../../../src/client/applier');
+const HashVerifier  = require('../../../src/client/hash_verifier');
+const Utility       = require('../../../src/util');
 
 function createMockDb(){
     return {

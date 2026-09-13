@@ -16,9 +16,9 @@ const express   = require('express');
 const setup     = require('./helpers/setup');
 const testDb    = require('./helpers/testDb');
 const fixtures  = require('./helpers/fixtures');
-const ServerPoller     = require('../../src/ServerPoller');
-const BlockBroadcaster = require('../../src/BlockBroadcaster');
-const TransparencyLog  = require('../../src/TransparencyLog');
+const ServerPoller     = require('../../src/server/poller');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
+const TransparencyLog  = require('../../src/server/transparency_log');
 
 const WS_PORT = 19200;
 

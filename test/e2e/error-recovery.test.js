@@ -17,6 +17,7 @@ const ServerProcess = require('./helpers/serverProcess');
 const ClientProcess = require('./helpers/clientProcess');
 const { waitFor, waitForReplicaBlock, waitForClientDisconnect, waitForClientEvents } = require('./helpers/waitFor');
 const { assertBlockExists, assertBalancesConsistent, assertReplicaByteIdentical } = require('./helpers/assertions');
+const axios = require('axios');
 
 const SERVER_PORT = 29400;
 
@@ -121,7 +122,6 @@ describe('E2E: Error Handling & Recovery', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
-            let axios = require('axios');
             let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 5000 });
             assert.strictEqual(res.data.block_height, 5);
         });
@@ -178,7 +178,6 @@ describe('E2E: Error Handling & Recovery', function() {
 
             await fixtures.seedBlocks(sourceDb, 6, 10);
 
-            let axios = require('axios');
             await waitFor(async () => {
                 let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 10;

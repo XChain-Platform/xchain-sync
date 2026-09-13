@@ -30,7 +30,7 @@ const path = require('path');
 process.env.INDEXER_COIN    = process.env.INDEXER_COIN    || 'BTC';
 process.env.INDEXER_NETWORK = process.env.INDEXER_NETWORK || 'regtest';
 
-const BlockHasher  = require('../../src/BlockHasher');
+const BlockHasher  = require('../../src/client/block_hasher');
 const IndexerUtil  = require('../../../xchain-indexer/src/utility.js');
 
 // Canned rows the 11 BlockHasher queries return, IN CALL ORDER:

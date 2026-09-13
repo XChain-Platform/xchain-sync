@@ -16,8 +16,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const TransparencyLog = require('../../src/TransparencyLog');
-const ServerPoller    = require('../../src/ServerPoller');
+const TransparencyLog = require('../../src/server/transparency_log');
+const ServerPoller    = require('../../src/server/poller');
 
 describe('TransparencyLog (read-only replica)', function(){
 

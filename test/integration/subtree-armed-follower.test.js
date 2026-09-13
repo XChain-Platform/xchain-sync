@@ -37,9 +37,9 @@ const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
 
-const ServerPoller   = require('../../src/ServerPoller');
-const ClientApplier  = require('../../src/ClientApplier');
-const ClientRollback = require('../../src/ClientRollback');
+const ServerPoller   = require('../../src/server/poller');
+const ClientApplier  = require('../../src/client/applier');
+const ClientRollback = require('../../src/client/rollback');
 const SUB = require('../../src/state_subtree_activation');
 const SC  = require('../../src/stateCommitment');
 

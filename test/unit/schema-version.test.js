@@ -20,7 +20,7 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const { SCHEMA_VERSION, MIGRATION_FRONTIER } = require('../../src/schema-version');
+const { SCHEMA_VERSION, MIGRATION_FRONTIER } = require('../../src/schema/version');
 
 const DB_TYPES = ['indexer', 'decoder'];
 

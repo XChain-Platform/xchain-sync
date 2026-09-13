@@ -13,7 +13,7 @@ const sinon    = require('sinon');
 const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
-const ClientRollback = require('../../src/ClientRollback');
+const ClientRollback = require('../../src/client/rollback');
 
 describe('Integration: ClientRollback', function() {
 

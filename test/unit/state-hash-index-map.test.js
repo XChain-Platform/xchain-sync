@@ -22,7 +22,7 @@
 'use strict';
 
 const assert  = require('assert');
-const Utility = require('../../src/utility');
+const Utility = require('../../src/util');
 const {
     buildStateHashData, isIndexMapStateHashActive, INDEX_MAP_STATE_HASH_ACTIVATION,
     POLL_FINALIZE_STATE_HASH_ACTIVATION, TOKEN_SUPPLY_STATE_HASH_ACTIVATION,

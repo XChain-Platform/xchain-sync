@@ -10,11 +10,12 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientSync    = require('../../../src/ClientSync');
-const ClientApplier = require('../../../src/ClientApplier');
-const ClientRollback = require('../../../src/ClientRollback');
-const HashVerifier  = require('../../../src/HashVerifier');
-const Utility       = require('../../../src/utility');
+const ClientSync    = require('../../../src/client/sync');
+const ClientApplier = require('../../../src/client/applier');
+const ClientRollback = require('../../../src/client/rollback');
+const HashVerifier  = require('../../../src/client/hash_verifier');
+const Utility       = require('../../../src/util');
+const axios = require('axios');
 
 function createMockDb(){
     return {
@@ -103,7 +104,6 @@ describe('Boundary: Source Array Parsing', function(){
     describe('_bootstrapRotateSources rotation (one round, returns boolean)', function(){
         it('does not recurse when only 1 source', async function(){
             let cs = createSync('http://s1');
-            let axios = require('axios');
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs._bootstrapRotateSources();
             assert.strictEqual(ok, false);
@@ -113,7 +113,6 @@ describe('Boundary: Source Array Parsing', function(){
 
         it('rotates sources on failure with 2 sources', async function(){
             let cs = createSync('http://s1,http://s2');
-            let axios = require('axios');
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs._bootstrapRotateSources();
             // Both sources fail this round → false; sources rotated during the pass.
@@ -123,7 +122,6 @@ describe('Boundary: Source Array Parsing', function(){
 
         it('stops after exhausting all sources (no infinite recursion)', async function(){
             let cs = createSync('http://s1,http://s2,http://s3');
-            let axios = require('axios');
             let callCount = 0;
             sinon.stub(axios, 'get').callsFake(async () => {
                 callCount++;
@@ -154,7 +152,6 @@ describe('Boundary: Source Array Parsing', function(){
 
         it('throws (does not silently return) when all sources are exhausted', async function(){
             let cs = createSync('http://s1', { maxRetries: 0 });
-            let axios = require('axios');
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             await assert.rejects(() => cs._bootstrapFromSnapshot(), /all sync sources exhausted/);
             assert.strictEqual(cs.lastAppliedBlock, null);
@@ -166,7 +163,6 @@ describe('Boundary: Source Array Parsing', function(){
             let sleep = sinon.stub(cs.util, 'sleep').resolves();   // instant backoff
             sinon.stub(cs, '_fetchAndApplySchema').resolves();
             sinon.stub(cs.applier, 'applyFullSnapshot').resolves();
-            let axios = require('axios');
             let payload = Buffer.from(JSON.stringify({ block_height: 7, tables: {} }));
             let get = sinon.stub(axios, 'get');
             get.onCall(0).rejects(new Error('transient'));

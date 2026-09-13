@@ -31,7 +31,7 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const { GENERATED_COLUMNS, generatedColumns } = require('../../src/generatedColumns');
+const { GENERATED_COLUMNS, generatedColumns } = require('../../src/schema/generated_columns');
 const lifecycle = require('../../src/tableLifecycle');
 
 // BOTH sibling schemas, resolved the way the DB-backed suites do. Absent by default
@@ -96,7 +96,7 @@ describe('generatedColumns: the frozen map matches the indexer and decoder DDL @
         for(const t of Object.keys(GENERATED_COLUMNS)) frozen[t] = [...GENERATED_COLUMNS[t]].sort();
 
         assert.deepStrictEqual(derived, frozen,
-            'src/generatedColumns.js has drifted from the indexer/decoder DDL. A table that ' +
+            'src/schema/generated_columns.js has drifted from the indexer/decoder DDL. A table that ' +
             'gained a generated column will make every follower fail its block apply with ' +
             'errno 1906 under STRICT_TRANS_TABLES; one that lost it wastes a column on every ' +
             'insert. Scanned: ' + present.join(', '));

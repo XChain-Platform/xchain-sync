@@ -26,9 +26,9 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const axios  = require('axios');
-const ClientSync   = require('../../src/ClientSync');
-const Utility      = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync   = require('../../src/client/sync');
+const Utility      = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 
 const HASHES = {
     100: { block_index: 100, ledger_hash: 'aa'.repeat(32), actions_hash: 'bb'.repeat(32), contract_hash: 'cc'.repeat(32) },

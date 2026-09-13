@@ -13,18 +13,19 @@ const sinon     = require('sinon');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
-const { parseCorsOrigin } = require('../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
 const WebSocket = require('ws');
 const setup     = require('./helpers/setup');
 const testDb    = require('./helpers/testDb');
 const fixtures  = require('./helpers/fixtures');
-const ServerPoller     = require('../../src/ServerPoller');
-const BlockBroadcaster = require('../../src/BlockBroadcaster');
-const TransparencyLog  = require('../../src/TransparencyLog');
-const SnapshotBuilder  = require('../../src/SnapshotBuilder');
-const ClientApplier    = require('../../src/ClientApplier');
-const ClientRollback   = require('../../src/ClientRollback');
-const HashVerifier     = require('../../src/HashVerifier');
+const ServerPoller     = require('../../src/server/poller');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
+const TransparencyLog  = require('../../src/server/transparency_log');
+const SnapshotBuilder  = require('../../src/server/snapshot_builder');
+const ClientApplier    = require('../../src/client/applier');
+const ClientRollback   = require('../../src/client/rollback');
+const HashVerifier     = require('../../src/client/hash_verifier');
+const clientSync = require('../../src/client/sync');
 
 const LIVE_PORT = 19400;
 
@@ -136,7 +137,6 @@ describe('Integration: Client Live Sync', function() {
                 HASH_CONFIRM_TIMEOUT: 1000
             };
 
-            let clientSync = require('../../src/ClientSync');
             let cs = new clientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
             await cs._bootstrapFromSnapshot();
             cs.lastAppliedBlock = 5;
@@ -177,7 +177,6 @@ describe('Integration: Client Live Sync', function() {
                 HASH_CONFIRM_TIMEOUT: 1000
             };
 
-            let clientSync = require('../../src/ClientSync');
             let cs = new clientSync('bitcoin', 'mainnet', replicaDb, applier, rollbacker, verifier, config, testDb.util);
             await cs._bootstrapFromSnapshot();
             cs.lastAppliedBlock = 5;

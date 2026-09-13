@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const crypto = require('crypto');
-const MerkleTree = require('../../src/MerkleTree');
+const MerkleTree = require('../../src/server/merkle_tree');
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const leaves = (n) => Array.from({ length: n }, (_, i) => sha('leaf' + i));

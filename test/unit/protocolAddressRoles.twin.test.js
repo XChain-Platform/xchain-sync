@@ -28,7 +28,7 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const { ROLE_BY_ADDRESS, canonicalizeHashAddress } = require('../../src/protocolAddressRoles');
+const { ROLE_BY_ADDRESS, canonicalizeHashAddress } = require('../../src/util/protocol_address_roles');
 
 const INDEXER_DIR = process.env.XCHAIN_INDEXER_DIR ||
     path.join(__dirname, '..', '..', '..', 'xchain-indexer');
@@ -60,7 +60,7 @@ describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression'
         // values, so a missing, extra, or re-pointed address all fail loudly.
         assert.deepStrictEqual(ROLE_BY_ADDRESS, indexerRoles,
             'xchain-sync frozen snapshot has drifted from xchain-indexer\'s config-derived ' +
-            'map; regenerate src/protocolAddressRoles.js from the indexer before deploying.');
+            'map; regenerate src/util/protocol_address_roles.js from the indexer before deploying.');
     });
 
     it('canonicalizes every special address identically to the indexer', function () {

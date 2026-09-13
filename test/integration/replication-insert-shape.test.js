@@ -41,7 +41,7 @@ const sinon   = require('sinon');
 const setup   = require('./helpers/setup');
 const testDb  = require('./helpers/testDb');
 
-const ClientApplier = require('../../src/ClientApplier');
+const ClientApplier = require('../../src/client/applier');
 const lifecycle     = require('../../src/tableLifecycle');
 
 // The classes that ride a block/catch-up payload into _insertRows. 'local',

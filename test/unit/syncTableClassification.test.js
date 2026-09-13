@@ -34,7 +34,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const lifecycle = require('../../src/tableLifecycle');
-const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES } = require('../../src/SnapshotBuilder');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES } = require('../../src/server/snapshot_builder');
 
 describe('sync-owned table classification (registry exhaustiveness)', function(){
     const sqlDir = path.join(__dirname, '..', '..', 'src', 'sql');

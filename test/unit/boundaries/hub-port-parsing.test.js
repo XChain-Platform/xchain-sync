@@ -10,7 +10,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const HubClient = require('../../../src/HubClient');
+const HubClient = require('../../../src/hub/client');
+const axios = require('axios');
 
 describe('Boundary: HubClient Port Parsing', function(){
 
@@ -83,7 +84,6 @@ describe('Boundary: HubClient Port Parsing', function(){
     describe('getIndexerConfigs integration', function(){
         it('uses db_port from hub config', async function(){
             let hub = new HubClient('localhost', 10000);
-            let axios = require('axios');
             sinon.stub(axios, 'post').resolves({
                 data: {
                     jsonrpc: '2.0',
@@ -110,7 +110,6 @@ describe('Boundary: HubClient Port Parsing', function(){
 
         it('falls back to port when db_port absent', async function(){
             let hub = new HubClient('localhost', 10000);
-            let axios = require('axios');
             sinon.stub(axios, 'post').resolves({
                 data: {
                     jsonrpc: '2.0',
@@ -137,7 +136,6 @@ describe('Boundary: HubClient Port Parsing', function(){
 
         it('defaults to 3306 when neither port field present', async function(){
             let hub = new HubClient('localhost', 10000);
-            let axios = require('axios');
             sinon.stub(axios, 'post').resolves({
                 data: {
                     jsonrpc: '2.0',

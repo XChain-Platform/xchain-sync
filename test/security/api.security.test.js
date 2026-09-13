@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const { createApiKeyMiddleware, safeEqual } = require('../../src/middleware');
+const { createApiKeyMiddleware, safeEqual } = require('../../src/http/middleware');
 
 function createMockReq(authHeader){
     let req = { headers: {} };

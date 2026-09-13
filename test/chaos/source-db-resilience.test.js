@@ -45,6 +45,7 @@ const {
 } = require('../e2e/helpers/assertions');
 
 const { waitForServerPollFailures } = require('../e2e/helpers/waitFor');
+const fixtures = require('../e2e/helpers/fixtures');
 
 const {
     bootstrapDatabases,
@@ -191,7 +192,6 @@ describe('CE-SRC-02: Slow Query Responses', function () {
         // advancement; re-seeding 21-25 leaves the height where it already was,
         // and the recovery wait below would be satisfied before the poller ran.
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
-        const fixtures = require('../e2e/helpers/fixtures');
         await fixtures.seedBlocks(sourceDbDirect, 26, 30);
 
         await server.poll();
@@ -243,7 +243,6 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
         await sourceFaults.reset();
 
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
-        const fixtures = require('../e2e/helpers/fixtures');
         await fixtures.seedBlocks(sourceDbDirect, 21, 23);
 
         // Allow circuit breaker to recover (up to 30s cooldown + half-open attempt)
@@ -264,7 +263,6 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
 
     it('server continues advancing block height under 30% TCP reset rate', async function () {
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
-        const fixtures = require('../e2e/helpers/fixtures');
         await fixtures.seedBlocks(sourceDbDirect, 21, 30);
 
         await sourceFaults.resetConnections(0.3);

@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { getTopology, getReplicatedTables } = require('../../src/replicatedTables');
+const { getTopology, getReplicatedTables } = require('../../src/schema/replicated_tables');
 
 describe('replicatedTables', function(){
 

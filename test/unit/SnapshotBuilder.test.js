@@ -13,9 +13,10 @@ const sinon  = require('sinon');
 const { PassThrough, Readable } = require('stream');
 const { EventEmitter } = require('events');
 const zlib = require('zlib');
-const SnapshotBuilder = require('../../src/SnapshotBuilder');
-const { SnapshotStreamWriter } = require('../../src/SnapshotBuilder');
-const Utility = require('../../src/utility');
+const SnapshotBuilder = require('../../src/server/snapshot_builder');
+const { SnapshotStreamWriter } = require('../../src/server/snapshot_builder');
+const Utility = require('../../src/util');
+const poolSizing = require('../../src/db/pool_sizing');
 
 function createMockDb(dbName){
     return {
@@ -1299,7 +1300,6 @@ describe('SnapshotBuilder', function(){
         // same per-dbType sizing db.js uses (DB_POOL_SIZE_<DBTYPE> > DB_POOL_SIZE >
         // per-dbType default), so a decoder Database never inherits the indexer's cap.
         it('falls back to per-dbType pool sizing, then DB_POOL_SIZE env', function(){
-            let poolSizing = require('../../src/poolSizing');
             let indexerDb  = createMockDb();
             let decoderDb  = createMockDb();
             decoderDb.dbType = 'decoder';

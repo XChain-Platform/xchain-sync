@@ -22,9 +22,9 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientSync = require('../../src/ClientSync');
-const Utility = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync = require('../../src/client/sync');
+const Utility = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 const vectors = require('../fixtures/block-hash-vectors.json');
 
 function createMockDb(){

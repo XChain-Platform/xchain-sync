@@ -30,7 +30,7 @@
  *   1 - initial replicated schema (both dbTypes).
  *   2 - binary (BLOB/binary) column values are base64-encoded on the wire
  *       as a { "__xbin__": "<base64>" } sentinel and decoded back to Buffers
- *       on apply (see src/wireCodec.js). Prior versions corrupted every
+ *       on apply (see src/util/wire_codec.js). Prior versions corrupted every
  *       binary column. A v1 peer fails closed against a v2 snapshot. This wire
  *       change affected both dbTypes, so both keys advanced to 2 together.
  *   3 - (indexer only) incremental snapshots and live block payloads gained an

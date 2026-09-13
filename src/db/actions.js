@@ -21,7 +21,7 @@
  ********************************************************************/
 
 const path       = require('path');
-const { canonicalizeHashAddress } = require('../protocolAddressRoles');
+const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
 const { isStateKeyBinCollationActive } = require('../state_key_collation_activation');
 const lifecycle = require('../tableLifecycle');
 const { assertValidIdentifier } = require('./shared.js');

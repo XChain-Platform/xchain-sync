@@ -15,7 +15,7 @@
 // ClientRollback's derive_block_index >= B reverse delete.
 
 const assert = require('assert');
-const { collectDerivedAnchorRewards } = require('../../src/derivedRewards');
+const { collectDerivedAnchorRewards } = require('../../src/server/derived_rewards');
 
 function row(over){
     return Object.assign({

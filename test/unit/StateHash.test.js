@@ -22,7 +22,7 @@
 
 const assert  = require('assert');
 const { buildStateHashData, STATE_HASH_VERSION } = require('../../src/stateHash');
-const Utility = require('../../src/utility');
+const Utility = require('../../src/util');
 const vectors = require('../fixtures/state-hash-vectors.json');
 
 // A db whose doQuery returns the canned result-sets in CALL ORDER, plus a fixed

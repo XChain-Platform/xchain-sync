@@ -21,7 +21,7 @@
 
 const assert   = require('assert');
 const Database = require('../../src/db');
-const Utility  = require('../../src/utility');
+const Utility  = require('../../src/util');
 const {
     TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASS,
     createDatabase, dropDatabase

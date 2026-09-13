@@ -12,8 +12,8 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const ClientApplier = require('../../src/ClientApplier');
-const Utility       = require('../../src/utility');
+const ClientApplier = require('../../src/client/applier');
+const Utility       = require('../../src/util');
 
 // The indexer schema, resolved the way the other cross-repo guards here do
 // (see generatedColumns.test.js). Absent by default in a standalone checkout;

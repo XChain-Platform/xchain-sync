@@ -11,9 +11,9 @@
 const path = require('path');
 const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
-const Utility = require('../../../src/utility');
-const { splitSqlStatements } = require('../../../src/sqlUtil');
-const validation = require('../../../src/validation');
+const Utility = require('../../../src/util');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
+const validation = require('../../../src/util/validation');
 
 const TEST_DB_HOST = process.env.E2E_DB_HOST || '127.0.0.1';
 const TEST_DB_PORT = parseInt(process.env.E2E_DB_PORT) || 23306;

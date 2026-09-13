@@ -18,7 +18,7 @@
  *
  ********************************************************************/
 
-const validation = require('../validation');
+const validation = require('../util/validation');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter

@@ -11,8 +11,8 @@
 const path = require('path');
 const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
-const Utility = require('../../../src/utility');
-const { splitSqlStatements } = require('../../../src/sqlUtil');
+const Utility = require('../../../src/util');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
 
 // These suites connect to a REAL MariaDB; credentials come from the
 // environment only. No fallback value: a committed default is a published

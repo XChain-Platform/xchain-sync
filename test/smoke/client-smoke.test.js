@@ -13,18 +13,22 @@ const sinon    = require('sinon');
 const http     = require('http');
 const express  = require('express');
 const cors     = require('cors');
-const { parseCorsOrigin } = require('../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
 const WebSocket = require('ws');
-const Utility  = require('../../src/utility');
-const { splitSqlStatements } = require('../../src/sqlUtil');
-const ClientApplier   = require('../../src/ClientApplier');
-const ClientRollback  = require('../../src/ClientRollback');
-const ClientSync      = require('../../src/ClientSync');
-const HashVerifier    = require('../../src/HashVerifier');
-const SnapshotBuilder = require('../../src/SnapshotBuilder');
+const Utility  = require('../../src/util');
+const { splitSqlStatements } = require('../../src/db/sql_util');
+const ClientApplier   = require('../../src/client/applier');
+const ClientRollback  = require('../../src/client/rollback');
+const ClientSync      = require('../../src/client/sync');
+const HashVerifier    = require('../../src/client/hash_verifier');
+const SnapshotBuilder = require('../../src/server/snapshot_builder');
 const { getMariadb }  = require('../integration/helpers/mariadbLoader');
 const { TestDatabase } = require('../integration/helpers/testDb');
 const fixtures = require('../integration/helpers/fixtures');
+const path = require('path');
+const fs = require('fs');
+const axios = require('axios');
+const zlib = require('zlib');
 
 const SMOKE_SOURCE_DB  = 'xchain_smoke_source';
 const SMOKE_REPLICA_DB = 'xchain_smoke_replica';
@@ -47,8 +51,6 @@ describe('Smoke: Client Mode', function() {
         util = new Utility();
 
         let mariadb = await getMariadb();
-        let path = require('path');
-        let fs   = require('fs');
 
         let conn = await mariadb.createConnection({
             host: TEST_DB_HOST, port: TEST_DB_PORT,
@@ -175,8 +177,6 @@ describe('Smoke: Client Mode', function() {
     });
 
     it('snapshot is downloadable and parseable', async function() {
-        let axios = require('axios');
-        let zlib  = require('zlib');
         let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/snapshot/indexer/bitcoin/mainnet', {
             responseType: 'arraybuffer', decompress: false
         });

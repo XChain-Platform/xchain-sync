@@ -143,7 +143,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         // canonicalization/fold tail live in the actions mixin. Each case pins the exact
         // file that holds what it compares, so a later move fails here by name rather
         // than comparing against whatever else a directory-wide read happened to contain.
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/shared.js');
+        const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/shared.js');
         if(!pair) return;
         const vSync    = pair.sync.match(/const BLOCK_HASH_VERSION = (\d+)/);
         const vIndexer = pair.indexer.match(/const BLOCK_HASH_VERSION = (\d+)/);
@@ -154,7 +154,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('every consensus SQL literal matches, in gathering order', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
+        const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
         const syncFn    = stripComments(extractFunction(pair.sync,
             /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js'));
@@ -191,7 +191,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     // counterpart in the leaf-row gathering; everything before it must match pairwise.
     it('getBlockLeafRows gathers the same consensus SQL as BlockHasher, in order', function(){
         const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
-        const bhSrc = fs.readFileSync(syncFile('src/BlockHasher.js'), 'utf8');
+        const bhSrc = fs.readFileSync(syncFile('src/client/block_hasher.js'), 'utf8');
         const leafSql = sqlLiterals(stripComments(extractFunction(dbSrc,
             /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')));
         const hashSql = sqlLiterals(stripComments(extractFunction(bhSrc,
@@ -216,7 +216,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
+        const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
         const loopRe = /for \(const row of ledger\.(credits|debits|escrows)\)\s+row\.address = canonicalizeHashAddress\(row\.address\);/g;
         for(const [name, src] of [['BlockHasher.js', pair.sync], ['db/actions.js', pair.indexer]]){
@@ -231,7 +231,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('the hash-assembly tail (chaining + hash_version fold) is identical', function(){
-        const pair = loadPair(this, 'src/BlockHasher.js', 'src/db/actions.js');
+        const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
         const tailRe = /let tables = \[[^]*?tables\.forEach\(table => \{[^]*?\}\);/;
         const tSync    = pair.sync.match(tailRe);
@@ -243,7 +243,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('utility jsonStringify + getDataHash (shared preimage serializer) are identical', function(){
-        const pair = loadPair(this, 'src/utility.js', 'src/utility.js');
+        const pair = loadPair(this, 'src/util/index.js', 'src/utility.js');
         if(!pair) return;
         for(const sig of [/jsonStringify\(obj\)\{/, /getDataHash\(data\)\{/]){
             assert.strictEqual(

@@ -16,7 +16,7 @@
  ********************************************************************/
 
 const assert = require('assert');
-const pinned = require('../../src/pinnedValidators');
+const pinned = require('../../src/client/pinned_validators');
 
 const ENVKEY = 'CHECKPOINT_VALIDATORS_BTC_REGTEST';
 

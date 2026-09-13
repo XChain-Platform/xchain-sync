@@ -8,7 +8,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 //
-// The gate behind src/schema-version.js: a migration that lands DDL against a
+// The gate behind src/schema/version.js: a migration that lands DDL against a
 // wire-replicated table decides what a follower can STORE, so it must arrive with
 // a SCHEMA_VERSION bump for that dbType or followers apply rows into a schema that
 // cannot hold them (Unknown column, ER_DUP_ENTRY, a truncated 4-byte character)
@@ -32,8 +32,8 @@ const os     = require('os');
 const path   = require('path');
 
 const lifecycle        = require('../../src/tableLifecycle');
-const replicatedTables = require('../../src/replicatedTables');
-const { MIGRATION_FRONTIER } = require('../../src/schema-version');
+const replicatedTables = require('../../src/schema/replicated_tables');
+const { MIGRATION_FRONTIER } = require('../../src/schema/version');
 
 const MIGRATION_DIRS = {
     indexer: process.env.XCHAIN_INDEXER_SQL_PATH
@@ -202,7 +202,7 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
                         + ' bump:\n'
                         + findings.map(f => '  ' + f.file + ' -> ' + f.tables.join(', ')
                             + (f.undated ? '  [filename carries no date]' : '')).join('\n')
-                        + '\nBump SCHEMA_VERSION.' + dbType + ' in src/schema-version.js with a history'
+                        + '\nBump SCHEMA_VERSION.' + dbType + ' in src/schema/version.js with a history'
                         + ' entry naming what a follower on the previous version cannot store, move the'
                         + ' frontier to the newest migration date, and land it with the next fleet'
                         + ' release: the version decides what peers ACCEPT, so a follower must refuse'

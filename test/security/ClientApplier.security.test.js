@@ -13,10 +13,10 @@ const sinon  = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 // Use proxyquire to inject validation into ClientApplier
-const ClientApplier = proxyquire('../../src/ClientApplier', {
-    './validation': require('../../src/validation')
+const ClientApplier = proxyquire('../../src/client/applier', {
+    './validation': require('../../src/util/validation')
 });
-const { SCHEMA_VERSION } = require('../../src/schema-version');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 
 function createMockDb(){
     return {

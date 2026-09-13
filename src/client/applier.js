@@ -19,17 +19,17 @@
  *
  ********************************************************************/
 
-const validation          = require('./validation');
-const balanceHelpers      = require('./balance-helpers');
-const { SCHEMA_VERSION }  = require('./schema-version');
-const { decodeValue }     = require('./wireCodec');
-const { rederiveEscrowGate } = require('./ClientRollback');
-const { generatedColumns }   = require('./generatedColumns');
-const { computeFollowerRoots, seedSnapshotRoots } = require('./stateCommitment');
-const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('./state_commitment_activation');
-const { coinTicker }      = require('./consensus-constants');
-const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('./SnapshotBuilder');
-const lifecycle           = require('./tableLifecycle');
+const validation          = require('../util/validation');
+const balanceHelpers      = require('./balance_helpers');
+const { SCHEMA_VERSION }  = require('../schema/version');
+const { decodeValue }     = require('../util/wire_codec');
+const { rederiveEscrowGate } = require('./rollback');
+const { generatedColumns }   = require('../schema/generated_columns');
+const { computeFollowerRoots, seedSnapshotRoots } = require('../stateCommitment');
+const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('../state_commitment_activation');
+const { coinTicker }      = require('../consensus-constants');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
+const lifecycle           = require('../tableLifecycle');
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
@@ -650,7 +650,7 @@ class ClientApplier {
         // with SELECT *, so one rides the wire like any other column, and naming it in
         // the INSERT is errno 1906: harmless on a permissive server, a hard error under
         // STRICT_TRANS_TABLES, which every modern MariaDB defaults to. See
-        // src/generatedColumns.js for why this is a frozen map and not a schema probe.
+        // src/schema/generated_columns.js for why this is a frozen map and not a schema probe.
         let generated = generatedColumns(table);
         if(generated.size){
             columns = columns.filter(c => !generated.has(c));

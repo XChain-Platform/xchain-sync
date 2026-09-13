@@ -26,7 +26,7 @@ const fs     = require('fs');
 const path   = require('path');
 
 const lifecycle        = require('../../src/tableLifecycle');
-const replicatedTables = require('../../src/replicatedTables');
+const replicatedTables = require('../../src/schema/replicated_tables');
 
 const SQL_DIRS = {
     indexer: process.env.XCHAIN_INDEXER_SQL_PATH

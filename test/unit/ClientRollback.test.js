@@ -10,9 +10,9 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientRollback = require('../../src/ClientRollback');
-const Utility = require('../../src/utility');
-const balanceHelpers = require('../../src/balance-helpers');
+const ClientRollback = require('../../src/client/rollback');
+const Utility = require('../../src/util');
+const balanceHelpers = require('../../src/client/balance_helpers');
 
 function createMockDb(){
     return {

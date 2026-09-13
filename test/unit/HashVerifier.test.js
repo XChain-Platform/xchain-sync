@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const HashVerifier = require('../../src/HashVerifier');
+const HashVerifier = require('../../src/client/hash_verifier');
 
 describe('HashVerifier', function(){
 

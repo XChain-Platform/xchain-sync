@@ -32,11 +32,11 @@
 const mariadb    = require('mariadb');
 const fs         = require('fs');
 const path       = require('path');
-const validation = require('../validation');
-const { splitSqlStatements } = require('../sqlUtil');
-const poolSizing = require('../poolSizing');
+const validation = require('../util/validation');
+const { splitSqlStatements } = require('./sql_util');
+const poolSizing = require('./pool_sizing');
 const stakeWeightCollation = require('../stake_weight_collation_activation');
-const utf8mb4Columns = require('../utf8mb4Columns');
+const utf8mb4Columns = require('../schema/utf8mb4_columns');
 const lifecycle = require('../tableLifecycle');
 const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
 
@@ -1066,7 +1066,7 @@ class Database {
     // migration, and it has to land with it: an origin that can hold the bytes and a
     // follower that cannot is a fleet-wide halt with no schema error anywhere upstream.
     //
-    // src/utf8mb4Columns.js is the byte-identical twin of the indexer's copy, so the two
+    // src/schema/utf8mb4_columns.js is the byte-identical twin of the indexer's copy, so the two
     // sides cannot disagree about which columns are in the set or what shape they take.
     //
     // Idempotent and additive: a column already utf8mb4 is skipped (so a snapshot-bootstrapped

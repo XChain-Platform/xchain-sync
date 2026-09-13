@@ -20,10 +20,10 @@ const axios      = require('axios');
 const zlib       = require('zlib');
 const proxyquire = require('proxyquire');
 const EventEmitter = require('events');
-const ClientSync = require('../../src/ClientSync');
-const { SCHEMA_VERSION } = require('../../src/schema-version');
-const Utility    = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync = require('../../src/client/sync');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
+const Utility    = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 const realConfig = require('../../src/config');
 
 function createMockDb(overrides){
@@ -593,7 +593,7 @@ describe('ClientSync _syncLookupTablesPaged', function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
         sinon.stub(console, 'warn');
-        rt = require('../../src/replicatedTables');
+        rt = require('../../src/schema/replicated_tables');
     });
     afterEach(function(){ sinon.restore(); });
 
@@ -1606,7 +1606,7 @@ describe('ClientSync: _connectWebSocket', function(){
         FakeWS.OPEN = 1;
         Object.setPrototypeOf(FakeWS.prototype, EventEmitter.prototype);
 
-        ClientSyncWS = proxyquire('../../src/ClientSync', { ws: FakeWS });
+        ClientSyncWS = proxyquire('../../src/client/sync', { ws: FakeWS });
     });
     afterEach(function(){ sinon.restore(); });
 
@@ -1665,7 +1665,7 @@ describe('ClientSync: _connectWebSocket', function(){
         // Make FakeWS throw on construction
         let ThrowWS = function(){ throw new Error('ws construct fail'); };
         ThrowWS.OPEN = 1;
-        let CSThrow = proxyquire('../../src/ClientSync', { ws: ThrowWS });
+        let CSThrow = proxyquire('../../src/client/sync', { ws: ThrowWS });
         let db = createMockDb(), applier = createMockApplier(), rb = createMockRollback();
         let hv = new HashVerifier(), util = new Utility();
         let config = {
@@ -1977,7 +1977,7 @@ describe('ClientSync: misc branch coverage', function(){
     it('constructor: validatorId falls back to "unknown" when hostname() is empty', function(){
         // Requires proxyquire to intercept the inline require('os') in the constructor
         const fakeOs = { hostname: () => '' };
-        const ClientSyncOS = proxyquire('../../src/ClientSync', { os: fakeOs });
+        const ClientSyncOS = proxyquire('../../src/client/sync', { os: fakeOs });
         const savedId = process.env.VALIDATOR_ID;
         delete process.env.VALIDATOR_ID;
 
@@ -2311,7 +2311,7 @@ describe('ClientSync lookup-hole repair and count-check scoping @regression', fu
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
         sinon.stub(console, 'warn');
-        rt = require('../../src/replicatedTables');
+        rt = require('../../src/schema/replicated_tables');
     });
     afterEach(function(){ sinon.restore(); });
 

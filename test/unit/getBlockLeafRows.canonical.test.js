@@ -18,7 +18,7 @@
 const assert  = require('assert');
 const sinon   = require('sinon');
 const Database = require('../../src/db');
-const { ROLE_BY_ADDRESS } = require('../../src/protocolAddressRoles');
+const { ROLE_BY_ADDRESS } = require('../../src/util/protocol_address_roles');
 
 // Pick one concrete special address per ledger role from the frozen map.
 function addrForRole(role){

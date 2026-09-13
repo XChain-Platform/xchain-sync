@@ -23,9 +23,9 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const axios  = require('axios');
-const ClientSync   = require('../../src/ClientSync');
-const Utility      = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync   = require('../../src/client/sync');
+const Utility      = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 
 function createMockDb(){
     return {

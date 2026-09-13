@@ -365,7 +365,7 @@ describe('E2E: Disconnect/Resume Parity', function() {
                 "UPDATE credits SET amount = '1000' WHERE action_index = 1100");
             // Later seeds rebuilt the source's balances while the corrupted
             // amount was live; rebuild them now that the ledger is honest.
-            await require('../../src/balance-helpers').rebuildBalances(sourceDb);
+            await require('../../src/client/balance_helpers').rebuildBalances(sourceDb);
             await client.stop();
             await testDb.truncateAll(replicaDb);
             client = new ClientProcess(replicaDb, server.getUrl());

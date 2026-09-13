@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const Utility = require('../../src/utility');
+const Utility = require('../../src/util');
 
 describe('Utility', function(){
 

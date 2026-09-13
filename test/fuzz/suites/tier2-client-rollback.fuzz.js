@@ -31,7 +31,7 @@ describe('Tier 2 - ClientRollback @tier2', function () {
     let ClientRollback, rollback, db, util;
 
     before(function () {
-        ClientRollback = require('../../../src/ClientRollback');
+        ClientRollback = require('../../../src/client/rollback');
     });
 
     beforeEach(function () {

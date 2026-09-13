@@ -53,12 +53,12 @@ const BLOCK_HASH_VERSION = 1;
 // compare different spans.
 const DEFAULT_CONTENT_PARITY_WINDOW = 100;
 
-const replicatedTables = require('./replicatedTables');
-const lifecycle = require('./tableLifecycle');
-const { buildStateHashData } = require('./stateHash');
-const { gasTickSymbol } = require('./consensus-constants');
-const { canonicalizeHashAddress } = require('./protocolAddressRoles');
-const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
+const replicatedTables = require('../schema/replicated_tables');
+const lifecycle = require('../tableLifecycle');
+const { buildStateHashData } = require('../stateHash');
+const { gasTickSymbol } = require('../consensus-constants');
+const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
+const { isStateKeyBinCollationActive } = require('../state_key_collation_activation');
 
 class BlockHasher {
 

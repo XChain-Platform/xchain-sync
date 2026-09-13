@@ -30,7 +30,7 @@ const {
 // forces a validator restart after a server DDL upgrade). The mock db has no dbType, so
 // the applier resolves to 'indexer'. Stamp the matching version so the shape-robustness
 // properties exercise the apply path instead of tripping the version gate.
-const { SCHEMA_VERSION } = require('../../../src/schema-version');
+const { SCHEMA_VERSION } = require('../../../src/schema/version');
 
 // Action-scoped table names (subset for payload generation)
 const ACTION_TABLES = [

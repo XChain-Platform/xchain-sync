@@ -24,8 +24,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ServerPoller = require('../../src/ServerPoller');
-const Utility = require('../../src/utility');
+const ServerPoller = require('../../src/server/poller');
+const Utility = require('../../src/util');
 
 const HASH_ROW = {
     block_index: 7, block_time: 1700,

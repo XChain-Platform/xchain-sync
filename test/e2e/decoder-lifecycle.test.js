@@ -40,20 +40,20 @@ const assert    = require('assert');
 const http      = require('http');
 const express   = require('express');
 const cors      = require('cors');
-const { parseCorsOrigin } = require('../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
 const WebSocket = require('ws');
 const axios     = require('axios');
 const sinon     = require('sinon');
 
 const Database         = require('../../src/db');
-const ServerPoller     = require('../../src/ServerPoller');
-const BlockBroadcaster = require('../../src/BlockBroadcaster');
-const SnapshotBuilder  = require('../../src/SnapshotBuilder');
-const ClientSync       = require('../../src/ClientSync');
-const ClientApplier    = require('../../src/ClientApplier');
-const ClientRollback   = require('../../src/ClientRollback');
-const HashVerifier     = require('../../src/HashVerifier');
-const Utility          = require('../../src/utility');
+const ServerPoller     = require('../../src/server/poller');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
+const SnapshotBuilder  = require('../../src/server/snapshot_builder');
+const ClientSync       = require('../../src/client/sync');
+const ClientApplier    = require('../../src/client/applier');
+const ClientRollback   = require('../../src/client/rollback');
+const HashVerifier     = require('../../src/client/hash_verifier');
+const Utility          = require('../../src/util');
 // Proxy-trust and rate-limiter wiring comes from the real api.js rather than a
 // parallel copy: how req.ip resolves and which limiter guards which route are
 // production decisions, and a harness that re-declares them cannot notice when

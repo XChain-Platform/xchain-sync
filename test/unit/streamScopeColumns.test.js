@@ -39,7 +39,7 @@ const fs     = require('fs');
 const path   = require('path');
 
 const lifecycle        = require('../../src/tableLifecycle');
-const replicatedTables = require('../../src/replicatedTables');
+const replicatedTables = require('../../src/schema/replicated_tables');
 
 // The registry declares indexer-schema tables plus the handful xchain-sync owns,
 // so those are the two DDL trees to scan. The decoder topology is declared
@@ -160,7 +160,7 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         // Only the INDEXER branch: the decoder topology is declared literally in
         // replicatedTables.js, not generated from this registry, so its block_index
         // range is correct as written and must not be swept up by this assertion.
-        const snapshot = read('src/SnapshotBuilder.js');
+        const snapshot = read('src/server/snapshot_builder.js');
         const start    = snapshot.indexOf('if(indexerBlockScoped.has(table)){');
         assert.ok(start !== -1, 'the incremental catch-up indexer branch moved; this guard cannot see it');
         const branch   = snapshot.slice(start, snapshot.indexOf('indexerFullDump.has(table)', start));

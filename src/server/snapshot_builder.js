@@ -21,16 +21,16 @@
 
 const zlib = require('zlib');
 const { once } = require('events');
-const { SCHEMA_VERSION } = require('./schema-version');
-const { encodeRow, encodeTables } = require('./wireCodec');
-const replicatedTables = require('./replicatedTables');
-const tableLifecycle = require('./tableLifecycle');
-const { collectUpdatedRows } = require('./updatedRows');
-const { collectMaturedCooldownCredits } = require('./cooldownCredits');
-const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
-const { collectDerivedAnchorRewards } = require('./derivedRewards');
-const { activationDelayBlocks } = require('./consensus-constants');
-const poolSizing = require('./poolSizing');
+const { SCHEMA_VERSION } = require('../schema/version');
+const { encodeRow, encodeTables } = require('../util/wire_codec');
+const replicatedTables = require('../schema/replicated_tables');
+const tableLifecycle = require('../tableLifecycle');
+const { collectUpdatedRows } = require('./updated_rows');
+const { collectMaturedCooldownCredits } = require('./cooldown_credits');
+const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
+const { collectDerivedAnchorRewards } = require('./derived_rewards');
+const { activationDelayBlocks } = require('../consensus-constants');
+const poolSizing = require('../db/pool_sizing');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -1127,8 +1127,11 @@ class SnapshotBuilder {
 
 }
 
+// Hung on the class rather than on module.exports so the file has ONE export
+// shape. Every call site reads the same property off the same object either way.
+SnapshotBuilder.SnapshotStreamWriter = SnapshotStreamWriter;
+SnapshotBuilder.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
+SnapshotBuilder.SOURCE_UNSTREAMED_TABLES = SOURCE_UNSTREAMED_TABLES;
+SnapshotBuilder.orderSnapshotTables = orderSnapshotTables;
+
 module.exports = SnapshotBuilder;
-module.exports.SnapshotStreamWriter = SnapshotStreamWriter;
-module.exports.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
-module.exports.SOURCE_UNSTREAMED_TABLES = SOURCE_UNSTREAMED_TABLES;
-module.exports.orderSnapshotTables = orderSnapshotTables;

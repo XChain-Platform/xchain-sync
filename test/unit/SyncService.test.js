@@ -27,9 +27,11 @@ const mariadbStub = {
 // the raw mariadb stub (whose pooled connection.query returns undefined).
 const Database = proxyquire('../../src/db', { 'mariadb': mariadbStub });
 const SyncService = proxyquire('../../src/SyncService', { './db': Database });
-const TransparencyLog = require('../../src/TransparencyLog');
-const ClientSync   = require('../../src/ClientSync');
-const ServerPoller = require('../../src/ServerPoller');
+const TransparencyLog = require('../../src/server/transparency_log');
+const ClientSync   = require('../../src/client/sync');
+const ServerPoller = require('../../src/server/poller');
+const fs = require('fs');
+const path = require('path');
 
 function indexerCfg(over){
     return Object.assign({
@@ -646,8 +648,6 @@ describe('SyncService', function(){
         // and is not reachable from a require. A readiness flag nothing gates on is
         // exactly the defect this item is about.
         it('gates GET /health on readiness before the per-chain loop', function(){
-            const fs   = require('fs');
-            const path = require('path');
             const src  = fs.readFileSync(path.join(__dirname, '../../src/api.js'), 'utf8');
             const route = src.slice(src.indexOf("app.get('/health'"), src.indexOf("app.get('/status'"));
             assert.ok(/isReady\(\)/.test(route), '/health does not consult isReady()');

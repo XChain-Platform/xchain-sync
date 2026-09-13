@@ -14,7 +14,7 @@
 // they stand, which on a replica is an aborted apply transaction.
 
 const assert = require('assert');
-const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/shutdown');
+const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/http/shutdown');
 const SyncService = require('../../src/SyncService');
 const { waitFor } = require('../e2e/helpers/waitFor');
 

@@ -22,7 +22,7 @@
 // integration venue.
 
 const assert = require('assert');
-const { collectRedrivenValidatorRewards } = require('../../src/recoveryRewards');
+const { collectRedrivenValidatorRewards } = require('../../src/server/recovery_rewards');
 
 function row(over){
     return Object.assign({

@@ -31,8 +31,8 @@ const mariadbStub = {
 
 const Database        = proxyquire('../../src/db', { 'mariadb': mariadbStub });
 const SyncService     = proxyquire('../../src/SyncService', { './db': Database });
-const TransparencyLog = require('../../src/TransparencyLog');
-const ClientSync      = require('../../src/ClientSync');
+const TransparencyLog = require('../../src/server/transparency_log');
+const ClientSync      = require('../../src/client/sync');
 
 function baseConfig(over){
     return Object.assign({

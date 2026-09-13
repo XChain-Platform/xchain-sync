@@ -10,8 +10,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientApplier = require('../../../src/ClientApplier');
-const Utility = require('../../../src/utility');
+const ClientApplier = require('../../../src/client/applier');
+const Utility = require('../../../src/util');
 
 function createMockDb(){
     return {

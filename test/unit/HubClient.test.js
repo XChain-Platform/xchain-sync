@@ -11,7 +11,7 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const axios  = require('axios');
-const HubClient = require('../../src/HubClient');
+const HubClient = require('../../src/hub/client');
 
 describe('HubClient', function(){
 

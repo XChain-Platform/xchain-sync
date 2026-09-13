@@ -11,7 +11,7 @@
 const assert = require('assert');
 const setup  = require('./helpers/setup');
 const testDb = require('./helpers/testDb');
-const TransparencyLog = require('../../src/TransparencyLog');
+const TransparencyLog = require('../../src/server/transparency_log');
 
 describe('Integration: TransparencyLog', function() {
 

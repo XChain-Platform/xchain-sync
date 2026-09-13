@@ -22,10 +22,10 @@
 const assert     = require('assert');
 const sinon      = require('sinon');
 const proxyquire = require('proxyquire');
-const ClientSync = require('../../src/ClientSync');
-const HashVerifier = require('../../src/HashVerifier');
-const Utility    = require('../../src/utility');
-const { getReplicatedTables, missingReplicatedTables } = require('../../src/replicatedTables');
+const ClientSync = require('../../src/client/sync');
+const HashVerifier = require('../../src/client/hash_verifier');
+const Utility    = require('../../src/util');
+const { getReplicatedTables, missingReplicatedTables } = require('../../src/schema/replicated_tables');
 
 // The BET family: the tables the live observation found missing on a replica
 // whose source was already writing them.

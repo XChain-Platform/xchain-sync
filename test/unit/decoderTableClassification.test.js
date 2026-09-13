@@ -41,8 +41,8 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const { getReplicatedTables }  = require('../../src/replicatedTables');
-const { OPERATOR_LOCAL_TABLES } = require('../../src/SnapshotBuilder');
+const { getReplicatedTables }  = require('../../src/schema/replicated_tables');
+const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
 
 // Resolved exactly as the other two decoder-schema readers resolve it
 // (generatedColumns.test.js, replicatedDatetimeColumns.test.js), so this guard
@@ -72,7 +72,7 @@ function requireSibling(ctx){
 const DECODER_EXCLUDED = new Set(['mempool_transactions']);
 
 const ADD_INSTRUCTIONS =
-    '\n\nEither add it to TOPOLOGY.decoder in src/replicatedTables.js (and update the ' +
+    '\n\nEither add it to TOPOLOGY.decoder in src/schema/replicated_tables.js (and update the ' +
     'by-value pin in test/unit/replicatedTables.test.js), or add it to DECODER_EXCLUDED ' +
     'here with a written reason. Either way check SnapshotBuilder OPERATOR_LOCAL_TABLES / ' +
     'decoderSkip and ClientRollback decoderBlockTables / decoderTxScopedTables.';

@@ -21,7 +21,7 @@
  *
  ********************************************************************/
 
-const MerkleTree = require('./MerkleTree.js');
+const MerkleTree = require('./merkle_tree.js');
 
 class TransparencyLog {
 

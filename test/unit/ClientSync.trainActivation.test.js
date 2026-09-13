@@ -37,9 +37,9 @@ const os     = require('os');
 const path   = require('path');
 const axios  = require('axios');
 
-const ClientSync   = require('../../src/ClientSync');
-const Utility      = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync   = require('../../src/client/sync');
+const Utility      = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 
 // An in-memory sync_halt: recordHalt stores the row getActiveHalt hands back, so a
 // second ClientSync over the same db sees exactly what a restarted process would.

@@ -9,7 +9,7 @@
 const assert     = require('assert');
 const sinon      = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
-const poolSizing = require('../../src/poolSizing');
+const poolSizing = require('../../src/db/pool_sizing');
 
 // ServerPoller assembles one indexer block payload from roughly this many
 // sequential queries (block-scoped rows over 8+ tables, action-scoped rows

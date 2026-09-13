@@ -23,7 +23,7 @@
 const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { splitSqlStatements } = require('../../../src/sqlUtil');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
 
 // Apply the decoder schema (from xchain-decoder/src/sql/) to a database.
 // Skips mempool_transactions per the xchain-sync decoder decisions (not synced).

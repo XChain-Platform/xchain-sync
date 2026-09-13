@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { BINARY_TAG, encodeRow, encodeTables, decodeValue } = require('../../src/wireCodec');
+const { BINARY_TAG, encodeRow, encodeTables, decodeValue } = require('../../src/util/wire_codec');
 
 // Simulate the wire trip: a row is encoded, JSON-serialized, parsed back, and
 // each column value decoded, exactly what SnapshotBuilder/BlockBroadcaster do

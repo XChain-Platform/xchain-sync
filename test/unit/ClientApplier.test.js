@@ -10,10 +10,10 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientApplier = require('../../src/ClientApplier');
-const Utility = require('../../src/utility');
-const { SCHEMA_VERSION } = require('../../src/schema-version');
-const balanceHelpers = require('../../src/balance-helpers');
+const ClientApplier = require('../../src/client/applier');
+const Utility = require('../../src/util');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
+const balanceHelpers = require('../../src/client/balance_helpers');
 
 function createMockDb(){
     return {

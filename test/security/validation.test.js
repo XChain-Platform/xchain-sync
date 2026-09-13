@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const validation = require('../../src/validation');
+const validation = require('../../src/util/validation');
 
 describe('validation', function(){
 

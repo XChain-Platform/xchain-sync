@@ -26,7 +26,7 @@
 
 const assert = require('assert');
 const config = require('../../src/config');
-const { PINNED } = require('../../src/pinnedValidators');
+const { PINNED } = require('../../src/client/pinned_validators');
 
 // True once any baked-in (chain, network) carries a real launch validator set.
 // Env overrides are deliberately ignored: this is about what the SHIPPED file

@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const Utility = require('../../../src/utility');
+const Utility = require('../../../src/util');
 
 // The mariadb import is at module level, so proxyquire injects a mock pool to test the circuit breaker logic without a real connection.
 const proxyquire = require('proxyquire');

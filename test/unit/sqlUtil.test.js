@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { stripSqlLineComments, splitSqlStatements } = require('../../src/sqlUtil');
+const { stripSqlLineComments, splitSqlStatements } = require('../../src/db/sql_util');
 
 describe('sqlUtil', function(){
 

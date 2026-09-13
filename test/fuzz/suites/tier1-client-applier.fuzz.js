@@ -27,7 +27,7 @@ const {
     fullSnapshotPayload, partialSnapshotPayload,
 } = require('../generators/payloads');
 const { genericDataRow, rowArray, mixedRows } = require('../generators/rows');
-const { SCHEMA_VERSION } = require('../../../src/schema-version');
+const { SCHEMA_VERSION } = require('../../../src/schema/version');
 
 let crashLog = [];
 
@@ -36,7 +36,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
     let ClientApplier, applier, db, util;
 
     before(function () {
-        ClientApplier = require('../../../src/ClientApplier');
+        ClientApplier = require('../../../src/client/applier');
     });
 
     beforeEach(function () {

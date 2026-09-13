@@ -11,7 +11,7 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const WebSocket = require('ws');
-const BlockBroadcaster = require('../../../src/BlockBroadcaster');
+const BlockBroadcaster = require('../../../src/server/block_broadcaster');
 
 function mockWs(){
     return {

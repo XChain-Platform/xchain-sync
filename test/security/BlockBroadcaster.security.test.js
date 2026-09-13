@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const BlockBroadcaster = require('../../src/BlockBroadcaster');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
 
 function createMockWs(ip){
     return {

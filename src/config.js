@@ -19,7 +19,7 @@
  ********************************************************************/
 
 const { coinTicker } = require('./consensus-constants');
-const { parseCorsOrigin } = require('./corsOrigin');
+const { parseCorsOrigin } = require('./http/cors_origin');
 
 // Parse an integer from an env var, returning defaultVal when the value is
 // absent, empty, or non-numeric.  Unlike `parseInt(x) || default`, this

@@ -17,10 +17,10 @@ const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
 
-const SnapshotBuilder  = require('../../src/SnapshotBuilder');
-const ClientApplier    = require('../../src/ClientApplier');
-const BlockBroadcaster = require('../../src/BlockBroadcaster');
-const { BINARY_TAG }   = require('../../src/wireCodec');
+const SnapshotBuilder  = require('../../src/server/snapshot_builder');
+const ClientApplier    = require('../../src/client/applier');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
+const { BINARY_TAG }   = require('../../src/util/wire_codec');
 
 // Binary payload chosen to break a naive toString() round-trip: contains a NUL,
 // 0xFF, and bytes that are not valid UTF-8.

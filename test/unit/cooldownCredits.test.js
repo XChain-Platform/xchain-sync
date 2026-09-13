@@ -5,7 +5,7 @@
 // MariaDB): the collector only calls getStatusId and doQuery.
 
 const assert = require('assert');
-const { collectMaturedCooldownCredits } = require('../../src/cooldownCredits.js');
+const { collectMaturedCooldownCredits } = require('../../src/server/cooldown_credits.js');
 
 function mockDb({ statusId = 1, queries = [] } = {}) {
     let call = 0;

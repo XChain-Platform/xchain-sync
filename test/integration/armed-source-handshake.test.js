@@ -29,10 +29,10 @@ const express   = require('express');
 const axios     = require('axios');
 const WebSocket = require('ws');
 
-const { createApiKeyMiddleware, safeEqual } = require('../../src/middleware');
-const ClientSync   = require('../../src/ClientSync');
-const HashVerifier = require('../../src/HashVerifier');
-const Utility      = require('../../src/utility');
+const { createApiKeyMiddleware, safeEqual } = require('../../src/http/middleware');
+const ClientSync   = require('../../src/client/sync');
+const HashVerifier = require('../../src/client/hash_verifier');
+const Utility      = require('../../src/util');
 
 const PORT       = 19477;
 const SERVER_KEY = 'armed-source-key';

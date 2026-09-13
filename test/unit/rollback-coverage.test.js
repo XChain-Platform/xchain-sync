@@ -43,13 +43,13 @@
 'use strict';
 
 const assert         = require('assert');
-const ClientRollback = require('../../src/ClientRollback');
-const ServerPoller   = require('../../src/ServerPoller');
-const Utility        = require('../../src/utility');
+const ClientRollback = require('../../src/client/rollback');
+const ServerPoller   = require('../../src/server/poller');
+const Utility        = require('../../src/util');
 
 // ServerPoller's constructor only assigns the per-dbType table lists (no DB or
 // network work), so we can read them straight off a stub-backed instance.
-const replicatedTablesMod = require('../../src/replicatedTables');
+const replicatedTablesMod = require('../../src/schema/replicated_tables');
 
 // The `special` bucket (stream:special) carries replicated-but-not-per-scope-extracted
 // tables: sync_meta on indexer, dispensers on decoder. ServerPoller never assigns it to a
@@ -76,7 +76,7 @@ function replicatedTables(dbType){
 // row-delete. dispensers: the decoder live-prunes it (soft-expire), so it seeds from the
 // full snapshot and is held in parity by the periodic apply-side reconcile; deleting its
 // rows on a reorg would corrupt that replicated state with no per-block stream to restore
-// them (ClientRollback.js: decoderTxScopedTables comment; src/replicatedTables.js:47-49).
+// them (ClientRollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js:47-49).
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
     dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
 };
@@ -97,6 +97,11 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 // (src/tableLifecycle.js, byte-identical to the xchain-indexer copy; asserted
 // below). Per-table rationale lives with each registry entry.
 const lifecycleTwin = require('../../src/tableLifecycle');
+const pathMod = require('path');
+const fs = require('fs');
+const assertLocal = require('assert');
+const sh = require('../../src/stateHash');
+const widenSet = require('../../src/schema/utf8mb4_columns');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
@@ -104,7 +109,6 @@ const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTw
 // sibling three levels up. (The unit tier previously hard-coded only the
 // monorepo path, which CI never populates, so every cross-repo guard below skipped.)
 function indexerFile(rel){
-    const pathMod = require('path');
     const root = process.env.XCHAIN_INDEXER_SQL_PATH
         ? pathMod.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
         : pathMod.resolve(__dirname, '..', '..', '..', 'xchain-indexer');
@@ -317,7 +321,6 @@ describe('Rollback coverage guard @regression', function(){
     // guard extracts the backtick SQL literals from each and asserts they are
     // whitespace-normalised identical. If you edit one, edit the other.
     it('escrow re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function escrowSql(path){
             const src = fs.readFileSync(path, 'utf8');
             const m = src.match(/\/\/<ESCROW-REDERIVE-SQL>([\s\S]*?)\/\/<\/ESCROW-REDERIVE-SQL>/);
@@ -327,7 +330,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
@@ -343,7 +346,6 @@ describe('Rollback coverage guard @regression', function(){
     // disagree. Both files carry the SQL between //<COINPAY-MATCH-REDERIVE-SQL> markers;
     // this extracts the backtick literals and asserts whitespace-normalised equality.
     it('COINPay match-status re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function coinpaySql(path){
             const src = fs.readFileSync(path, 'utf8');
             const m = src.match(/\/\/<COINPAY-MATCH-REDERIVE-SQL>([\s\S]*?)\/\/<\/COINPAY-MATCH-REDERIVE-SQL>/);
@@ -352,7 +354,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.strictEqual(lits.length, 2, `expected 2 SQL literals in the marked block of ${path}, got ${lits.length}`);
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(coinpaySql(syncPath), coinpaySql(indexerPath),
@@ -364,8 +366,7 @@ describe('Rollback coverage guard @regression', function(){
     // payment" cannot be told from "the payment predates my floor", and demoting on that
     // reading would invent a divergence instead of removing one.
     it('the replica calls the COINPay re-derive, and never on a truncated replica', function(){
-        const fs  = require('fs');
-        const src = fs.readFileSync(require('path').resolve(__dirname, '../../src/ClientRollback.js'), 'utf8');
+        const src = fs.readFileSync(require('path').resolve(__dirname, '../../src/client/rollback.js'), 'utf8');
         assert.ok(/await rederiveCoinpayMatchStatus\(this\.db\)/.test(src),
             'ClientRollback defines the re-derive but never calls it');
         const call = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
@@ -385,7 +386,6 @@ describe('Rollback coverage guard @regression', function(){
     // markers; this extracts the backtick literals and asserts whitespace-normalised
     // equality. If you edit one, edit the other.
     it('cross-chain mirror reorg delete SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function crossChainSql(path){
             const src = fs.readFileSync(path, 'utf8');
             const m = src.match(/\/\/<CROSS-CHAIN-MIRROR-REORG-DELETE>([\s\S]*?)\/\/<\/CROSS-CHAIN-MIRROR-REORG-DELETE>/);
@@ -394,7 +394,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(crossChainSql(syncPath), crossChainSql(indexerPath),
@@ -411,7 +411,6 @@ describe('Rollback coverage guard @regression', function(){
     // literals, the replica as double-quoted concatenation, and the interpolated table name
     // drops out of both) and asserts whitespace-normalised equality.
     it('contract slash-restore SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function slashRestoreSql(path){
             const src = fs.readFileSync(path, 'utf8');
             const m = src.match(/\/\/<CONTRACT-SLASH-RESTORE-SQL>([\s\S]*?)\/\/<\/CONTRACT-SLASH-RESTORE-SQL>/);
@@ -420,7 +419,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(lits.length >= 2, `expected >=2 SQL literals in the marked block of ${path}, got ${lits.length}`);
             return lits.map(l => l.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const sql = slashRestoreSql(syncPath);
@@ -437,7 +436,6 @@ describe('Rollback coverage guard @regression', function(){
     // check false-halts. Both files carry the method verbatim; this extracts the body
     // and asserts whitespace-normalised equality. If you edit one, edit the other.
     it('_stakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function stakeSql(p){
             const src = fs.readFileSync(p, 'utf8');
             const m = src.match(/_stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
@@ -464,7 +462,6 @@ describe('Rollback coverage guard @regression', function(){
     // both call THIS builder + the shared swq_source_cap_activation.js caps, which are
     // the consensus-relevant surface. If you edit one _cappedStakeWeightsSql, edit both.
     it('_cappedStakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
-        const fs = require('fs');
         function cappedSql(p){
             const src = fs.readFileSync(p, 'utf8');
             const m = src.match(/_cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
@@ -489,7 +486,7 @@ describe('Rollback coverage guard @regression', function(){
     // in the other and extend this guard.
     it('cooldown-maturity reversal is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         // Whitespace-normalised fragments that uniquely identify each of the four ops.
@@ -527,7 +524,7 @@ describe('Rollback coverage guard @regression', function(){
     // flag without shipping (or removing) the matching sweep fails here.
     it('registry replica-flagged orphan sweeps are mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
@@ -562,7 +559,7 @@ describe('Rollback coverage guard @regression', function(){
     // is optional in the regex; everything else must match text-for-text.
     it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const IDX2_OPS = [
@@ -595,7 +592,7 @@ describe('Rollback coverage guard @regression', function(){
     it('forward cooldown-credit selection mirrors the reverse delete keys (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/cooldownCredits.js'), 'utf8'));
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/cooldown_credits.js'), 'utf8'));
         const FWD_OPS = [
             { name: 'capability refund select (GAS, by unstake action_index)', re: /SELECT c\.\* FROM credits c JOIN unstakes u ON u\.action_index = c\.action_index AND u\.source_id = c\.address_id/ },
             { name: 'contract refund select (own tick)',                       re: /SELECT c\.\* FROM credits c JOIN contract_unstakes cu ON cu\.action_index = c\.action_index AND cu\.source_id = c\.address_id AND cu\.tick_id = c\.tick_id/ },
@@ -607,7 +604,7 @@ describe('Rollback coverage guard @regression', function(){
         }
         // Both forward channels (live per-block + incremental snapshot) must actually invoke it,
         // or one of them silently re-opens the gap for its replication path.
-        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+        for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js']){
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
             assert.ok(/collectMaturedCooldownCredits\s*\(/.test(src),
                 `${f} does not call collectMaturedCooldownCredits; its replication channel drops cooldown-maturity refunds`);
@@ -621,11 +618,11 @@ describe('Rollback coverage guard @regression', function(){
     // ClientRollback's reverse status reset). Without it the follower keeps a stale 'valid'
     // unstake while its balance is already refunded.
     it('updated_rows carries the cooldown-maturity status_id flip keyed by cooldown_end_block', function(){
-        const { COOLDOWN_STATUS_TABLES } = require('../../src/updatedRows');
+        const { COOLDOWN_STATUS_TABLES } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(COOLDOWN_STATUS_TABLES, ['unstakes', 'contract_unstakes'],
             'updated_rows must track the cooldown status flip on both unstake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
@@ -641,7 +638,7 @@ describe('Rollback coverage guard @regression', function(){
     it('forward recovery-reward selection mirrors the rollback key (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/recoveryRewards.js'), 'utf8'));
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/recovery_rewards.js'), 'utf8'));
         const FWD_OPS = [
             { name: 'validator_rewards / recovery_pending_rewards join (NULL-safe round_reference)', re: /JOIN recovery_pending_rewards rpr ON rpr\.source_id = vr\.source_id AND rpr\.reward_type = vr\.reward_type AND rpr\.round_reference <=> vr\.round_reference/ },
             { name: 'pubkey bridge (lowercase-hex match)',         re: /JOIN index_pubkeys ip ON ip\.id = vr\.signing_pubkey_id AND ip\.pubkey = rpr\.validator_pubkey/ },
@@ -652,7 +649,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(op.re.test(fwd), `recoveryRewards.js is missing the forward ${op.name}; it must mirror the rollback re-drain keys`);
         }
         // Both forward channels (live per-block + incremental snapshot) must invoke it.
-        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+        for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js']){
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
             assert.ok(/collectRedrivenValidatorRewards\s*\(/.test(src),
                 `${f} does not call collectRedrivenValidatorRewards; its replication channel drops reorg-redriven recovery rewards`);
@@ -676,17 +673,17 @@ describe('Rollback coverage guard @regression', function(){
     it('forward derived-reward selection mirrors the derive_block_index rollback key, and the reconcile DELETE is mirrored (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/derivedRewards.js'), 'utf8'));
+        const fwd = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/derived_rewards.js'), 'utf8'));
         assert.ok(/vr\.derive_block_index BETWEEN \? AND \?/.test(fwd), 'derivedRewards.js must key on derive_block_index (the materialization window)');
         assert.ok(/vr\.block_index < vr\.derive_block_index/.test(fwd), 'derivedRewards.js must restrict to backdated rows (earn-block below the materialization block)');
-        const rbSync = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientRollback.js'), 'utf8'));
+        const rbSync = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/rollback.js'), 'utf8'));
         assert.ok(/DELETE FROM validator_rewards WHERE derive_block_index >= \?/.test(rbSync), 'ClientRollback.js must keep the derive_block_index reverse delete the forward collector twins');
-        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js']){
+        for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js']){
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
             assert.ok(/collectDerivedAnchorRewards\s*\(/.test(src),
                 `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
         }
-        const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientApplier.js'), 'utf8'));
+        const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/applier.js'), 'utf8'));
         assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
             'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
         // RB-ANCHOR restore parity on that same identity. The source twin
@@ -699,8 +696,8 @@ describe('Rollback coverage guard @regression', function(){
         // The four JS payload-merge dedup keys ride the same identity: a four-column key
         // treats two distinct archive rewards as one and drops the second from the payload
         // before it ever reaches a replica.
-        for(const f of ['../../src/ServerPoller.js', '../../src/SnapshotBuilder.js',
-                        '../../src/derivedRewards.js', '../../src/recoveryRewards.js']){
+        for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js',
+                        '../../src/server/derived_rewards.js', '../../src/server/recovery_rewards.js']){
             // Collapse whitespace only (the quotes around ':' are part of the key text).
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8').replace(/\s+/g, ' ');
             const stale = src.match(/r\.reward_type \+ ':' \+ r\.round_reference(?! \+ ':' \+ r\.round_qualifier)/g);
@@ -717,7 +714,7 @@ describe('Rollback coverage guard @regression', function(){
     // change the other and extend this guard.
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
@@ -757,7 +754,7 @@ describe('Rollback coverage guard @regression', function(){
     // attests is excluded from content parity). If you change one side, change the other.
     it('ATTEST v5 batch-head status restore is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         // Strips quote characters, template-literal splices, the indexer's `abw.` namespace and
@@ -794,7 +791,7 @@ describe('Rollback coverage guard @regression', function(){
     // back to the self-join.
     it('delegations deactivation reset is the threshold form on both sides (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\+/g, ' ').replace(/\s+/g, ' ');
@@ -868,15 +865,13 @@ describe('Rollback coverage guard @regression', function(){
     // alone, and any other version byte is unparseable at or above ANCHOR_ACTIVATION.
     // The splice sites do not move when only the array's members change.
     it('archive-head version set is [1] via the shared stateHash constant, consumed by updatedRows', function(){
-        const assertLocal = require('assert');
-        const sh = require('../../src/stateHash');
         assertLocal.deepStrictEqual(sh.ARCHIVE_HEAD_VERSIONS, [1],
             'ARCHIVE_HEAD_VERSIONS must be exactly [1]');
         assertLocal.strictEqual(sh.ARCHIVE_HEAD_VERSIONS_SQL, 'IN (1)',
             'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1)');
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8'));
+        const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8'));
         assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND ARCHIVE_CHUNK_HEIGHT_COL BETWEEN \? AND \?/.test(ur),
             'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
             'scoped by the shared ARCHIVE_CHUNK_HEIGHT_COL');
@@ -905,7 +900,7 @@ describe('Rollback coverage guard @regression', function(){
     // re-opened. If you change one side, change the other and extend this guard.
     it('VOTE polls re-open reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile('src/rollback.js');
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
@@ -929,11 +924,11 @@ describe('Rollback coverage guard @regression', function(){
     // surviving row the action-scoped stream cannot reach). Pin the class table list and
     // its resolved_block window predicate in updatedRows.js.
     it('updated_rows carries the VOTE poll finalization flip keyed by resolved_block', function(){
-        const { POLL_FINALIZE_TABLES } = require('../../src/updatedRows');
+        const { POLL_FINALIZE_TABLES } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(POLL_FINALIZE_TABLES, ['polls'],
             'updated_rows must track the poll finalization flip on polls');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
@@ -950,11 +945,11 @@ describe('Rollback coverage guard @regression', function(){
     // the rotation and a follower hands contracts a stale staker set. Pin the class table
     // list and its journal-window predicate in updatedRows.js.
     it('updated_rows carries the DELEGATE v1 rotation rewrite keyed by the rotations journal window', function(){
-        const { ROTATION_TABLES } = require('../../src/updatedRows');
+        const { ROTATION_TABLES } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
             'updated_rows must track the rotation rewrite on both contract stake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
@@ -966,13 +961,13 @@ describe('Rollback coverage guard @regression', function(){
     // that flip and a follower keeps a stale feed or bet status. Pin the class spec list
     // and the per-stamp window predicate it drives in updatedRows.js.
     it('updated_rows carries the BET status flips keyed by their stamp columns', function(){
-        const { BET_STATUS_SPECS } = require('../../src/updatedRows');
+        const { BET_STATUS_SPECS } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(BET_STATUS_SPECS, [
             { table: 'bet_feeds', stamps: ['closed_block', 'terminal_block'] },
             { table: 'bets',      stamps: ['settled_block'] }
         ], 'updated_rows must track the feed closed/terminal stamps and the bet settlement stamp');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/updatedRows.js'), 'utf8')
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/for\(let spec of BET_STATUS_SPECS\)\{ try \{ let where = spec\.stamps\.map\(col => col BETWEEN \? AND \? \)\.join\( OR \);/.test(src),
             'updatedRows.js must select each BET class by every stamp column landing in the window, OR-joined so a feed that latches and goes terminal in one window is still carried');
@@ -1004,7 +999,7 @@ describe('Rollback coverage guard @regression', function(){
     // excluded (it is keyed by block-hash/tx-hash ids the generic scan can't see).
     it('ServerPoller streams index_addresses via the generic *_id pass (non-tx-interned completeness) @regression', function(){
         const fs = require('fs'), pathMod = require('path');
-        const norm = fs.readFileSync(pathMod.resolve(__dirname, '../../src/ServerPoller.js'), 'utf8')
+        const norm = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/poller.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/table === index_transactions\s*\) continue/.test(norm),
             'ServerPoller generic *_id pass must still exclude index_transactions (block-hash/tx-hash keyed)');
@@ -1046,11 +1041,12 @@ describe('Rollback coverage guard @regression', function(){
     // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
     // copy means an origin that accepts a 4-byte character and a replica that halts on it
     // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
-    // The two sides no longer share one relative path. xchain-sync keeps every twin flat
-    // under src/, while the indexer has sorted its copies into feature directories, so the
-    // indexer tail is spelled out per twin instead of derived from the basename. The pairs
-    // below compare exactly the same code the single-tail loop did.
-    for(const [twin, indexerRel] of [
+    // The two sides no longer share one relative path. xchain-sync keeps its twins flat
+    // under src/ except the utf8mb4 map, which sits in src/schema/, while the indexer has
+    // sorted its copies into feature directories, so the indexer tail is spelled out per
+    // twin and a third element names the sync path where it is not src/ plus the basename.
+    // The pairs below compare exactly the same code the single-tail loop did.
+    for(const [twin, indexerRel, syncRel] of [
         ['merkle.js',                            'src/consensus/merkle.js'],
         ['state_commitment_activation.js',       'src/state_commitment_activation.js'],
         ['swq_source_cap_activation.js',         'src/swq_source_cap_activation.js'],
@@ -1060,11 +1056,11 @@ describe('Rollback coverage guard @regression', function(){
         ['contractStateSubtree.js',              'src/consensus/contractStateSubtree.js'],
         ['escrowLeafSubtree.js',                 'src/consensus/escrowLeafSubtree.js'],
         ['tableLifecycle.js',                    'src/hub/tableLifecycle.js'],
-        ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js'],
+        ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js',  'schema/utf8mb4_columns.js'],
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
-            const syncPath    = pathMod.resolve(__dirname, '../../src/' + twin);
+            const syncPath    = pathMod.resolve(__dirname, '../../src/' + (syncRel || twin));
             const indexerPath = indexerFile(indexerRel);
             if(!requireSibling(this, indexerPath)) return;
             assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
@@ -1080,7 +1076,6 @@ describe('Rollback coverage guard @regression', function(){
     // dated migration files, which is exactly what ensureReplicaUtf8mb4Columns issues.
     it('every utf8mb4 widen entry is carried by a dated xchain-indexer migration (source/replica lockstep)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const widenSet = require('../../src/utf8mb4Columns');
         const migDir   = indexerFile(pathMod.join('src', 'sql', 'migrations'));
         if(!requireSibling(this, migDir)) return;
         const ledger = fs.readdirSync(migDir).filter(f => f.endsWith('.sql'))
@@ -1189,7 +1184,7 @@ describe('Rollback coverage guard @regression', function(){
         // per-chain '<COIN>:<network>' keys, so the follower's recompute MUST
         // thread coin alongside network or it computes without the armed classes
         // while the source computes with them (guaranteed halt at the height).
-        const bh = fs.readFileSync(pathMod.resolve(__dirname, '../../src/BlockHasher.js'), 'utf8');
+        const bh = fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/block_hasher.js'), 'utf8');
         assert.ok(/computeStateHash\(block_index, activationDelay, gasTick, network, coin\)/.test(bh),
             'BlockHasher.computeStateHash must accept and forward the coin gate parameter');
         // Threading a coin is necessary but NOT sufficient - the FORMAT must
@@ -1201,7 +1196,7 @@ describe('Rollback coverage guard @regression', function(){
         // classes: the "guaranteed halt at the height" predicted above actually
         // happened on every production replica (BTC 958500 / LTC 3143000 / DOGE 6291000
         // / BTC-testnet 145000, each chain's armed height). Pin the normalized ticker.
-        const cs = fs.readFileSync(pathMod.resolve(__dirname, '../../src/ClientSync.js'), 'utf8')
+        const cs = fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/sync.js'), 'utf8')
             .replace(/\s+/g, ' ');
         assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.coinTicker\)/.test(cs),
             'ClientSync must pass this.coinTicker (the normalized TICKER, not this.chain) as the coin gate parameter to computeStateHash');
@@ -1222,7 +1217,7 @@ describe('Rollback coverage guard @regression', function(){
     // F-1 hash gap. Pin the array design by value: a table added to one of these
     // arrays is a deliberate, visible change, not drift.
     it('F-1: tokens is not in any updatedRows mutation-class array (supply rides the ledger-driven pass + token_supply hash class)', function(){
-        const { DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES } = require('../../src/updatedRows');
+        const { DEACTIVATION_TABLES, SLASH_SPECS, REQUEST_STATUS_TABLES, COOLDOWN_STATUS_TABLES } = require('../../src/server/updated_rows');
         const allMutationTables = new Set([
             ...DEACTIVATION_TABLES,
             ...SLASH_SPECS.map(s => s.table),
@@ -1250,7 +1245,7 @@ describe('Rollback coverage guard @regression', function(){
     // follower upserts the updated status_id. buildStateHashData must include it in the
     // anchor_invalid preimage class so a follower that silently drops the upsert halts.
     it('F-2: collectUpdatedRows returns the invalid_archive-stamped anchor parent by value (CRC-failure fixture)', async function(){
-        const { collectUpdatedRows } = require('../../src/updatedRows');
+        const { collectUpdatedRows } = require('../../src/server/updated_rows');
         // Fake DB: the anchor self-join query returns a v1 parent stamped invalid_archive.
         let anchorParent = { action_index: 301, version: 1, status_id: 99, match_batch_seq: 7 };
         let db = {
@@ -1339,7 +1334,7 @@ describe('Rollback coverage guard @regression', function(){
         // a consensus table from snapshots) fails just as loudly. Uses the
         // exported Set, not a source-text scrape, so it pins the value the
         // runtime consumers (SnapshotBuilder, ClientApplier, explorer) see.
-        const { OPERATOR_LOCAL_TABLES } = require('../../src/SnapshotBuilder');
+        const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
         const derived = lifecycleTwin.tablesWhere(t =>
             ['local', 'hub-mirror', 'follower-derived'].includes(t.replication));
         // The ONLY permitted members with no registry entry: mempool_transactions is a
@@ -1370,18 +1365,16 @@ describe('Rollback coverage guard @regression', function(){
 // parity. The pre-reconcile phrasing, naming the full snapshot as the sole channel, outlived
 // the reconcile it predates and was restated across several consumer-side files, so a
 // rollback author reading them learned that the replace-table reconcile does not exist.
-// The authority is src/replicatedTables.js:47-49: parity rests on the apply-side
+// The authority is src/schema/replicated_tables.js:47-49: parity rests on the apply-side
 // reconcile, ClientApplier.applyDispensersReplace via ClientSync._reconcileDispensers.
 describe('dispensers convergence wording does not drift back', function(){
-    const fs      = require('fs');
-    const pathMod = require('path');
     // Fixed in-repo list on purpose: no repo walk, nothing outside xchain-sync, and
     // nothing under any archive/ or reports/ tree (dated records were accurate when
     // written and stay as written).
     const SCANNED = [
-        '../../src/ClientRollback.js',
-        '../../src/replicatedTables.js',
-        '../../src/SnapshotBuilder.js',
+        '../../src/client/rollback.js',
+        '../../src/schema/replicated_tables.js',
+        '../../src/server/snapshot_builder.js',
         '../../src/tableLifecycle.js',
         './rollback-coverage.test.js',
     ];
@@ -1404,12 +1397,12 @@ describe('dispensers convergence wording does not drift back', function(){
             assert.strictEqual(STALE.test(src), false,
                 `${rel} restates the superseded dispensers convergence channel. dispensers ` +
                 `SEEDS from the full snapshot and is then held in parity by the periodic ` +
-                `apply-side reconcile; see src/replicatedTables.js:47-49 for the authority.`);
+                `apply-side reconcile; see src/schema/replicated_tables.js:47-49 for the authority.`);
         });
     }
 
     it('the decoderTxScopedTables comment names the reconcile channel', function(){
-        const abs = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const abs = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const src = fs.readFileSync(abs, 'utf8');
         const idx = src.indexOf('this.decoderTxScopedTables');
         assert.ok(idx > 0, 'decoderTxScopedTables assignment not found in ClientRollback.js');

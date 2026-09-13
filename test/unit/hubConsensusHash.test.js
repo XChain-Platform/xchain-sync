@@ -20,7 +20,7 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 
-const HubClient = require('../../src/HubClient');
+const HubClient = require('../../src/hub/client');
 const coins     = require('../../src/coins');
 
 function envelope(hashes){

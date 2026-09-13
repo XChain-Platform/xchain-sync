@@ -24,6 +24,9 @@
 const assert     = require('assert');
 const sinon      = require('sinon');
 const Database   = require('../../src/db');
+const ClientSync = require('../../src/client/sync');
+const Utility = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 
 function makeUtil(){
     return {
@@ -131,9 +134,6 @@ describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
 });
 
 describe('ClientSync._oraclePublishSetAt uses the as-of reconstruction (#4927)', function(){
-    const ClientSync   = require('../../src/ClientSync');
-    const Utility      = require('../../src/utility');
-    const HashVerifier = require('../../src/HashVerifier');
 
     let sync, db;
     beforeEach(function(){

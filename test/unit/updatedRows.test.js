@@ -14,10 +14,10 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const { collectUpdatedRows } = require('../../src/updatedRows');
-const ClientApplier = require('../../src/ClientApplier');
-const ClientRollback = require('../../src/ClientRollback');
-const Utility = require('../../src/utility');
+const { collectUpdatedRows } = require('../../src/server/updated_rows');
+const ClientApplier = require('../../src/client/applier');
+const ClientRollback = require('../../src/client/rollback');
+const Utility = require('../../src/util');
 
 // A doQuery stub that branches on a substring of the SQL so each in-place class
 // can be given canned rows independently. Records every (sql, args) pair.

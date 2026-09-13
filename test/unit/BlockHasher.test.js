@@ -22,8 +22,8 @@
 
 const assert  = require('assert');
 const path    = require('path');
-const BlockHasher = require('../../src/BlockHasher');
-const Utility = require('../../src/utility');
+const BlockHasher = require('../../src/client/block_hasher');
+const Utility = require('../../src/util');
 const vectors = require('../fixtures/block-hash-vectors.json');
 
 // A BlockHasher whose db.doQuery returns the canned result-sets in CALL ORDER.

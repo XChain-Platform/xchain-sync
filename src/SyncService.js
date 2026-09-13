@@ -21,19 +21,19 @@
  ********************************************************************/
 
 const Database        = require('./db');
-const HubClient       = require('./HubClient');
-const ServerPoller    = require('./ServerPoller');
-const BlockBroadcaster = require('./BlockBroadcaster');
-const SnapshotBuilder = require('./SnapshotBuilder');
-const TransparencyLog = require('./TransparencyLog');
-const ClientSync      = require('./ClientSync');
-const ClientApplier   = require('./ClientApplier');
-const ClientRollback  = require('./ClientRollback');
-const HashVerifier    = require('./HashVerifier');
+const HubClient       = require('./hub/client');
+const ServerPoller    = require('./server/poller');
+const BlockBroadcaster = require('./server/block_broadcaster');
+const SnapshotBuilder = require('./server/snapshot_builder');
+const TransparencyLog = require('./server/transparency_log');
+const ClientSync      = require('./client/sync');
+const ClientApplier   = require('./client/applier');
+const ClientRollback  = require('./client/rollback');
+const HashVerifier    = require('./client/hash_verifier');
 const stateCommitment = require('./stateCommitment');
 const { assertBootstrapDepthChains } = require('./config');
-const { assertPinnedEnvOverrides }   = require('./pinnedValidators');
-const Utility         = require('./utility');
+const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
+const Utility         = require('./util');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
 // façade that reaches the real sink once that has happened.
@@ -111,7 +111,7 @@ class SyncService {
     }
 
     // Stop every background loop this service owns and release its DB pools.
-    // Called from the process SIGTERM/SIGINT drain (src/shutdown.js): start()
+    // Called from the process SIGTERM/SIGINT drain (src/http/shutdown.js): start()
     // fans work out into pollers, client syncs and two intervals, none of which
     // the entry point can reach, so the fan-in belongs here beside the fan-out.
     //

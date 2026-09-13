@@ -25,8 +25,8 @@ const assert      = require('assert');
 const setup       = require('./helpers/setup');
 const testDb      = require('./helpers/testDb');
 const Database    = require('../../src/db');
-const BlockHasher = require('../../src/BlockHasher');
-const HashVerifier= require('../../src/HashVerifier');
+const BlockHasher = require('../../src/client/block_hasher');
+const HashVerifier= require('../../src/client/hash_verifier');
 
 // Byte-identical copy of ClientSync._recordIndexMapMismatch's body, exercised here
 // against a real Database so the counter logic + real sync_state persistence are

@@ -17,7 +17,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const TransparencyLog = require('../../src/TransparencyLog');
+const TransparencyLog = require('../../src/server/transparency_log');
+const MerkleTree = require('../../src/server/merkle_tree');
 
 // db double whose SELECTs are keyed by query shape. hwm = MAX(block_index) in
 // sync_meta, boundary = MAX(end_block) of a committed epoch at/below the cutoff.
@@ -237,7 +238,6 @@ describe('TransparencyLog sync_meta retention', function(){
         });
 
         it('still serves a full epoch (leaf_count matches the surviving rows)', async function(){
-            let MerkleTree = require('../../src/MerkleTree');
             let rows = [1, 2, 3, 4].map(i => ({
                 block_index: i, ledger_hash: 'l' + i, actions_hash: 'a' + i, contract_hash: 'c' + i
             }));

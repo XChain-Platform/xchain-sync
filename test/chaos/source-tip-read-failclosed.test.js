@@ -30,7 +30,7 @@
  */
 
 const { expect } = require('chai');
-const ServerPoller = require('../../src/ServerPoller');
+const ServerPoller = require('../../src/server/poller');
 
 // Mirrors src/db.js: outside a transaction doQuery swallows a query error and
 // returns [] unless the caller passed { rethrow: true }; getLastBlock turns an

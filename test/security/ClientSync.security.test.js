@@ -11,6 +11,8 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const HashVerifier = require('../../src/client/hash_verifier');
+const Database = require('../../src/db');
 
 function createMockDb(){
     return {
@@ -41,7 +43,6 @@ function createMockRollback(){
 }
 
 function createMockHashVerifier(){
-    let HashVerifier = require('../../src/HashVerifier');
     return new HashVerifier();
 }
 
@@ -100,7 +101,7 @@ describe('ClientSync security', function(){
 
         beforeEach(function(){
             axiosStub = { get: sinon.stub() };
-            ClientSync = proxyquire('../../src/ClientSync', {
+            ClientSync = proxyquire('../../src/client/sync', {
                 'axios': axiosStub,
                 'ws': sinon.stub()
             });
@@ -221,7 +222,6 @@ describe('ClientSync security', function(){
         // The schema-catch-up path (addMissingColumns) must skip the column
         // rather than splice it into a multi-action ALTER TABLE.
         it('does not splice a bare-comma multi-action ALTER on schema catch-up', async function(){
-            const Database = require('../../src/db');
             // Real Db so the production addMissingColumns splice path runs;
             // only doQuery is stubbed so no real connection is opened.
             let realDb = new Database('localhost', 3306, 'test_db', 'u', 'p', util, 'indexer');
@@ -266,7 +266,7 @@ describe('ClientSync security', function(){
         let ClientSync;
 
         beforeEach(function(){
-            ClientSync = proxyquire('../../src/ClientSync', {
+            ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': sinon.stub()
             });
@@ -368,7 +368,7 @@ describe('ClientSync security', function(){
         let ClientSync;
 
         beforeEach(function(){
-            ClientSync = proxyquire('../../src/ClientSync', {
+            ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': sinon.stub()
             });
@@ -455,7 +455,7 @@ describe('ClientSync security', function(){
                 };
             };
 
-            let ClientSync = proxyquire('../../src/ClientSync', {
+            let ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': fakeWs
             });
@@ -484,7 +484,7 @@ describe('ClientSync security', function(){
                 };
             };
 
-            let ClientSync = proxyquire('../../src/ClientSync', {
+            let ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': fakeWs
             });
@@ -518,7 +518,7 @@ describe('ClientSync security', function(){
                 };
             };
 
-            let ClientSync = proxyquire('../../src/ClientSync', {
+            let ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': fakeWs
             });
@@ -546,7 +546,7 @@ describe('ClientSync security', function(){
                 };
             };
 
-            let ClientSync = proxyquire('../../src/ClientSync', {
+            let ClientSync = proxyquire('../../src/client/sync', {
                 'axios': { get: sinon.stub() },
                 'ws': fakeWs
             });

@@ -26,7 +26,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ClientSync = require('../../src/ClientSync');
+const ClientSync = require('../../src/client/sync');
 
 describe('ClientSync.dispenserReconcileIntervalDue (wall-clock term)', function(){
     function due(ctx, now){

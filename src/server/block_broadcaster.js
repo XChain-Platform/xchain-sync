@@ -22,7 +22,7 @@
  ********************************************************************/
 
 const WebSocket = require('ws');
-const { encodeTables } = require('./wireCodec');
+const { encodeTables } = require('../util/wire_codec');
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -233,7 +233,7 @@ class BlockBroadcaster {
         // Encode binary (Buffer) columns to the base64 wire sentinel before
         // serializing. Block payloads carry rows under `data`; without this,
         // JSON.stringify mangles Buffers and the replica's blob columns corrupt
-        // (see src/wireCodec.js).
+        // (see src/util/wire_codec.js).
         let wireEvent = event;
         if(event && (event.data || event.updated_rows)){
             wireEvent = Object.assign({}, event);

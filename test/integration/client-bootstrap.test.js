@@ -13,16 +13,16 @@ const sinon    = require('sinon');
 const http     = require('http');
 const express  = require('express');
 const cors     = require('cors');
-const { parseCorsOrigin } = require('../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
 const WebSocket = require('ws');
 const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
-const SnapshotBuilder = require('../../src/SnapshotBuilder');
-const ClientSync      = require('../../src/ClientSync');
-const ClientApplier   = require('../../src/ClientApplier');
-const ClientRollback  = require('../../src/ClientRollback');
-const HashVerifier    = require('../../src/HashVerifier');
+const SnapshotBuilder = require('../../src/server/snapshot_builder');
+const ClientSync      = require('../../src/client/sync');
+const ClientApplier   = require('../../src/client/applier');
+const ClientRollback  = require('../../src/client/rollback');
+const HashVerifier    = require('../../src/client/hash_verifier');
 
 const SERVER_PORT = 19300;
 

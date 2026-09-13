@@ -28,7 +28,7 @@ const assert  = require('assert');
 const express = require('express');
 const cors    = require('cors');
 const config  = require('../../src/config');
-const { parseCorsOrigin } = require('../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
 
 // Resolve CORS_ORIGIN the way the service does: env -> getConfig() -> cors().
 // api.js also pins `methods`, which is reproduced so the mount matches.

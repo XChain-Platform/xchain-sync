@@ -43,7 +43,7 @@
  *
  ********************************************************************/
 
-const { gasTickSymbol } = require('./consensus-constants');
+const { gasTickSymbol } = require('../consensus-constants');
 
 // Selects the matured refund credits whose cooldown_end_block falls in the
 // inclusive window [fromBlock, toBlock] and returns raw `credits` rows for the

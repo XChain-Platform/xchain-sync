@@ -11,6 +11,8 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const Database = require('../../src/db');
+const fs = require('fs');
+const path = require('path');
 
 // Minimal util stub: addMissingColumns only touches this.doQuery (stubbed
 // below) and the pure validation helpers, so util is never exercised here.
@@ -389,8 +391,6 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
         // entry. If they disagree the two populations diverge in schema, which is
         // how a "converged" fleet ends up with a CHAR(64) on some nodes and
         // something else on others.
-        const fs   = require('fs');
-        const path = require('path');
         const ddl  = fs.readFileSync(path.resolve(__dirname, '../../src/sql/state_tree_roots.sql'), 'utf8');
         assert.ok(/contract_state_root\s+CHAR\(64\)\s+NULL/i.test(ddl),
             'src/sql/state_tree_roots.sql must declare contract_state_root CHAR(64) NULL');

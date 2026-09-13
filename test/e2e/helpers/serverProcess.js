@@ -11,12 +11,12 @@
 const http    = require('http');
 const express = require('express');
 const cors    = require('cors');
-const { parseCorsOrigin } = require('../../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../../src/http/cors_origin');
 const WebSocket = require('ws');
-const ServerPoller     = require('../../../src/ServerPoller');
-const BlockBroadcaster = require('../../../src/BlockBroadcaster');
-const TransparencyLog  = require('../../../src/TransparencyLog');
-const SnapshotBuilder  = require('../../../src/SnapshotBuilder');
+const ServerPoller     = require('../../../src/server/poller');
+const BlockBroadcaster = require('../../../src/server/block_broadcaster');
+const TransparencyLog  = require('../../../src/server/transparency_log');
+const SnapshotBuilder  = require('../../../src/server/snapshot_builder');
 const testDb           = require('./testDb');
 // Trust-proxy and rate-limiter wiring is imported from the real api.js rather
 // than re-declared here. api.js now guards its startup env check and listen()

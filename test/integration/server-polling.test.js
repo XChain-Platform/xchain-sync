@@ -13,7 +13,7 @@ const sinon    = require('sinon');
 const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
-const ServerPoller = require('../../src/ServerPoller');
+const ServerPoller = require('../../src/server/poller');
 
 describe('Integration: ServerPoller', function() {
 

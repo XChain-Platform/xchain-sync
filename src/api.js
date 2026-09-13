@@ -34,11 +34,11 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
 const { computeArmedMapFingerprint } = require('./armedMapFingerprint');
 const SyncService = require('./SyncService');
-const Utility     = require('./utility');
-const BlockHasher = require('./BlockHasher');
-const { createApiKeyMiddleware, safeEqual } = require('./middleware');
-const { createShutdown, createSyncDrain } = require('./shutdown');
-const { getReplicatedTables, missingReplicatedTables } = require('./replicatedTables');
+const Utility     = require('./util');
+const BlockHasher = require('./client/block_hasher');
+const { createApiKeyMiddleware, safeEqual } = require('./http/middleware');
+const { createShutdown, createSyncDrain } = require('./http/shutdown');
+const { getReplicatedTables, missingReplicatedTables } = require('./schema/replicated_tables');
 const coins       = require('./coins');
 
 // Stateless helper for the advisory index-map parity checksum published on
@@ -1228,7 +1228,7 @@ async function startApi(){
     // SIGTERM to this process; before this handler existed the default action
     // killed the poll/apply loops wherever they stood, which on a replica means an
     // aborted apply transaction on every routine restart. The handler is bounded by
-    // its own hard-exit timer (src/shutdown.js): installing it removes node's
+    // its own hard-exit timer (src/http/shutdown.js): installing it removes node's
     // default terminate, so a hung drain must still end the process.
     const shutdown = createShutdown({
         drain: createSyncDrain({

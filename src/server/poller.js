@@ -29,14 +29,14 @@
  *
  ********************************************************************/
 
-const replicatedTables = require('./replicatedTables');
-const { collectUpdatedRows } = require('./updatedRows');
-const { collectMaturedCooldownCredits } = require('./cooldownCredits');
-const { collectRedrivenValidatorRewards } = require('./recoveryRewards');
-const { collectDerivedAnchorRewards } = require('./derivedRewards');
-const { activationDelayBlocks, coinTicker } = require('./consensus-constants');
-const { isStateCommitmentActive } = require('./state_commitment_activation');
-const { SCHEMA_VERSION } = require('./schema-version');
+const replicatedTables = require('../schema/replicated_tables');
+const { collectUpdatedRows } = require('./updated_rows');
+const { collectMaturedCooldownCredits } = require('./cooldown_credits');
+const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
+const { collectDerivedAnchorRewards } = require('./derived_rewards');
+const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
+const { isStateCommitmentActive } = require('../state_commitment_activation');
+const { SCHEMA_VERSION } = require('../schema/version');
 
 // How many recently broadcast block hashes to retain in memory for the
 // net-forward reorg walk-back. Comfortably above the source
@@ -103,7 +103,7 @@ class ServerPoller {
         this.running = false;
 
         // Per-block replicated table topology (single source of truth shared with
-        // the row-count completeness check; see src/replicatedTables.js).
+        // the row-count completeness check; see src/schema/replicated_tables.js).
         let topo = replicatedTables.getTopology(this.dbType);
         this.blockScopedTables  = topo.blockScoped;
         this.txScopedTables     = topo.txScoped;

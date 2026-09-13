@@ -32,7 +32,7 @@ const path    = require('path');
 const fc      = require('fast-check');
 const mathjs  = require('mathjs');
 const testDb  = require('./helpers/testDb');
-const { splitSqlStatements } = require('../../src/sqlUtil');
+const { splitSqlStatements } = require('../../src/db/sql_util');
 const { getNetBalance } = require('../../src/stateCommitment.js');
 const M = require('../../src/merkle.js');
 

@@ -35,7 +35,7 @@ describe('Tier 2 - ServerPoller @tier2', function () {
     let ServerPoller, poller, db, broadcaster, log, config, util;
 
     before(function () {
-        ServerPoller = require('../../../src/ServerPoller');
+        ServerPoller = require('../../../src/server/poller');
     });
 
     beforeEach(function () {

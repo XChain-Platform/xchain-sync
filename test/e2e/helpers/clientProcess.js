@@ -9,10 +9,10 @@
 // contact legal@dankest.llc.
 
 const WebSocket      = require('ws');
-const ClientSync     = require('../../../src/ClientSync');
-const ClientApplier  = require('../../../src/ClientApplier');
-const ClientRollback = require('../../../src/ClientRollback');
-const HashVerifier   = require('../../../src/HashVerifier');
+const ClientSync     = require('../../../src/client/sync');
+const ClientApplier  = require('../../../src/client/applier');
+const ClientRollback = require('../../../src/client/rollback');
+const HashVerifier   = require('../../../src/client/hash_verifier');
 const testDb         = require('./testDb');
 
 class ClientProcess {

@@ -29,7 +29,7 @@ describe('Tier 1 - HashVerifier @tier1', function () {
     let HashVerifier, verifier;
 
     before(function () {
-        HashVerifier = require('../../../src/HashVerifier');
+        HashVerifier = require('../../../src/client/hash_verifier');
     });
 
     beforeEach(function () {

@@ -80,7 +80,7 @@
  *
  ********************************************************************/
 
-const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('./stateHash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../stateHash');
 
 // Tables carrying the deactivation_block stamp (value-threshold detection).
 const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];

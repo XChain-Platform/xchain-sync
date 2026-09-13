@@ -43,8 +43,8 @@ const setup   = require('./helpers/setup');
 const testDb  = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
 
-const ServerPoller  = require('../../src/ServerPoller');
-const ClientApplier = require('../../src/ClientApplier');
+const ServerPoller  = require('../../src/server/poller');
+const ClientApplier = require('../../src/client/applier');
 const SUB = require('../../src/state_subtree_activation');
 const CST = require('../../src/contractStateSubtree');
 const SC  = require('../../src/stateCommitment');

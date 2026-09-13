@@ -23,7 +23,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 
 const Database      = require('../../src/db');
-const utf8mb4Columns = require('../../src/utf8mb4Columns');
+const utf8mb4Columns = require('../../src/schema/utf8mb4_columns');
 
 function makeDb(dbType){
     const util = { isNull: (v) => v === null || v === undefined, logError: () => {} };

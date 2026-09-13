@@ -32,10 +32,10 @@
 const assert = require('assert');
 
 const lifecycle       = require('../../src/tableLifecycle');
-const replicatedTables = require('../../src/replicatedTables');
-const BlockHasher     = require('../../src/BlockHasher');
-const HashVerifier    = require('../../src/HashVerifier');
-const Utility         = require('../../src/utility');
+const replicatedTables = require('../../src/schema/replicated_tables');
+const BlockHasher     = require('../../src/client/block_hasher');
+const HashVerifier    = require('../../src/client/hash_verifier');
+const Utility         = require('../../src/util');
 
 // A fake Database serving canned per-table windows. `tables` maps a table name to
 // its rows; anything absent is simply an empty window (omitted from the result).
@@ -411,7 +411,7 @@ describe('Advisory table-content parity', function(){
 
     describe('wiring', function(){
 
-        const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/ClientSync.js'), 'utf8');
+        const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/client/sync.js'), 'utf8');
         const body = src.slice(src.indexOf('async _verifyTableContentParity('),
                                src.indexOf('async _recordTableContentMismatch('));
 

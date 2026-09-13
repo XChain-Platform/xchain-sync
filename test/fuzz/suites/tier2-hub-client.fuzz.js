@@ -32,7 +32,7 @@ describe('Tier 2 - HubClient @tier2', function () {
 
     before(function () {
         axiosStub = { post: sinon.stub() };
-        HubClient = proxyquire('../../../src/HubClient', { axios: axiosStub });
+        HubClient = proxyquire('../../../src/hub/client', { axios: axiosStub });
     });
 
     beforeEach(function () {

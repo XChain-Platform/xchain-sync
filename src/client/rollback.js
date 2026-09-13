@@ -22,17 +22,17 @@
  *
  ********************************************************************/
 
-const balanceHelpers = require('./balance-helpers');
-const lifecycle      = require('./tableLifecycle');
-const replicatedTables = require('./replicatedTables');
-const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
-const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
-const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('./archive_rollback_author_scope_activation');
+const balanceHelpers = require('./balance_helpers');
+const lifecycle      = require('../tableLifecycle');
+const replicatedTables = require('../schema/replicated_tables');
+const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
+const { ARCHIVE_HEAD_VERSIONS_SQL } = require('../stateHash');
+const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../archive_rollback_author_scope_activation');
 // ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
 // updatedRows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
 // updatedRows.js requires only stateHash.js, so this introduces no cycle.
 const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
-        ATTEST_BATCH_COMPLETION_STAMP } = require('./updatedRows');
+        ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows');
 
 // What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
 // rather than a token: the coin has no index_tickers row, and NULL is distinct inside
@@ -1319,6 +1319,9 @@ async function rederiveCoinpayMatchStatus(db){
     await db.doQuery(coinpayMatchPromoteSql, []);
 }
 
+// Hung on the class rather than on module.exports so the file has ONE export
+// shape. Every call site reads the same property off the same object either way.
+ClientRollback.rederiveEscrowGate = rederiveEscrowGate;
+ClientRollback.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;
+
 module.exports = ClientRollback;
-module.exports.rederiveEscrowGate = rederiveEscrowGate;
-module.exports.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;

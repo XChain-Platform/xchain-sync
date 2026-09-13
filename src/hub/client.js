@@ -21,7 +21,7 @@
  ********************************************************************/
 
 const axios = require('axios');
-const coins = require('./coins');
+const coins = require('../coins');
 
 // Local { coin -> consensusHash } per network, computed on first use. The vendored
 // bundle cannot change under a running process, so re-hashing it on every config

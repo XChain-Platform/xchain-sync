@@ -23,9 +23,9 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const crypto = require('crypto');
 const axios  = require('axios');
-const ClientSync   = require('../../src/ClientSync');
-const Utility      = require('../../src/utility');
-const HashVerifier = require('../../src/HashVerifier');
+const ClientSync   = require('../../src/client/sync');
+const Utility      = require('../../src/util');
+const HashVerifier = require('../../src/client/hash_verifier');
 const checkpoint   = require('../../src/checkpoint');
 
 const ENVKEY = 'CHECKPOINT_VALIDATORS_BTC_REGTEST';

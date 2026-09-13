@@ -10,8 +10,8 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const ServerPoller = require('../../src/ServerPoller');
-const Utility = require('../../src/utility');
+const ServerPoller = require('../../src/server/poller');
+const Utility = require('../../src/util');
 
 function createMockDb(){
     return {
@@ -526,7 +526,7 @@ describe('ServerPoller', function(){
             assert.ok(payload.data);
             // Live block payloads must carry schema_version so ClientApplier
             // can enforce the version-pin gate the snapshot paths enforce.
-            const { SCHEMA_VERSION } = require('../../src/schema-version');
+            const { SCHEMA_VERSION } = require('../../src/schema/version');
             assert.strictEqual(payload.schema_version, SCHEMA_VERSION['indexer'],
                 'live block payload must carry schema_version');
         });

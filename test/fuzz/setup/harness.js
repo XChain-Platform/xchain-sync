@@ -17,7 +17,7 @@
  */
 
 const sinon = require('sinon');
-const Utility = require('../../../src/utility');
+const Utility = require('../../../src/util');
 
 const NUM_RUNS = parseInt(process.env.FUZZ_RUNS || '1000');
 
