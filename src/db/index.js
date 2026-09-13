@@ -27,15 +27,15 @@
 const mariadb    = require('mariadb');
 const fs         = require('fs');
 const path       = require('path');
-const validation = require('./validation');
-const { splitSqlStatements } = require('./sqlUtil');
-const { canonicalizeHashAddress } = require('./protocolAddressRoles');
-const poolSizing = require('./poolSizing');
-const swqCap = require('./swq_source_cap_activation');
-const { isStateKeyBinCollationActive } = require('./state_key_collation_activation');
-const stakeWeightCollation = require('./stake_weight_collation_activation');
-const utf8mb4Columns = require('./utf8mb4Columns');
-const lifecycle = require('./tableLifecycle');
+const validation = require('../validation');
+const { splitSqlStatements } = require('../sqlUtil');
+const { canonicalizeHashAddress } = require('../protocolAddressRoles');
+const poolSizing = require('../poolSizing');
+const swqCap = require('../swq_source_cap_activation');
+const { isStateKeyBinCollationActive } = require('../state_key_collation_activation');
+const stakeWeightCollation = require('../stake_weight_collation_activation');
+const utf8mb4Columns = require('../utf8mb4Columns');
+const lifecycle = require('../tableLifecycle');
 
 // Guard for the few queries that must interpolate a table name into a
 // backtick-quoted identifier (COUNT(*), pagination, TRUNCATE). Parameter

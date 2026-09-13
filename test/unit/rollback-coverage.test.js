@@ -444,7 +444,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(m, `_stakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/db.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/db/index.js');
         // The indexer split its 19k-line src/db.js into src/db/index.js plus per-feature
         // mixins, and _stakeWeightsSql landed in the stakes mixin. Pin the exact file
         // rather than the src/db/ directory: if the method is moved again, stakeSql()'s
@@ -471,7 +471,7 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(m, `_cappedStakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
-        const syncPath = require('path').resolve(__dirname, '../../src/db.js');
+        const syncPath = require('path').resolve(__dirname, '../../src/db/index.js');
         // Same split as above: the capped wrapper sits beside _stakeWeightsSql in the
         // stakes mixin, and cappedSql()'s assert.ok is what fails loudly if it moves.
         const indexerPath = indexerFile('src/db/stakes.js');

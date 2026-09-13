@@ -21,7 +21,7 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const DB_SRC  = path.join(__dirname, '..', '..', 'src', 'db.js');
+const DB_SRC  = path.join(__dirname, '..', '..', 'src', 'db', 'index.js');
 const SQL_DIR = path.join(__dirname, '..', '..', 'src', 'sql');
 
 function ensureIndexList(){
@@ -43,7 +43,7 @@ describe('replica secondary-index ensure list', function(){
 
     it('sanity: the gate actually parses entries (it cannot pass vacuously)', function(){
         assert.ok(ensureIndexList().length >= 2,
-            'parsed no ensureIndexes entries out of src/db.js; the anchors above have gone stale ' +
+            'parsed no ensureIndexes entries out of the database class; the anchors above have gone stale ' +
             'and every case in this file would pass over an empty list');
     });
 

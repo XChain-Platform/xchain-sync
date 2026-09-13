@@ -75,8 +75,8 @@ function deriveFromDdl(sqlDir){
 describe('replicated DATETIME columns depend on db.js dateStrings:true @regression', function(){
 
     it('db.js sets dateStrings: true on the shared pool (never scoped per dbType)', function(){
-        const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'src', 'db.js'), 'utf8');
-        assert.ok(/dateStrings:\s*true/.test(src), 'db.js must set dateStrings: true on connectionPoolParams');
+        const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'src', 'db', 'index.js'), 'utf8');
+        assert.ok(/dateStrings:\s*true/.test(src), 'the database class must set dateStrings: true on connectionPoolParams');
         assert.ok(!/dateStrings:\s*(?:false|this\.dbType|\()/.test(src), 'dateStrings must stay an unconditional true');
     });
 
