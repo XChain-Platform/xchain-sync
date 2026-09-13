@@ -20,7 +20,7 @@
  ********************************************************************/
 
 const validation          = require('../util/validation');
-const balanceHelpers      = require('./balance_helpers');
+const balanceHelpers      = require('../db/balance_helpers');
 const { SCHEMA_VERSION }  = require('../schema/version');
 const { decodeValue }     = require('../util/wire_codec');
 const { rederiveEscrowGate } = require('./rollback');

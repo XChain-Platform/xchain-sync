@@ -22,7 +22,7 @@
  *
  ********************************************************************/
 
-const balanceHelpers = require('./balance_helpers');
+const balanceHelpers = require('../db/balance_helpers');
 const lifecycle      = require('../tableLifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');

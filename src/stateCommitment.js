@@ -69,7 +69,7 @@ const CC = require('./consensus-constants.js');
 const SUB = require('./state_subtree_activation.js');
 const CST = require('./contractStateSubtree.js');
 const ESC = require('./escrowLeafSubtree.js');
-const { minimalDecimal } = require('./client/balance_helpers.js');
+const { minimalDecimal } = require('./db/balance_helpers.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT
 const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);

@@ -11,7 +11,7 @@
 const crypto = require('crypto');
 const BlockHasher = require('../../../src/client/block_hasher');
 const Utility = require('../../../src/util');
-const { rebuildBalances } = require('../../../src/client/balance_helpers');
+const { rebuildBalances } = require('../../../src/db/balance_helpers');
 const { activationDelayBlocks, gasTickSymbol } = require('../../../src/consensus-constants');
 
 const _util = new Utility();

@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { rebuildBalances, recomputeTokenSupplies } = require('../../src/client/balance_helpers');
+const { rebuildBalances, recomputeTokenSupplies } = require('../../src/db/balance_helpers');
 
 // These helpers are pure SQL emitters (the real arithmetic happens in MariaDB),
 // so a unit test can only guard the SQL *semantics*: call order, target tables,

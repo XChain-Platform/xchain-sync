@@ -13,7 +13,7 @@ const sinon  = require('sinon');
 const ClientApplier = require('../../src/client/applier');
 const Utility = require('../../src/util');
 const { SCHEMA_VERSION } = require('../../src/schema/version');
-const balanceHelpers = require('../../src/client/balance_helpers');
+const balanceHelpers = require('../../src/db/balance_helpers');
 
 function createMockDb(){
     return {

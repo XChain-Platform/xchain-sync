@@ -12,7 +12,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientRollback = require('../../src/client/rollback');
 const Utility = require('../../src/util');
-const balanceHelpers = require('../../src/client/balance_helpers');
+const balanceHelpers = require('../../src/db/balance_helpers');
 
 function createMockDb(){
     return {
