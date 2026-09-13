@@ -39,6 +39,7 @@ const { isStateCommitmentActive } = require('../state_commitment_activation');
 const { SCHEMA_VERSION } = require('../schema/version');
 const util = require('node:util');
 const { getLogger } = require('../observability');
+const envConfig = require('../config');
 const logger = getLogger();
 
 // How many recently broadcast block hashes to retain in memory for the
@@ -1003,7 +1004,7 @@ class ServerPoller {
     // SYNC_QUERY_METRIC_INTERVAL_MS (default 15m, 0 disables), so this is one line per
     // interval, not per block. Twin of SyncService's STATE_TREE_METRIC_INTERVAL_MS.
     _reportActionScopedQueryMetric(queries, nonEmpty, elapsedMs, probeQueries){
-        let raw = parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10);
+        let raw = envConfig.syncQueryMetricIntervalMsFromEnv();
         let intervalMs = Number.isFinite(raw) ? raw : (15 * 60 * 1000);
         if(intervalMs === 0) return;   // explicitly disabled
         let now = Date.now();

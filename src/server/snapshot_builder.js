@@ -33,6 +33,7 @@ const { activationDelayBlocks } = require('../consensus-constants');
 const poolSizing = require('../db/pool_sizing');
 const util = require('node:util');
 const { getLogger } = require('../observability');
+const envConfig = require('../config');
 const logger = getLogger();
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
@@ -279,7 +280,7 @@ class SnapshotBuilder {
     _snapshotCap(db){
         let poolSize = (db && db.connectionPoolParams && db.connectionPoolParams.connectionLimit)
             || poolSizing.resolvePoolSize(db && db.dbType);
-        let cap = parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS);
+        let cap = envConfig.maxConcurrentSnapshotsFromEnv();
         if(!Number.isFinite(cap)) cap = poolSize - 2;
         return Math.max(1, Math.min(cap, poolSize - 1));
     }

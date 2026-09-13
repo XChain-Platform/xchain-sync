@@ -41,6 +41,7 @@ const lifecycle = require('../tableLifecycle');
 const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
 const util = require('node:util');
 const { getLogger } = require('../observability');
+const envConfig = require('../config');
 const logger = getLogger();
 
 // Columns that a key rebuild in ensureReplicaSecondaryIndexes NAMES, with the
@@ -100,7 +101,7 @@ class Database {
         // Name of the replication connection carrying the served schemas. Unset
         // reduces across every connection, worst-case; naming one measures that
         // stream alone so an unrelated lagging connection cannot drag the reading.
-        this.replicaConnectionName = (process.env.SYNC_REPLICA_CONNECTION || '').trim();
+        this.replicaConnectionName = (envConfig.replicaConnectionFromEnv() || '').trim();
 
         // Connection pool parameters.
         // Sizing is per dbType (see poolSizing.js): the indexer pool absorbs

@@ -120,6 +120,32 @@ function assertBootstrapDepthChains(config, chains){
 
 module.exports = {
 
+    // Environment reads that happen at CALL time, kept here so this file stays the
+    // one place every variable the service reads is named. Each is a function, not
+    // a value set in getConfig, because its caller reads the environment when it
+    // runs rather than at boot, and several suites set the variable mid-run.
+
+    /** The hub wait ceiling in ms, for a caller whose config object lacks it. */
+    maxHubWaitMsFromEnv: () => parseInt(process.env.MAX_HUB_WAIT_MS) || 300000,
+
+    /** The raw state-tree metric interval, NaN when unset; the caller applies its default. */
+    stateTreeMetricIntervalMsFromEnv: () => parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10),
+
+    /** The raw action-scoped query metric interval, NaN when unset; the caller applies its default. */
+    syncQueryMetricIntervalMsFromEnv: () => parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10),
+
+    /** The raw concurrent-snapshot cap, NaN when unset; the caller derives one from the pool. */
+    maxConcurrentSnapshotsFromEnv: () => parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS),
+
+    /** The key a hub call carries: the config-secrets key when set, else the bulk key. */
+    hubApiKeyFromEnv: () => process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY,
+
+    /** The operator-set validator id, undefined when unset. */
+    validatorIdFromEnv: () => process.env.VALIDATOR_ID,
+
+    /** The replication connection to measure replica lag on, empty when unset. */
+    replicaConnectionFromEnv: () => process.env.SYNC_REPLICA_CONNECTION,
+
     bootstrapDepthKey,
     bootstrapDepthEnvKey,
     unmatchedBootstrapDepthKeys,

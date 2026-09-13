@@ -47,6 +47,7 @@ const { getPinnedValidators, getPinnedCheckpoint } = require('./pinned_validator
 // façade that reaches the real sink once that has happened.
 const { getLogger } = require('../observability');
 const util = require('node:util');
+const envConfig = require('../config');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in verifyTableCounts for the
@@ -285,7 +286,7 @@ class ClientSync {
 
         // Stable identifier for this validator, used in POST /validator-heartbeat.
         // Operators set VALIDATOR_ID explicitly; we fall back to the system hostname.
-        this.validatorId = process.env.VALIDATOR_ID || require('os').hostname() || 'unknown';
+        this.validatorId = envConfig.validatorIdFromEnv() || require('os').hostname() || 'unknown';
 
         // Divergence halt. Set (in-memory + durably in sync_halt) when a confirmed
         // cross-source consensus-hash divergence is detected. Once halted the client

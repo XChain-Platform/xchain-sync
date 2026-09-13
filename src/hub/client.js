@@ -24,6 +24,7 @@ const axios = require('axios');
 const coins = require('../coins');
 const util = require('node:util');
 const { getLogger } = require('../observability');
+const envConfig = require('../config');
 const logger = getLogger();
 
 // Local { coin -> consensusHash } per network, computed on first use. The vendored
@@ -110,7 +111,7 @@ class HubClient {
     async _call(data, timeout = 5000){
         this.lastFailures = [];
         let headers = {};
-        let hubKey = process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY;
+        let hubKey = envConfig.hubApiKeyFromEnv();
         if(hubKey) headers['x-api-key'] = hubKey;
         for(let i = 0; i < this.urls.length; i++){
             let idx = (this._lastGoodIdx + i) % this.urls.length;

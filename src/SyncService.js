@@ -39,6 +39,7 @@ const Utility         = require('./util');
 // façade that reaches the real sink once that has happened.
 const { getLogger }   = require('./observability');
 const util = require('node:util');
+const envConfig = require('./config');
 
 class SyncService {
 
@@ -161,7 +162,7 @@ class SyncService {
     async waitForHub(){
         let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
         if(maxWaitMs === undefined || maxWaitMs === null)
-            maxWaitMs = parseInt(process.env.MAX_HUB_WAIT_MS) || 300000;
+            maxWaitMs = envConfig.maxHubWaitMsFromEnv();
         let startedAt = Date.now();
         let attempts = 0;
         while(true){
@@ -434,7 +435,7 @@ class SyncService {
     // 4h; 0 disables). Decoder DBs are skipped (no state_tree_* tables).
     _startStateTreeMetric(){
         if(this._stateTreeMetricTimer) return;
-        const raw = parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10);
+        const raw = envConfig.stateTreeMetricIntervalMsFromEnv();
         const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
         if(intervalMs === 0) return;   // explicitly disabled
         this._stateTreeMetricRunning = false;
