@@ -70,7 +70,7 @@ describe('client-mode sync_meta retention', function(){
     it('starts no timer when the window is 0 (the shipped default)', function(){
         service = new SyncService(baseConfig());
         service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
-        service._startSyncMetaRetention();
+        service.startSyncMetaRetention();
         assert.strictEqual(service._syncMetaRetentionTimer, undefined,
             'a zero window must arm nothing at all: no timer, no deletes');
     });
@@ -78,7 +78,7 @@ describe('client-mode sync_meta retention', function(){
     it('starts no timer in server mode, where recordBlock already prunes', function(){
         service = new SyncService(baseConfig({ SYNC_MODE: 'server', SYNC_META_RETENTION_BLOCKS: 500 }));
         service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
-        service._startSyncMetaRetention();
+        service.startSyncMetaRetention();
         assert.strictEqual(service._syncMetaRetentionTimer, undefined);
     });
 
@@ -93,7 +93,7 @@ describe('client-mode sync_meta retention', function(){
         service.databases.set('litecoin:mainnet:indexer', { db: idxB, config: {}, dbType: 'indexer' });
         service.databases.set('bitcoin:mainnet:decoder',  { db: dec,  config: {}, dbType: 'decoder' });
 
-        service._startSyncMetaRetention();
+        service.startSyncMetaRetention();
         assert.ok(service._syncMetaRetentionTimer, 'an armed window must start the timer');
         assert.strictEqual(prune.callCount, 0, 'nothing is swept before the first tick');
 
@@ -114,7 +114,7 @@ describe('client-mode sync_meta retention', function(){
         service = new SyncService(baseConfig({ SYNC_META_RETENTION_BLOCKS: 500, REPLICA_DB_READONLY: true }));
         service.databases.set('bitcoin:mainnet:indexer',
             { db: { doQuery: sinon.stub().resolves([]) }, config: {}, dbType: 'indexer' });
-        service._startSyncMetaRetention();
+        service.startSyncMetaRetention();
         await clock.tickAsync(60000);
 
         assert.strictEqual(prune.callCount, 1);
@@ -133,7 +133,7 @@ describe('client-mode sync_meta retention', function(){
         service = new SyncService(baseConfig({ SYNC_META_RETENTION_BLOCKS: 500 }));
         service.databases.set('bitcoin:mainnet:indexer',  { db: { tag: 'a' }, config: {}, dbType: 'indexer' });
         service.databases.set('litecoin:mainnet:indexer', { db: { tag: 'b' }, config: {}, dbType: 'indexer' });
-        service._startSyncMetaRetention();
+        service.startSyncMetaRetention();
 
         await clock.tickAsync(60000);
         assert.strictEqual(prune.callCount, 2, 'the second DB is still swept after the first throws');
@@ -165,7 +165,7 @@ describe('sync_meta count parity while the client window is armed', function(){
     }
 
     it('is armed only for a writable client with a positive window', function(){
-        const armed = (over) => clientSync(baseConfig(over))._syncMetaWindowArmed();
+        const armed = (over) => clientSync(baseConfig(over)).syncMetaWindowArmed();
         assert.strictEqual(armed({ SYNC_META_RETENTION_BLOCKS: 500 }), true);
         assert.strictEqual(armed({ SYNC_META_RETENTION_BLOCKS: 0 }), false, 'default window');
         assert.strictEqual(armed({ SYNC_META_RETENTION_BLOCKS: 'abc' }), false, 'unparseable window');

@@ -42,6 +42,10 @@ const { bootstrapDepthKey } = require('./config');
 const checkpointVerifier = require('./checkpoint');
 const M = require('./merkle');
 const { getPinnedValidators, getPinnedCheckpoint } = require('./pinnedValidators');
+// Resolved at each call site rather than bound once: the shim is installed by the
+// entry file after this module is required, and getLogger() hands back a lazy
+// façade that reaches the real sink once that has happened.
+const { getLogger } = require('./observability');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in _verifyTableCounts for the
@@ -583,7 +587,7 @@ class ClientSync {
                 try {
                     let prior = await this.db.getActiveHalt(this.dbType);
                     if(!prior){
-                        console.log('halt-state check recovered for ' + this.chain + '/' + this.network +
+                        getLogger().info('halt-state check recovered for ' + this.chain + '/' + this.network +
                             '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
                         this._halted = null;
                         break;
@@ -593,7 +597,7 @@ class ClientSync {
                         mismatches: this._safeParse(prior.mismatches), sources: this._safeParse(prior.sources),
                         at: prior.detected_at
                     };
-                    console.error('halt-state check recovered for ' + this.chain + '/' + this.network +
+                    getLogger().error('halt-state check recovered for ' + this.chain + '/' + this.network +
                         '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
                         prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
                     break;
@@ -2142,9 +2146,9 @@ class ClientSync {
     // schema) is reported as a full shortfall rather than silently skipped.
     // True when this client prunes its own sync_meta, i.e. SYNC_META_RETENTION_BLOCKS is
     // a positive window and the DB is writable. Mirrors the conditions
-    // SyncService._startSyncMetaRetention starts its timer under, so the count check and
+    // SyncService.startSyncMetaRetention starts its timer under, so the count check and
     // the sweep cannot disagree about whether local pruning is happening.
-    _syncMetaWindowArmed(){
+    syncMetaWindowArmed(){
         if(!this.config) return false;
         if(this.config['SYNC_MODE'] === 'server') return false;
         if(this.config['REPLICA_DB_READONLY']) return false;
@@ -2184,13 +2188,13 @@ class ClientSync {
             // this signal would delete the only detector for that class of defect.
             if(OPERATIONAL_LOG_TABLES.has(table)) continue;
             // Exclude sync_meta too, and ONLY while this client's own retention window
-            // is armed. SyncService._startSyncMetaRetention then deletes rows below the
+            // is armed. SyncService.startSyncMetaRetention then deletes rows below the
             // window locally while the source keeps them, so the shortfall is the window
             // working rather than a replication hole, and reporting it every pass would
             // bury the real signal exactly as an unfiltered events delta does. With
             // the window at its default 0 nothing is pruned and sync_meta stays
             // strictly compared, so this exclusion cannot quietly widen.
-            if(table === 'sync_meta' && this._syncMetaWindowArmed()) continue;
+            if(table === 'sync_meta' && this.syncMetaWindowArmed()) continue;
             // table names here come straight from the remote source's /status
             // payload: validate before they reach getTableCount's identifier
             // interpolation, mirroring the schema-application loop above. Skip
@@ -2528,7 +2532,7 @@ class ClientSync {
     //       (default 30 min; 0 disables), so a slow/stalled catch-up cadence cannot let
     //       dispensers drift unbounded in wall-clock time. Sampled from the recurring
     //       status tick as well as from this catch-up path (see
-    //       _dispenserReconcileIntervalDue and its caller in _handleEvent), because a
+    //       dispenserReconcileIntervalDue and its caller in _handleEvent), because a
     //       healthy live-following replica never enters a catch-up at all, which is
     //       precisely the cadence this clause claims to bound.
     // `_lastDispenserReconcileAt` is stamped by _reconcileDispensers on success (covering
@@ -2539,7 +2543,7 @@ class ClientSync {
         if(isNaN(every) || every < 1) every = 20;
         let firstResume = (this._lastDispenserReconcileAt == null);
         let periodic    = (this._catchUpCount % every === 0);
-        // Free function, not this._dispenserReconcileIntervalDue: this method is exercised
+        // Free function, not this.dispenserReconcileIntervalDue: this method is exercised
         // through prototype.call with hand-built contexts, which carry config and the stamp
         // and nothing else.
         return firstResume || periodic ||
@@ -2549,7 +2553,7 @@ class ClientSync {
     // Wall-clock term of the reconcile decision, WITHOUT _shouldReconcileDispensers'
     // cycle-counter side effect, so a recurring caller can sample the same bound without
     // corrupting the every-Nth catch-up cadence.
-    _dispenserReconcileIntervalDue(nowMs){
+    dispenserReconcileIntervalDue(nowMs){
         return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
     }
 
@@ -2758,7 +2762,7 @@ class ClientSync {
             // and carries its own throttle, none of which this bound may inherit. Uses the
             // side-effect-free predicate so the every-Nth catch-up counter is untouched.
             if(this.dbType === 'decoder' && !this._halted && this.lastAppliedBlock !== null &&
-               !this._dispenserReconcileInFlight && this._dispenserReconcileIntervalDue(Date.now())){
+               !this._dispenserReconcileInFlight && this.dispenserReconcileIntervalDue(Date.now())){
                 this._dispenserReconcileInFlight = true;
                 try { await this._reconcileDispensers(this.sources[sourceIndex]); }
                 finally { this._dispenserReconcileInFlight = false; }
@@ -2783,7 +2787,7 @@ class ClientSync {
     // rollback itself fails), so the DB tip actually moves and the follow-up catch-up
     // resolves since = <forked height>. _incrementalCatchUp refuses while _halted, so a
     // rollback that failed closed can never be followed by an advance.
-    async _rewindForkedHead(blockIndex){
+    async rewindForkedHead(blockIndex){
         await this._handleReorg({ block_index: blockIndex });
         await this._incrementalCatchUp(this.lastAppliedBlock + 1);
     }
@@ -2826,7 +2830,7 @@ class ClientSync {
                 console.error('Chain continuity error (decoder): fork at head block ' + blockIndex +
                     '; stored block_hash ' + this.lastHashes.block_hash +
                     ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
-                await this._rewindForkedHead(blockIndex);
+                await this.rewindForkedHead(blockIndex);
             } else if(this.dbType === 'indexer' &&
                blockIndex === this.lastAppliedBlock &&
                this.lastHashes){
@@ -2850,7 +2854,7 @@ class ClientSync {
                 if(mismatch){
                     console.error('Chain continuity error (indexer): fork at head block ' + blockIndex +
                         '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
-                    await this._rewindForkedHead(blockIndex);
+                    await this.rewindForkedHead(blockIndex);
                 }
             }
             return;
@@ -3115,11 +3119,11 @@ class ClientSync {
             console.error('no further blocks). Operator must fix the local fault (DB, schema) and');
             console.error('clear before this validator can resume.');
         } else if(this._halted.reason === 'boundary-read-error'){
-            console.error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
-            console.error('retries, so the bulk-range verification could not run at all. An unreadable');
-            console.error('hash is not an absent one: treating it as absent would skip the only check');
-            console.error('the applied range gets. HALTING (applying no further blocks). Operator must');
-            console.error('fix the local database fault and clear before this validator can resume.');
+            getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
+            getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
+            getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
+            getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
+            getLogger().error('fix the local database fault and clear before this validator can resume.');
         } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
             console.error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
             console.error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
@@ -3257,8 +3261,9 @@ class ClientSync {
                 break;
             } catch(e){
                 if(attempt < readAttempts){
-                    console.error('Boundary hash read errored at block %s (attempt %s/%s, retrying):',
-                        blockIndex, attempt, readAttempts, e);
+                    getLogger().error('Boundary hash read errored at block ' + blockIndex +
+                        ' (attempt ' + attempt + '/' + readAttempts + ', retrying): ' +
+                        ((e && e.message) ? e.message : e));
                     await this.util.sleep(1000 * attempt);
                     continue;
                 }
@@ -3412,7 +3417,7 @@ class ClientSync {
         if(this._halted && this._halted.reason === 'halt-state-check-failed'){
             const wasSynthetic = this._halted;
             this._halted = null;
-            console.log('halt-state-check-failed state cleared for ' + this.chain + '/' + this.network +
+            getLogger().info('halt-state-check-failed state cleared for ' + this.chain + '/' + this.network +
                 '/' + this.dbType + '; sync_halt left untouched (it was never successfully read)');
             return wasSynthetic;
         }

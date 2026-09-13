@@ -28,9 +28,9 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientSync = require('../../src/ClientSync');
 
-describe('ClientSync._dispenserReconcileIntervalDue (wall-clock term)', function(){
+describe('ClientSync.dispenserReconcileIntervalDue (wall-clock term)', function(){
     function due(ctx, now){
-        return ClientSync.prototype._dispenserReconcileIntervalDue.call(ctx, now);
+        return ClientSync.prototype.dispenserReconcileIntervalDue.call(ctx, now);
     }
 
     it('is due once the last reconcile is older than the interval', function(){
@@ -92,7 +92,7 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
             _incrementalCatchUp: sinon.stub().resolves(),
             _maybeVerifyCompleteness: sinon.stub().resolves(),
             _reconcileDispensers: sinon.stub().resolves(),
-            _dispenserReconcileIntervalDue: ClientSync.prototype._dispenserReconcileIntervalDue
+            dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
         };
         return Object.assign(ctx, over || {});
     }

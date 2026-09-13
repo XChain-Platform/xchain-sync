@@ -34,6 +34,10 @@ const stateCommitment = require('./stateCommitment');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./pinnedValidators');
 const Utility         = require('./utility');
+// Resolved at each call site rather than bound once: the shim is installed by the
+// entry file after this module is required, and getLogger() hands back a lazy
+// façade that reaches the real sink once that has happened.
+const { getLogger }   = require('./observability');
 
 class SyncService {
 
@@ -99,7 +103,7 @@ class SyncService {
 
         this._scheduleHubRepoll();
         this._startStateTreeMetric();
-        this._startSyncMetaRetention();
+        this.startSyncMetaRetention();
 
         // Last statement in start(): everything a /health caller is entitled to
         // assume is running is running by here.
@@ -484,7 +488,7 @@ class SyncService {
     //
     // Server mode is deliberately untouched: it already prunes, and a second driver there
     // would add concurrent DELETE load to a path that works.
-    _startSyncMetaRetention(){
+    startSyncMetaRetention(){
         if(this._syncMetaRetentionTimer) return;
         if(this.config['SYNC_MODE'] === 'server') return;
         const keep = parseInt(this.config['SYNC_META_RETENTION_BLOCKS'], 10);
@@ -492,9 +496,11 @@ class SyncService {
         // Honours REPLICA_DB_READONLY: pruneSyncMeta short-circuits on it, so a
         // serve-only deployment still deletes nothing.
         const readOnly = this.config['REPLICA_DB_READONLY'];
-        const raw = parseInt(this.config['SYNC_META_RETENTION_INTERVAL_MS'] !== undefined
-            ? this.config['SYNC_META_RETENTION_INTERVAL_MS']
-            : process.env.SYNC_META_RETENTION_INTERVAL_MS, 10);
+        // config.js already resolves this key from the environment and applies the
+        // 1-hour default, so the interval is read from config and nowhere else. The
+        // fallback below covers a config object assembled without the key (a test
+        // fixture), not an unset environment variable.
+        const raw = parseInt(this.config['SYNC_META_RETENTION_INTERVAL_MS'], 10);
         const intervalMs = (Number.isFinite(raw) && raw > 0) ? raw : (60 * 60 * 1000);
 
         this._syncMetaRetentionRunning = false;
@@ -508,8 +514,8 @@ class SyncService {
                         const log = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], readOnly, keep);
                         await log.pruneSyncMeta();
                     } catch(err){
-                        console.warn('SyncService: sync_meta retention failed for ' + key + ':',
-                                     err && err.message ? err.message : err);
+                        getLogger().warn('SyncService: sync_meta retention failed for ' + key + ': ' +
+                                         (err && err.message ? err.message : err));
                     }
                 }
             } finally {
@@ -517,7 +523,7 @@ class SyncService {
             }
         }, intervalMs);
         if(this._syncMetaRetentionTimer.unref) this._syncMetaRetentionTimer.unref();
-        console.log('SyncService: client sync_meta retention started (window ' + keep +
+        getLogger().info('SyncService: client sync_meta retention started (window ' + keep +
                     ' blocks, interval ' + intervalMs + 'ms); inclusion proofs below the window ' +
                     'stop being serveable from this replica');
     }
