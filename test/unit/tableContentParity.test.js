@@ -158,7 +158,7 @@ describe('Advisory table-content parity', function(){
             // Rows assigned outside a consensus block tx (recovery pre-seed, API
             // read-path createAddress) are benign source-local drift. Hashing them
             // would make an honest replica fail forever.
-            const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/db/index.js'), 'utf8');
+            const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/db/tables.js'), 'utf8');
             const body = src.slice(src.indexOf('async getContentWindowRows('), src.indexOf('async getMaxRowId('));
             // The scope column is now the registry's (lifecycle.blockKey), so the guard
             // pins the PROPERTY (the same column, NULL-excluded, then range-bounded)

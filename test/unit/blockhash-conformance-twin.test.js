@@ -190,10 +190,10 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     // EXTRA trailing literal, the previous-block-hash chaining query, which has no
     // counterpart in the leaf-row gathering; everything before it must match pairwise.
     it('getBlockLeafRows gathers the same consensus SQL as BlockHasher, in order', function(){
-        const dbSrc = fs.readFileSync(syncFile('src/db/index.js'), 'utf8');
+        const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
         const bhSrc = fs.readFileSync(syncFile('src/BlockHasher.js'), 'utf8');
         const leafSql = sqlLiterals(stripComments(extractFunction(dbSrc,
-            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db.js')));
+            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')));
         const hashSql = sqlLiterals(stripComments(extractFunction(bhSrc,
             /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js')));
         assert.ok(leafSql.length >= 12,

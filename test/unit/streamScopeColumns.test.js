@@ -142,8 +142,10 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         // `block_index` is exactly how the tables shipped un-replicated.
         const read = (p) => fs.readFileSync(path.resolve(__dirname, '..', '..', p), 'utf8');
 
-        const db = read('src/db/index.js');
-        const blockScoped = db.slice(db.indexOf('async getBlockScopedRows('), db.indexOf('async getActionScopedRows('));
+        // Both readers live in the table-generic mixin, so the slice ends at the
+        // next member of THAT file rather than at a method that moved elsewhere.
+        const db = read('src/db/tables.js');
+        const blockScoped = db.slice(db.indexOf('async getBlockScopedRows('), db.indexOf('streamTableRows('));
         assert.ok(/lifecycle\.blockKey\(table\)/.test(blockScoped),
                   'getBlockScopedRows must scope by the registry column; the literal block_index ' +
                   'raised 1054 on rollcalls/rollcall_absences and ServerPoller swallowed it');
