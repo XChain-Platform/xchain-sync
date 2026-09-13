@@ -55,6 +55,7 @@ describe('06 Incremental Catch-Up', function () {
         const baseBlocks = 50; // Bootstrap to this point first
         const totalBlocks = baseBlocks + gapSize;
 
+        // Seed all blocks into source
         await gen.seedBlockRange(1, totalBlocks);
 
         server = createServer(sourceDb, SERVER_PORT);
@@ -63,6 +64,10 @@ describe('06 Incremental Catch-Up', function () {
         // client.bootstrap() snapshots whatever is currently in source, so source is
         // reset and reseeded to baseBlocks-only before bootstrapping, which keeps the
         // client pinned to the pre-gap height; the gap blocks are seeded back in below.
+        // Bootstrap client to baseBlocks only
+        // First, temporarily reduce source to baseBlocks by remembering total
+        // We bootstrap from snapshot which will include all blocks, so instead:
+        // Seed base blocks, bootstrap, then seed remaining
         await resetAll();
         await gen.seedBlockRange(1, baseBlocks);
 
@@ -73,6 +78,7 @@ describe('06 Incremental Catch-Up', function () {
         await client.bootstrap();
         assert.strictEqual(await replicaDb.getLastBlock(), baseBlocks);
 
+        // Now add the gap blocks to source
         await gen.seedBlockRange(baseBlocks + 1, totalBlocks);
 
         // Restart server to pick up new blocks
@@ -83,6 +89,7 @@ describe('06 Incremental Catch-Up', function () {
         const collector = new MetricsCollector({ name: label });
         collector.start();
 
+        // Measure incremental catch-up
         collector.beginOperation('catchUp');
         await client.incrementalCatchUp(baseBlocks + 1);
         const catchUpMs = collector.endOperation('catchUp');
@@ -106,9 +113,11 @@ describe('06 Incremental Catch-Up', function () {
             blocksPerSecond: stats.catchUpMetrics.blocksPerSecond
         };
 
+        // Verify catch-up completed
         assert.strictEqual(await replicaDb.getLastBlock(), totalBlocks,
             `Replica should be at block ${totalBlocks} after catch-up`);
 
+        // Verify data integrity
         const sourceBlockCount = await testDb.getRowCount(sourceDb, 'blocks');
         const replicaBlockCount = await testDb.getRowCount(replicaDb, 'blocks');
         assert.strictEqual(replicaBlockCount, sourceBlockCount,
@@ -142,10 +151,12 @@ describe('06 Incremental Catch-Up', function () {
     });
 
     it('catch-up rate scales linearly', async function () {
+        // Compare blocks/second across gap sizes; should not degrade significantly
         const small = allStats['gap-10'];
         const large = allStats['gap-500'] || allStats['gap-100'];
 
         if (small && large) {
+            // Large gap should not be slower per-block than small gap by more than 5x
             assert.ok(large.blocksPerSecond > small.blocksPerSecond / 5,
                 `Large gap (${large.blocksPerSecond} blk/s) is much slower than small gap (${small.blocksPerSecond} blk/s)`);
         }

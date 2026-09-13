@@ -68,15 +68,18 @@ describe('E2E: Reorg Propagation', function() {
                 return block !== null && block <= 17;
             }, 10000);
 
+            // Verify old blocks removed from replica
             await assertBlockNotExists(replicaDb, 18);
             await assertBlockNotExists(replicaDb, 19);
             await assertBlockNotExists(replicaDb, 20);
 
+            // Add replacement blocks with different data
             await fixtures.seedBlocks(sourceDb, 18, 21, { creditAmount: '5555' });
             await server.poll();
 
             await waitForReplicaBlock(replicaDb, 21);
 
+            // Verify new data
             await assertBlockExists(replicaDb, 18);
             await assertBlockExists(replicaDb, 21);
 
@@ -95,6 +98,7 @@ describe('E2E: Reorg Propagation', function() {
         it('recalculates balances correctly after reorg', async function() {
             this.timeout(30000);
 
+            // Seed blocks: 1-15 with credit 1000, blocks 16-20 with credit 5000
             await fixtures.seedBlocks(sourceDb, 1, 15, { creditAmount: '1000' });
             await fixtures.seedBlocks(sourceDb, 16, 20, { creditAmount: '5000' });
 
@@ -106,6 +110,7 @@ describe('E2E: Reorg Propagation', function() {
             await waitForReplicaBlock(replicaDb, 20);
 
             // Removes the blocks that carried the 5000-credit range.
+            // Reorg: remove blocks 16-20 (which had 5000 credits)
             await fixtures.deleteBlocksFrom(sourceDb, 16);
             await server.poll();
 
@@ -114,6 +119,7 @@ describe('E2E: Reorg Propagation', function() {
                 return block !== null && block <= 15;
             }, 10000);
 
+            // Add new blocks 16-18 with credit 3000
             await fixtures.seedBlocks(sourceDb, 16, 18, { creditAmount: '3000' });
             await server.poll();
 
@@ -137,6 +143,7 @@ describe('E2E: Reorg Propagation', function() {
             await client.start();
             await waitForReplicaBlock(replicaDb, 30);
 
+            // Deep reorg: delete blocks 21-30
             await fixtures.deleteBlocksFrom(sourceDb, 21);
             await server.poll();
 
@@ -145,6 +152,7 @@ describe('E2E: Reorg Propagation', function() {
                 return block !== null && block <= 20;
             }, 10000);
 
+            // Add new blocks 21-35
             await fixtures.seedBlocks(sourceDb, 21, 35, { creditAmount: '2222' });
             await server.poll();
 
@@ -224,6 +232,7 @@ describe('E2E: Reorg Propagation', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 23);
 
+            // Verify final data has second-reorg amounts
             let credits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index WHERE a.block_index >= 20"
             );

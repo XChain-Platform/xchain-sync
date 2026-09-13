@@ -27,20 +27,24 @@ class Utility {
 
     constructor(){}
 
+    // Handle sleeping for a given number of milliseconds
     sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     // Empty string counts as null here; callers rely on that for DB columns.
+    // Check if a value is null or undefined
     isNull(val){
         return (val === null || val === undefined || val === '');
     }
 
+    // Throw an error and log to console
     throwError(error){
         logger.error(util.format('throwError:', error));
         throw new Error(error);
     }
 
+    // Log an error to console
     logError(error, info){
         logger.error(util.format('logError: ' + error, info));
     }
@@ -65,11 +69,13 @@ class Utility {
         return hash;
     }
 
+    // Start a debug timer
     startTimer(){
         return Date.now();
     }
 
     // Formats elapsed time as ms / s / m+s for log lines, not for arithmetic.
+    // Get elapsed time string from a timer
     getTimer(timer){
         let ms = Date.now() - timer;
         if(ms < 1000) return ms + 'ms';

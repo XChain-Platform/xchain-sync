@@ -204,9 +204,11 @@ async function assertBlockNotExists(db, block_index) {
     assert.strictEqual(txRows.length, 0, 'Block ' + block_index + ' should have no transactions');
 }
 
+// Assert that balances table is consistent with credits/debits
 async function assertBalancesConsistent(db) {
     // Committed-state reads (see tableContent): must not observe a half-applied block.
     let q = db.doQueryCommitted ? db.doQueryCommitted.bind(db) : db.doQuery.bind(db);
+    // Compute expected balances from credits/debits
     let computed = await q(`
         SELECT address_id, tick_id,
             CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END), 0) AS CHAR) as expected_amount
@@ -230,6 +232,7 @@ async function assertBalancesConsistent(db) {
     assert.strictEqual(actual.length, computed.length,
         'Balances count mismatch: actual=' + actual.length + ' expected=' + computed.length);
 
+    // Build lookup map for comparison
     let expectedMap = {};
     for (let row of computed) {
         expectedMap[row.address_id + ':' + row.tick_id] = row.expected_amount;
@@ -243,6 +246,7 @@ async function assertBalancesConsistent(db) {
     }
 }
 
+// Assert block hashes match between source and replica
 async function assertHashesMatch(sourceDb, replicaDb, block_index) {
     let sourceHash = await sourceDb.getBlockHashRow(block_index);
     let replicaHash = await replicaDb.getBlockHashRow(block_index);

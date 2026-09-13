@@ -83,6 +83,7 @@ describe('Tier 3 - config.getConfig @tier3', function () {
             saved[key] = process.env[key];
         }
         try {
+            // Apply fuzzed values
             for (let key of CONFIG_ENV_KEYS) {
                 let val = envObj[key];
                 if (val === undefined || val === null) {
@@ -93,6 +94,7 @@ describe('Tier 3 - config.getConfig @tier3', function () {
             }
             return fn();
         } finally {
+            // Restore original values
             for (let key of CONFIG_ENV_KEYS) {
                 if (saved[key] === undefined) {
                     delete process.env[key];

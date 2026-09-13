@@ -84,8 +84,11 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                     let committed = db.commitTransaction.callCount;
                     let rolledBack = db.rollbackTransaction.callCount;
 
+                    // A transaction was opened; verify it was resolved
                     if (began > 0) {
                         // Commit is always attempted; rollback only fires as a follow-up when commit fails.
+                        // Commit is always attempted. If it fails, rollback is also called.
+                        // Valid states: committed=1,rolledBack=0 (success) or committed=1,rolledBack=1 (commit failed)
                         assert.ok(committed >= 1,
                             'Commit should always be attempted: committed=' + committed);
                         if (commitFails) {
@@ -140,6 +143,7 @@ describe('Tier 2 - ClientRollback @tier2', function () {
 
                     await rollback.rollback(bi);
 
+                    // Verify no query contains 'action_index >='
                     for (let i = 0; i < db.doQuery.callCount; i++) {
                         let query = db.doQuery.getCall(i).args[0];
                         if (query.includes('action_index >=')) {

@@ -54,12 +54,14 @@ describe('E2E: Cross-Source Hash Verification', function() {
 
             await fixtures.seedBlocks(sourceDb, 1, 10);
 
+            // Both servers read from the same source DB
             server1 = new ServerProcess(sourceDb, SERVER_PORT_1);
             await server1.start();
 
             server2 = new ServerProcess(sourceDb, SERVER_PORT_2);
             await server2.start();
 
+            // Client configured with both sources and hash verification enabled
             client = new ClientProcess(replicaDb, server1.getUrl(), 'bitcoin', 'mainnet', {
                 syncSources: server1.getUrl() + ',' + server2.getUrl(),
                 verifyHashes: true,
@@ -70,6 +72,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 10);
 
+            // Add more blocks and verify cross-source sync continues
             await fixtures.seedBlocks(sourceDb, 11, 15);
             await waitForReplicaBlock(replicaDb, 15, 20000);
 
@@ -89,6 +92,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
 
             // Second configured source is never started, exercising the
             // timeout-then-apply-from-primary fallback path.
+            // Client configured with two sources, but second doesn't exist
             client = new ClientProcess(replicaDb, server1.getUrl(), 'bitcoin', 'mainnet', {
                 syncSources: server1.getUrl() + ',http://127.0.0.1:' + SERVER_PORT_2,
                 verifyHashes: true,
@@ -96,6 +100,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
             });
             await client.start();
 
+            // Should eventually sync after timeouts
             await waitForReplicaBlock(replicaDb, 5, 20000);
             assert.strictEqual(await replicaDb.getLastBlock(), 5);
         });
@@ -110,6 +115,7 @@ describe('E2E: Cross-Source Hash Verification', function() {
             server1 = new ServerProcess(sourceDb, SERVER_PORT_1);
             await server1.start();
 
+            // Two sources but verification disabled
             client = new ClientProcess(replicaDb, server1.getUrl(), 'bitcoin', 'mainnet', {
                 syncSources: server1.getUrl() + ',http://127.0.0.1:' + SERVER_PORT_2,
                 verifyHashes: false

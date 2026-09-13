@@ -51,6 +51,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
         sinon.restore();
     });
 
+    // Helper: run and log crashes
     async function runAndLog(fn, input) {
         try {
             await fn();
@@ -114,6 +115,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                     let committed = db.commitTransaction.callCount;
                     let rolledBack = db.rollbackTransaction.callCount;
 
+                    // If a transaction was started, exactly one of commit/rollback happened
                     if (began > 0) {
                         assert.strictEqual(committed + rolledBack, began,
                             'Transaction leaked: began=' + began + ' committed=' + committed + ' rolledBack=' + rolledBack);
@@ -182,6 +184,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             return fc.assert(fc.asyncProperty(
                 fullSnapshotPayload(),
                 async (snapshot) => {
+                    // Add since_block to make it incremental
                     snapshot.since_block = 1;
                     db.truncateTable.resetHistory();
                     await applier.applyIncrementalSnapshot(snapshot);

@@ -94,10 +94,12 @@ describe('Boundary: Block Index Values', function(){
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
 
+            // First poll: initialize
             poller.lastPolledBlock = null;
             await poller._poll();
             assert.strictEqual(poller.lastPolledBlock, 1);
 
+            // Second poll: no new blocks
             await poller._poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
@@ -149,6 +151,8 @@ describe('Boundary: Block Index Values', function(){
     describe('client skip logic', function(){
         it('skips block with index <= lastAppliedBlock', function(){
             // Verifies the comparison ClientSync.handleBlock relies on to skip already-applied blocks.
+            // ClientSync._handleBlock: blockIndex <= this.lastAppliedBlock → return
+            // This is tested indirectly through the unit tests, but we verify the comparison
             let lastApplied = 10;
             assert.strictEqual(10 <= lastApplied, true);  // same block: skipped
             assert.strictEqual(9 <= lastApplied, true);   // earlier: skipped

@@ -28,6 +28,9 @@ function clearPoolEnv(){
     for(let k of POOL_ENV_KEYS) delete process.env[k];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. resolver semantics
+// ═══════════════════════════════════════════════════════════════════════════
 describe('poolSizing.resolvePoolSize()', function(){
     let saved;
 
@@ -115,6 +118,9 @@ describe('poolSizing.resolvePoolSize()', function(){
     });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. Database wiring: the pool a chain actually opens
+// ═══════════════════════════════════════════════════════════════════════════
 describe('Database pool sizing per dbType', function(){
     let saved, createdPools;
 

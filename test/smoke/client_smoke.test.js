@@ -93,8 +93,10 @@ describe('Smoke: Client Mode', function() {
             try { await replicaDb.doQuery(q); } catch (e) {}
         }
 
+        // Seed 3 blocks in source
         await fixtures.seedBlocks(sourceDb, 1, 3);
 
+        // Start a minimal server for snapshot/schema endpoints
         snapshotBuilder = new SnapshotBuilder(util);
         let app = express();
         app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
@@ -154,6 +156,7 @@ describe('Smoke: Client Mode', function() {
         await replicaDb.close();
     });
 
+    // Scenario 7: Replica DB connectivity
     it('replica DB connection succeeds', async function() {
         let conn = await replicaDb.getConnection();
         assert.ok(conn);
@@ -168,6 +171,7 @@ describe('Smoke: Client Mode', function() {
         assert.strictEqual(rows.length, 1);
     });
 
+    // Scenario 8: Schema check
     it('replica has indexer tables', async function() {
         let rows = await replicaDb.doQuery(
             "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
@@ -176,6 +180,7 @@ describe('Smoke: Client Mode', function() {
         assert.ok(Number(rows[0].cnt) >= 10);
     });
 
+    // Scenario 9: Snapshot download
     it('snapshot is downloadable and parseable', async function() {
         let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/snapshot/indexer/bitcoin/mainnet', {
             responseType: 'arraybuffer', decompress: false
@@ -188,9 +193,11 @@ describe('Smoke: Client Mode', function() {
         assert.ok(snapshot.tables.blocks);
     });
 
+    // Scenario 10: Block apply
     it('ClientApplier applies a block without error', async function() {
         let applier = new ClientApplier(replicaDb, util);
 
+        // Build a minimal block payload
         let payload = {
             block_index: 99,
             data: {
@@ -208,6 +215,7 @@ describe('Smoke: Client Mode', function() {
     it('full bootstrap populates replica', async function() {
         this.timeout(15000);
 
+        // Truncate replica first
         let tables = await replicaDb.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
             [SMOKE_REPLICA_DB]
@@ -219,6 +227,7 @@ describe('Smoke: Client Mode', function() {
         }
         await replicaDb.doQuery("SET FOREIGN_KEY_CHECKS = 1");
 
+        // Bootstrap
         let applier    = new ClientApplier(replicaDb, util);
         let rollback   = new ClientRollback(replicaDb, util, undefined, 'regtest');
         let verifier   = new HashVerifier();

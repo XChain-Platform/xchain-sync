@@ -67,6 +67,9 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
+// -------------------------------------------------------------------------
+// Suite setup / teardown
+// -------------------------------------------------------------------------
 describe('Chaos: Replica Database Resilience', function () {
 
     let server, client;
@@ -77,14 +80,18 @@ before(async function () {
     await createProxy(SOURCE_PROXY);
     await createProxy(REPLICA_PROXY);
     await bootstrapDatabases();
+    // Seed initial blocks 1-10 into source
     await seedSourceBlocks(1, 10);
 
+    // Start sync server
     server = createServer(SERVER_PORT);
     await server.start();
 
+    // Bootstrap client and start live sync
     client = createClient(server.getUrl());
     await client.start();
 
+    // Wait for initial sync to complete
     const recoveryMs = await waitForSyncRecovery(10, 30000);
     expect(recoveryMs).to.be.above(-1, 'Initial sync should complete within 30s');
     console.log(`    [setup] Initial sync to block 10 completed in ${recoveryMs}ms`);
@@ -136,19 +143,26 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
 
         expect(client.isConnected()).to.equal(true,
             'Client must still be connected to the server with only the replica DB down');
+        // Client's WebSocket should still be connected (process alive)
+        // We verify by checking that the server still has WebSocket subscribers
+        // (if client crashed, it would disconnect)
         expect(client.getLastAppliedBlock()).to.be.at.most(10,
             'Client should not have advanced beyond block 10 with replica DB down');
     });
 
     it('client recovers and catches up after replica DB is restored', async function () {
+        // Take replica down
         await replicaFaults.dbDown();
 
+        // Seed blocks while replica is down
         await seedSourceBlocks(11, 20);
         await server.poll();
         await sleep(3000);
 
+        // Restore replica
         await replicaFaults.dbUp();
 
+        // Client should detect gap via status event and catch up
         const recoveryMs = await waitForSyncRecovery(20, 90000);
         expect(recoveryMs).to.be.above(-1,
             'Client should catch up to block 20 after replica recovery');
@@ -173,8 +187,10 @@ describe('CE-DST-02: Slow Write Responses', function () {
     });
 
     it('blocks still applied under 2s write latency', async function () {
+        // Inject 2s latency on all replica DB writes
         await replicaFaults.addLatency(2000);
 
+        // Seed blocks into source
         await seedSourceBlocks(11, 18);
         await server.poll();
 
@@ -190,6 +206,7 @@ describe('CE-DST-02: Slow Write Responses', function () {
         await replicaFaults.addLatency(2000);
         await replicaFaults.reset();
 
+        // Seed and sync a block; should be fast
         await seedSourceBlocks(19, 20);
         await server.poll();
 
@@ -212,12 +229,15 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
     it('client stays alive when replica DB connections are held for 30s', async function () {
         await replicaFaults.timeout(30000);
 
+        // Seed blocks; server broadcasts, client receives but can't write
         await seedSourceBlocks(11, 15);
         await server.poll();
         await sleep(8000);
 
         // Server must stay reachable even though the client is stuck
         // retrying against replica-write timeouts.
+        // Client process must still be running (WebSocket connected)
+        // Verify server is still serving (not blocked by client issues)
         const alive = await isServerAlive(server.getUrl());
         expect(alive).to.equal(true,
             'Server must stay alive; client pool exhaustion must not affect server');
@@ -225,6 +245,7 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
 
     it('client recovers after timeout toxic is removed', async function () {
         await replicaFaults.timeout(30000);
+        // Seed new blocks into source; server will broadcast them
         await seedSourceBlocks(11, 15);
         await server.poll();
         await sleep(5000);
@@ -246,10 +267,13 @@ describe('CE-DST-04: Intermittent Connection Drops', function () {
     });
 
     it('majority of blocks eventually applied under 30% TCP reset rate', async function () {
+        // Seed blocks before injecting fault
         await seedSourceBlocks(11, 25);
 
+        // Inject 30% connection reset on replica writes
         await replicaFaults.resetConnections(0.3);
 
+        // Force multiple poll cycles to broadcast blocks
         for (let i = 0; i < 15; i++) {
             try { await server.poll(); } catch { /* expected */ }
             await sleep(300);
@@ -269,6 +293,7 @@ describe('CE-DST-04: Intermittent Connection Drops', function () {
         await sleep(3000);
         await replicaFaults.reset();
 
+        // Allow catch-up to complete
         const recoveryMs = await waitForSyncRecovery(25, 60000);
         expect(recoveryMs).to.be.above(-1,
             'All blocks should reach replica after toxic removal');
@@ -285,33 +310,42 @@ describe('CE-DST-05: Replica Down → Blocks Accumulate → Recovery', function 
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const sourceDb  = require('./helpers/chaos-setup').getSourceDb();
 
+        // Record pre-outage state
         const preOutageBlock = await replicaDb.getLastBlock();
         expect(preOutageBlock).to.be.at.least(10);
 
+        // Take replica DB down
         await replicaFaults.dbDown();
         await sleep(2000);
 
+        // Seed a batch of blocks into source while replica is down
         await seedSourceBlocks(11, 30);
 
+        // Server polls and broadcasts (client receives via WebSocket but can't write)
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* expected */ }
             await sleep(300);
         }
 
+        // Wait for blocks to be broadcast and fail on client
         await sleep(5000);
 
+        // Restore replica DB
         await replicaFaults.dbUp();
         await sleep(2000);
 
+        // Client should detect gap and perform incremental catch-up
         const recoveryMs = await waitForSyncRecovery(30, 120000);
         expect(recoveryMs).to.be.above(-1,
             'Client should catch up to block 30 after replica recovery');
         console.log(`    CE-DST-05 full recovery time: ${recoveryMs}ms`);
 
+        // Full integrity checks
         await assertReplicaMatchesSource(sourceDb, replicaDb, testDb);
         await assertBalancesConsistent(replicaDb);
         await assertHashesMatch(sourceDb, replicaDb, 30);
 
+        // Verify no block gaps
         for (let i = 11; i <= 30; i++) {
             await assertBlockExists(replicaDb, i);
         }

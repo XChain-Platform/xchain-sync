@@ -95,6 +95,7 @@ describe('Integration: ServerPoller', function() {
             assert.strictEqual(broadcaster.broadcast.callCount, 5);
             assert.strictEqual(poller.lastPolledBlock, 5);
 
+            // Verify block order
             for (let i = 0; i < 5; i++) {
                 let event = broadcaster.broadcast.getCall(i).args[2];
                 assert.strictEqual(event.block_index, i + 1);
@@ -114,6 +115,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 10);
             poller.lastPolledBlock = 10;
 
+            // Simulate reorg at source
             await fixtures.deleteBlocksFrom(sourceDb, 8);
 
             await poller._poll();

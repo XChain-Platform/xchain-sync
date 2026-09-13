@@ -107,6 +107,7 @@ describe('Boundary: Source Array Parsing', function(){
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs.bootstrapRotateSources();
             assert.strictEqual(ok, false);
+            // Should not rotate (only 1 source)
             assert.deepStrictEqual(cs.sources, ['http://s1']);
             axios.get.restore();
         });

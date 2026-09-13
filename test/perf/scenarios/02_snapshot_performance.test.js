@@ -61,6 +61,7 @@ describe('02 Snapshot Performance', function () {
             const collector = new MetricsCollector({ name: label });
             collector.start();
 
+            // Measure snapshot download
             collector.beginOperation('fullSnapshot');
             const res = await axios.get(
                 server.getUrl() + '/snapshot/indexer/bitcoin/mainnet',

@@ -86,12 +86,14 @@ const TOPOLOGY = {
     // mempool_transactions is intentionally excluded, being non-deterministic
     // across nodes.
     decoder: {
+        // Block-scoped tables (key off block_index directly)
         blockScoped:  ['blocks', 'transactions'],
         // Keyed off tx_index -> transactions.block_index. dispensers is deliberately
         // absent: that join captures only rows INSERTED in a block, while the decoder
         // also soft-expires and later hard-purges dispensers off-stream, so streaming
         // inserts alone would let a follower's count drift. It rides `special` instead.
         txScoped:     ['transaction_outputs'],
+        // Decoder doesn't have action-scoped tables
         actionScoped: [],
         // Append-only lookups that grow as blocks are processed. events is
         // operational/logging, included so consumers can see decoder activity.
@@ -100,6 +102,16 @@ const TOPOLOGY = {
         // dispensers converges only through the full snapshot plus the periodic
         // re-dump/replace reconcile, and incrementalCatchUp excludes it on every
         // non-reconcile cycle; see the header note on why its count detects nothing.
+        // Replicated-for-completeness-counting but NOT extracted by ServerPoller's
+        // per-scope loops (ServerPoller reads only blockScoped/txScoped/actionScoped/
+        // index). dispensers lives here so it enters the /status row-count
+        // completeness check (getReplicatedTables) without being streamed per block:
+        // it converges via full snapshot + the periodic re-dump/replace reconcile,
+        // which is the ONLY thing keeping it in parity. The count is a post-replace
+        // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
+        // the replica ahead (_verifyTableCounts flags remote > local only) and a
+        // soft-expire UPDATE leaves counts equal, so neither can ever fire, and
+        // _incrementalCatchUp excludes the table on every non-reconcile cycle.
         special:      ['dispensers']
     },
 

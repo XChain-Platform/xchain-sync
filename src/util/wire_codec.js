@@ -51,6 +51,7 @@ function encodeRow(row){
     return out || row;
 }
 
+// Encode every row in a { table: [rows] } map (the live block payload's `data`).
 function encodeTables(tables){
     if(!tables || typeof tables !== 'object') return tables;
     let out = {};

@@ -58,19 +58,24 @@ describe('E2E: Delta Synchronization', function() {
             await client.bootstrap();
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
 
+            // Record pre-existing row counts
             let preCredits = await testDb.getRowCount(replicaDb, 'credits');
 
+            // Add blocks 21-40 to source while client is "down"
             await fixtures.seedBlocks(sourceDb, 21, 40);
             // Seeded rows are servable only once the poller records them (100/cycle cap).
             await server.pollUntil(40);
 
+            // Client catches up via incremental snapshot
             await client.incrementalCatchUp(21);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 40);
 
+            // Verify new blocks exist
             await assertBlockExists(replicaDb, 21);
             await assertBlockExists(replicaDb, 40);
 
+            // Verify old blocks untouched (row count increased, not replaced)
             let postCredits = await testDb.getRowCount(replicaDb, 'credits');
             assert.ok(postCredits > preCredits, 'Credits should have increased');
             assert.strictEqual(postCredits, 40); // 1 credit per block
@@ -82,6 +87,7 @@ describe('E2E: Delta Synchronization', function() {
         it('catches up 200 blocks via incremental snapshot', async function() {
             this.timeout(60000);
 
+            // Bootstrap to block 10
             await fixtures.seedBlocks(sourceDb, 1, 10);
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -90,9 +96,11 @@ describe('E2E: Delta Synchronization', function() {
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.bootstrap();
 
+            // Add 200 blocks while client is down
             await fixtures.seedBlocks(sourceDb, 11, 210);
             await server.pollUntil(210);
 
+            // Incremental catch-up
             await client.incrementalCatchUp(11);
 
             assert.strictEqual(await replicaDb.getLastBlock(), 210);
@@ -104,6 +112,7 @@ describe('E2E: Delta Synchronization', function() {
         it('syncs blocks with different credit amounts', async function() {
             this.timeout(30000);
 
+            // Bootstrap to block 5
             await fixtures.seedBlocks(sourceDb, 1, 5, { creditAmount: '500' });
 
             server = new ServerProcess(sourceDb, SERVER_PORT);
@@ -112,6 +121,7 @@ describe('E2E: Delta Synchronization', function() {
             client = new ClientProcess(replicaDb, server.getUrl());
             await client.bootstrap();
 
+            // Add blocks 6-15 with different amounts
             await fixtures.seedBlocks(sourceDb, 6, 15, { creditAmount: '9999' });
             await server.pollUntil(15);
 
@@ -119,6 +129,7 @@ describe('E2E: Delta Synchronization', function() {
 
             assert.strictEqual(await replicaDb.getLastBlock(), 15);
 
+            // Verify new credits have the correct amount
             let newCredits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index WHERE a.block_index >= 6"
             );
@@ -126,6 +137,7 @@ describe('E2E: Delta Synchronization', function() {
                 assert.strictEqual(row.amount, '9999');
             }
 
+            // Verify old credits unchanged
             let oldCredits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index WHERE a.block_index <= 5"
             );
@@ -156,9 +168,11 @@ describe('E2E: Delta Synchronization', function() {
             // re-apply and took none. The old sleep also passed when the live
             // socket never connected at all.
             const seenStatus = client.getEventsHandled('status');
+            // Connect live; should not trigger catch-up
             await client.connectLive();
             await waitForClientEvents(client, 'status', seenStatus + 3, 10000);
 
+            // Still at block 20
             assert.strictEqual(await replicaDb.getLastBlock(), 20);
             assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 20);
         });

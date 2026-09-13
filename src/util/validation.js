@@ -20,6 +20,7 @@
  *
  ********************************************************************/
 
+// Compiled once at module load for performance
 const IDENTIFIER_RE = /^[A-Za-z0-9_]+$/;
 const DDL_START_RE  = /^\s*CREATE\s+TABLE\s/i;
 const DDL_BANNED_STATEMENT_RE = /;\s*(DROP|CREATE\s+TRIGGER|CREATE\s+PROCEDURE|CREATE\s+FUNCTION|CREATE\s+EVENT|CREATE\s+VIEW|EXEC|EXECUTE)\b/i;
@@ -29,6 +30,8 @@ const VALID_WS_TYPES = new Set(['block', 'reorg', 'status']);
 
 // SQL identifiers (table, column, database) are restricted to [A-Za-z0-9_] and
 // 1 to 64 characters, which is what makes them safe to splice into DDL.
+// Validate a SQL identifier (table name, column name, database name).
+// Accepts only [A-Za-z0-9_], 1–64 characters.
 function validateIdentifier(val){
     if(val === null || val === undefined)
         return { valid: false, reason: 'Identifier is null or undefined' };

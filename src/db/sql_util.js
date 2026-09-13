@@ -14,6 +14,8 @@
 // standalone query and silently fails schema creation. xchain-indexer hit this
 // exactly once (a header comment split its own attests.sql, crash-looping the
 // indexer); keep in sync with xchain-indexer/src/db.js#stripSqlLineComments.
+// Remove `--` line comments while respecting quoted strings/identifiers, so a
+// ';' inside a comment never reaches the statement splitter.
 function stripSqlLineComments(sql){
     let out = '';
     let quote = null;
@@ -38,6 +40,7 @@ function stripSqlLineComments(sql){
     return out;
 }
 
+// Strip line comments, then split into trimmed, non-empty statements.
 function splitSqlStatements(sql){
     return stripSqlLineComments(sql)
         .split(';')

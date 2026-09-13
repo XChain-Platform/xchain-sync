@@ -70,6 +70,9 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
+// -------------------------------------------------------------------------
+// Suite setup / teardown
+// -------------------------------------------------------------------------
 describe('Chaos: Sync Resilience', function () {
 
     const SERVER_PORT = 30400;
@@ -133,6 +136,7 @@ describe('CE-SYNC-01: Server Crash → Reconnect → Gap Healing', function () {
             'Client should reconnect and heal gap after server crash');
         console.log(`    CE-SYNC-01 recovery time: ${recoveryMs}ms`);
 
+        // Verify integrity
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const sourceDb  = require('./helpers/chaos-setup').getSourceDb();
 
@@ -155,6 +159,7 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
     });
 
     it('client detects and heals a multi-block gap via status event', async function () {
+        // Seed initial blocks and bootstrap
         await seedSourceBlocks(1, 30);
 
         server = createServer(SERVER_PORT);
@@ -169,11 +174,13 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         // Simulate a brief disconnect.
         client.stop();
 
+        // Seed more blocks while client is disconnected
         await seedSourceBlocks(31, 50);
         await server.poll();
         await sleep(1000);
 
         // Simulates resumption: the client's replica already has blocks 1-30.
+        // Reconnect client; simulates resumption from block 30
         client = createClient(server.getUrl(), { reconnectDelay: 500 });
 
         // connectLive() skips the full bootstrap since the replica is already
@@ -186,6 +193,7 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
             'Client should detect gap and catch up to block 50');
         console.log(`    CE-SYNC-02 gap healing time: ${recoveryMs}ms`);
 
+        // Verify all 50 blocks present
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const sourceDb  = require('./helpers/chaos-setup').getSourceDb();
 
@@ -229,29 +237,36 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
         try { await server.poll(); } catch { /* may fail under latency */ }
         await sleep(2000);
 
+        // Server broadcasts reorg event; client should rollback to block 17
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         await sleep(3000);
 
         // Different creditAmount so the assertions below can confirm this is
         // the re-seeded data, not the pre-reorg blocks.
+        // Re-seed blocks 18-22 with different data
         await fixtures.seedBlocks(sourceDbDirect, 18, 22, { creditAmount: '7777' });
 
+        // Remove latency for recovery
         await sourceFaults.reset();
         await sleep(1000);
 
+        // Force polls to process re-seeded blocks
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* recovery in progress */ }
             await sleep(500);
         }
 
+        // Wait for replica to reach block 22
         const recoveryMs = await waitForSyncRecovery(22, 60000);
         expect(recoveryMs).to.be.above(-1,
             'Client should apply re-seeded blocks after reorg');
         console.log(`    CE-SYNC-03 reorg recovery time: ${recoveryMs}ms`);
 
+        // Verify integrity
         const sourceDb = require('./helpers/chaos-setup').getSourceDb();
         await assertBalancesConsistent(replicaDb);
 
+        // Verify the re-seeded blocks are present (not old data)
         await assertBlockExists(replicaDb, 22);
         await assertHashesMatch(sourceDb, replicaDb, 22);
     });
@@ -269,6 +284,7 @@ describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function (
     });
 
     it('full data integrity after compound source outage + server crash', async function () {
+        // Setup: seed blocks, establish full sync
         await seedSourceBlocks(1, 15);
 
         server = createServer(SERVER_PORT);
@@ -280,6 +296,7 @@ describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function (
         const initialSync = await waitForSyncRecovery(15, 30000);
         expect(initialSync).to.be.above(-1);
 
+        // Phase 1: Source DB goes down
         await sourceFaults.dbDown();
 
         // Direct connection, since the source proxy is disabled.
@@ -292,14 +309,17 @@ describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function (
         await server.stop();
         server = null;
 
+        // Client loses WebSocket connection
         await sleep(3000);
 
+        // Phase 3: Recovery (source comes back, server restarts)
         await sourceFaults.dbUp();
         await sleep(2000);
 
         server = createServer(SERVER_PORT);
         await server.start();
 
+        // Force server to poll and catch up on blocks 16-25
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* circuit may be recovering */ }
             await sleep(500);
@@ -311,12 +331,14 @@ describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function (
             'Client should recover after compound failure (source down + server crash)');
         console.log(`    CE-SYNC-04 compound recovery time: ${recoveryMs}ms`);
 
+        // Full integrity verification
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const sourceDb  = require('./helpers/chaos-setup').getSourceDb();
 
         await assertReplicaMatchesSource(sourceDb, replicaDb, testDb);
         await assertBalancesConsistent(replicaDb);
 
+        // Verify every block in the gap is present and correct
         for (let i = 16; i <= 25; i++) {
             await assertBlockExists(replicaDb, i);
             await assertHashesMatch(sourceDb, replicaDb, i);

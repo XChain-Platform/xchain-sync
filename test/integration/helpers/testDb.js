@@ -328,6 +328,7 @@ async function seedSchema(db) {
     }
 }
 
+// Get list of all tables in a database
 async function getTables(db) {
     let rows = await db.doQuery(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -336,6 +337,7 @@ async function getTables(db) {
     return rows.map(r => r.table_name || r.TABLE_NAME);
 }
 
+// Truncate all tables in a database
 async function truncateAll(db) {
     let tables = await getTables(db);
     await db.doQuery("SET FOREIGN_KEY_CHECKS = 0");
@@ -345,11 +347,13 @@ async function truncateAll(db) {
     await db.doQuery("SET FOREIGN_KEY_CHECKS = 1");
 }
 
+// Get row count for a table
 async function getRowCount(db, table) {
     let rows = await db.doQuery("SELECT COUNT(*) as cnt FROM `" + table + "`");
     return Number(rows[0].cnt);
 }
 
+// Drop a database
 async function dropDatabase(dbName) {
     let mariadb = await getMariadb();
     try {

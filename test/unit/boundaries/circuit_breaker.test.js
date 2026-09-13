@@ -48,6 +48,7 @@ describe('Boundary: Circuit Breaker', function(){
                 end: sinon.stub()
             };
             db = createDatabase(pool);
+            // Override sleep to be instant
             sinon.stub(db.util, 'sleep').resolves();
 
             let result = await db.getConnection();
@@ -85,9 +86,11 @@ describe('Boundary: Circuit Breaker', function(){
             db = createDatabase(pool);
             sinon.stub(db.util, 'sleep').resolves();
 
+            // Open the circuit
             try { await db.getConnection(); } catch(e) {}
             assert.strictEqual(db.circuitState, 'open');
 
+            // Set cooldown to future
             db.circuitOpenUntil = Date.now() + 30000;
 
             await assert.rejects(
@@ -109,6 +112,7 @@ describe('Boundary: Circuit Breaker', function(){
             };
             db = createDatabase(pool);
 
+            // Simulate open circuit with expired cooldown
             db.circuitState = 'open';
             db.circuitFailures = 10;
             db.circuitOpenUntil = Date.now() - 1; // expired
@@ -127,6 +131,7 @@ describe('Boundary: Circuit Breaker', function(){
             db = createDatabase(pool);
             sinon.stub(db.util, 'sleep').resolves();
 
+            // Simulate half-open state
             db.circuitState = 'open';
             db.circuitFailures = 9;
             db.circuitOpenUntil = Date.now() - 1;
