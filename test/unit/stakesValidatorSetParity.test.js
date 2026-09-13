@@ -20,7 +20,7 @@
 // encoders (merkle.js) and _stakeWeightsSql are byte-guarded, but the *inputs*
 // to gatherStakeEntries were not: BTC_STAKE_CAPABILITIES (the capability set and
 // per-cap MIN_STAKE floors) and VALIDATOR_QUERY_LIMIT are hand-mirrored from the
-// indexer's src/configs/BTC.js. A future indexer edit (a sixth capability, a
+// indexer's src/coins/BTC.js. A future indexer edit (a sixth capability, a
 // floor change, or a limit bump) would silently fork the regtest/testnet
 // follower stakes_root into a hard halt with nothing catching it in CI.
 //
@@ -37,7 +37,7 @@ const consts = require('../../src/consensus-constants.js');
 
 const INDEXER_DIR = process.env.XCHAIN_INDEXER_DIR ||
     path.join(__dirname, '..', '..', '..', 'xchain-indexer');
-const BTC_CONFIG_PATH = path.join(INDEXER_DIR, 'src', 'configs', 'BTC.js');
+const BTC_CONFIG_PATH = path.join(INDEXER_DIR, 'src', 'coins', 'BTC.js');
 const INDEXER_PRESENT = fs.existsSync(BTC_CONFIG_PATH);
 
 let indexerCaps = null;     // { capability: MIN_STAKE string }
@@ -45,7 +45,7 @@ let indexerLimit = null;
 let indexerLoadErr = null;
 if (INDEXER_PRESENT) {
     try {
-        const cfg = require(BTC_CONFIG_PATH).getConfig('mainnet');
+        const cfg = require(BTC_CONFIG_PATH);
         indexerCaps = {};
         for (const k of Object.keys(cfg.STAKING.CAPABILITIES)) {
             indexerCaps[k] = cfg.STAKING.CAPABILITIES[k].MIN_STAKE;
@@ -53,7 +53,8 @@ if (INDEXER_PRESENT) {
         indexerLimit = cfg.VALIDATOR_QUERY_LIMIT;
     } catch (e) {
         // A present-but-unreadable sibling (renamed STAKING.CAPABILITIES,
-        // restructured getConfig, moved MIN_STAKE) is exactly the refactor a real
+        // moved MIN_STAKE, or another fold of the per-coin module) is exactly the
+        // refactor a real
         // capability-set change rides in on, and the drift it hides turns the
         // follower stakes_root into a hard halt. Do NOT degrade it to a silent
         // skip: record the error so before() hard-fails instead of pending.
@@ -82,7 +83,7 @@ describe('stakes_root validator-set parity: xchain-sync == xchain-indexer @regre
         assert.deepStrictEqual(
             syncKeys, indexerKeys,
             'capability set drift: a capability added/removed in xchain-indexer ' +
-            'src/configs/BTC.js STAKING.CAPABILITIES must be mirrored in xchain-sync ' +
+            'src/coins/BTC.js STAKING.CAPABILITIES must be mirrored in xchain-sync ' +
             'consensus-constants.js BTC_STAKE_CAPABILITIES, or the follower stakes_root forks'
         );
     });
