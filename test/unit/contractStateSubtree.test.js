@@ -39,9 +39,9 @@
  * as a SOURCE assertion that every query names state_key_bin, and structurally
  * by the spec precondition that Stage A may not arm below the collation height.
  *
- * TWIN PAIR: xchain-indexer/test/unit/contractStateSubtree.test.js and
+ * TWIN PAIR: xchain-indexer/test/unit/contract_state_subtree.test.js and
  * xchain-sync/test/unit/contractStateSubtree.test.js are kept BYTE-IDENTICAL
- * (both repos resolve the same relative src paths). Locked equal by the
+ * apart from the src/<feature>/ depth of their requires. Locked equal by the
  * cross-repo twin loop in xchain-sync/test/unit/rollback-coverage.test.js.
  *
  ********************************************************************/
@@ -117,13 +117,13 @@ class FakeDb {
     // derivation's own reads went strict.
     async doQuery(sql, args){
         this.softSql.push(sql);
-        return await this._run(sql, args);
+        return await this.run(sql, args);
     }
     async doQueryStrict(sql, args){
         this.strictSql.push(sql);
-        return await this._run(sql, args);
+        return await this.run(sql, args);
     }
-    async _run(sql, args){
+    async run(sql, args){
         // Fault injection: model a transient DB fault. doQueryStrict propagates
         // it; doQuery would have swallowed it into [] outside a transaction.
         if(this.failOn && sql.indexOf(this.failOn) !== -1)

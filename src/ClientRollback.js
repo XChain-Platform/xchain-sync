@@ -237,7 +237,7 @@ class ClientRollback {
             // NOTE: the source ALSO re-NULLs deactivation_block on
             // stakes/delegations/contract_stakes/contract_delegations. Those resets key on
             // ACTIVATION_DELAY_BLOCKS, which is a frozen per-chain node-local consensus
-            // constant (never hub-overlaid; the indexer's _mergeHubParams overlay is empty
+            // constant (never hub-overlaid; the indexer's mergeHubParams overlay is empty
             // for consensus params), so the replica now holds it via consensus-constants.js
             // and mirrors all four resets below.
             if(firstActionIndex !== null){
@@ -655,7 +655,7 @@ class ClientRollback {
             }
 
             // Reverse orphaned cooldown-maturity completions, mirror of
-            // xchain-indexer/src/rollback.js _reverseCooldownMaturities. When a capability/contract
+            // xchain-indexer/src/rollback.js reverseCooldownMaturities. When a capability/contract
             // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit carrying
             // the unstake's OWN (earlier-block) action_index and flips the surviving unstake row's
             // status_id to 'completed' IN PLACE. Both effects live on rows whose action_index <

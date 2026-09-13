@@ -73,13 +73,13 @@ class FakeDb {
     // string came through is what proves the journal reads went strict.
     async doQuery(sql, args){
         this.softSql.push(sql);
-        return await this._run(sql, args);
+        return await this.run(sql, args);
     }
     async doQueryStrict(sql, args){
         this.strictSql.push(sql);
-        return await this._run(sql, args);
+        return await this.run(sql, args);
     }
-    async _run(sql, args){
+    async run(sql, args){
         if(this.failOn && sql.indexOf(this.failOn) !== -1)
             throw new Error('injected DB fault');
         if(sql.indexOf('escrow_leaf_journal') === -1) throw new Error('unexpected query: ' + sql.slice(0, 60));
@@ -340,11 +340,11 @@ describe('XCHAIN_ESC locked leaf: the §7 shadow thread @regression', function()
     // read on top.
     function shadowDb(priors){
         const db = new FakeDb();
-        // Patch _run, not doQuery: the module reads strictly now (M-17), and
+        // Patch run, not doQuery: the module reads strictly now (M-17), and
         // overriding the soft reader would leave the shadow prior-row read
         // unstubbed while quietly passing.
-        const orig = db._run.bind(db);
-        db._run = async function(sql, args){
+        const orig = db.run.bind(db);
+        db.run = async function(sql, args){
             if(sql.indexOf('balances_root_escrow_shadow') !== -1){
                 const r = priors[args[2]];
                 return r ? [{ r }] : [];
@@ -385,11 +385,11 @@ describe('XCHAIN_ESC locked leaf: the §7 shadow thread @regression', function()
         prior = await ESC.applyEscrowLeaves(db, smt, prior, CHAIN, NETWORK, 499);
 
         const priors = {}; priors[499] = prior;
-        // Patch _run, not doQuery: the module reads strictly now (M-17), and
+        // Patch run, not doQuery: the module reads strictly now (M-17), and
         // overriding the soft reader would leave the shadow prior-row read
         // unstubbed while quietly passing.
-        const orig = db._run.bind(db);
-        db._run = async function(sql, args){
+        const orig = db.run.bind(db);
+        db.run = async function(sql, args){
             if(sql.indexOf('balances_root_escrow_shadow') !== -1){
                 const r = priors[args[2]];
                 return r ? [{ r }] : [];

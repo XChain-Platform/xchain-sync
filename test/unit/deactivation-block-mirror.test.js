@@ -46,7 +46,7 @@ describe('deactivation_block sync-mirror', function(){
 
     describe('frozen per-chain ACTIVATION_DELAY_BLOCKS', function(){
         it('matches the indexer golden (BTC 6 / LTC 24 / DOGE 60)', function(){
-            // Mirrors xchain-indexer/test/unit/consensus-params.test.js GOLDEN_STAKING_PER_CHAIN.
+            // Mirrors xchain-indexer/test/unit/consensus_params.test.js GOLDEN_STAKING_PER_CHAIN.
             assert.deepStrictEqual(ACTIVATION_DELAY_BLOCKS_BY_COIN, { BTC: 6, LTC: 24, DOGE: 60 });
         });
 
