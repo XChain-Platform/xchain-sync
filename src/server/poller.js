@@ -37,6 +37,9 @@ const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../state_commitment_activation');
 const { SCHEMA_VERSION } = require('../schema/version');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // How many recently broadcast block hashes to retain in memory for the
 // net-forward reorg walk-back. Comfortably above the source
@@ -138,7 +141,7 @@ class ServerPoller {
         this.lastPolledBlock = await this._resumeCursor();
         this.lastPolledBlockHash = await this._seedReorgGuardHash(this.lastPolledBlock);
         this.running = true;
-        console.log('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
+        logger.info('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
         // Repair any interior transparency-log holes left by a pre-fix restart that
         // resumed from the source tip. No-op on a healthy log (and on the decoder,
@@ -147,7 +150,7 @@ class ServerPoller {
         try {
             await this.backfillGaps();
         } catch(e){
-            console.error('Transparency backfill failed for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (continuing with live polling):', e);
+            logger.error(util.format('Transparency backfill failed for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (continuing with live polling):', e));
         }
 
         await this._updateStatus();
@@ -159,7 +162,7 @@ class ServerPoller {
                 this.pollErrorCount = 0;
             } catch(e){
                 this.pollErrorCount++;
-                console.error('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e);
+                logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e));
                 // Update status so the poll_error_count field is current even while
                 // lastPolledBlock is frozen at the last-good value.
                 await this._updateStatus().catch(() => {});
@@ -205,7 +208,7 @@ class ServerPoller {
         let gaps = await this.transparencyLog.findGaps();
         if(gaps.length === 0) return 0;
 
-        console.log('Transparency backfill: ' + gaps.length + ' missing block(s) detected for ' +
+        logger.info('Transparency backfill: ' + gaps.length + ' missing block(s) detected for ' +
             this.chain + '/' + this.network + '/' + this.dbType + '; repairing');
 
         let epochSize = this.transparencyLog.epochSize;
@@ -232,7 +235,7 @@ class ServerPoller {
         for(let epoch of epochs)
             await this.transparencyLog.recommitEpoch(epoch, hwm);
 
-        console.log('Transparency backfill complete for ' + this.chain + '/' + this.network + '/' + this.dbType +
+        logger.info('Transparency backfill complete for ' + this.chain + '/' + this.network + '/' + this.dbType +
             ': ' + gaps.length + ' block(s) recorded, ' + epochs.size + ' epoch(s) recomputed');
         return gaps.length;
     }
@@ -285,7 +288,7 @@ class ServerPoller {
                 // below it stops at the deepest recorded height (cold-start fallback,
                 // same as before), where the follower's recompute/remediation is the net.
                 let forkBlock = await this._resolveForkPoint(this.lastPolledBlock);
-                console.log('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
+                logger.info('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
                 if(this.transparencyLog)
                     await this.transparencyLog.pruneFrom(forkBlock);
                 // Reorg event message shape:
@@ -330,7 +333,7 @@ class ServerPoller {
             // recorded pre-reorg hashes down from currentBlock resolves the full depth
             // in THIS poll, so the one reorg event carries the true fork point.
             let forkBlock = await this._resolveForkPoint(currentBlock + 1);
-            console.log('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
+            logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
 
             // Prune the source's own transparency log first (indexer only; decoder
             // has no transparencyLog). The indexer rolls back its data tables on a
@@ -439,10 +442,10 @@ class ServerPoller {
         if(blocksProcessed > 0){
             let isBatch = (streamTo - catchUpStart) > 1 || blocksProcessed >= 100;
             if(isBatch){
-                console.log('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
+                logger.info('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
                     ' (' + blocksProcessed + ' block(s)) for ' + this.chain + '/' + this.network + '/' + this.dbType);
             } else {
-                console.log('Synced block ' + this.lastPolledBlock + ' for ' +
+                logger.info('Synced block ' + this.lastPolledBlock + ' for ' +
                     this.chain + '/' + this.network + '/' + this.dbType);
             }
         }
@@ -984,7 +987,7 @@ class ServerPoller {
                 // Only a genuine schema gap may be skipped; any transient fault must
                 // re-throw so the block is retried rather than broadcast without
                 // updated_rows (a dropped in-place mutation forks every follower).
-                console.error('updated_rows collection failed for block ' + block_index + ':', e);
+                logger.error(util.format('updated_rows collection failed for block ' + block_index + ':', e));
                 if(!isSchemaGapError(e)) throw e;
             }
         }
@@ -1007,7 +1010,7 @@ class ServerPoller {
         let now = Date.now();
         if(this._lastQueryMetricAt && (now - this._lastQueryMetricAt) < intervalMs) return;
         this._lastQueryMetricAt = now;
-        console.log('[METRIC] ' + JSON.stringify({
+        logger.info('[METRIC] ' + JSON.stringify({
             metric: 'sync_action_scoped_queries_per_block', component: 'sync',
             chain: this.chain, network: this.network, db_type: this.dbType,
             candidate_tables: this.actionScopedTables ? this.actionScopedTables.length : 0,

@@ -22,6 +22,9 @@
 
 
 
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 module.exports = {
 
     // --- Durable client key/value markers (sync_state) ------------------------
@@ -53,7 +56,7 @@ module.exports = {
             let rows = await this.doQuery("SELECT state_value FROM sync_state WHERE state_key=? LIMIT 1", [key]);
             return (rows && rows.length) ? rows[0].state_value : null;
         } catch(e){
-            console.error('getSyncState(' + key + ') failed (treating as unset):', e);
+            logger.error(util.format('getSyncState(' + key + ') failed (treating as unset):', e));
             return null;
         }
     },
@@ -70,7 +73,7 @@ module.exports = {
             );
             return true;
         } catch(e){
-            console.error('setSyncState(' + key + ') failed (continuing):', e);
+            logger.error(util.format('setSyncState(' + key + ') failed (continuing):', e));
             return false;
         }
     },
@@ -83,7 +86,7 @@ module.exports = {
             await this.doQuery("DELETE FROM sync_state WHERE state_key=?", [key]);
             return true;
         } catch(e){
-            console.error('deleteSyncState(' + key + ') failed (continuing):', e);
+            logger.error(util.format('deleteSyncState(' + key + ') failed (continuing):', e));
             return false;
         }
     },

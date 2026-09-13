@@ -22,6 +22,9 @@
  ********************************************************************/
 
 const MerkleTree = require('./merkle_tree.js');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 class TransparencyLog {
 
@@ -54,7 +57,7 @@ class TransparencyLog {
         if (block_index > 0 && block_index % this.epochSize === 0) {
             let epoch = Math.floor(block_index / this.epochSize);
             await this.commitEpoch(epoch).catch(e =>
-                console.error('Error committing Merkle epoch ' + epoch + ':', e)
+                logger.error(util.format('Error committing Merkle epoch ' + epoch + ':', e))
             );
             // Retention runs at epoch boundaries only (once per epochSize blocks) and
             // AFTER the boundary commit, so the epoch that just closed is committed
@@ -63,7 +66,7 @@ class TransparencyLog {
             // is idempotent and the next boundary retries it.
             if (this.retentionBlocks > 0) {
                 await this.pruneSyncMeta().catch(e =>
-                    console.error('Error pruning sync_meta at epoch ' + epoch + ':', e)
+                    logger.error(util.format('Error pruning sync_meta at epoch ' + epoch + ':', e))
                 );
             }
         }
@@ -129,7 +132,7 @@ class TransparencyLog {
             [boundary, boundary]
         );
         if (straddling.length > 0 && Number(straddling[0].c) > 0) {
-            console.error('sync_meta retention skipped: a committed epoch straddles block ' + boundary +
+            logger.error('sync_meta retention skipped: a committed epoch straddles block ' + boundary +
                 ' (MERKLE_EPOCH_SIZE likely changed after epochs were committed); refusing a partial prune');
             return { enabled: true, skipped: true, reason: 'straddling_epoch', deleted: 0, tip, cutoff };
         }
@@ -139,7 +142,7 @@ class TransparencyLog {
         );
         let deleted = (result && result.affectedRows) ? Number(result.affectedRows) : 0;
         if (deleted > 0)
-            console.log('sync_meta retention: pruned ' + deleted + ' row(s) at or below block ' + boundary +
+            logger.info('sync_meta retention: pruned ' + deleted + ' row(s) at or below block ' + boundary +
                 ' (tip ' + tip + ', window ' + keep + ' blocks); inclusion proofs below that block are no longer serveable');
         return { enabled: true, skipped: false, deleted, tip, cutoff, prunedThrough: boundary };
     }
@@ -184,9 +187,9 @@ class TransparencyLog {
         await this.db.doQuery(
             "UPDATE merkle_reorgs SET new_root = ? WHERE epoch = ? AND new_root IS NULL",
             [tree.root, epoch]
-        ).catch(e => console.error('Error backfilling reorg marker for epoch ' + epoch + ':', e));
+        ).catch(e => logger.error(util.format('Error backfilling reorg marker for epoch ' + epoch + ':', e)));
 
-        console.log('Merkle: Epoch ' + epoch + ' committed (blocks ' + startBlock + '-' + endBlock +
+        logger.info('Merkle: Epoch ' + epoch + ' committed (blocks ' + startBlock + '-' + endBlock +
             ', root: ' + tree.root.substring(0, 16) + '...)');
     }
 
@@ -241,7 +244,7 @@ class TransparencyLog {
         await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
         await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
         if(invalidated.length > 0)
-            console.log('Transparency log pruned at reorg to block ' + block_index + ': ' +
+            logger.info('Transparency log pruned at reorg to block ' + block_index + ': ' +
                 invalidated.length + ' committed epoch(s) invalidated (will re-commit from canonical chain)');
     }
 

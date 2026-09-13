@@ -39,6 +39,9 @@ const stakeWeightCollation = require('../stake_weight_collation_activation');
 const utf8mb4Columns = require('../schema/utf8mb4_columns');
 const lifecycle = require('../tableLifecycle');
 const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // Columns that a key rebuild in ensureReplicaSecondaryIndexes NAMES, with the
 // authoritative definition from the indexer migration that introduced each one. A
@@ -154,7 +157,7 @@ class Database {
                 await db.end();
                 return results.length > 0;
             } catch (e){
-                console.error('Error checking if database ' + this.dbName + ' exists:', e)
+                logger.error(util.format('Error checking if database ' + this.dbName + ' exists:', e))
                 await this.util.sleep(DB_RETRY_DELAY_MS);
             }
         }
@@ -192,7 +195,7 @@ class Database {
         let dbCheck = validation.validateIdentifier(this.dbName);
         if(!dbCheck.valid)
             throw new Error('Invalid database name: ' + this.dbName + ' (' + dbCheck.reason + ')');
-        console.log("Creating " + this.dbName + " database!");
+        logger.info("Creating " + this.dbName + " database!");
         while(true){
             try {
                 let db = await mariadb.createConnection(connectionParams);
@@ -200,7 +203,7 @@ class Database {
                 await db.end();
                 return true;
             } catch(e){
-                console.error('Error creating database ' + this.dbName + ':', e)
+                logger.error(util.format('Error creating database ' + this.dbName + ':', e))
                 await this.util.sleep(DB_RETRY_DELAY_MS);
             }
         }
@@ -219,7 +222,7 @@ class Database {
         let db    = await this.getConnection();
         // One summary line instead of a per-table pair; the error path below still
         // names the table, so a failure stays attributable.
-        console.log('Verifying database and tables...');
+        logger.info('Verifying database and tables...');
         let checked = 0;
         let created = 0;
         for(let file of files){
@@ -240,7 +243,7 @@ class Database {
             }
         }
         await db.release();
-        console.log('Database and tables verified (' + checked + ' tables, ' + created + ' created).');
+        logger.info('Database and tables verified (' + checked + ' tables, ' + created + ' created).');
         return true;
     }
 
@@ -304,13 +307,13 @@ class Database {
 
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
-                console.error('Skipping invalid column name ' + col + ' on ' + tableName + ' (' + colCheck.reason + ')');
+                logger.error('Skipping invalid column name ' + col + ' on ' + tableName + ' (' + colCheck.reason + ')');
                 continue;
             }
 
             let def = validation.extractColumnDefinition(sourceDdl, col);
             if(!def){
-                console.warn('Could not extract definition for column ' + col + ' on ' + tableName + '; skipping (manual ALTER may be required)');
+                logger.warn('Could not extract definition for column ' + col + ' on ' + tableName + '; skipping (manual ALTER may be required)');
                 continue;
             }
 
@@ -326,12 +329,12 @@ class Database {
                 // error and returns [], so the success log below fired on a REFUSED
                 // ALTER and reported "Added column" for a column that does not exist.
                 await this.doQueryStrict(alter);
-                console.log('Added column ' + col + ' to ' + tableName);
+                logger.info('Added column ' + col + ' to ' + tableName);
                 added++;
             } catch(e){
                 failed.push({ column: col, errno: (e && e.errno) || null, message: (e && e.message) || String(e) });
-                console.error('FAILED to add column ' + col + ' to ' + tableName +
-                    ' (errno ' + ((e && e.errno) || 'unknown') + '); the column is still missing. ALTER was: ' + alter, e);
+                logger.error(util.format('FAILED to add column ' + col + ' to ' + tableName +
+                    ' (errno ' + ((e && e.errno) || 'unknown') + '); the column is still missing. ALTER was: ' + alter, e));
             }
         }
 
@@ -383,7 +386,7 @@ class Database {
             );
             return rows.length > 0;
         } catch(e){
-            console.error('Could not read primary-key state for ' + tableName + '; assuming one exists:', e);
+            logger.error(util.format('Could not read primary-key state for ' + tableName + '; assuming one exists:', e));
             return true;
         }
     }
@@ -399,12 +402,12 @@ class Database {
         try {
             await this.doQueryStrict('ALTER TABLE `' + table + '` ADD COLUMN IF NOT EXISTS `' +
                 column + '` ' + spec.definition);
-            console.log('Added ' + table + '.' + column + ' on ' + this.dbName +
+            logger.info('Added ' + table + '.' + column + ' on ' + this.dbName +
                 '; the key rebuild that names it can run in this same startup.');
             return true;
         } catch(e){
-            console.error('Failed to add ' + table + '.' + column + ' on ' + this.dbName +
-                ' (errno ' + ((e && e.errno) || 'unknown') + '); the key rebuild that names it cannot run', e);
+            logger.error(util.format('Failed to add ' + table + '.' + column + ' on ' + this.dbName +
+                ' (errno ' + ((e && e.errno) || 'unknown') + '); the key rebuild that names it cannot run', e));
             return false;
         }
     }
@@ -416,7 +419,7 @@ class Database {
     // bootstrapped (see addMissingColumns). This ensures the replica always
     // matches the authoritative indexer schema (no copied SQL files needed).
     async replicateSchema(sourceDb){
-        console.log('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
+        logger.info('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
 
         let sourceTables = await sourceDb.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -437,7 +440,7 @@ class Database {
             // Validate table name before using in SQL
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
-                console.error('Skipping invalid table name: ' + tableName + ' (' + idCheck.reason + ')');
+                logger.error('Skipping invalid table name: ' + tableName + ' (' + idCheck.reason + ')');
                 continue;
             }
 
@@ -450,7 +453,7 @@ class Database {
             // Validate DDL before executing
             let ddlCheck = validation.validateDdl(createSql);
             if(!ddlCheck.valid){
-                console.error('Rejected DDL for ' + tableName + ': ' + ddlCheck.reason);
+                logger.error('Rejected DDL for ' + tableName + ': ' + ddlCheck.reason);
                 continue;
             }
 
@@ -469,13 +472,13 @@ class Database {
                 continue;
             }
 
-            console.log('Creating table ' + tableName + '...');
+            logger.info('Creating table ' + tableName + '...');
             try {
                 await this.doQuery(createSql);
                 created++;
             } catch(e){
                 // Table may reference another table not yet created; retry later.
-                console.log('Deferred: ' + tableName + ':', e);
+                logger.info(util.format('Deferred: ' + tableName + ':', e));
             }
         }
 
@@ -501,15 +504,15 @@ class Database {
 
                 let ddlCheck = validation.validateDdl(createSql);
                 if(!ddlCheck.valid){
-                    console.error('Rejected DDL for ' + tableName + ' (retry): ' + ddlCheck.reason);
+                    logger.error('Rejected DDL for ' + tableName + ' (retry): ' + ddlCheck.reason);
                     continue;
                 }
 
                 try {
                     await this.doQuery(createSql);
-                    console.log('Created table ' + tableName + ' (retry)');
+                    logger.info('Created table ' + tableName + ' (retry)');
                 } catch(e){
-                    console.error('Failed to create table ' + tableName + ':', e);
+                    logger.error(util.format('Failed to create table ' + tableName + ':', e));
                 }
             }
         }
@@ -537,7 +540,7 @@ class Database {
             throw err;
         }
 
-        console.log('Schema replication complete for ' + this.dbName);
+        logger.info('Schema replication complete for ' + this.dbName);
     }
 
     // Self-heal known column drift on already-existing replicated tables.
@@ -619,7 +622,7 @@ class Database {
             );
             if(colRows.length > 0) continue;
 
-            console.log('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding ' + definition + '.');
+            logger.info('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding ' + definition + '.');
             await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` ' + definition);
         }
 
@@ -638,7 +641,7 @@ class Database {
             let nullable = colRows[0].IS_NULLABLE || colRows[0].is_nullable;
             if(String(nullable).toUpperCase() !== 'NO') continue;    // already nullable; no-op
 
-            console.log('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
+            logger.info('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
             await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
         }
 
@@ -664,7 +667,7 @@ class Database {
             let extra = colRows[0].EXTRA || colRows[0].extra || '';
             if(String(extra).toLowerCase().indexOf('auto_increment') !== -1) continue;  // already correct; no-op
 
-            console.log('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
+            logger.info('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
             // Re-key any id=0 rows before the ALTER rebuilds the index (avoids a
             // collision when the AUTO_INCREMENT attribute is restored). Mirrors the
             // indexer migration. The old scalar-subquery UPDATE assigned EVERY id=0
@@ -686,10 +689,10 @@ class Database {
                 await this.doQuery('SET @n := ?', [base]);
                 await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
                 await this.doQuery('ALTER TABLE `' + table + '` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
-                console.log('Repaired AUTO_INCREMENT on ' + table + '.id');
+                logger.info('Repaired AUTO_INCREMENT on ' + table + '.id');
             } catch(e){
                 // errno 1146 (table absent) or 1054 (column absent) can race; log and continue.
-                console.error('Failed to repair AUTO_INCREMENT on ' + table + '.id:', e);
+                logger.error(util.format('Failed to repair AUTO_INCREMENT on ' + table + '.id:', e));
             }
         }
 
@@ -712,7 +715,7 @@ class Database {
                 if(enumRows.length > 0){
                     let columnType = String(enumRows[0].COLUMN_TYPE || enumRows[0].column_type || '');
                     if(columnType.indexOf("'rejected'") === -1){
-                        console.log('Schema drift on attests.request_status: ENUM missing \'rejected\'. Widening to canonical set.');
+                        logger.info('Schema drift on attests.request_status: ENUM missing \'rejected\'. Widening to canonical set.');
                         await this.doQuery(
                             "ALTER TABLE `attests` MODIFY COLUMN `request_status` " +
                             "ENUM('pending','fulfilled','expired','errored','rejected') NOT NULL DEFAULT 'pending'"
@@ -723,7 +726,7 @@ class Database {
                 // errno 1146 = table absent on an older replica that has not yet had
                 // attests created; skip silently. Any other error is logged.
                 if(e.errno !== 1146)
-                    console.error('Failed to widen attests.request_status ENUM:', e);
+                    logger.error(util.format('Failed to widen attests.request_status ENUM:', e));
             }
         }
     }
@@ -814,11 +817,11 @@ class Database {
 
             try {
                 await this.doQuery('ALTER TABLE `' + table + '` ADD INDEX `' + indexName + '` ' + columns);
-                console.log('Added secondary index ' + indexName + ' to ' + table + ' on ' + this.dbName);
+                logger.info('Added secondary index ' + indexName + ' to ' + table + ' on ' + this.dbName);
             } catch(e){
                 // errno 1061 = duplicate key name (race with another startup); harmless.
                 if(e.errno !== 1061)
-                    console.error('Failed to add secondary index ' + indexName + ' to ' + table + ':', e);
+                    logger.error(util.format('Failed to add secondary index ' + indexName + ' to ' + table + ':', e));
             }
         }
 
@@ -848,7 +851,7 @@ class Database {
                         let nonUnique = Number(idxRows[0].NON_UNIQUE || idxRows[0].non_unique || 0);
                         if(nonUnique === 0){
                             // Index is UNIQUE on this replica; relax it.
-                            console.log('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
+                            logger.info('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
                             await this.doQuery('ALTER TABLE `attests` DROP INDEX `request_id_version`');
                             await this.doQuery('CREATE INDEX `request_id_version` ON `attests` (request_id, version)');
                         }
@@ -856,7 +859,7 @@ class Database {
                 }
             } catch(e){
                 if(e.errno !== 1146)
-                    console.error('Failed to relax attests request_id_version index:', e);
+                    logger.error(util.format('Failed to relax attests request_id_version index:', e));
             }
 
             // votes append-only migration (indexer 219da33 /
@@ -885,7 +888,7 @@ class Database {
                         [this.dbName]
                     );
                     if(staleIdx.length > 0){
-                        console.log('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
+                        logger.info('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
                         await this.doQuery('ALTER TABLE `votes` DROP INDEX `poll_voter_choice`');
                     }
                     let newIdx = await this.doQuery(
@@ -899,7 +902,7 @@ class Database {
                 }
             } catch(e){
                 if(e.errno !== 1146)
-                    console.error('Failed to migrate votes append-only unique index:', e);
+                    logger.error(util.format('Failed to migrate votes append-only unique index:', e));
             }
 
             // anchor_actions bundle-section key (indexer migration
@@ -955,10 +958,10 @@ class Database {
                         let haveColumn = colRows.length > 0 ||
                             await this._ensureKeyRebuildColumn('anchor_actions', 'section_index');
                         if(!haveColumn){
-                            console.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
+                            logger.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
                                 'the widened key for ANCHOR v7 bundle sections cannot be built on this replica');
                         } else {
-                            console.log('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
+                            logger.info('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
                                 'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
                             await this.doQueryStrict(
                                 'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
@@ -970,7 +973,7 @@ class Database {
                 // else leaves the replica on a key that WILL wedge on the first v7 bundle,
                 // so it is logged loudly; the apply-time 1062 is the backstop signal.
                 if(e.errno !== 1146)
-                    console.error('Failed to widen the anchor_actions primary key to (action_index, section_index):', e);
+                    logger.error(util.format('Failed to widen the anchor_actions primary key to (action_index, section_index):', e));
             }
 
             // validator_rewards reward_unique qualifier key (indexer migration
@@ -1030,10 +1033,10 @@ class Database {
                         let haveColumn = colRows.length > 0 ||
                             await this._ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
                         if(!haveColumn){
-                            console.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
+                            logger.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
                                 'the archive reward identity stays ambiguous on this replica');
                         } else {
-                            console.log('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
+                            logger.info('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
                                 'Rebuilding with round_qualifier for the anchor_archive reward identity.');
                             await this.doQueryStrict(
                                 'ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ' +
@@ -1048,7 +1051,7 @@ class Database {
                 // archive rewards, which no hash and no halt would ever surface, so it is
                 // logged loudly.
                 if(e.errno !== 1146)
-                    console.error('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e);
+                    logger.error(util.format('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e));
             }
         }
     }
@@ -1092,7 +1095,7 @@ class Database {
                     { rethrow: true }
                 );
             } catch(e){
-                console.error('Failed to read the column charsets of ' + table + ' while widening to utf8mb4:', e);
+                logger.error(util.format('Failed to read the column charsets of ' + table + ' while widening to utf8mb4:', e));
                 continue;
             }
             if(!rows || rows.length === 0) continue;   // table absent on this replica
@@ -1110,15 +1113,15 @@ class Database {
             try {
                 await this.doQuery('ALTER TABLE `' + table + '` ' +
                     pending.map(utf8mb4Columns.modifyClause).join(', '), [], null, { rethrow: true });
-                console.log('Widened ' + pending.length + ' raw-wire-field column(s) on ' + table +
+                logger.info('Widened ' + pending.length + ' raw-wire-field column(s) on ' + table +
                     ' to utf8mb4 in ' + this.dbName + ': ' + pending.map(e => e.column).join(', '));
             } catch(e){
                 // Not fatal to startup: the replica is exactly as usable as it was a moment
                 // ago, and every other table still converges. But it stays wedge-capable on
                 // these columns, and nothing downstream would say so, so log it loudly.
-                console.error('Failed to widen ' + table + ' to utf8mb4 (errno ' + ((e && e.errno) || 'unknown') +
+                logger.error(util.format('Failed to widen ' + table + ' to utf8mb4 (errno ' + ((e && e.errno) || 'unknown') +
                     '); this replica still halts on a 4-byte character in ' +
-                    pending.map(e => e.column).join(', '), e);
+                    pending.map(e => e.column).join(', '), e));
             }
         }
     }
@@ -1145,7 +1148,7 @@ class Database {
             if(Date.now() < this.circuitOpenUntil)
                 this.util.throwError('Circuit breaker open: database connections rejected until cooldown expires');
             this.circuitState = 'half-open';
-            console.log('Circuit breaker half-open: attempting reconnection');
+            logger.info('Circuit breaker half-open: attempting reconnection');
         }
         let connection  = null;
         let attempts    = 0;
@@ -1158,7 +1161,7 @@ class Database {
                 if(this.circuitState === 'half-open'){
                     this.circuitState = 'closed';
                     this.circuitFailures = 0;
-                    console.log('Circuit breaker closed: database connection restored');
+                    logger.info('Circuit breaker closed: database connection restored');
                 }
                 this.circuitFailures = 0;
             } catch (e){
@@ -1173,7 +1176,7 @@ class Database {
                     this.util.throwError('Could not connect to MariaDB after ' + maxAttempts + ' attempts');
                 let delay = Math.min(baseDelay * Math.pow(2, attempts - 1), maxDelay);
                 let jitter = Math.floor(Math.random() * delay * 0.3);
-                console.error('MariaDB connection attempt ' + attempts + '/' + maxAttempts + ' failed. Retrying in ' + (delay + jitter) + 'ms...', e)
+                logger.error(util.format('MariaDB connection attempt ' + attempts + '/' + maxAttempts + ' failed. Retrying in ' + (delay + jitter) + 'ms...', e))
                 connection = null;
                 await this.util.sleep(delay + jitter);
             }
@@ -1206,7 +1209,7 @@ class Database {
             // Log the DB name and type so a rollback entry in the journal is
             // traceable to the specific replica/source DB that triggered it, rather
             // than appearing as an anonymous "rolling back" with no context.
-            console.log('Rolling back transaction on ' + this.dbName + ' (' + this.dbType + ')');
+            logger.info('Rolling back transaction on ' + this.dbName + ' (' + this.dbType + ')');
             try {
                 await this.transactionConnection.rollback();
             } finally {
@@ -1224,7 +1227,7 @@ class Database {
                 this.transactionConnection = null;
                 return true;
             } catch (e){
-                console.error('Error committing transaction:', e)
+                logger.error(util.format('Error committing transaction:', e))
                 try {
                     await this.transactionConnection.rollback();
                 } finally {
@@ -1346,7 +1349,7 @@ class Database {
         try {
             await this.pool.end();
         } catch(e){
-            console.log('Error closing database pool:', e);
+            logger.info(util.format('Error closing database pool:', e));
         }
     }
 

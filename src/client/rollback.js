@@ -28,6 +28,9 @@ const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('../stateHash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../archive_rollback_author_scope_activation');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 // ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
 // updatedRows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
 // updatedRows.js requires only stateHash.js, so this introduces no cycle.
@@ -142,7 +145,7 @@ class ClientRollback {
     // Indexer rollback (original behaviour)
     async _rollbackIndexer(block_index){
         let timer = this.util.startTimer();
-        console.log('Starting indexer rollback to block ' + block_index + '...');
+        logger.info('Starting indexer rollback to block ' + block_index + '...');
 
         // rethrow, not the fail-soft default: this read runs BEFORE beginTransaction, where
         // doQuery logs a query error and returns [], so a deadlock/lock-wait/connection drop
@@ -512,7 +515,7 @@ class ClientRollback {
                     // No coin supplied at construction (legacy/test path). Skip rather than
                     // run with a wrong value, but warn since on a real replica this would
                     // silently reintroduce the deactivation-block sync divergence.
-                    console.warn('ClientRollback: deactivation_block re-NULL mirror skipped (no coin supplied)');
+                    logger.warn('ClientRollback: deactivation_block re-NULL mirror skipped (no coin supplied)');
                 } else {
 
                 // stakes ← orphaned unstakes (capability staking)
@@ -1157,7 +1160,7 @@ class ClientRollback {
                 // Only errno 1146 (missing table on an older-schema replica) is a
                 // benign skip; log the step context and rethrow every real fault so
                 // the outer catch aborts rather than committing a partial reorg-reset.
-                if(e.errno !== 1146){ console.error('rebuildBalances after rollback failed:', e); throw e; }
+                if(e.errno !== 1146){ logger.error(util.format('rebuildBalances after rollback failed:', e)); throw e; }
             }
 
             // Recompute tokens.supply from the surviving credits/debits/escrows. The
@@ -1171,15 +1174,15 @@ class ClientRollback {
             } catch(e){
                 // errno 1146 (missing table) is the only benign schema gap; log the
                 // step and rethrow real faults so the outer catch rolls back.
-                if(e.errno !== 1146){ console.error('recomputeTokenSupplies after rollback failed:', e); throw e; }
+                if(e.errno !== 1146){ logger.error(util.format('recomputeTokenSupplies after rollback failed:', e)); throw e; }
             }
 
             await this.db.commitTransaction();
-            console.log('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
+            logger.info('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Indexer rollback failed:', e);
+            logger.error(util.format('Indexer rollback failed:', e));
             throw e;
         }
     }
@@ -1192,7 +1195,7 @@ class ClientRollback {
     // change (decoder review Finding D).
     async _rollbackDecoder(block_index){
         let timer = this.util.startTimer();
-        console.log('Starting decoder rollback to block ' + block_index + '...');
+        logger.info('Starting decoder rollback to block ' + block_index + '...');
 
         await this.db.beginTransaction();
         try {
@@ -1232,11 +1235,11 @@ class ClientRollback {
             // ids (the current BLOCK_HASH_VERSION). Never let a lookup id back into a hashed projection.
 
             await this.db.commitTransaction();
-            console.log('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
+            logger.info('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Decoder rollback failed:', e);
+            logger.error(util.format('Decoder rollback failed:', e));
             throw e;
         }
     }

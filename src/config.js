@@ -20,6 +20,8 @@
 
 const { coinTicker } = require('./consensus-constants');
 const { parseCorsOrigin } = require('./http/cors_origin');
+const { getLogger } = require('./observability');
+const logger = getLogger();
 
 // Parse an integer from an env var, returning defaultVal when the value is
 // absent, empty, or non-numeric.  Unlike `parseInt(x) || default`, this
@@ -262,7 +264,7 @@ module.exports = {
         config['WS_BACKPRESSURE_MAX_BYTES'] = parseIntMin1(process.env.WS_BACKPRESSURE_MAX_BYTES, 16777216); // 16 MiB
         config['WS_BACKPRESSURE_STALL_MS']  = parseIntMin1(process.env.WS_BACKPRESSURE_STALL_MS, 30000);     // 30 s
         if(process.env.WS_BACKPRESSURE_LIMIT !== undefined)
-            console.log('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead.');
+            logger.info('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead.');
 
         // WebSocket status broadcast interval (default 60 seconds; override via WS_STATUS_INTERVAL)
         config['WS_STATUS_INTERVAL'] = parseIntMin0(process.env.WS_STATUS_INTERVAL, 60000);

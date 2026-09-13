@@ -23,6 +23,9 @@
 
 const WebSocket = require('ws');
 const { encodeTables } = require('../util/wire_codec');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -127,7 +130,7 @@ class BlockBroadcaster {
             this._send(ws, { type: 'status', chain, network, dbType: type, ...status });
         }
 
-        console.log('WebSocket subscriber added for ' + key + ' from ' + ip + ' (' + this.subscribers.get(key).size + ' total)');
+        logger.info('WebSocket subscriber added for ' + key + ' from ' + ip + ' (' + this.subscribers.get(key).size + ' total)');
         return true;
     }
 
@@ -376,7 +379,7 @@ class BlockBroadcaster {
         ws._syncLastBuffered = buffered;
 
         if(drop){
-            console.log('WebSocket backpressure: dropping ' + ws._syncIp + ' (' + drop + ')');
+            logger.info('WebSocket backpressure: dropping ' + ws._syncIp + ' (' + drop + ')');
             ws.close(1008, 'Backpressure: ' + drop);
             this.removeSubscription(ws);
             return;
@@ -385,7 +388,7 @@ class BlockBroadcaster {
         try {
             ws.send(data);
         } catch(e){
-            console.log('WebSocket send error:', e);
+            logger.info(util.format('WebSocket send error:', e));
             this.removeSubscription(ws);
         }
     }

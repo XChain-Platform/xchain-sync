@@ -19,6 +19,9 @@
  ********************************************************************/
 
 const crypto = require('crypto');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 class Utility {
 
@@ -34,12 +37,12 @@ class Utility {
     }
 
     throwError(error){
-        console.error('throwError:', error);
+        logger.error(util.format('throwError:', error));
         throw new Error(error);
     }
 
     logError(error, info){
-        console.error('logError: ' + error, info);
+        logger.error(util.format('logError: ' + error, info));
     }
 
     // JSON.stringify with BigInt support. The replacer reads the RAW pre-toJSON value

@@ -30,6 +30,9 @@ const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('.
 const { coinTicker }      = require('../consensus-constants');
 const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
 const lifecycle           = require('../tableLifecycle');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // Above this many distinct ids per dimension a scoped rebuild's IN-lists stop
 // being worth it (and a catch-up that touched that much of the table is close
@@ -262,7 +265,7 @@ class ClientApplier {
         // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
-            console.log('Block ' + payload.block_index + ' already exists, skipping');
+            logger.info('Block ' + payload.block_index + ' already exists, skipping');
             return;
         }
 
@@ -321,7 +324,7 @@ class ClientApplier {
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying block %s:', payload.block_index, e);
+            logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
     }
@@ -428,7 +431,7 @@ class ClientApplier {
             throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
         }
 
-        console.log('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
+        logger.info('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
         let timer = this.util.startTimer();
 
         await this.db.beginTransaction();
@@ -460,7 +463,7 @@ class ClientApplier {
                     .map(r => r.table_name || r.TABLE_NAME)
                     .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
             } catch(e){
-                console.error('Full-snapshot clear: local table enumeration failed:', e.message);
+                logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
@@ -473,7 +476,7 @@ class ClientApplier {
             // apply, while OPERATOR_LOCAL_TABLES is clear-protected.
             let payloadTables = Object.keys(snapshotData.tables).filter(t => {
                 if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
-                console.log('Ignoring node-local table shipped in full snapshot: ' + t);
+                logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
                 return false;
             });
 
@@ -487,7 +490,7 @@ class ClientApplier {
             for(let i = tables.length - 1; i >= 0; i--){
                 let tCheck = validation.validateIdentifier(tables[i]);
                 if(!tCheck.valid){
-                    console.error('Skipping clear of invalid table: ' + tables[i]);
+                    logger.error('Skipping clear of invalid table: ' + tables[i]);
                     continue;
                 }
                 await this.db.doQuery('DELETE FROM `' + tables[i] + '`');
@@ -498,7 +501,7 @@ class ClientApplier {
                 if(!rows || rows.length === 0) continue;
                 await this._insertRows(table, rows);
                 if(rows.length > 100)
-                    console.log('  ' + table + ': ' + rows.length + ' rows');
+                    logger.info('  ' + table + ': ' + rows.length + ' rows');
             }
 
             // Scoped clear of state_tree_roots at/above the snapshot height. This table
@@ -536,10 +539,10 @@ class ClientApplier {
                 await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();
-            console.log('Full snapshot applied (' + this.util.getTimer(timer) + ')');
+            logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying full snapshot:', e);
+            logger.error(util.format('Error applying full snapshot:', e));
             throw e;
         }
     }
@@ -556,7 +559,7 @@ class ClientApplier {
             throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
         }
 
-        console.log('Applying incremental snapshot (since block ' + snapshotData.since_block + ')...');
+        logger.info('Applying incremental snapshot (since block ' + snapshotData.since_block + ')...');
         let timer = this.util.startTimer();
 
         await this.db.beginTransaction();
@@ -596,10 +599,10 @@ class ClientApplier {
                     await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
             }
             await this.db.commitTransaction();
-            console.log('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
+            logger.info('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying incremental snapshot:', e);
+            logger.error(util.format('Error applying incremental snapshot:', e));
             throw e;
         }
     }
@@ -624,7 +627,7 @@ class ClientApplier {
             await this.db.commitTransaction();
         } catch(e){
             await this.db.rollbackTransaction();
-            console.error('Error applying dispensers reconcile:', e);
+            logger.error(util.format('Error applying dispensers reconcile:', e));
             throw e;
         }
     }
@@ -882,7 +885,7 @@ class ClientApplier {
 
                 await this.db.doQuery('DELETE FROM `' + table + '` WHERE id = ?', [holderId]);
                 retired.push(holderId);
-                console.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
+                logger.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
                     ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
                     ' retired_id=' + holderId + ' landed_id=' + id +
                     ' (the source no longer serves the retired id within this page\'s id window)');
@@ -956,7 +959,7 @@ class ClientApplier {
             // skipping in silence; schema replication (ensureReplicatedColumns) adds the
             // column on the next pass and the mirror resumes.
             if(e && e.errno === 1054)
-                console.warn('anchor-reward reconcile mirror skipped: an identity column ' +
+                logger.warn('anchor-reward reconcile mirror skipped: an identity column ' +
                     '(round_qualifier) is missing from validator_rewards or ' +
                     'anchor_reward_reconcile_log on this replica, so reconcile losers stay ' +
                     'until schema replication adds it');

@@ -38,6 +38,7 @@ const Utility         = require('./util');
 // entry file after this module is required, and getLogger() hands back a lazy
 // façade that reaches the real sink once that has happened.
 const { getLogger }   = require('./observability');
+const util = require('node:util');
 
 class SyncService {
 
@@ -75,7 +76,7 @@ class SyncService {
     }
 
     async start(){
-        console.log('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
+        getLogger().info('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
 
         await this._waitForHub();
 
@@ -92,7 +93,7 @@ class SyncService {
         await this._discoverChains();
 
         if(this.databases.size === 0){
-            console.log('No indexer/decoder databases found. Waiting for hub config...');
+            getLogger().info('No indexer/decoder databases found. Waiting for hub config...');
         }
 
         if(this.config['SYNC_MODE'] === 'server'){
@@ -128,12 +129,12 @@ class SyncService {
 
         for(let poller of this.pollers.values()){
             try { if(typeof poller.stop === 'function') poller.stop(); }
-            catch(e){ console.warn('SyncService.stop: poller stop failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: poller stop failed:', e && e.message ? e.message : e)); }
         }
 
         for(let sync of this.clientSyncs.values()){
             try { if(typeof sync.stop === 'function') sync.stop(); }
-            catch(e){ console.warn('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e)); }
         }
 
         // Both are unref'd, so they cannot hold the loop open on their own, but a
@@ -150,10 +151,10 @@ class SyncService {
             if(!db || typeof db.close !== 'function' || closed.has(db)) continue;
             closed.add(db);
             try { await db.close(); }
-            catch(e){ console.warn('SyncService.stop: database close failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: database close failed:', e && e.message ? e.message : e)); }
         }
 
-        console.log('SyncService stopped (' + this.pollers.size + ' poller(s), '
+        getLogger().info('SyncService stopped (' + this.pollers.size + ' poller(s), '
             + this.clientSyncs.size + ' client sync(s), ' + closed.size + ' pool(s) closed).');
     }
 
@@ -165,17 +166,17 @@ class SyncService {
         let attempts = 0;
         while(true){
             if(Date.now() - startedAt >= maxWaitMs){
-                console.error('Hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+                getLogger().error('Hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
                     + ' was unreachable after ' + Math.round(maxWaitMs / 1000) + 's (MAX_HUB_WAIT_MS); exiting.');
                 process.exit(1);
             }
             let alive = await this.hubClient.ping();
             if(alive){
-                console.log('Hub is reachable');
+                getLogger().info('Hub is reachable');
                 return;
             }
             attempts++;
-            console.log('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+            getLogger().info('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
                 + '... (attempt ' + attempts + ')');
             await this.util.sleep(3000);
         }
@@ -201,11 +202,11 @@ class SyncService {
             // Skipped before any DB pool / ClientSync is created, so an excluded
             // chain can never crash-loop the process.
             if(this.config['SYNC_EXCLUDE'] && this.config['SYNC_EXCLUDE'].includes(key)){
-                console.log('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
+                getLogger().info('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
                 continue;
             }
 
-            console.log('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
+            getLogger().info('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
@@ -239,11 +240,11 @@ class SyncService {
                     // it must not be filed under the reachability message. Say so loudly and
                     // let ClientSync's schema apply record the durable halt.
                     if(e && e.columnFailures){
-                        console.error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
+                        getLogger().error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
                             ' left columns missing on the replica: ' + e.message);
                     } else {
                         // Source DB not reachable; schema will be fetched from server via /schema endpoint
-                        console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
+                        getLogger().info('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
                     }
                 } finally {
                     // Close in finally: a thrown replicateSchema used to leak the source
@@ -357,7 +358,7 @@ class SyncService {
             this._startPollerForChain(key, db, cfg);
         }
 
-        console.log('Server mode started with ' + this.databases.size + ' poller(s)' +
+        getLogger().info('Server mode started with ' + this.databases.size + ' poller(s)' +
             (this.config['REPLICA_DB_READONLY'] ? ' (READ-ONLY replica: transparency log is serve-only)' : ''));
     }
 
@@ -378,7 +379,7 @@ class SyncService {
         // which /status cannot show (stale block_height under a live timestamp), so log
         // the full error and exit and let the container restart policy surface it.
         poller.start().catch(e => {
-            console.error('Poller crashed for ' + key + '; exiting for restart:', e);
+            getLogger().error(util.format('Poller crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });
     }
@@ -389,7 +390,7 @@ class SyncService {
         for(let [key, { db, config: cfg }] of this.databases){
             this._startClientSyncForChain(key, db, cfg);
         }
-        console.log('Client mode started with ' + this.databases.size + ' sync(s)');
+        getLogger().info('Client mode started with ' + this.databases.size + ' sync(s)');
     }
 
     _startClientSyncForChain(key, db, cfg){
@@ -404,7 +405,7 @@ class SyncService {
         // sync is permanently dead while the process still appears healthy.
         // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
-            console.error('ClientSync crashed for ' + key + '; exiting for restart:', e);
+            getLogger().error(util.format('ClientSync crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });
     }
@@ -417,9 +418,9 @@ class SyncService {
             try {
                 let newChains = await this._discoverChains();
                 if(newChains.length > 0)
-                    console.log('Discovered ' + newChains.length + ' new chain(s) from hub');
+                    getLogger().info('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){
-                console.error('Hub re-poll error:', e);
+                getLogger().error(util.format('Hub re-poll error:', e));
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
         if(this._hubRepollTimer.unref) this._hubRepollTimer.unref();
@@ -452,7 +453,7 @@ class SyncService {
                     try {
                         const stats = await stateCommitment.reportOrphanStats(query, cfg.coin, cfg.network);
                         if(stats.totalNodes === 0) continue;
-                        console.log('[METRIC] ' + JSON.stringify({
+                        getLogger().info('[METRIC] ' + JSON.stringify({
                             metric: 'state_tree_orphan_nodes', component: 'sync', key: key,
                             chain: cfg.coin, network: cfg.network,
                             total_nodes: stats.totalNodes, reachable_nodes: stats.reachableNodes,
@@ -463,7 +464,7 @@ class SyncService {
                             ts: Date.now()
                         }));
                     } catch(err) {
-                        console.warn('SyncService: state_tree orphan-metric failed for ' + key + ':', err.message || err);
+                        getLogger().warn(util.format('SyncService: state_tree orphan-metric failed for ' + key + ':', err.message || err));
                     }
                 }
             } finally {
@@ -471,7 +472,7 @@ class SyncService {
             }
         }, intervalMs);
         if(this._stateTreeMetricTimer.unref) this._stateTreeMetricTimer.unref();
-        console.log('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
+        getLogger().info('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
     }
 
     // Make SYNC_META_RETENTION_BLOCKS real in CLIENT mode. On the server the window is

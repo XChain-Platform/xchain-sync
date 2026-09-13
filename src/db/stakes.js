@@ -25,6 +25,8 @@ const path       = require('path');
 const swqCap = require('../swq_source_cap_activation');
 const stakeWeightCollation = require('../stake_weight_collation_activation');
 const { requireStakeWeight } = require('./shared.js');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 module.exports = {
 
@@ -157,7 +159,7 @@ module.exports = {
             let raw = await this.doQueryStrict(capped.sql, capped.args);
             let truncated = raw.some(r => Number(r._sr) > maxSources);
             if(truncated)
-                console.warn(label + ' saw more than ' + maxSources + ' distinct staking sources at block ' + blockIndex + ' - stakes_root snapshot truncated; stake-weighted quorum fails closed. Raise STAKE_WEIGHT_MAX_SOURCES (coordinated flag-day upgrade) if the federation has grown.');
+                logger.warn(label + ' saw more than ' + maxSources + ' distinct staking sources at block ' + blockIndex + ' - stakes_root snapshot truncated; stake-weighted quorum fails closed. Raise STAKE_WEIGHT_MAX_SOURCES (coordinated flag-day upgrade) if the federation has grown.');
             let rows = (truncated ? raw.filter(r => Number(r._sr) <= maxSources) : raw).map(r => ({
                 pubkey: String(r.pubkey),
                 source: String(r.source),
@@ -169,7 +171,7 @@ module.exports = {
         let raw = await this.doQueryStrict(query, [...inner.args, limit]);
         let truncated = raw.length >= limit;
         if(truncated)
-            console.warn(label + ' hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
+            logger.warn(label + ' hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
         let rows = raw.map(r => ({
             pubkey: String(r.pubkey),
             source: String(r.source),

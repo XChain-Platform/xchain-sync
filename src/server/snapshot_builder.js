@@ -31,6 +31,9 @@ const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { activationDelayBlocks } = require('../consensus-constants');
 const poolSizing = require('../db/pool_sizing');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
 const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
@@ -436,7 +439,7 @@ class SnapshotBuilder {
             let duration = Date.now() - startedAt;
             let chain  = (db && db.chain)  || '?';
             let network = (db && db.network) || '?';
-            console.log('[SnapshotBuilder] full-snapshot served: dbType=' + (db && db.dbType) +
+            logger.info('[SnapshotBuilder] full-snapshot served: dbType=' + (db && db.dbType) +
                 ' chain=' + chain + '/' + network +
                 ' block_height=' + lastBlock +
                 ' rows=' + totalRows +
@@ -901,7 +904,7 @@ class SnapshotBuilder {
                     // the stream aborts and the follower fails closed on truncated JSON,
                     // matching ClientRollback's errno discrimination.
                     if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
-                    console.error('Error reading table ' + table + ' for incremental:', e);
+                    logger.error(util.format('Error reading table ' + table + ' for incremental:', e));
                 }
             }
 

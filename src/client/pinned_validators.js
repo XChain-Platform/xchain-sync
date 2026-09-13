@@ -64,6 +64,8 @@
  ********************************************************************/
 
 'use strict';
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 /**
  * Baked-in pinned validator sets, keyed "chain:network". All real keys ship null
@@ -121,7 +123,7 @@ function _fromEnv(chain, network) {
     if (!raw) return null;
     const { set, error } = _parseValidatorSetEnv(raw);
     if (error) {
-        console.warn('[pinnedValidators] ' + _envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
+        logger.warn('[pinnedValidators] ' + _envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
         return null;
     }
     return set;
@@ -195,7 +197,7 @@ function _seedFromEnv(chain, network) {
     if (!raw) return null;
     const { seed, error } = _parseSeedEnv(raw);
     if (error) {
-        console.warn('[pinnedValidators] ' + _seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
+        logger.warn('[pinnedValidators] ' + _seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
         return null;
     }
     return seed;

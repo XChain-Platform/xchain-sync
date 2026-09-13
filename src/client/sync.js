@@ -46,6 +46,7 @@ const { getPinnedValidators, getPinnedCheckpoint } = require('./pinned_validator
 // entry file after this module is required, and getLogger() hands back a lazy
 // façade that reaches the real sink once that has happened.
 const { getLogger } = require('../observability');
+const util = require('node:util');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in _verifyTableCounts for the
@@ -106,14 +107,14 @@ class ClientSync {
         // chain while it keeps the orphaned blocks. Warn loudly at construction
         // so the operator sees it once per client session, on every entry path.
         if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] === false){
-            console.error('================================================================');
-            console.error('WARNING: VERIFY_RECOMPUTE is DISABLED for ' + this.chain + '/' +
+            getLogger().error('================================================================');
+            getLogger().error('WARNING: VERIFY_RECOMPUTE is DISABLED for ' + this.chain + '/' +
                 this.network + '/indexer. This mode is UNSAFE for consensus-relevant');
-            console.error('replicas: a reorg occurring while this client is disconnected or');
-            console.error('restarting will be stitched onto the orphaned tip UNVERIFIED and');
-            console.error('the replica will silently follow the forked chain. Use only for');
-            console.error('throwaway read-only mirrors whose state nothing downstream trusts.');
-            console.error('================================================================');
+            getLogger().error('replicas: a reorg occurring while this client is disconnected or');
+            getLogger().error('restarting will be stitched onto the orphaned tip UNVERIFIED and');
+            getLogger().error('the replica will silently follow the forked chain. Use only for');
+            getLogger().error('throwaway read-only mirrors whose state nothing downstream trusts.');
+            getLogger().error('================================================================');
         }
 
         // Per-chain subscribe mode: 'full' (default) or 'infra-only' (SYNC_MODE_<CHAIN>,
@@ -207,7 +208,7 @@ class ClientSync {
             if(!Number.isFinite(maxRollback) || maxRollback < 1) maxRollback = 100;
             if(this._truncatedDepth <= maxRollback){
                 let clamped = maxRollback + 1;
-                console.warn('SYNC_BOOTSTRAP_DEPTH for ' + this.chain + '/' + this.network +
+                getLogger().warn('SYNC_BOOTSTRAP_DEPTH for ' + this.chain + '/' + this.network +
                     ' is ' + this._truncatedDepth + ', which is <= MAX_ROLLBACK_DEPTH (' + maxRollback +
                     '). A reorg within the rollback window could request a rollback below the truncation ' +
                     'floor, which a truncated replica cannot perform. Clamping bootstrap depth up to ' +
@@ -364,7 +365,7 @@ class ClientSync {
             ? ' (+' + this._gapLogSuppressed + ' similar in last ' +
               Math.round((now - this._gapLogLastAt) / 1000) + 's)'
             : '';
-        console.log(message + suffix);
+        getLogger().info(message + suffix);
         this._gapLogLastAt = now;
         this._gapLogSuppressed = 0;
     }
@@ -381,7 +382,7 @@ class ClientSync {
     // make deliberately, so say it out loud rather than burying it in docs.
     _warnTrustPosture(){
         if(this.sources.length < 2){
-            console.warn(
+            getLogger().warn(
                 'SECURITY: ' + this.dbType + ' replica is running SINGLE-SOURCE (' +
                 (this.sources[0] || '<none>') + '). Content integrity rests entirely on TLS trust ' +
                 'of that one server. Cross-source divergence detection is INACTIVE, and the local ' +
@@ -390,7 +391,7 @@ class ClientSync {
             );
         }
         if(this.dbType === 'decoder'){
-            console.warn(
+            getLogger().warn(
                 'SECURITY: decoder replication has no hash-based rejection. Completeness is ' +
                 'row-count advisory only (a shortfall is logged, never rejected). A decoder replica ' +
                 'trusts its source(s) for row content. Treat decoder sources as trusted infrastructure.'
@@ -407,7 +408,7 @@ class ClientSync {
             let pinned = getPinnedValidators(this.chain, this.network);
             let havePinned = Array.isArray(pinned) && pinned.length > 0;
             if(!this.config['VERIFY_CHECKPOINT_QUORUM'] || !havePinned){
-                console.warn(
+                getLogger().warn(
                     'SECURITY: ' + this.chain + '/' + this.network + '/indexer replica has NO active ' +
                     'checkpoint-quorum anchor (' +
                     (!this.config['VERIFY_CHECKPOINT_QUORUM'] ? 'VERIFY_CHECKPOINT_QUORUM is off'
@@ -446,7 +447,7 @@ class ClientSync {
             let missing = replicatedTables.missingReplicatedTables(present, this.dbType);
             this._missingTables = missing;
             if(missing && missing.length){
-                console.warn('MISSING_REPLICATED_TABLES: ' + this.chain + '/' + this.network + '/' +
+                getLogger().warn('MISSING_REPLICATED_TABLES: ' + this.chain + '/' + this.network + '/' +
                     this.dbType + ' replica schema is missing ' + missing.length +
                     ' table(s) that this build replicates per block: ' + missing.join(', ') +
                     '. Rows for these tables are SKIPPED (errno 1146 is tolerated so a schema gap ' +
@@ -456,8 +457,8 @@ class ClientSync {
             }
         } catch(e){
             this._missingTables = null;
-            console.error('Missing-table check failed for ' + this.chain + '/' + this.network + '/' +
-                this.dbType + ' (advisory, continuing):', e.message);
+            getLogger().error(util.format('Missing-table check failed for ' + this.chain + '/' + this.network + '/' +
+                this.dbType + ' (advisory, continuing):', e.message));
         }
     }
 
@@ -491,7 +492,7 @@ class ClientSync {
         let floor = blockIndex - this._sourceStrikeWindow;
         strikes = strikes.filter(b => b > floor);
         this._sourceStrikes.set(sourceIndex, strikes);
-        console.warn('SOURCE STRIKE: ' + (this.sources[sourceIndex] || ('#' + sourceIndex)) +
+        getLogger().warn('SOURCE STRIKE: ' + (this.sources[sourceIndex] || ('#' + sourceIndex)) +
             ' dissented from the quorum majority at block ' + blockIndex + ' (' + strikes.length + '/' +
             this._sourceEvictThreshold + ' within ' + this._sourceStrikeWindow + ' blocks) for ' +
             this.chain + '/' + this.network + '/' + this.dbType);
@@ -506,7 +507,7 @@ class ClientSync {
         if(this._evictedSources.has(sourceIndex)) return;
         let label = this.sources[sourceIndex] || ('#' + sourceIndex);
         if(this._activeSourceCount() - 1 < 2){
-            console.error('SOURCE EVICTION SUPPRESSED: ' + label + ' reached the strike threshold but ' +
+            getLogger().error('SOURCE EVICTION SUPPRESSED: ' + label + ' reached the strike threshold but ' +
                 'evicting it would leave fewer than 2 active sources for ' + this.chain + '/' + this.network +
                 '/' + this.dbType + '. Retaining it; per-block no-source-quorum halts still guard safety.');
             return;
@@ -517,14 +518,14 @@ class ClientSync {
         if(ws){
             try { ws._xchainEvicted = true; ws.close(); } catch(e){ /* best-effort */ }
         }
-        console.error('================================================================');
-        console.error('SOURCE EVICTED: ' + label + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
-        console.error('It reached ' + this._sourceEvictThreshold + ' divergence strikes within ' +
+        getLogger().error('================================================================');
+        getLogger().error('SOURCE EVICTED: ' + label + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('It reached ' + this._sourceEvictThreshold + ' divergence strikes within ' +
             this._sourceStrikeWindow + ' blocks (dissented from the quorum majority). Its WebSocket is');
-        console.error('closed and it is removed from the active quorum denominator (now ' +
+        getLogger().error('closed and it is removed from the active quorum denominator (now ' +
             this._activeSourceCount() + ' active source(s)). A quorum still stands behind every applied');
-        console.error('block. Investigate the evicted source for a fork/Byzantine fault.');
-        console.error('================================================================');
+        getLogger().error('block. Investigate the evicted source for a fork/Byzantine fault.');
+        getLogger().error('================================================================');
     }
 
     // /status getters for the Byzantine quorum surface.
@@ -536,7 +537,7 @@ class ClientSync {
 
     async start(){
         this.running = true;
-        console.log('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
 
         this._warnTrustPosture();
 
@@ -551,7 +552,7 @@ class ClientSync {
                     mismatches: this._safeParse(prior.mismatches), sources: this._safeParse(prior.sources),
                     at: prior.detected_at
                 };
-                console.error('ClientSync is HALTED on a prior consensus divergence at block ' +
+                getLogger().error('ClientSync is HALTED on a prior consensus divergence at block ' +
                     prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
                     '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
                 // Stay alive but idle so /status can report the halt.
@@ -566,7 +567,7 @@ class ClientSync {
             // chain. Hold in an idle halted state until a restart can positively read
             // the halt table (getActiveHalt now fails closed / throws rather than
             // returning [] on a query error).
-            console.error('halt-state check failed; staying HALTED (fail-closed) until it can be read:', e);
+            getLogger().error(util.format('halt-state check failed; staying HALTED (fail-closed) until it can be read:', e));
             this._halted = {
                 blockIndex: -1, reason: 'halt-state-check-failed',
                 mismatches: [], sources: [], at: null
@@ -627,11 +628,11 @@ class ClientSync {
             // chains whose full snapshot can't be applied in one pass); everything
             // else takes the full-history snapshot.
             if(this._truncatedDepth >= 1){
-                console.log('No local data found; bootstrapping ' + this.chain + '/' + this.network +
+                getLogger().info('No local data found; bootstrapping ' + this.chain + '/' + this.network +
                     ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + this._truncatedDepth + ', truncated replica)...');
                 await this._bootstrapFromHeightRetry(this._truncatedDepth);
             } else {
-                console.log('No local data found, bootstrapping from full snapshot...');
+                getLogger().info('No local data found, bootstrapping from full snapshot...');
                 await this._bootstrapFromSnapshot();
             }
         } else {
@@ -650,7 +651,7 @@ class ClientSync {
             // Pass the next needed block (lastAppliedBlock + 1): the server uses
             // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
             // applied rows and the non-ignore INSERT throws a duplicate-key error.
-            console.log('Resuming from block ' + this.lastAppliedBlock);
+            getLogger().info('Resuming from block ' + this.lastAppliedBlock);
             await this._incrementalCatchUp(this.lastAppliedBlock + 1);
         }
 
@@ -760,7 +761,7 @@ class ClientSync {
     }
 
     async _fetchAndApplySchema(source){
-        console.log('Fetching schema from ' + source + '...');
+        getLogger().info('Fetching schema from ' + source + '...');
         let schema;
         try {
             let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
@@ -769,7 +770,7 @@ class ClientSync {
         } catch(e){
             // A fetch/transport failure is not a schema fault: the source may be
             // briefly unreachable. Leave it to the bootstrap retry/rotate loop.
-            console.error('Failed to fetch schema from ' + source + ':', e);
+            getLogger().error(util.format('Failed to fetch schema from ' + source + ':', e));
             return;
         }
         if(!schema || !schema.tables) return;
@@ -781,12 +782,12 @@ class ClientSync {
             if(!createSql) continue;
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
-                console.error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
+                getLogger().error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
                 continue;
             }
             let ddlCheck = validation.validateDdl(createSql);
             if(!ddlCheck.valid){
-                console.error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
+                getLogger().error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
                 continue;
             }
             pending.push({ tableName, createSql });
@@ -825,7 +826,7 @@ class ClientSync {
                         );
                         if(exists.length === 0){
                             await this.db.doQuery(createSql);
-                            console.log('  Created table: ' + tableName);
+                            getLogger().info('  Created table: ' + tableName);
                         } else {
                             // Table already exists: propagate any columns the master has
                             // added since this replica was bootstrapped. Without this the
@@ -843,7 +844,7 @@ class ClientSync {
                         // then fall through to the fixpoint as a persistent failure.
                         if(e.errno === SCHEMA_TRANSIENT_ERRNO && attempt < SCHEMA_TRANSIENT_MAX_RETRIES){
                             let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
-                            console.warn('Schema apply lock-timeout on ' + tableName +
+                            getLogger().warn('Schema apply lock-timeout on ' + tableName +
                                 ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
                                 (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
                             await this.util.sleep(delay);
@@ -876,7 +877,7 @@ class ClientSync {
             await this._haltOnSchemaFailure(source, failed);
             return;
         }
-        console.log('Schema applied from ' + source);
+        getLogger().info('Schema applied from ' + source);
     }
 
     // Durable halt for an unrecoverable schema apply (distinct from the
@@ -896,16 +897,16 @@ class ClientSync {
             at: new Date().toISOString()
         };
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, failedTables, [source]); }
-        catch(e){ console.error('CRITICAL: failed to persist schema-apply halt (still halting in-memory):', e); }
-        console.error('================================================================');
-        console.error('SCHEMA APPLY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
-        console.error('after the multi-pass apply these tables still could not be created');
-        console.error('or altered (a genuine DDL fault, not FK ordering): ' + JSON.stringify(failedTables));
-        console.error('the replica cannot build a complete schema, so a snapshot apply would');
-        console.error('loop forever on errno 1146/1054. HALTING (applying no further blocks).');
-        console.error('Operator must fix the DDL fault (disk, permissions, lock, malformed');
-        console.error('DDL) and clear the halt before this replica can resume.');
-        console.error('================================================================');
+        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist schema-apply halt (still halting in-memory):', e)); }
+        getLogger().error('================================================================');
+        getLogger().error('SCHEMA APPLY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('after the multi-pass apply these tables still could not be created');
+        getLogger().error('or altered (a genuine DDL fault, not FK ordering): ' + JSON.stringify(failedTables));
+        getLogger().error('the replica cannot build a complete schema, so a snapshot apply would');
+        getLogger().error('loop forever on errno 1146/1054. HALTING (applying no further blocks).');
+        getLogger().error('Operator must fix the DDL fault (disk, permissions, lock, malformed');
+        getLogger().error('DDL) and clear the halt before this replica can resume.');
+        getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
@@ -952,17 +953,17 @@ class ClientSync {
             at: new Date().toISOString()
         };
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
-        catch(e){ console.error('CRITICAL: failed to persist snapshot-too-large halt (still halting in-memory):', e); }
-        console.error('================================================================');
-        console.error('SNAPSHOT TOO LARGE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
-        console.error('the full-history snapshot from ' + source + ' exceeds SNAPSHOT_MAX_CONTENT (' +
+        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist snapshot-too-large halt (still halting in-memory):', e)); }
+        getLogger().error('================================================================');
+        getLogger().error('SNAPSHOT TOO LARGE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('the full-history snapshot from ' + source + ' exceeds SNAPSHOT_MAX_CONTENT (' +
             (this.config['SNAPSHOT_MAX_CONTENT'] || 'unset') + ' bytes).');
-        console.error('every source serves the same payload, so retrying, rotating sources, or');
-        console.error('restarting the process cannot get past this. HALTING (applying no further');
-        console.error('blocks) rather than crash-looping and exhausting the source snapshot budget.');
-        console.error('Operator must either reseed this replica as a truncated one');
-        console.error('(SYNC_BOOTSTRAP_DEPTH) or raise SNAPSHOT_MAX_CONTENT, then clear the halt.');
-        console.error('================================================================');
+        getLogger().error('every source serves the same payload, so retrying, rotating sources, or');
+        getLogger().error('restarting the process cannot get past this. HALTING (applying no further');
+        getLogger().error('blocks) rather than crash-looping and exhausting the source snapshot budget.');
+        getLogger().error('Operator must either reseed this replica as a truncated one');
+        getLogger().error('(SYNC_BOOTSTRAP_DEPTH) or raise SNAPSHOT_MAX_CONTENT, then clear the halt.');
+        getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
@@ -988,7 +989,7 @@ class ClientSync {
         let now = Date.now();
         if(this._lastSchemaHeal && (now - this._lastSchemaHeal) < 60000) return false;
         this._lastSchemaHeal = now;
-        console.log('Apply failed on a schema gap (errno ' + errno + ') for ' +
+        getLogger().info('Apply failed on a schema gap (errno ' + errno + ') for ' +
             this.chain + '/' + this.network + '; re-applying source schema');
         await this._fetchAndApplySchema(this.sources[0]);
         return true;
@@ -1010,7 +1011,7 @@ class ClientSync {
     // there is no second source to rotate to and the old code returned normally.
     async _bootstrapFromSnapshot(){
         if(!this.sources[0]){
-            console.error('No sync sources configured');
+            getLogger().error('No sync sources configured');
             throw new BootstrapExhaustedError('Bootstrap failed: no sync sources configured for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
@@ -1042,7 +1043,7 @@ class ClientSync {
                     (round + 1) + ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
             }
             let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
-            console.warn('Bootstrap round ' + (round + 1) + ' exhausted all sources for ' +
+            getLogger().warn('Bootstrap round ' + (round + 1) + ' exhausted all sources for ' +
                 this.chain + '/' + this.network + '/' + this.dbType + '; retrying in ' + delay + 'ms');
             await this.util.sleep(delay);
         }
@@ -1063,7 +1064,7 @@ class ClientSync {
         // abort this round (the snapshot apply would only fail 1146/1054).
         if(this._halted) return false;
 
-        console.log('Downloading full snapshot from ' + source + '...');
+        getLogger().info('Downloading full snapshot from ' + source + '...');
         try {
             let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, {
@@ -1136,7 +1137,7 @@ class ClientSync {
                             if(verdict === 'agree') agreed++;
                         }
                         if(agreed < need){
-                            console.warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
+                            getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
                                 ' agreeing source(s) of the ' + this._effectiveQuorum() + ' required for quorum for ' +
                                 this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
                                 'bootstrap tip is under-verified until live quorum forms.');
@@ -1153,7 +1154,7 @@ class ClientSync {
                 }
             }
 
-            console.log('Bootstrap complete at block ' + this.lastAppliedBlock);
+            getLogger().info('Bootstrap complete at block ' + this.lastAppliedBlock);
             return true;
         } catch(e){
             // The full-history snapshot no longer fits under SNAPSHOT_MAX_CONTENT.
@@ -1173,18 +1174,18 @@ class ClientSync {
             // seconds, so an operator reading the log must see the wait it implies.
             let retryAfter = this._rateLimitRetryAfterSeconds(e);
             if(retryAfter !== null){
-                console.error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
+                getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
                     this.chain + '/' + this.network + '/' + this.dbType +
                     '; the source will not serve another full snapshot for ' + retryAfter + 's.');
             }
-            console.error('Bootstrap failed:', e);
+            getLogger().error(util.format('Bootstrap failed:', e));
             // Try next source, but only if we haven't exhausted all sources
             if(this.sources.length > 1 && attempt < this.sources.length - 1){
-                console.log('Trying secondary source...');
+                getLogger().info('Trying secondary source...');
                 this.sources.push(this.sources.shift());
                 return this._bootstrapRotateSources(attempt + 1);
             }
-            console.error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
+            getLogger().error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
             return false;
         }
     }
@@ -1210,8 +1211,8 @@ class ClientSync {
             try {
                 if(await this._bootstrapFromHeight(depth)) return; // success: tip committed
             } catch(e){
-                console.error('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
-                    this.chain + '/' + this.network + ':', e);
+                getLogger().error(util.format('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
+                    this.chain + '/' + this.network + ':', e));
             }
             if(this._halted){
                 // A halt recorded before the window landed (the platform-train gate).
@@ -1226,7 +1227,7 @@ class ClientSync {
                     ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
             }
             let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
-            console.warn('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
+            getLogger().warn('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
                 this.chain + '/' + this.network + '; retrying in ' + delay + 'ms');
             await this.util.sleep(delay);
         }
@@ -1266,7 +1267,7 @@ class ClientSync {
             throw new Error('Bootstrap-from-height: source tip unavailable from ' + statusUrl);
         }
         let base = Math.max(0, tip - depth);
-        console.log('Bootstrap-from-height: source tip=' + tip + ', depth=' + depth +
+        getLogger().info('Bootstrap-from-height: source tip=' + tip + ', depth=' + depth +
             ', base=' + base + ' for ' + this.chain + '/' + this.network);
 
         // 2. Apply schema before any data (same as the full-bootstrap path).
@@ -1370,7 +1371,7 @@ class ClientSync {
             await this._verifyDecoderCompleteness(source, this.lastAppliedBlock);
         }
 
-        console.log('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
+        getLogger().info('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
             ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
             ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
         return true;
@@ -1427,7 +1428,7 @@ class ClientSync {
             // slower, so it is used solely for a table measured to be short.
             let repairing = !!(fromZero && fromZero.has(table));
             if(repairing){
-                console.log('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
+                getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
             } else {
             try {
@@ -1492,13 +1493,13 @@ class ClientSync {
                 // against non-progress so a misbehaving server can't spin us forever.
                 let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
                 if(nextAfter <= afterId){
-                    console.warn('Lookup paging for ' + table + ' made no progress past id ' +
+                    getLogger().warn('Lookup paging for ' + table + ' made no progress past id ' +
                         afterId + '; stopping');
                     break;
                 }
                 afterId = nextAfter;
             }
-            if(pages > 1) console.log('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
+            if(pages > 1) getLogger().info('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
         }
     }
 
@@ -1568,7 +1569,7 @@ class ClientSync {
         // path would happily advance the replica past the divergence (the same
         // half-enforced-halt failure mode the live-path guard closed).
         if(this._halted){
-            console.error('Refusing incremental catch-up since block ' + sinceBlock +
+            getLogger().error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
@@ -1583,7 +1584,7 @@ class ClientSync {
         // with 2+ sources; the set is otherwise always empty so this is inert.
         if(this._strictConfirmPending.size > 0){
             let heights = Array.from(this._strictConfirmPending).sort((a, b) => a - b);
-            console.error('Refusing incremental catch-up since block ' + sinceBlock +
+            getLogger().error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; HASH_CONFIRM_STRICT is on and block(s) ' + JSON.stringify(heights) +
                 ' await cross-source confirmation. Single-source catch-up would bypass the strict gate; ' +
                 'waiting for a second source to confirm over the live stream.');
@@ -1645,7 +1646,7 @@ class ClientSync {
             dbTip = await this.db.getLastBlock(null, { rethrow: true });
             sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
 
-            console.log('Incremental catch-up from block ' + sinceBlock + '...');
+            getLogger().info('Incremental catch-up from block ' + sinceBlock + '...');
             // Truncated/fast chains: sync the append-only lookup tables by id cursor
             // first (only NEW rows, since the replica's MAX(id) is the cursor), then
             // fetch the block window with skip_lookups=1. Without this the bundled
@@ -1784,7 +1785,7 @@ class ClientSync {
                 // to the bounded height bootstrap instead (mirroring start()'s empty-DB
                 // branch); reserve the full snapshot for full-history replicas.
                 if(this._truncatedDepth >= 1){
-                    console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                    getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                         '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
                         this._truncatedDepth + ', truncated replica).');
                     await this._bootstrapFromHeightRetry(this._truncatedDepth);
@@ -1795,12 +1796,12 @@ class ClientSync {
                 // now halts on that rather than crash-looping, so this stays
                 // the right call for the case it was written for (a payload window too
                 // wide to fetch incrementally but a snapshot that still fits).
-                console.warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                     '; falling back to full bootstrap.');
                 await this._bootstrapFromSnapshot();
                 return;
             }
-            console.error('Incremental catch-up failed:', e);
+            getLogger().error(util.format('Incremental catch-up failed:', e));
             // Schema-gap failures are fixable right now: heal and retry once.
             // The heal's debounce bounds the recursion: a second schema-gap
             // failure inside the window returns false and falls through.
@@ -1840,7 +1841,7 @@ class ClientSync {
             // continue: a replica bootstrapped from a forked/Byzantine source would
             // otherwise proceed to serve and extend forked state.
             if(remoteStatus.block_height != null && Number(remoteStatus.block_height) !== blockHeight){
-                console.warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
+                getLogger().warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
                     ', source ' + source + ' height ' + remoteStatus.block_height + ')');
                 verdict = 'skew';
             } else {
@@ -1855,8 +1856,8 @@ class ClientSync {
                 });
 
                 if(!result.match){
-                    console.error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
-                    console.error('Mismatches:', JSON.stringify(result.mismatches));
+                    getLogger().error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
+                    getLogger().error(util.format('Mismatches:', JSON.stringify(result.mismatches)));
                     verdict = 'diverge';
                     if(this.config['HALT_ON_DIVERGENCE']){
                         // Durable, alerting halt mirroring the live dual-source path:
@@ -1866,7 +1867,7 @@ class ClientSync {
                         return 'halted';
                     }
                 } else {
-                    console.log('Hash verification passed against ' + source);
+                    getLogger().info('Hash verification passed against ' + source);
                     verdict = 'agree';
                 }
             }
@@ -1909,17 +1910,17 @@ class ClientSync {
             let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
             let ahead      = countMismatches.filter(m => m.reason === 'replica-ahead');
             if(shortfalls.length){
-                console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+                getLogger().error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
                     '; follower may be missing replicated rows:');
-                console.error(JSON.stringify(shortfalls));
+                getLogger().error(JSON.stringify(shortfalls));
             }
             if(ahead.length){
-                console.error('TABLE_COUNT_REPLICA_AHEAD at block ' + blockHeight + ' against ' + source +
+                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + blockHeight + ' against ' + source +
                     '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                console.error(JSON.stringify(ahead));
+                getLogger().error(JSON.stringify(ahead));
             }
             if(!countMismatches.length && remoteStatus.table_counts){
-                console.log('Table-count verification passed against ' + source);
+                getLogger().info('Table-count verification passed against ' + source);
             }
 
             // Advisory id->address map parity (NON-consensus; never halts). The
@@ -1946,23 +1947,23 @@ class ClientSync {
                     let localChecksum = await this.blockHasher.computeIndexMapChecksum(blockHeight);
                     let res = this.hashVerifier.compareIndexMap(blockHeight, localChecksum, remoteStatus.index_map_checksum);
                     if(!res.match){
-                        console.warn('INDEX_MAP_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                        getLogger().warn('INDEX_MAP_PARITY mismatch at block ' + blockHeight + ' against ' + source +
                             ': local=' + localChecksum + ' source=' + remoteStatus.index_map_checksum +
                             ' (advisory, NOT halting; id->address map content diverged at equal row count)');
                         await this._recordIndexMapMismatch(blockHeight);
                     } else {
-                        console.log('Index-map parity passed against ' + source);
+                        getLogger().info('Index-map parity passed against ' + source);
                     }
                 } catch(e){
-                    console.error('Index-map parity check errored at block ' + blockHeight +
-                        ' (advisory, ignoring):', e.message);
+                    getLogger().error(util.format('Index-map parity check errored at block ' + blockHeight +
+                        ' (advisory, ignoring):', e.message));
                 }
             }
 
             await this._verifyTableContentParity(source, blockHeight, remoteStatus);
             return verdict;
         } catch(e){
-            console.error('Hash verification failed against ' + source + ':', e);
+            getLogger().error(util.format('Hash verification failed against ' + source + ':', e));
             return 'unreachable';
         }
     }
@@ -2024,17 +2025,17 @@ class ClientSync {
             });
             let res = this.hashVerifier.compareTableContent(blockHeight, localParity, remoteParity);
             if(!res.match){
-                console.warn('TABLE_CONTENT_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                getLogger().warn('TABLE_CONTENT_PARITY mismatch at block ' + blockHeight + ' against ' + source +
                     ': ' + JSON.stringify(res.mismatches) +
                     ' (advisory, NOT halting; replicated table content diverged at equal row count)');
                 await this._recordTableContentMismatch(blockHeight, res.mismatches);
             } else {
-                console.log('Table-content parity passed against ' + source +
+                getLogger().info('Table-content parity passed against ' + source +
                     ' (' + res.compared + ' tables compared, ' + res.skipped.length + ' skipped)');
             }
             return res;
         } catch(e){
-            console.error('Table-content parity check errored at block %s (advisory, ignoring):', blockHeight, e.message);
+            getLogger().error(util.format('Table-content parity check errored at block %s (advisory, ignoring):', blockHeight, e.message));
             return null;
         }
     }
@@ -2104,17 +2105,17 @@ class ClientSync {
                 effectiveExcludes = new Set(excludeTables || []);
                 let windowed = this._truncatedWindowedTables();
                 for(let tbl of windowed) effectiveExcludes.add(tbl);
-                console.log('Truncated replica: skipping block-windowed tables from the decoder ' +
+                getLogger().info('Truncated replica: skipping block-windowed tables from the decoder ' +
                     'completeness count check (' + [...windowed].join(', ') + '); append-only lookups stay strict.');
             }
 
             let countMismatches = await this._verifyTableCounts(remoteStatus.table_counts, effectiveExcludes);
             if(countMismatches.length){
-                console.error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+                getLogger().error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
                     '; decoder snapshot may be truncated or incomplete:');
-                console.error(JSON.stringify(countMismatches));
+                getLogger().error(JSON.stringify(countMismatches));
             } else if(remoteStatus.table_counts){
-                console.log('Table-count verification passed against ' + source);
+                getLogger().info('Table-count verification passed against ' + source);
             }
 
             // Decoder content parity (advisory). The counts above are the
@@ -2124,7 +2125,7 @@ class ClientSync {
             await this._verifyTableContentParity(source, blockHeight, remoteStatus);
             return countMismatches;
         } catch(e){
-            console.error('Decoder completeness check failed against ' + source + ':', e);
+            getLogger().error(util.format('Decoder completeness check failed against ' + source + ':', e));
             return null;
         }
     }
@@ -2202,7 +2203,7 @@ class ClientSync {
             // false count mismatch and trip a needless recompute/halt.
             let idCheck = validation.validateIdentifier(table);
             if(!idCheck.valid){
-                console.error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
+                getLogger().error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
                 continue;
             }
             let remote = Number(remoteCounts[table]);
@@ -2291,9 +2292,9 @@ class ClientSync {
             let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
             let repairTried = new Set();
             if(shortfalls.length){
-                console.error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+                getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
                     '; follower may be missing replicated rows:');
-                console.error(JSON.stringify(shortfalls));
+                getLogger().error(JSON.stringify(shortfalls));
                 // A short append-only lookup is the one shortfall shape this client can
                 // repair by itself, and until now it did not: the ordinary pager seeds
                 // at MAX(id), so a hole below the high-water mark survived every sweep
@@ -2311,15 +2312,15 @@ class ClientSync {
                         await this._syncLookupTablesPaged(source, { fromZero: shortLookups });
                     } catch(repairErr){
                         // Advisory: the sweep must not fault on a repair attempt.
-                        console.error('Lookup repair pass failed against ' + source + ':',
-                            repairErr.message || repairErr);
+                        getLogger().error(util.format('Lookup repair pass failed against ' + source + ':',
+                            repairErr.message || repairErr));
                     }
                 }
             }
             if(ahead.length){
-                console.error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
+                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
                     '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                console.error(JSON.stringify(ahead));
+                getLogger().error(JSON.stringify(ahead));
             }
             // Age the shortfall set. A repeated TABLE_COUNT_MISMATCH line is the same
             // severity on sweep 1 and sweep 700, so a gap that no amount of syncing
@@ -2331,9 +2332,9 @@ class ClientSync {
                 source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
             });
             if(!mismatches.length && remoteStatus.table_counts)
-                console.log('Table-count verification passed against ' + source);
+                getLogger().info('Table-count verification passed against ' + source);
         } catch(e){
-            console.error('Periodic completeness sweep failed against ' + source + ':', e.message || e);
+            getLogger().error(util.format('Periodic completeness sweep failed against ' + source + ':', e.message || e));
         }
     }
 
@@ -2410,7 +2411,7 @@ class ClientSync {
                 let closed = this._replicaGaps.get(table);
                 this._replicaGaps.delete(table);
                 if(closed.alerts || closed.sweeps >= this._replicaGapAlertSweeps)
-                    console.warn('REPLICA_GAP_CLOSED: ' + this._replicaLabel() + ' table ' + table +
+                    getLogger().warn('REPLICA_GAP_CLOSED: ' + this._replicaLabel() + ' table ' + table +
                         ' now matches the source (was short ' + closed.lastDelta + ' row(s) for ' +
                         this._gapAgeMinutes(closed, now) + ' min across ' + closed.sweeps + ' sweep(s)).');
             }
@@ -2418,7 +2419,7 @@ class ClientSync {
             await this._recordReplicaGaps(now);
         } catch(e){
             // Advisory reporting layer; a failure here must not disturb the sweep.
-            console.error('Replica-gap tracking failed (advisory, continuing):', e.message || e);
+            getLogger().error(util.format('Replica-gap tracking failed (advisory, continuing):', e.message || e));
         }
     }
 
@@ -2434,7 +2435,7 @@ class ClientSync {
                 this._gapAgeMinutes(e, now) + ' min ago across ' + e.sweeps + ' equal-height sweep(s)' +
                 (e.repairAttempts ? ', ' + e.repairAttempts + ' self-repair pass(es) did NOT close it' : '') + ')';
         }).join('; ');
-        console.error('REPLICA_GAP_PERSISTENT: ' + this._replicaLabel() +
+        getLogger().error('REPLICA_GAP_PERSISTENT: ' + this._replicaLabel() +
             ' is missing replicated rows that repeated sweeps are not closing at block ' +
             (entries[0].lastBlock != null ? entries[0].lastBlock : 'unknown') +
             (source ? ' against ' + source : '') + ': ' + detail +
@@ -2590,12 +2591,12 @@ class ClientSync {
             // and max-interval triggers in _incrementalCatchUp can tell when dispensers
             // were last converged.
             this._lastDispenserReconcileAt = Date.now();
-            console.log('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
+            getLogger().info('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
         } catch(e){
             // Best-effort: leave the existing local dispensers intact on any failure.
-            console.error('Dispensers reconcile failed against ' + source +
-                ' (local table left intact):', (e && e.message) ? e.message : e);
+            getLogger().error(util.format('Dispensers reconcile failed against ' + source +
+                ' (local table left intact):', (e && e.message) ? e.message : e));
         }
     }
 
@@ -2612,7 +2613,7 @@ class ClientSync {
         let syncMode = this._syncMode || 'full';
         let modeQs   = (syncMode === 'infra-only') ? '?sync_mode=infra-only' : '';
         let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.dbType + '/' + this.chain + '/' + this.network + modeQs;
-        console.log('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
+        getLogger().info('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
 
         let ws;
         try {
@@ -2624,13 +2625,13 @@ class ClientSync {
                 headers:    this._upstreamHeaders()
             });
         } catch(e){
-            console.error('WebSocket connection error:', e);
+            getLogger().error(util.format('WebSocket connection error:', e));
             this._scheduleReconnect(source, sourceIndex);
             return;
         }
 
         ws.on('open', () => {
-            console.log('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+            getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
         });
 
         ws.on('message', (data) => {
@@ -2645,11 +2646,11 @@ class ClientSync {
                 event = JSON.parse(data.toString());
                 let check = validation.validateWsEvent(event);
                 if(!check.valid){
-                    console.error('Invalid WS event from ' + source + ': ' + check.reason);
+                    getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
                     return;
                 }
             } catch(e){
-                console.error('Error parsing WebSocket message:', e);
+                getLogger().error(util.format('Error parsing WebSocket message:', e));
                 return;
             }
             // Stamp liveness on receipt (before the serialized apply chain) so the
@@ -2663,7 +2664,7 @@ class ClientSync {
         });
 
         ws.on('close', () => {
-            console.log('WebSocket disconnected from ' + source);
+            getLogger().info('WebSocket disconnected from ' + source);
             // A source we are no longer connected to is not evidence about anything.
             // Keeping its last verdict would let a disconnected server go on certifying
             // its own freshness, which is the shape of the bug this map exists to fix.
@@ -2672,7 +2673,7 @@ class ClientSync {
         });
 
         ws.on('error', (err) => {
-            console.error('WebSocket error from ' + source + ':', err.message);
+            getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
         });
 
         this.wsConns[sourceIndex] = ws;
@@ -2687,12 +2688,12 @@ class ClientSync {
     // (SyncService sync.start().catch -> process.exit(1)) from this path too.
     _handleWsChainError(e){
         if(e instanceof BootstrapExhaustedError){
-            console.error('Bootstrap exhausted mid-stream for ' + this.chain + '/' +
-                this.network + '/' + this.dbType + '; exiting for supervised restart:', e);
+            getLogger().error(util.format('Bootstrap exhausted mid-stream for ' + this.chain + '/' +
+                this.network + '/' + this.dbType + '; exiting for supervised restart:', e));
             process.exit(1);
             return; // reached only when process.exit is stubbed (tests)
         }
-        console.error('Error handling WebSocket message:', e);
+        getLogger().error(util.format('Error handling WebSocket message:', e));
     }
 
     _scheduleReconnect(source, sourceIndex){
@@ -2700,7 +2701,7 @@ class ClientSync {
         // An evicted (Byzantine-suspected) source stays disconnected: reconnecting it
         // would re-admit it to the stream it was evicted from.
         if(this._evictedSources.has(sourceIndex)){
-            console.warn('Not reconnecting evicted source ' + source + ' for ' +
+            getLogger().warn('Not reconnecting evicted source ' + source + ' for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
             return;
         }
@@ -2805,7 +2806,7 @@ class ClientSync {
         // from-empty apply; for anything above it, refuse and trigger a catch-up to
         // rebuild from the source rather than orphaning the blocks beneath it.
         if(this.lastAppliedBlock === null && blockIndex > 0){
-            console.error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
+            getLogger().error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
                 this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
                 'triggering catch-up instead of orphaning blocks below it');
             await this._incrementalCatchUp(blockIndex);
@@ -2827,7 +2828,7 @@ class ClientSync {
                blockIndex === this.lastAppliedBlock &&
                this.lastHashes && this.lastHashes.block_hash &&
                event.block_hash && event.block_hash !== this.lastHashes.block_hash){
-                console.error('Chain continuity error (decoder): fork at head block ' + blockIndex +
+                getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
                     '; stored block_hash ' + this.lastHashes.block_hash +
                     ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
                 await this.rewindForkedHead(blockIndex);
@@ -2852,7 +2853,7 @@ class ClientSync {
                     (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
                     (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
                 if(mismatch){
-                    console.error('Chain continuity error (indexer): fork at head block ' + blockIndex +
+                    getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
                         '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
                     await this.rewindForkedHead(blockIndex);
                 }
@@ -2951,9 +2952,9 @@ class ClientSync {
                         'no-source-quorum');
                     return;
                 }
-                console.error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
+                getLogger().error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
                     '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
-                console.error('groups:', JSON.stringify(summary));
+                getLogger().error(util.format('groups:', JSON.stringify(summary)));
                 return; // Don't apply contested blocks (log-only mode)
             } else {
                 // Not enough sources have reported to reach quorum yet. Arm the fallback
@@ -2964,17 +2965,17 @@ class ClientSync {
                         this._applyTimers.delete(blockIndex);
                         if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
                             if(this.config['HASH_CONFIRM_STRICT']){
-                                console.error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
+                                getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
                                     ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
                                 // Retain the pending hashes so a later delivery can still
                                 // complete quorum; block single-source catch-up meanwhile.
                                 this._strictConfirmPending.add(blockIndex);
                             } else {
-                                console.log('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
+                                getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
                                 try {
                                     await this._applyBlockEvent(event);
                                 } catch(e){
-                                    console.error('Error applying block ' + blockIndex + ' after cross-source timeout:', e);
+                                    getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
                                 }
                                 this.pendingHashes.delete(blockIndex);
                             }
@@ -3067,7 +3068,7 @@ class ClientSync {
             // Loud on the transition, then periodic, so the announcement cannot be
             // missed and cannot drown the log during a long rolling-upgrade window.
             if((this._trainActivationLogTick++ % 60) === 0)
-                console.error('ClientSync: TRAIN ACTIVATION PENDING for ' + this.chain + '/' + this.network +
+                getLogger().error('ClientSync: TRAIN ACTIVATION PENDING for ' + this.chain + '/' + this.network +
                     '/' + this.dbType + ' - ' + verdict.reason);
             return false;
         }
@@ -3104,20 +3105,20 @@ class ClientSync {
             at: new Date().toISOString()
         };
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
-        catch(e){ console.error('CRITICAL: failed to persist divergence halt (still halting in-memory):', e); }
-        console.error('================================================================');
-        console.error('CONSENSUS DIVERGENCE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist divergence halt (still halting in-memory):', e)); }
+        getLogger().error('================================================================');
+        getLogger().error('CONSENSUS DIVERGENCE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
         if(this._halted.reason === 'local-recompute-divergence'){
-            console.error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
-            console.error('integrity failure. HALTING (applying no further blocks). Operator must');
-            console.error('investigate replica state and clear before this validator can resume.');
+            getLogger().error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
+            getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
+            getLogger().error('investigate replica state and clear before this validator can resume.');
         } else if(this._halted.reason === 'recompute-error'){
-            console.error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
-            console.error('retries. This recompute is the only verification of the applied range');
-            console.error('(at the catch-up join it is what catches a reorg that crossed a');
-            console.error('disconnect), so the replica cannot prove its state. HALTING (applying');
-            console.error('no further blocks). Operator must fix the local fault (DB, schema) and');
-            console.error('clear before this validator can resume.');
+            getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
+            getLogger().error('retries. This recompute is the only verification of the applied range');
+            getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
+            getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
+            getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
+            getLogger().error('clear before this validator can resume.');
         } else if(this._halted.reason === 'boundary-read-error'){
             getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
             getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
@@ -3125,47 +3126,47 @@ class ClientSync {
             getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
             getLogger().error('fix the local database fault and clear before this validator can resume.');
         } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
-            console.error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
-            console.error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
-            console.error('cannot rewind to the new canonical base. HALTING (applying no further');
-            console.error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
-            console.error('this validator can resume.');
+            getLogger().error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
+            getLogger().error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
+            getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
+            getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
+            getLogger().error('this validator can resume.');
         } else if(this._halted.reason === 'checkpoint-quorum-divergence'){
-            console.error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
-            console.error('match this replica (quorum failed under the pinned validator set, or its');
-            console.error('committed state_root disagrees with the replica\'s own recompute). The');
-            console.error('source served state the federation did not sign. HALTING (applying no');
-            console.error('further blocks). Operator must investigate and clear before resuming.');
+            getLogger().error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
+            getLogger().error('match this replica (quorum failed under the pinned validator set, or its');
+            getLogger().error('committed state_root disagrees with the replica\'s own recompute). The');
+            getLogger().error('source served state the federation did not sign. HALTING (applying no');
+            getLogger().error('further blocks). Operator must investigate and clear before resuming.');
         } else if(this._halted.reason === 'no-source-quorum'){
-            console.error('block ' + blockIndex + ': the active sources split with NO majority reaching');
-            console.error('SOURCE_QUORUM (' + this._effectiveQuorum() + ' of ' + this._activeSourceCount() +
+            getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
+            getLogger().error('SOURCE_QUORUM (' + this._effectiveQuorum() + ' of ' + this._activeSourceCount() +
                 ' active). The replica cannot determine which chain is canonical, so it must not');
-            console.error('pick one. HALTING (applying no further blocks). Operator must investigate');
-            console.error('the contending sources and clear before this validator can resume.');
+            getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
+            getLogger().error('the contending sources and clear before this validator can resume.');
         } else if(this._halted.reason === 'checkpoint-freshness-stale'){
-            console.error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
-            console.error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
-            console.error('is on. The tail past the last anchor is unverifiable against the federation, so');
-            console.error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
-            console.error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
+            getLogger().error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
+            getLogger().error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
+            getLogger().error('is on. The tail past the last anchor is unverifiable against the federation, so');
+            getLogger().error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
+            getLogger().error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
         } else if(this._halted.reason === 'train-activation'){
             let m = (mismatches && mismatches[0]) || {};
-            console.error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
-            console.error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
+            getLogger().error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
+            getLogger().error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
                 ', which this build does');
-            console.error('not implement. Applying this block under the old rules would fork. HALTING');
-            console.error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
-            console.error('platform version that carries the rule set, then clear. Clearing without the');
-            console.error('update is not a supported path.');
-            if(m.reason) console.error(m.reason);
+            getLogger().error('not implement. Applying this block under the old rules would fork. HALTING');
+            getLogger().error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
+            getLogger().error('platform version that carries the rule set, then clear. Clearing without the');
+            getLogger().error('update is not a supported path.');
+            if(m.reason) getLogger().error(m.reason);
         } else {
-            console.error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
-            console.error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
-            console.error('investigate and clear before this validator can resume.');
+            getLogger().error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
+            getLogger().error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
+            getLogger().error('investigate and clear before this validator can resume.');
         }
-        console.error('mismatches: ' + JSON.stringify(mismatches));
-        console.error('sources: ' + JSON.stringify(sources));
-        console.error('================================================================');
+        getLogger().error('mismatches: ' + JSON.stringify(mismatches));
+        getLogger().error('sources: ' + JSON.stringify(sources));
+        getLogger().error('================================================================');
         // Stop the live apply path; pending cross-source hashes are now moot.
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
@@ -3209,14 +3210,14 @@ class ClientSync {
                 break;
             } catch(e){
                 if(attempt < attempts){
-                    console.error('Recompute verification errored at block %s (attempt %s/%s, retrying):',
-                        (event && event.block_index), attempt, attempts, e);
+                    getLogger().error(util.format('Recompute verification errored at block %s (attempt %s/%s, retrying):',
+                        (event && event.block_index), attempt, attempts, e));
                     await this.util.sleep(1000 * attempt);
                     continue;
                 }
                 if(opts.failClosed) throw e;
-                console.error('Recompute verification errored at block %s (NOT halting on a recompute error):',
-                    (event && event.block_index), e);
+                getLogger().error(util.format('Recompute verification errored at block %s (NOT halting on a recompute error):',
+                    (event && event.block_index), e));
                 return null;
             }
         }
@@ -3399,7 +3400,7 @@ class ClientSync {
         let n = Number(v);
         if(Number.isFinite(n)){
             this._bootstrapBase = n;
-            console.log('Reloaded truncation join floor _bootstrapBase=' + n + ' for ' +
+            getLogger().info('Reloaded truncation join floor _bootstrapBase=' + n + ' for ' +
                 this.chain + '/' + this.network + '/' + this.dbType + ' (survives restart)');
         }
     }
@@ -3421,10 +3422,10 @@ class ClientSync {
                 '/' + this.dbType + '; sync_halt left untouched (it was never successfully read)');
             return wasSynthetic;
         }
-        try { await this.db.clearHalt(this.dbType); } catch(e){ console.error('clearHalt persistence failed:', e); }
+        try { await this.db.clearHalt(this.dbType); } catch(e){ getLogger().error(util.format('clearHalt persistence failed:', e)); }
         const was = this._halted;
         this._halted = null;
-        console.log('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
+        getLogger().info('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
             (was ? ' (was halted at block ' + was.blockIndex + ')' : ''));
         return was;
     }
@@ -3433,7 +3434,7 @@ class ClientSync {
         // Refuse to apply anything once halted on a divergence: never replicate
         // onto a chain we could not agree with the fleet on.
         if(this._halted){
-            console.error('Refusing to apply block ' + (event && event.block_index) +
+            getLogger().error('Refusing to apply block ' + (event && event.block_index) +
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
@@ -3604,7 +3605,7 @@ class ClientSync {
                 await this._verifyCheckpointQuorum();
             }
         } catch(e){
-            console.error('Error applying block %s:', event.block_index, e);
+            getLogger().error(util.format('Error applying block %s:', event.block_index, e));
             // Heal a schema gap but don't re-apply the block inline: the
             // skipped block leaves a gap that the next status event's gap
             // detection closes via incremental catch-up, post-heal.
@@ -3638,7 +3639,7 @@ class ClientSync {
             // Transport fault / 404 is not proof of divergence, so it never halts. But it
             // is no longer SWALLOWED: a source that withholds the anchor must be visible,
             // otherwise a forged tail past the last served checkpoint goes unanchored.
-            console.warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
+            getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
                 this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
             return;
         }
@@ -3654,7 +3655,7 @@ class ClientSync {
         // never a halt: absence is not proof of forgery, matching the freshness guard's
         // documented advisory stance a few lines down.
         if(checkpointVerifier.commitmentMissing(cp)){
-            console.warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
+            getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
                 this.chain + '/' + this.network + ' at block ' + cp.block_index +
                 ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
                 '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
@@ -3668,7 +3669,7 @@ class ClientSync {
         // newer checkpoints). Do not anchor it; surface the rewind.
         if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
                 && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
-            console.warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
+            getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
                 ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
                 '); source may be withholding newer checkpoints, not anchoring');
             return;
@@ -3681,7 +3682,7 @@ class ClientSync {
         // least one checkpoint has been verified (the federation is demonstrably live), so a
         // replica that has never anchored is not halted at startup.
         if(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS']){
-            console.warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
+            getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
                 ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
                 ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
             if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
@@ -3706,7 +3707,7 @@ class ClientSync {
                 let r = await this._followCheckpointForward(cp, seed);
                 if(r.verdict === 'ok'){
                     this._recordVerifiedCheckpointSeq(cp.checkpoint_seq);
-                    console.log('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
+                    getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
                         this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
                     return;
                 }
@@ -3731,7 +3732,7 @@ class ClientSync {
             return;
         }
         this._recordVerifiedCheckpointSeq(cp.checkpoint_seq);
-        console.log('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
+        getLogger().info('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
     }
@@ -3853,7 +3854,7 @@ class ClientSync {
     }
 
     async _handleReorg(event){
-        console.log('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
+        getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
 
         // Ignore a reorg while the replica has NO committed tip. A reorg presupposes
         // blocks to invalidate; a null tip means getLastBlock was null at start and the
@@ -3867,7 +3868,7 @@ class ClientSync {
         // bootstrap, and lastAppliedBlock is never reset to null once set), but guarding
         // here hardens against a future change that opens the WS earlier.
         if(this.lastAppliedBlock === null){
-            console.warn('Ignoring reorg for ' + this.chain + '/' + this.network +
+            getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': no committed tip yet (replica empty); a reorg has nothing to roll back');
             return;
         }
@@ -3885,7 +3886,7 @@ class ClientSync {
         // when we have a tip; a null tip is a distinct early-sync state the rollback path
         // handles on its own.)
         if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
-            console.warn('Ignoring reorg for ' + this.chain + '/' + this.network +
+            getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': target block ' + event.block_index + ' is above the replica tip (' +
                 this.lastAppliedBlock + '); a reorg to an unapplied block is a no-op');
             return;
@@ -3928,8 +3929,8 @@ class ClientSync {
             // fork with halted:false on /status (the decoder track has no recompute net to
             // self-halt). Record a durable halt via the same contract used for consensus
             // divergence and let the operator investigate/clear, rather than wedging silently.
-            console.error('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
-                this.chain, this.network, this.dbType, event.block_index, e);
+            getLogger().error(util.format('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
+                this.chain, this.network, this.dbType, event.block_index, e));
             await this._haltOnDivergence(event.block_index,
                 [{ field: 'reorg_rollback_failed', error: String(e && e.message ? e.message : e) }],
                 this.sources.slice(0, 1), 'reorg-rollback-failed');

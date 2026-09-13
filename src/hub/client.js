@@ -22,6 +22,9 @@
 
 const axios = require('axios');
 const coins = require('../coins');
+const util = require('node:util');
+const { getLogger } = require('../observability');
+const logger = getLogger();
 
 // Local { coin -> consensusHash } per network, computed on first use. The vendored
 // bundle cannot change under a running process, so re-hashing it on every config
@@ -120,7 +123,7 @@ class HubClient {
                 }
             } catch(err){
                 this.lastFailures.push(url + ' → ' + (err.code || err.message));
-                console.warn('Hub endpoint ' + url + ' failed: ', err);
+                logger.warn(util.format('Hub endpoint ' + url + ' failed: ', err));
             }
         }
         return null;
@@ -153,7 +156,7 @@ class HubClient {
         if(!result || typeof result !== 'object' || result.secrets_redacted !== true) return;
         if(this._warnedRedacted) return;
         this._warnedRedacted = true;
-        console.error('Hub served a CREDENTIAL-REDACTED config tree (' + (result.redacted_params || 0) +
+        logger.error('Hub served a CREDENTIAL-REDACTED config tree (' + (result.redacted_params || 0) +
             ' params withheld): this service asked for secrets but is not authorized for them. Set ' +
             'HUB_API_KEY (or the hub\'s HUB_CONFIG_SECRETS_API_KEY) to the value the hub expects; until ' +
             'then every replication source built from this config will fail to authenticate.');
@@ -214,7 +217,7 @@ class HubClient {
         // reset the cursor and re-fetch the full tree once, exactly as the failover
         // block above does.
         if(this.lastWatermark > 0 && this.configs && this._hubConfigRegressed(result)){
-            console.error('HubClient: HUB CONFIG REGRESSION: hub served seq ' + (Number(result.seq) || 0) +
+            logger.error('HubClient: HUB CONFIG REGRESSION: hub served seq ' + (Number(result.seq) || 0) +
                           '/watermark ' + (Number(result.watermark) || 0) + ', below last-seen ' + this.lastSeq +
                           '/' + this.lastWatermark +
                           ' (hub restart or restore from an older snapshot); discarding cached config and re-fetching the full tree.');
@@ -321,7 +324,7 @@ class HubClient {
         if(key === (this._lastConsensusMismatchKey || '')) return;
         this._lastConsensusMismatchKey = key;
         if(mismatches.length)
-            console.error('CONSENSUS HASH MISMATCH: the hub serves consensus config differing from this service\'s bundled coin files (' +
+            logger.error('CONSENSUS HASH MISMATCH: the hub serves consensus config differing from this service\'s bundled coin files (' +
                 mismatches.join('; ') + '). Hub consensus values are never applied (they are pinned locally); upgrade the lagging side.');
     }
 
