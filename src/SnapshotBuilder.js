@@ -1075,15 +1075,23 @@ class SnapshotBuilder {
             return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
         }
 
+        // Read STRICTLY: this dump is authoritative for the whole follower table.
+        // doQuery is fail-soft outside a transaction (a query error becomes []), which
+        // is indistinguishable here from a genuinely empty table, so a transient
+        // source-DB fault would ship a 200 dump of zero rows; the follower's
+        // applyDispensersReplace then runs DELETE with no insert and stamps the
+        // reconcile a success, wiping its table. doQueryStrict throws instead, the
+        // route handler turns it into a 500, and the follower's reconcile catch leaves
+        // the local rows intact.
         let rows;
         if(Number.isFinite(afterTx) && Number.isFinite(afterAddr)){
-            rows = await db.doQuery(
+            rows = await db.doQueryStrict(
                 "SELECT * FROM `dispensers` WHERE (tx_index > ? OR (tx_index = ? AND address_id > ?)) " +
                 "ORDER BY tx_index ASC, address_id ASC",
                 [afterTx, afterTx, afterAddr]
             );
         } else {
-            rows = await db.doQuery(
+            rows = await db.doQueryStrict(
                 "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC"
             );
         }

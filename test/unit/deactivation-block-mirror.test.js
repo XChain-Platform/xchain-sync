@@ -92,12 +92,18 @@ describe('deactivation_block sync-mirror', function(){
             assert.deepStrictEqual(q.args[1], [100, 6]);
         });
 
-        it('delegations reset self-joins on source + signing pubkey', function(){
-            const q = deactivationResets(db).find(c => c.args[0].includes('UPDATE delegations p'));
-            assert.ok(q);
-            assert.ok(q.args[0].includes('JOIN delegations r ON r.source_id = p.source_id'));
-            assert.ok(q.args[0].includes('p.deactivation_block = r.block_index + ?'));
-            assert.deepStrictEqual(q.args[1], [100, 6]);
+        it('delegations reset is the value-threshold form (no child row survives the flag-day) at block+delay', function(){
+            // The DELEGATE revoke stopped writing a child delegations row at the
+            // DELEGATE_REVOKE_NO_REINSERT flag-day, and a ROLLCALL eviction never wrote one, so
+            // the old self-join on that child matched nothing and the surviving parent kept its
+            // stamp. Mirror of the source's threshold reset (xchain-indexer/src/rollback.js).
+            const q = deactivationResets(db).find(c => c.args[0].includes('UPDATE delegations'));
+            assert.ok(q, 'delegations reset present');
+            assert.ok(!q.args[0].includes('JOIN'), 'a self-join on the child revoke row matches nothing post-flag-day');
+            assert.ok(q.args[0].includes('deactivation_block >= ?'));
+            // 106, never 100: a surviving revoke at block b in [94, 100) stamped b + 6, which
+            // lands at or above 100, and a blanket >= block_index sweep would wrongly clear it.
+            assert.deepStrictEqual(q.args[1], [106]);
         });
 
         it('contract_stakes reset joins contract_unstakes on pubkey+contract+tick', function(){

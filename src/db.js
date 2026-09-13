@@ -807,9 +807,15 @@ class Database {
         // (DELETE WHERE block_index >= ?) and the index-map parity checksum
         // (WHERE block_index IS NOT NULL AND block_index <= ?). Without this index,
         // both paths degrade to a full table scan on multi-million-row replicas.
+        // state_tree_roots.block_index: added by xchain-indexer migration
+        // 2026-09-12-state-tree-roots-block-index-idx.sql, for the same reason. The
+        // table's two existing keys both lead with (chain, network), so ClientRollback's
+        // DELETE WHERE block_index >= ? scans the entire root history on a replica, which
+        // holds one row per block for the life of the chain.
         let ensureIndexes = [
-            { table: 'index_tickers',   indexName: 'block_index', columns: '(block_index)' },
-            { table: 'index_addresses', indexName: 'block_index', columns: '(block_index)' }
+            { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)' },
+            { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)' },
+            { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)' }
         ];
         for(let { table, indexName, columns } of ensureIndexes){
             let tableRows = await this.doQuery(

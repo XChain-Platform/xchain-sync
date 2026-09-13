@@ -1040,6 +1040,13 @@ class ServerPoller {
             status.contract_hash = hashRow ? hashRow.contract_hash : null;
         }
         status.subscriber_count = this.broadcaster.getSubscriberCount(this.chain, this.network, this.dbType);
+        // When this measurement was actually taken. Every read above has succeeded by the
+        // time we reach here (a throw skips the updateStatus call entirely), so the stamp
+        // only ever dates a real observation. Without it the cached object is undated and
+        // no reader can tell a status measured a second ago from one measured before the
+        // database went away, which is what let a failed poll keep certifying freshness
+        // indefinitely. BlockBroadcaster.getStatus expires the verdict against it.
+        status.measured_at = Date.now();
         this.broadcaster.updateStatus(this.chain, this.network, status);
     }
 

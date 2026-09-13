@@ -234,7 +234,21 @@ module.exports = {
         // value lets TransparencyLog.pruneSyncMeta drop sync_meta rows older than the
         // window at epoch boundaries, trading old proofs for bounded table growth.
         // Committed Merkle roots (merkle_epochs) are kept either way.
+        //
+        // Applies in BOTH modes. Server mode prunes at epoch boundaries from
+        // TransparencyLog.recordBlock; client mode prunes on the timer below, because a
+        // client builds no transparency log and the source's DELETEs are not carried over
+        // replication. On a client the window also means this replica can no longer serve
+        // inclusion proofs below it, and its sync_meta row count legitimately falls short
+        // of the source's (ClientSync excludes that one table from the count check while
+        // the window is armed).
         config['SYNC_META_RETENTION_BLOCKS'] = parseIntMin0(process.env.SYNC_META_RETENTION_BLOCKS, 0);
+
+        // How often client mode runs that sweep, in ms (default 1 hour). A clock rather
+        // than a per-block hook: bulk snapshot catch-up applies many blocks at once and
+        // would skip epoch-boundary events. No timer at all when the window is 0.
+        config['SYNC_META_RETENTION_INTERVAL_MS'] =
+            parseInt(process.env.SYNC_META_RETENTION_INTERVAL_MS) || (60 * 60 * 1000);
 
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
@@ -471,6 +485,19 @@ module.exports = {
         // lag_blocks 0 on an hours-behind node. Seconds behind the source
         // above this reads stale. Needs the REPLICATION CLIENT grant to be readable.
         config['SYNC_REPLICA_MAX_LAG_S'] = parseIntMin1(process.env.SYNC_REPLICA_MAX_LAG_S, 120);
+
+        // Measurement-freshness window for a cached status object (server mode).
+        // ServerPoller._updateStatus overwrites BlockBroadcaster.statusData only on a
+        // SUCCESSFUL database read and its callers swallow the rejection, so a throw, a
+        // hung query or a stopped poller leaves the last HEALTHY status in the cache and
+        // every reader keeps re-serving it: the 60s status broadcast, the new-subscriber
+        // snapshot, the validator-lag view and REST /status alike. Transport liveness
+        // looks perfect throughout, because the events keep flowing, so the consumer's
+        // own 180s silence timer never fires either. Past this age the measurement is no
+        // longer evidence of anything, so its FRESHNESS verdict expires (the heights are
+        // kept: an operator diagnosing the outage needs them). Default 180s, the same
+        // 3-missed-heartbeat budget CLIENT_SOURCE_STALE_MS uses on the other side.
+        config['SYNC_STATUS_MAX_AGE_MS'] = parseIntMin1(process.env.SYNC_STATUS_MAX_AGE_MS, 180000);
 
         // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
         // exhausts every configured source must NOT fall through to live-follow on an

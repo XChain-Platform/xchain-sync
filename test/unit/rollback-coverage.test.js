@@ -73,11 +73,12 @@ function replicatedTables(dbType){
 // stream:special tables deliberately NOT rolled back row-by-row on reorg, with the reason.
 // Kept in the test (not the registry) because these tables carry a non-'exempt'
 // replicaRollback mode for other paths; the exemption is specifically about the reorg
-// row-delete. dispensers: the decoder live-prunes it (soft-expire) and it converges via the
-// full snapshot only, so deleting its rows on a reorg would corrupt full-snapshot state with
-// no live stream to restore them (ClientRollback.js: decoderTxScopedTables comment).
+// row-delete. dispensers: the decoder live-prunes it (soft-expire), so it seeds from the
+// full snapshot and is held in parity by the periodic apply-side reconcile; deleting its
+// rows on a reorg would corrupt that replicated state with no per-block stream to restore
+// them (ClientRollback.js: decoderTxScopedTables comment; src/replicatedTables.js:47-49).
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
-    dispensers: 'decoder live-prunes; converges via full snapshot, untouched on reorg',
+    dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
 };
 
 // Append-only / id-keyed dedup lookups whose orphan rows are inert (re-sent INSERT
@@ -331,6 +332,46 @@ describe('Rollback coverage guard @regression', function(){
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+    });
+
+    // Cross-repo drift guard for the COINPay match-status re-derive. A COINPay match is
+    // promoted to `valid` IN PLACE by the settling COINPAY, which is a LATER action, so
+    // the reorg delete removes the payment and leaves the promotion on a surviving match
+    // row. Source (xchain-indexer/src/rollback.js) and replica
+    // (xchain-sync/src/ClientRollback.js) must reverse it with the SAME logic, or a reorg
+    // leaves them holding different match statuses and the valid-only price reads
+    // disagree. Both files carry the SQL between //<COINPAY-MATCH-REDERIVE-SQL> markers;
+    // this extracts the backtick literals and asserts whitespace-normalised equality.
+    it('COINPay match-status re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const fs = require('fs');
+        function coinpaySql(path){
+            const src = fs.readFileSync(path, 'utf8');
+            const m = src.match(/\/\/<COINPAY-MATCH-REDERIVE-SQL>([\s\S]*?)\/\/<\/COINPAY-MATCH-REDERIVE-SQL>/);
+            assert.ok(m, `COINPAY-MATCH-REDERIVE-SQL markers not found in ${path}`);
+            const lits = m[1].match(/`[^`]*`/g) || [];
+            assert.strictEqual(lits.length, 2, `expected 2 SQL literals in the marked block of ${path}, got ${lits.length}`);
+            return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
+        }
+        const syncPath = require('path').resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        assert.strictEqual(coinpaySql(syncPath), coinpaySql(indexerPath),
+            'COINPay match re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+    });
+
+    // The replica must actually RUN the re-derive, and must skip it on a truncated
+    // replica: that replica holds only [base..tip] of coinpay_statuses, so "no fulfilled
+    // payment" cannot be told from "the payment predates my floor", and demoting on that
+    // reading would invent a divergence instead of removing one.
+    it('the replica calls the COINPay re-derive, and never on a truncated replica', function(){
+        const fs  = require('fs');
+        const src = fs.readFileSync(require('path').resolve(__dirname, '../../src/ClientRollback.js'), 'utf8');
+        assert.ok(/await rederiveCoinpayMatchStatus\(this\.db\)/.test(src),
+            'ClientRollback defines the re-derive but never calls it');
+        const call = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
+        const guard = src.lastIndexOf('if(!truncatedReplica){', call);
+        assert.ok(guard > -1 && call - guard < 400,
+            'the re-derive call must sit inside a !truncatedReplica guard');
     });
 
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
@@ -698,6 +739,65 @@ describe('Rollback coverage guard @regression', function(){
             for(const op of ANCHOR_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
             }
+        }
+    });
+
+    // Bespoke-logic parity: ATTEST v5 batch-head status restore. Same shape as the archive guard
+    // above, on the batch rail. A v6 continuation that completed the batch stamps its failure
+    // verdict IN PLACE on the surviving v5 head; if that continuation is orphaned, deleting it
+    // cannot undo the stamp, and the head is then missing from its own chunk set. The source and
+    // the replica must both reverse it, or every follower that reorgs across a completing chunk
+    // diverges silently (row counts stay equal, stateHash reads attests at version 0 only, and
+    // attests is excluded from content parity). If you change one side, change the other.
+    it('ATTEST v5 batch-head status restore is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        // Strips quote characters, template-literal splices, the indexer's `abw.` namespace and
+        // every `+` so one regex set matches the indexer's template literal and the replica's
+        // string concatenation.
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\$\{/g, ' ').replace(/\}/g, ' ')
+                           .replace(/\babw\./g, '').replace(/\+/g, ' ').replace(/\s+/g, ' ');
+        const ATTEST_OPS = [
+            { name: 'stamp-only head-status join (a blanket reset would revive a head terminal at write time)',
+              re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status LIKE \?/ },
+            { name: 'orphaned v6 continuation join on the same request',
+              re: /JOIN attests c ON c\.request_id = p\.request_id AND c\.version = ATTEST_BATCH_CONTINUATION_VERSION AND c\.batch_chunk_index IS NOT NULL AND c\.action_index >= \?/ },
+            { name: 'continuation must itself be valid',
+              re: /JOIN index_statuses cs ON cs\.id = c\.status_id AND cs\.status = valid/ },
+            { name: 'publisher scope on actions.source_id (fail-closed on an unresolvable author)',
+              re: /JOIN actions ca ON ca\.action_index = c\.action_index AND ca\.source_id = pa\.source_id/ },
+            { name: 'restore to valid',
+              re: /JOIN index_statuses vs ON vs\.status = valid SET p\.status_id = vs\.id/ },
+            { name: 'head predicate (v5, chunk 0, below the orphaned range)',
+              re: /WHERE p\.version = ATTEST_BATCH_HEAD_VERSION AND p\.batch_chunk_index = 0 AND p\.action_index < \?/ },
+        ];
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            const src = norm(fs.readFileSync(p, 'utf8'));
+            for(const op of ATTEST_OPS){
+                assert.ok(op.re.test(src), `${label} is missing the ATTEST batch-head ${op.name}; source and replica must both reverse the completion stamp on reorg`);
+            }
+        }
+    });
+
+    // Bespoke-logic parity: the delegations deactivation_block reset. The DELEGATE revoke stopped
+    // writing a child delegations row at the DELEGATE_REVOKE_NO_REINSERT flag-day and a ROLLCALL
+    // eviction never wrote one, so a self-join on that child matches nothing and the surviving
+    // parent keeps its stamp. Both sides must carry the value-threshold form, and neither may go
+    // back to the self-join.
+    it('delegations deactivation reset is the threshold form on both sides (bespoke-logic drift guard)', function(){
+        const fs = require('fs'), pathMod = require('path');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const indexerPath = indexerFile('src/rollback.js');
+        if(!requireSibling(this, indexerPath)) return;
+        const norm = s => s.replace(/[`"']/g, ' ').replace(/\+/g, ' ').replace(/\s+/g, ' ');
+        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+            const src = norm(fs.readFileSync(p, 'utf8'));
+            assert.ok(/UPDATE delegations SET deactivation_block = NULL WHERE deactivation_block IS NOT NULL AND deactivation_block >= \?/.test(src),
+                `${label} is missing the delegations threshold reset; a post-flag-day revoke leaves the parent stamped`);
+            assert.ok(!/UPDATE delegations p JOIN delegations r/.test(src),
+                `${label} still self-joins the child revoke row, which no post-flag-day revoke writes`);
         }
     });
 
@@ -1224,5 +1324,60 @@ describe('Rollback coverage guard @regression', function(){
         for(const t of ['recovery_pending_rewards', 'state_tree_roots']){
             assert.ok(OPERATOR_LOCAL_TABLES.has(t), `${t} dropped out of OPERATOR_LOCAL_TABLES`);
         }
+    });
+});
+
+// Drift guard for the one sentence that describes how decoder `dispensers` reaches
+// parity. The pre-reconcile phrasing, naming the full snapshot as the sole channel, outlived
+// the reconcile it predates and was restated across several consumer-side files, so a
+// rollback author reading them learned that the replace-table reconcile does not exist.
+// The authority is src/replicatedTables.js:47-49: parity rests on the apply-side
+// reconcile, ClientApplier.applyDispensersReplace via ClientSync._reconcileDispensers.
+describe('dispensers convergence wording does not drift back', function(){
+    const fs      = require('fs');
+    const pathMod = require('path');
+    // Fixed in-repo list on purpose: no repo walk, nothing outside xchain-sync, and
+    // nothing under any archive/ or reports/ tree (dated records were accurate when
+    // written and stay as written).
+    const SCANNED = [
+        '../../src/ClientRollback.js',
+        '../../src/replicatedTables.js',
+        '../../src/SnapshotBuilder.js',
+        '../../src/tableLifecycle.js',
+        './rollback-coverage.test.js',
+    ];
+    // Deliberately narrow. A bare /full snapshot only/ scan would false-positive on
+    // SnapshotBuilder.js, where unscoped tables legitimately "ride along in the full
+    // snapshot only" and that phrasing is about other tables entirely.
+    const STALE = /converges?\s+(?:via|through)\s+the\s+full\s+snapshot\s+only/i;
+
+    // The sentence that started this drift was wrapped across three comment lines, so a
+    // raw scan could never have matched it (verified: restoring it left the guard green).
+    // Fold each line break plus its leading comment marker into one space first.
+    function flatten(src){
+        return src.replace(/[\r\n]+[ \t]*(?:\/\/+|\*+)?[ \t]*/g, ' ');
+    }
+
+    for(const rel of SCANNED){
+        it(`${rel} does not restate the superseded dispensers convergence channel`, function(){
+            const abs = pathMod.resolve(__dirname, rel);
+            const src = flatten(fs.readFileSync(abs, 'utf8'));
+            assert.strictEqual(STALE.test(src), false,
+                `${rel} restates the superseded dispensers convergence channel. dispensers ` +
+                `SEEDS from the full snapshot and is then held in parity by the periodic ` +
+                `apply-side reconcile; see src/replicatedTables.js:47-49 for the authority.`);
+        });
+    }
+
+    it('the decoderTxScopedTables comment names the reconcile channel', function(){
+        const abs = pathMod.resolve(__dirname, '../../src/ClientRollback.js');
+        const src = fs.readFileSync(abs, 'utf8');
+        const idx = src.indexOf('this.decoderTxScopedTables');
+        assert.ok(idx > 0, 'decoderTxScopedTables assignment not found in ClientRollback.js');
+        // The comment block immediately above the assignment is what a rollback author reads.
+        const block = src.slice(Math.max(0, idx - 1200), idx);
+        assert.ok(/reconcile/i.test(block),
+            'the decoderTxScopedTables comment explains why dispensers is exempt from the ' +
+            'reorg row-delete without naming the reconcile that actually converges it');
     });
 });

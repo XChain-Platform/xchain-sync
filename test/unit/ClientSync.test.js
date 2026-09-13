@@ -790,14 +790,23 @@ describe('ClientSync', function(){
                 return s;
             }
 
-            it('triggers catch-up when the head block is re-delivered with a different hash', async function(){
+            it('rewinds the orphaned head and catches up from the forked height', async function(){
+                // A bare catch-up cannot reach the fork: _runIncrementalCatchUp resolves
+                // `since` from the DB tip, not from the argument, so with the orphan
+                // still committed the client asks the source for /since/101 and either
+                // 404s at the source's own tip or stacks later blocks on the orphan.
+                // The rewind is what moves the tip.
                 let s = decoderSync();
                 sinon.stub(s, '_incrementalCatchUp').resolves();
 
                 await s._handleBlock({ type: 'block', block_index: 100, block_hash: 'FORKED' }, 0);
 
+                assert.strictEqual(s.rollback.rollback.calledOnceWith(100), true,
+                    'the orphaned tip is actually unwound');
+                assert.strictEqual(s.lastAppliedBlock, 99, 'the committed tip moves below the fork');
                 assert.strictEqual(s._incrementalCatchUp.calledOnce, true);
-                assert.strictEqual(s._incrementalCatchUp.firstCall.args[0], 101);
+                assert.strictEqual(s._incrementalCatchUp.firstCall.args[0], 100,
+                    'and the replacement block is re-fetched, not skipped over');
                 // The forked head must NOT be silently applied.
                 assert.strictEqual(applier.applyBlock.called, false);
             });

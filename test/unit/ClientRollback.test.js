@@ -485,6 +485,89 @@ describe('ClientRollback', function(){
             assert.ok(restoreIdx >= 0 && deleteIdx >= 0 && restoreIdx < deleteIdx, 'reconcile restore must precede the validator_rewards delete');
         });
 
+        // RB-ANCHOR-NULL. The reconcile has two callers and only the DOGE ANCHOR handler mints an
+        // actions row; the BTC-side derive (anchor_reward_derive.js) reconciles with a NULL action
+        // index. So an orphaned range whose only reward work was a derive-side reconcile leaves
+        // firstActionIndex null, while the block-scoped deletes below still drop both the log rows
+        // and the replacement winner. Gated on firstActionIndex the restore would be skipped and
+        // the earlier winner deleted for good, forking SUM(validator_rewards) from the source,
+        // which runs this statement outside its own guard (xchain-indexer/src/rollback.js).
+        it('still replays the anchor reconcile-log restore when firstActionIndex is null (RB-ANCHOR-NULL)', async function(){
+            db.getFirstActionIndex.resolves(null);
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let restore = calls.find(c =>
+                c.args[0].includes('INSERT IGNORE INTO validator_rewards') &&
+                c.args[0].includes('anchor_reward_reconcile_log'));
+            assert.ok(restore, 'the RB-ANCHOR restore must run on an action-empty reorg');
+            assert.deepStrictEqual(restore.args[1], [100, 100, 100]);
+            // Still ahead of both deletes that would otherwise destroy the evidence and the reward.
+            let restoreIdx = calls.indexOf(restore);
+            let logDelIdx  = calls.findIndex(c => c.args[0].includes('DELETE FROM `anchor_reward_reconcile_log`'));
+            let rewDelIdx  = calls.findIndex(c => /DELETE FROM validator_rewards WHERE derive_block_index\s*>=\s*\?/.test(c.args[0]));
+            assert.ok(logDelIdx >= 0, 'expected the block-scoped anchor_reward_reconcile_log delete');
+            assert.ok(rewDelIdx >= 0, 'expected the derive-block validator_rewards delete');
+            assert.ok(restoreIdx < logDelIdx, 'restore must precede the pre-image log delete');
+            assert.ok(restoreIdx < rewDelIdx, 'restore must precede the derive-block reward delete');
+            // The restore carries no action_index term, so it does not violate the
+            // action-empty contract the sibling test pins.
+            assert.ok(!restore.args[0].includes('action_index'), 'the restore is keyed purely on block heights');
+        });
+
+        // ATTEST v5 batch head: an orphaned v6 continuation that COMPLETED the batch stamped the
+        // failure verdict in place on the surviving head. Deleting the continuation cannot undo
+        // that, and the head then goes missing from its own chunk set (the reader accepts 'valid'
+        // only), so the window is permanently dead on this replica while the source restores it
+        // (xchain-indexer/src/rollback.js). The forward channel ships the stamp to every follower,
+        // so without this reset every follower that reorgs across a completing chunk diverges.
+        const ATTEST_HEAD_RE = /UPDATE attests p .*batch_chunk_index = 0/;
+
+        it('restores a stamped ATTEST v5 batch head before the action-scoped deletes', async function(){
+            await rollback.rollback(100);
+            let calls = db.doQuery.getCalls();
+            let reset = calls.find(c => ATTEST_HEAD_RE.test(c.args[0]));
+            assert.ok(reset, 'expected the ATTEST batch-head status restore');
+            let sql = reset.args[0];
+            // ONLY a marked stamp is restored: a head terminal AT WRITE TIME (duplicate head,
+            // foreign network, single-chunk quorum failure) must never be revived.
+            assert.ok(/JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status LIKE \?/.test(sql),
+                'head-status join must match the completion stamp, not any non-valid status');
+            assert.strictEqual(reset.args[1][0], '% (stamped on batch completion)');
+            // Same request, a v6 continuation inside the orphaned range, chunk-indexed and valid.
+            assert.ok(/JOIN attests c ON c\.request_id = p\.request_id/.test(sql));
+            assert.ok(sql.includes('c.version = 6'));
+            assert.ok(sql.includes('c.batch_chunk_index IS NOT NULL'));
+            assert.ok(/JOIN index_statuses cs ON cs\.id = c\.status_id AND cs\.status = 'valid'/.test(sql));
+            // Publisher scope on the action source ids (fail-closed on an unresolvable author).
+            assert.ok(/JOIN actions ca ON ca\.action_index = c\.action_index AND ca\.source_id = pa\.source_id/.test(sql));
+            // Restore target is 'valid', the one value the flip could have overwritten.
+            assert.ok(/JOIN index_statuses vs ON vs\.status = 'valid' SET p\.status_id = vs\.id/.test(sql));
+            assert.ok(sql.includes('p.version = 5'));
+            assert.deepStrictEqual(reset.args[1], ['% (stamped on batch completion)', 500, 500]);
+            // Both rows must still exist when it runs.
+            let resetIdx  = calls.indexOf(reset);
+            let deleteIdx = calls.findIndex(c => c.args[0].includes('DELETE FROM `attests` WHERE action_index >= ?'));
+            assert.ok(deleteIdx >= 0, 'expected the action-scoped attests delete');
+            assert.ok(resetIdx < deleteIdx, 'the head restore must precede the delete that removes the continuation');
+        });
+
+        it('skips the ATTEST batch-head restore when firstActionIndex is null (no orphaned continuation)', async function(){
+            db.getFirstActionIndex.resolves(null);
+            await rollback.rollback(100);
+            assert.ok(!db.doQuery.getCalls().some(c => ATTEST_HEAD_RE.test(c.args[0])));
+        });
+
+        it('swallows a schema gap on the ATTEST batch-head restore but aborts on a transient fault', async function(){
+            let gap = new Error('no such column'); gap.errno = 1054;
+            db.doQuery.withArgs(sinon.match(ATTEST_HEAD_RE)).rejects(gap);
+            await rollback.rollback(100); // must not throw on a pre-batch-rail replica schema
+
+            let deadlock = new Error('deadlock'); deadlock.errno = 1213;
+            db.doQuery.withArgs(sinon.match(ATTEST_HEAD_RE)).rejects(deadlock);
+            await assert.rejects(rollback.rollback(100), /deadlock/,
+                'a transient fault must abort the reorg rather than commit a partial rollback');
+        });
+
         // A derived anchor reward is EARNED at the checkpoint's snapshot_block but MATERIALIZED
         // at a later BTC block, so the block_index loop above cannot reach it for a reorg landing
         // between the two heights. The replica must drop exactly what the source drops or the

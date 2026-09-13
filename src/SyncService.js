@@ -99,6 +99,7 @@ class SyncService {
 
         this._scheduleHubRepoll();
         this._startStateTreeMetric();
+        this._startSyncMetaRetention();
 
         // Last statement in start(): everything a /health caller is entitled to
         // assume is running is running by here.
@@ -136,6 +137,7 @@ class SyncService {
         // behind the close below.
         if(this._hubRepollTimer){ clearInterval(this._hubRepollTimer); this._hubRepollTimer = null; }
         if(this._stateTreeMetricTimer){ clearInterval(this._stateTreeMetricTimer); this._stateTreeMetricTimer = null; }
+        if(this._syncMetaRetentionTimer){ clearInterval(this._syncMetaRetentionTimer); this._syncMetaRetentionTimer = null; }
 
         // Pools close LAST: a poller mid-iteration above still needs its connection
         // to finish or roll back the statement it is on.
@@ -468,6 +470,58 @@ class SyncService {
         console.log('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
     }
 
+    // Make SYNC_META_RETENTION_BLOCKS real in CLIENT mode. On the server the window is
+    // driven by TransparencyLog.recordBlock at epoch boundaries; a client never builds a
+    // TransparencyLog at all, only INSERT-IGNOREs sync_meta rows, and the source's own
+    // pruning DELETEs are not carried over replication, so a configured window was inert
+    // and the replica's sync_meta grew forever.
+    //
+    // A periodic timer rather than a per-block hook: bulk snapshot catch-up applies many
+    // blocks at once and would skip epoch-boundary events, whereas pruneSyncMeta recomputes
+    // its own cutoff from the current tip and is an idempotent range delete, so calling it
+    // on a clock is both sufficient and safe. Modelled on _startStateTreeMetric: one unref'd
+    // interval, self-overlap guarded, try/catch per DB, cleared in stop().
+    //
+    // Server mode is deliberately untouched: it already prunes, and a second driver there
+    // would add concurrent DELETE load to a path that works.
+    _startSyncMetaRetention(){
+        if(this._syncMetaRetentionTimer) return;
+        if(this.config['SYNC_MODE'] === 'server') return;
+        const keep = parseInt(this.config['SYNC_META_RETENTION_BLOCKS'], 10);
+        if(!Number.isFinite(keep) || keep <= 0) return;   // default 0: retention is off, no timer
+        // Honours REPLICA_DB_READONLY: pruneSyncMeta short-circuits on it, so a
+        // serve-only deployment still deletes nothing.
+        const readOnly = this.config['REPLICA_DB_READONLY'];
+        const raw = parseInt(this.config['SYNC_META_RETENTION_INTERVAL_MS'] !== undefined
+            ? this.config['SYNC_META_RETENTION_INTERVAL_MS']
+            : process.env.SYNC_META_RETENTION_INTERVAL_MS, 10);
+        const intervalMs = (Number.isFinite(raw) && raw > 0) ? raw : (60 * 60 * 1000);
+
+        this._syncMetaRetentionRunning = false;
+        this._syncMetaRetentionTimer = setInterval(async () => {
+            if(this._syncMetaRetentionRunning) return;
+            this._syncMetaRetentionRunning = true;
+            try {
+                for(const [key, { db, dbType }] of this.databases){
+                    if(dbType !== 'indexer') continue;   // sync_meta lives only in indexer DBs
+                    try {
+                        const log = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], readOnly, keep);
+                        await log.pruneSyncMeta();
+                    } catch(err){
+                        console.warn('SyncService: sync_meta retention failed for ' + key + ':',
+                                     err && err.message ? err.message : err);
+                    }
+                }
+            } finally {
+                this._syncMetaRetentionRunning = false;
+            }
+        }, intervalMs);
+        if(this._syncMetaRetentionTimer.unref) this._syncMetaRetentionTimer.unref();
+        console.log('SyncService: client sync_meta retention started (window ' + keep +
+                    ' blocks, interval ' + intervalMs + 'ms); inclusion proofs below the window ' +
+                    'stop being serveable from this replica');
+    }
+
     getBroadcaster(){
         return this.broadcaster;
     }
@@ -548,7 +602,12 @@ class SyncService {
         if(!entry) return null;
         let poller = this.pollers.get(key);
         if(poller) return poller.transparencyLog;
-        return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE']);
+        // readOnly and the retention window are passed, not dropped. Client mode always
+        // takes this fallback (this.pollers is empty there), so omitting them silently
+        // handed every caller a log that believed it was writable and unwindowed.
+        return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE'],
+                                   this.config['REPLICA_DB_READONLY'],
+                                   this.config['SYNC_META_RETENTION_BLOCKS']);
     }
 }
 

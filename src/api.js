@@ -175,6 +175,52 @@ function applyReplicaFreshness(row, pollerStatus){
     return row;
 }
 
+// One /health databases[] row for a chain, and the verdict it implies.
+//
+// Module-scope and exported for the same reason buildStatusRow is: this is the
+// shape the Docker probe judges the container on, so it has to be checkable
+// without binding a port.
+//
+// The circuit breaker only opens after circuitThreshold (10) consecutive
+// acquisition failures (db.js), so a dead origin DB would otherwise read
+// 'healthy' for up to 10 BLOCK_POLL_INTERVAL cycles while every snapshot request
+// is already 500ing. ServerPoller's pollErrorCount resets to 0 on the next
+// successful poll, so a non-zero count means the poller is currently in a failing
+// streak: the earliest reliable outage signal.
+//
+// A halted CLIENT applies no blocks at all, and neither of those signals can see
+// it: getPoller is server-mode only, so pollErrorCount is a constant 0 on a
+// client, and a durable halt leaves the database perfectly healthy with its
+// circuit closed. So this route, the one ModuleService points the sync
+// container's probe at, answered 200 'healthy' for a replica that had stopped
+// replicating and stayed stopped across reboots. Read the halt through
+// getClientSyncState, the accessor /status already trusts. Degrading on an
+// INTENTIONAL halt is safe too: the sync healthcheck entry carries no autoheal
+// flag, so an unhealthy verdict marks the container and never restarts it out
+// from under the operator investigating the divergence.
+function buildHealthEntry(syncService, mode, db, coin, network, dbType){
+    let poller = syncService.getPoller(coin, network, dbType);
+    let entry = {
+        chain: coin, network: network, dbType: dbType,
+        circuit: (db && db.circuitState) || null,
+        poll_error_count: poller ? poller.pollErrorCount : 0
+    };
+    if(mode !== 'server' && typeof syncService.getClientSyncState === 'function'){
+        let clientState = syncService.getClientSyncState(coin, network, dbType);
+        let halted = !!(clientState && clientState.halted);
+        entry.halted      = halted;
+        entry.halt_reason = (halted && clientState.haltInfo) ? clientState.haltInfo.reason : null;
+        entry.halt_block  = (halted && clientState.haltInfo) ? clientState.haltInfo.blockIndex : null;
+    }
+    return entry;
+}
+
+// Degraded verdict for one /health row. Kept beside the builder so the probe's
+// contract is one readable predicate rather than a condition spread over a loop.
+function healthEntryDegraded(entry){
+    return entry.circuit === 'open' || entry.poll_error_count > 0 || entry.halted === true;
+}
+
 // Build the status row for one (db, dbType, chain, network) tuple.
 //
 // Module-scope (not a closure inside startApi) and exported so the row shape is
@@ -190,12 +236,13 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // lag signal. The WS _updateStatus path (ServerPoller) correctly separates
         // lastPolledBlock from the source tip; REST now matches those semantics.
         let broadcaster = syncService.getBroadcaster();
-        let statusData = broadcaster ? broadcaster.statusData : null;
-        // statusData is keyed by "chain:network:dbType" inside BlockBroadcaster.
+        // Read through getStatus, never statusData directly: it is the one accessor
+        // that expires a measurement's freshness verdict, so a status cached before the
+        // poller stopped measuring cannot certify this row (SYNC_STATUS_MAX_AGE_MS).
         // The status object stored by ServerPoller._updateStatus has block_height
         // (polled position) and source_block_height (DB tip) already separated.
-        let key = chain + ':' + network + ':' + (dbType || 'indexer');
-        let pollerStatus = (statusData && statusData.get) ? statusData.get(key) : null;
+        let pollerStatus = (broadcaster && typeof broadcaster.getStatus === 'function')
+            ? broadcaster.getStatus(chain, network, dbType || 'indexer') : null;
 
         let polledBlock = (pollerStatus && pollerStatus.block_height != null)
             ? pollerStatus.block_height : null;
@@ -495,18 +542,9 @@ async function startApi(){
         for(let { coin, network, dbType } of chains){
             let db = syncService.getDatabase(coin, network, dbType);
             if(!db) continue;
-            let circuit = db.circuitState || null;
-            // The circuit breaker only opens after circuitThreshold (10)
-            // consecutive acquisition failures (db.js), so a dead origin DB would
-            // otherwise read 'healthy' for up to 10 BLOCK_POLL_INTERVAL cycles
-            // while every snapshot request is already 500ing. ServerPoller's
-            // pollErrorCount resets to 0 on the next successful poll, so a
-            // non-zero count means the poller is currently in a failing streak:
-            // the earliest reliable outage signal. Flip to 503 degraded on it.
-            let poller = syncService.getPoller(coin, network, dbType);
-            let pollErrorCount = poller ? poller.pollErrorCount : 0;
-            if(circuit === 'open' || pollErrorCount > 0) degraded = true;
-            databases.push({ chain: coin, network: network, dbType: dbType, circuit: circuit, poll_error_count: pollErrorCount });
+            let entry = buildHealthEntry(syncService, cfg['SYNC_MODE'], db, coin, network, dbType);
+            if(healthEntryDegraded(entry)) degraded = true;
+            databases.push(entry);
         }
         if(degraded) res.status(503);
         res.json({
@@ -1228,4 +1266,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, buildStatusRow, startApi };
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness,
+                   buildHealthEntry, healthEntryDegraded, buildStatusRow, startApi };

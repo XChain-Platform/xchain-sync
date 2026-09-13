@@ -28,6 +28,11 @@ const replicatedTables = require('./replicatedTables');
 const { activationDelayBlocks, gasTickSymbol } = require('./consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('./stateHash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('./archive_rollback_author_scope_activation');
+// ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
+// updatedRows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
+// updatedRows.js requires only stateHash.js, so this introduces no cycle.
+const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
+        ATTEST_BATCH_COMPLETION_STAMP } = require('./updatedRows');
 
 // What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
 // rather than a token: the coin has no index_tickers row, and NULL is distinct inside
@@ -112,9 +117,12 @@ class ClientRollback {
         // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
         // Also topology-derived. dispensers is absent from the topology's txScoped by
         // design: it is not per-block replicated (the decoder live-prunes it, which
-        // the block stream can't model (see replicatedTables.js)); it converges via
-        // the full snapshot only. Deleting its rows on a reorg would corrupt that
-        // full-snapshot state with no live stream to restore them, so a reorg leaves
+        // the block stream can't model (see replicatedTables.js)); it SEEDS from the
+        // full snapshot and is then held in parity by the periodic apply-side reconcile
+        // (ClientSync._reconcileDispensers -> ClientApplier.applyDispensersReplace),
+        // which replicatedTables.js:47-49 names as the whole of its parity story.
+        // Deleting its rows on a reorg would corrupt that replicated state with no
+        // per-block stream to restore them before the next reconcile, so a reorg leaves
         // dispensers untouched.
         this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
     }
@@ -477,45 +485,12 @@ class ClientRollback {
                     }
                 }
 
-                // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
-                // xchain-indexer/src/rollback.js. An orphaned anchor reconcile DELETEd loser
-                // validator_rewards rows from earlier SURVIVING blocks (block_index =
-                // SNAPSHOT_BLOCK) and pre-imaged them in the replicated anchor_reward_reconcile_log
-                // keyed to the reconcile's (ANCHOR) block. The generic block delete below drops the
-                // log rows but never re-creates the losers, so re-INSERT those whose original
-                // earn-block (reward_block_index) survives the reorg (< block_index). amount is the
-                // frozen consensus reward constant per round, so INSERT IGNORE is value-stable and
-                // idempotent whether or not the source's forward DELETE reached this replica. Runs
-                // BEFORE the generic delete so the log rows still exist. A loser whose
-                // MATERIALIZATION block (reward_derive_block_index) is itself inside the
-                // orphaned range is NOT restored: its earn-block survives, but a replay to
-                // reorg_block-1 never derived it, so restoring it would mint an orphan.
-                // round_qualifier rides the pre-image like every other key column (the twin
-                // at xchain-indexer/src/rollback.js carries it in both the column list and the
-                // projection): it is part of the reward's UNIQUE identity, snapshot_block for
-                // the archive leg whose round_reference is a reissuable hub counter. Dropped,
-                // the restore re-INSERTs the loser under the schema default 0, a DIFFERENT row
-                // from the one the reconcile deleted, which either collides with whatever
-                // legacy row already holds that key and is swallowed by INSERT IGNORE, or
-                // lands as a wrong-identity duplicate. Either way the real loser stays
-                // unrestored and the replica forks SUM(validator_rewards) from the source.
-                try {
-                    await this.db.doQuery(
-                        "INSERT IGNORE INTO validator_rewards " +
-                        "(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index) " +
-                        "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
-                        "       d.round_qualifier, " +
-                        "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
-                        "  FROM anchor_reward_reconcile_log d " +
-                        " WHERE d.block_index >= ? AND d.reward_block_index < ? " +
-                        "   AND (d.reward_derive_block_index IS NULL OR d.reward_derive_block_index < ?)",
-                        [block_index, block_index, block_index]
-                    );
-                } catch(e){
-                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
-                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
-                }
+                // The anchor_reward_reconcile_log restore (RB-ANCHOR) was here; it now runs
+                // UNCONDITIONALLY just past this guard's close, mirroring the source twin's
+                // RB-ANCHOR-NULL placement. The BTC-side derive (anchor_reward_derive.js)
+                // performs the reconcile with a NULL anchor action index, so an orphaned range
+                // whose only reward work was a derive-side reconcile leaves firstActionIndex
+                // null and would skip the restore while the deletes below still ran.
 
                 // deactivation_block re-NULL, mirror of xchain-indexer/src/rollback.js.
                 // Orphaned UNSTAKE / DELEGATE-revoke actions stamped deactivation_block =
@@ -557,19 +532,25 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // delegations ← orphaned DELEGATE-revoke rows (a revoke is itself a
-                // delegations row; the parent it stamped is an earlier delegations row for
-                // the same source + signing pubkey (self-join).
+                // delegations ← orphaned DELEGATE-revoke and ROLLCALL-eviction stamps, mirror of
+                // xchain-indexer/src/rollback.js. The revoke stopped writing a child delegations
+                // row at the DELEGATE_REVOKE_NO_REINSERT flag-day (actions/delegate.js), and a
+                // ROLLCALL eviction never wrote one, so the old self-join on that child matched
+                // nothing and the surviving parent kept its stamp. Key on the value threshold
+                // instead, exactly as contract_delegations does below.
+                // INVARIANT: every writer of delegations.deactivation_block stamps
+                // actionBlock + ACTIVATION_DELAY_BLOCKS (setDelegationDeactivation from
+                // actions/delegate.js, setAllDelegationDeactivationsBySource from
+                // rollcall_close.js), so a SURVIVING stamper wrote a strictly smaller value and
+                // cannot be caught by this threshold. A new writer using a different offset MUST
+                // update this query and its source twin.
                 try {
                     await this.db.doQuery(
-                        "UPDATE delegations p " +
-                        "JOIN delegations r ON r.source_id = p.source_id " +
-                        "  AND r.signing_pubkey_id = p.signing_pubkey_id " +
-                        "SET p.deactivation_block = NULL " +
-                        "WHERE r.block_index >= ? " +
-                        "  AND p.deactivation_block IS NOT NULL " +
-                        "  AND p.deactivation_block = r.block_index + ?",
-                        [block_index, activationDelay]
+                        "UPDATE delegations " +
+                        "SET deactivation_block = NULL " +
+                        "WHERE deactivation_block IS NOT NULL " +
+                        "  AND deactivation_block >= ?",
+                        [Number(block_index) + activationDelay]
                     );
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
@@ -620,6 +601,57 @@ class ClientRollback {
                 // no actions row in the maturity block, so an orphaned range with no other actions
                 // leaves firstActionIndex null and would skip it, diverging the replica from the
                 // (now-fixed) source.
+            }
+
+            // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
+            // xchain-indexer/src/rollback.js. An orphaned anchor reconcile DELETEd loser
+            // validator_rewards rows from earlier SURVIVING blocks (block_index =
+            // SNAPSHOT_BLOCK) and pre-imaged them in the replicated anchor_reward_reconcile_log
+            // keyed to the reconcile's (ANCHOR) block. The generic block delete below drops the
+            // log rows but never re-creates the losers, so re-INSERT those whose original
+            // earn-block (reward_block_index) survives the reorg (< block_index). amount is the
+            // frozen consensus reward constant per round, so INSERT IGNORE is value-stable and
+            // idempotent whether or not the source's forward DELETE reached this replica. Runs
+            // BEFORE the generic delete so the log rows still exist. A loser whose
+            // MATERIALIZATION block (reward_derive_block_index) is itself inside the
+            // orphaned range is NOT restored: its earn-block survives, but a replay to
+            // reorg_block-1 never derived it, so restoring it would mint an orphan.
+            // round_qualifier rides the pre-image like every other key column (the twin
+            // at xchain-indexer/src/rollback.js carries it in both the column list and the
+            // projection): it is part of the reward's UNIQUE identity, snapshot_block for
+            // the archive leg whose round_reference is a reissuable hub counter. Dropped,
+            // the restore re-INSERTs the loser under the schema default 0, a DIFFERENT row
+            // from the one the reconcile deleted, which either collides with whatever
+            // legacy row already holds that key and is swallowed by INSERT IGNORE, or
+            // lands as a wrong-identity duplicate. Either way the real loser stays
+            // unrestored and the replica forks SUM(validator_rewards) from the source.
+            //
+            // Runs UNCONDITIONALLY, OUTSIDE the firstActionIndex guard above (RB-ANCHOR-NULL),
+            // exactly as the source twin does. The reconcile has two callers and only the DOGE
+            // ANCHOR handler mints an actions row; the BTC-side derive (anchor_reward_derive.js)
+            // passes a NULL action index because the attested rows arrive over the mirror. So a
+            // BTC reorg over a range whose only reward work was a derive-side reconcile leaves
+            // firstActionIndex null, while the generic blockTables loop below still drops
+            // anchor_reward_reconcile_log and the derive_block_index delete below still drops
+            // the replacement winner: gated, the earlier winner would be deleted and never
+            // restored. Keyed entirely on block heights (no action-index term) and a no-op when
+            // the log holds nothing in range, so the unconditional path costs one query.
+            try {
+                await this.db.doQuery(
+                    "INSERT IGNORE INTO validator_rewards " +
+                    "(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index) " +
+                    "SELECT d.source_id, d.signing_pubkey_id, d.reward_type, d.round_reference, " +
+                    "       d.round_qualifier, " +
+                    "       d.amount, d.reward_block_index, d.reward_derive_block_index " +
+                    "  FROM anchor_reward_reconcile_log d " +
+                    " WHERE d.block_index >= ? AND d.reward_block_index < ? " +
+                    "   AND (d.reward_derive_block_index IS NULL OR d.reward_derive_block_index < ?)",
+                    [block_index, block_index, block_index]
+                );
+            } catch(e){
+                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
             // Reverse orphaned cooldown-maturity completions, mirror of
@@ -706,6 +738,62 @@ class ClientRollback {
                 }
             }
 
+            // Restore an ATTEST v5 batch head that an orphaned v6 continuation flipped IN
+            // PLACE on a surviving row, mirror of xchain-indexer/src/rollback.js. The exact
+            // shape of the archive reset above, on the batch rail, for the same reason: the
+            // completing chunk reassembles the window and, on a body or quorum failure, stamps
+            // the verdict on the head (a row created in an earlier, surviving block). Deleting
+            // the orphaned chunk cannot undo that stamp, and the damage is worse than a stale
+            // verdict: the batch-chunk reader accepts status 'valid' only, so the head goes
+            // missing from its OWN chunk set, a re-mined continuation rejoins a headless batch,
+            // and the window is permanently dead on this replica. The forward channel
+            // (updatedRows.js class 5b) actively ships the stamp to every follower, so without
+            // this reset every follower that reorgs across a completing chunk diverges.
+            //
+            // ONLY A MARKED STAMP IS RESTORED, and that is the whole safety argument. A blanket
+            // "reset every non-valid head joined to an orphaned chunk" is UNSAFE: a head can be
+            // terminal because it was terminal AT WRITE TIME (a duplicate head for the
+            // publisher's own window, a foreign network, a single-chunk head that failed its own
+            // quorum), and restoring one revives a head that was never valid, giving two live
+            // heads for one window. Match on ATTEST_BATCH_COMPLETION_STAMP only. 'valid' is then
+            // not a guess either: a head reaches the stamp only by coming back from a
+            // status='valid' chunk read, so 'valid' is the one value the flip could have
+            // overwritten.
+            //
+            // Publisher scope is UNCONDITIONAL with no flag day, unlike the archive twin above:
+            // batch identity has been (key, author) since the rail shipped, so this scope has
+            // never been wider than the live path's. Scoped on actions.source_id rather than the
+            // resolved address (both rows are local, the ids are exact, and the address column
+            // is a case-folding collation); an unresolvable author on either side is a NULL that
+            // no equality matches, so it authenticates nothing rather than everything.
+            //
+            // Runs BEFORE the dataTables delete, while both rows are still present. The three
+            // version/stamp constants are imported from updatedRows.js so the forward carry and
+            // this reverse reset cannot drift apart; the twin to change in lockstep is
+            // xchain-indexer/src/rollback.js.
+            if(firstActionIndex !== null){
+                try {
+                    await this.db.doQuery(
+                        "UPDATE attests p " +
+                        "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status LIKE ? " +
+                        "JOIN actions pa ON pa.action_index = p.action_index " +
+                        "JOIN attests c ON c.request_id = p.request_id " +
+                        "  AND c.version = " + ATTEST_BATCH_CONTINUATION_VERSION + " " +
+                        "  AND c.batch_chunk_index IS NOT NULL AND c.action_index >= ? " +
+                        "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                        "JOIN actions ca ON ca.action_index = c.action_index AND ca.source_id = pa.source_id " +
+                        "JOIN index_statuses vs ON vs.status = 'valid' " +
+                        "SET p.status_id = vs.id " +
+                        "WHERE p.version = " + ATTEST_BATCH_HEAD_VERSION + " AND p.batch_chunk_index = 0 " +
+                        "  AND p.action_index < ?",
+                        ['%' + ATTEST_BATCH_COMPLETION_STAMP, firstActionIndex, firstActionIndex]);
+                } catch(e){
+                    // Schema-gap errors (missing table/column on older replicas) are safe to skip.
+                    // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+            }
+
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
                     try {
@@ -742,6 +830,18 @@ class ClientRollback {
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+
+                // Reverse an orphaned COINPAY's in-place match promotion, mirroring the
+                // source (xchain-indexer/src/rollback.js). Skipped on a truncated replica
+                // for the same reason the pair-scoped market sweep is: the payment history
+                // this derives from may sit below the local floor.
+                if(!truncatedReplica){
+                    try {
+                        await rederiveCoinpayMatchStatus(this.db);
+                    } catch(e){
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    }
                 }
             }
 
@@ -1181,5 +1281,44 @@ async function rederiveEscrowGate(db){
     }
 }
 
+// Re-derive order_matches.status for COINPay matches from the already-replicated
+// coinpay_statuses rows. Replica mirror of the re-derive in
+// xchain-indexer/src/rollback.js: a COINPay match is written `pending_coinpay` and
+// promoted IN PLACE to `valid` by the settling COINPAY, which is a LATER action, so the
+// reorg delete removes the payment and leaves the promotion standing on a surviving
+// match row. Without this the replica keeps a `valid` match a from-genesis replay reads
+// as `pending_coinpay`.
+//
+// Settlement proof is a `fulfilled` coinpay_statuses row for the obligation, whose
+// coinpay_action_index IS the match's action_index. Both statements touch only rows whose
+// status disagrees and no-op when the target status has never been minted locally, so
+// neither can blank a status_id. The SQL between the //<COINPAY-MATCH-REDERIVE-SQL>
+// markers is kept logically identical with xchain-indexer/src/rollback.js (cross-repo
+// drift guard in test/unit/rollback-coverage.test.js). Uses db.doQuery so it joins
+// whatever transaction the caller already opened.
+//
+// Skipped on a truncated replica: it holds only [base..tip] of coinpay_statuses, so
+// "no fulfilled status" there cannot be told from "the payment predates my floor", and
+// demoting on that reading would invent a divergence rather than remove one.
+async function rederiveCoinpayMatchStatus(db){
+    //<COINPAY-MATCH-REDERIVE-SQL>
+    const coinpayMatchDemoteSql =
+        `UPDATE order_matches SET status_id=(SELECT id FROM index_statuses WHERE status='pending_coinpay' LIMIT 1)
+         WHERE settlement_type='coinpay'
+           AND (SELECT id FROM index_statuses WHERE status='pending_coinpay' LIMIT 1) IS NOT NULL
+           AND status_id=(SELECT id FROM index_statuses WHERE status='valid' LIMIT 1)
+           AND action_index NOT IN (SELECT cs.coinpay_action_index FROM coinpay_statuses cs INNER JOIN index_statuses si ON si.id=cs.status_id WHERE si.status='fulfilled' AND cs.coinpay_action_index IS NOT NULL)`;
+    const coinpayMatchPromoteSql =
+        `UPDATE order_matches SET status_id=(SELECT id FROM index_statuses WHERE status='valid' LIMIT 1)
+         WHERE settlement_type='coinpay'
+           AND (SELECT id FROM index_statuses WHERE status='valid' LIMIT 1) IS NOT NULL
+           AND status_id=(SELECT id FROM index_statuses WHERE status='pending_coinpay' LIMIT 1)
+           AND action_index IN (SELECT cs.coinpay_action_index FROM coinpay_statuses cs INNER JOIN index_statuses si ON si.id=cs.status_id WHERE si.status='fulfilled' AND cs.coinpay_action_index IS NOT NULL)`;
+    //</COINPAY-MATCH-REDERIVE-SQL>
+    await db.doQuery(coinpayMatchDemoteSql, []);
+    await db.doQuery(coinpayMatchPromoteSql, []);
+}
+
 module.exports = ClientRollback;
 module.exports.rederiveEscrowGate = rederiveEscrowGate;
+module.exports.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;

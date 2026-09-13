@@ -2167,6 +2167,59 @@ describe('ClientSync: small branches', function(){
             assert.ok(sync._haltOnDivergence.calledOnce);
             assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
         });
+
+        // A post-commit verification ERROR must not launder the commitment gate.
+        // applyBlock commits before the gates run, so a throw from the state-hash read
+        // leaves the block committed with lastAppliedBlock unadvanced. The redelivery
+        // gap detection then triggers takes applyBlock's duplicate early return, which
+        // clears _lastComputedRoots, and the commitment comparison is gated on those
+        // roots: without the carried stash the retry advances the tip with divergent
+        // roots never compared. Database presence is not proof of verification.
+        it('a state-hash read failure then redelivery still compares the commitment roots', async function(){
+            let { sync, applier } = makeCommitSync();
+            sync.config['VERIFY_STATE_HASH'] = true;
+            let readStub = sinon.stub(sync.blockHasher, 'computeStateHash')
+                .rejects(new Error('replica read failed'));
+
+            // DIVERGENT balances_root: the comparison, once it runs, must halt.
+            let event = { type: 'block', block_index: 101, state_hash: 'sh'.repeat(32),
+                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) };
+
+            await sync._applyBlockEvent(event);
+            assert.strictEqual(sync._haltOnDivergence.called, false,
+                'the swallowed read error itself does not halt');
+            assert.strictEqual(sync.lastAppliedBlock, 100, 'and does not advance the tip');
+
+            // The redelivery: applyBlock early-returns on the duplicate, leaving null roots.
+            applier._lastComputedRoots = null;
+            readStub.resolves(event.state_hash);   // the transient read has recovered
+
+            await sync._applyBlockEvent(event);
+
+            assert.ok(sync._haltOnDivergence.calledOnce,
+                'the retry must run the commitment comparison it skipped the first time');
+            assert.strictEqual(sync._haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+            assert.strictEqual(sync.lastAppliedBlock, 100,
+                'an unverified block must never advance the tip');
+        });
+
+        it('clears the carried roots once every gate passes, so a later duplicate stays a skip', async function(){
+            // Negative control for the test above: the stash must not outlive a clean
+            // apply, or an honest duplicate of an already-verified block would be
+            // re-compared against roots the gate has no business re-checking.
+            let { sync, applier } = makeCommitSync();
+
+            await sync._applyBlockEvent({ type: 'block', block_index: 101,
+                balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
+            assert.strictEqual(sync.lastAppliedBlock, 101, 'the clean block applied');
+            assert.strictEqual(sync._unverifiedRoots, null, 'the stash is cleared once verified');
+
+            applier._lastComputedRoots = null;
+            await sync._applyBlockEvent({ type: 'block', block_index: 101,
+                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
+            assert.strictEqual(sync._haltOnDivergence.called, false,
+                'a duplicate of an already-verified block is still a skip, not a divergence');
+        });
     });
 
     it('_applyBlockEvent sets lastHashes to {block_hash} for decoder dbType', async function(){

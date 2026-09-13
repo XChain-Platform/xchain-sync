@@ -59,6 +59,20 @@ const OPERATIONAL_LOG_TABLES = new Set(['events']);
 // unrecoverable case (_handleWsChainError) and escalate it to the same exit.
 class BootstrapExhaustedError extends Error {}
 
+// Is the decoder `dispensers` table due a wall-clock reconcile? The one term of the
+// reconcile decision that carries no cycle-counter side effect, so the recurring status
+// tick can sample it without corrupting the every-Nth catch-up cadence. Due only once
+// some reconcile has stamped a time: a replica that has never converged dispensers is the
+// firstResume case, owned by the catch-up path, and firing that from a tick would retry a
+// failing re-dump on every tick instead of once per interval.
+function dispenserIntervalDue(config, lastReconcileAt, nowMs){
+    let maxIntervalMs = parseInt(config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'], 10);
+    if(isNaN(maxIntervalMs) || maxIntervalMs < 0) maxIntervalMs = 1800000;
+    if(maxIntervalMs === 0) return false;            // explicitly disabled
+    if(lastReconcileAt == null) return false;
+    return (nowMs - lastReconcileAt) >= maxIntervalMs;
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -289,6 +303,11 @@ class ClientSync {
         // and PATCH train). A resolution fault is not cached so a manifest that becomes
         // readable later is picked up on the next apply.
         this._trainActivationRequired = undefined;
+
+        // SMT roots computed for a block that is COMMITTED but not yet past the
+        // post-commit verification gates, carried so a retry of that height still runs
+        // the commitment comparison (see _applyBlockEvent). null = nothing outstanding.
+        this._unverifiedRoots = null; // { blockIndex, roots }
 
         // Throttle stamp for the periodic replica-completeness sweep against the
         // primary source (see _maybeVerifyCompleteness). 0 = never swept, so the
@@ -548,6 +567,42 @@ class ClientSync {
                 blockIndex: -1, reason: 'halt-state-check-failed',
                 mismatches: [], sources: [], at: null
             };
+            // Keep replication blocked, but RE-READ the authoritative halt table each
+            // idle tick instead of idling forever on the one failed read. The original
+            // loop never retried, so a transient MariaDB blip left the replica idle for
+            // good after the database recovered: the process is still running, so
+            // `restart: unless-stopped` never restarts it and nothing else re-reads
+            // sync_halt. The safety invariant is unchanged, because only a POSITIVE read
+            // leaves this state: a definitive null resumes, a returned row installs the
+            // real durable halt, and a throw keeps the synthetic halt and idles on with a
+            // backoff so a sick database is not hammered.
+            let haltRetryDelay = 5000;
+            while(this.running && this._halted && this._halted.reason === 'halt-state-check-failed'){
+                await this.util.sleep(haltRetryDelay);
+                if(!(this.running && this._halted && this._halted.reason === 'halt-state-check-failed')) break;
+                try {
+                    let prior = await this.db.getActiveHalt(this.dbType);
+                    if(!prior){
+                        console.log('halt-state check recovered for ' + this.chain + '/' + this.network +
+                            '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
+                        this._halted = null;
+                        break;
+                    }
+                    this._halted = {
+                        blockIndex: Number(prior.block_index), reason: prior.reason,
+                        mismatches: this._safeParse(prior.mismatches), sources: this._safeParse(prior.sources),
+                        at: prior.detected_at
+                    };
+                    console.error('halt-state check recovered for ' + this.chain + '/' + this.network +
+                        '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
+                        prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+                    break;
+                } catch(e2){
+                    haltRetryDelay = Math.min(haltRetryDelay * 2, 60000);
+                }
+            }
+            // A real durable halt installed above idles here exactly as the prior-halt
+            // branch does; a cleared or never-existent halt falls straight through.
             while(this.running && this._halted){ await this.util.sleep(5000); }
             if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
             return;
@@ -2085,6 +2140,18 @@ class ClientSync {
     // #5610); it is advisory and never halts.
     // Best-effort: a table that can't be counted locally (absent in this replica's
     // schema) is reported as a full shortfall rather than silently skipped.
+    // True when this client prunes its own sync_meta, i.e. SYNC_META_RETENTION_BLOCKS is
+    // a positive window and the DB is writable. Mirrors the conditions
+    // SyncService._startSyncMetaRetention starts its timer under, so the count check and
+    // the sweep cannot disagree about whether local pruning is happening.
+    _syncMetaWindowArmed(){
+        if(!this.config) return false;
+        if(this.config['SYNC_MODE'] === 'server') return false;
+        if(this.config['REPLICA_DB_READONLY']) return false;
+        const keep = parseInt(this.config['SYNC_META_RETENTION_BLOCKS'], 10);
+        return Number.isFinite(keep) && keep > 0;
+    }
+
     async _verifyTableCounts(remoteCounts, excludeTables, opts){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
@@ -2116,6 +2183,14 @@ class ClientSync {
             // index_transactions rows, blocks 961908-963876). Excluding them to quiet
             // this signal would delete the only detector for that class of defect.
             if(OPERATIONAL_LOG_TABLES.has(table)) continue;
+            // Exclude sync_meta too, and ONLY while this client's own retention window
+            // is armed. SyncService._startSyncMetaRetention then deletes rows below the
+            // window locally while the source keeps them, so the shortfall is the window
+            // working rather than a replication hole, and reporting it every pass would
+            // bury the real signal exactly as an unfiltered events delta does. With
+            // the window at its default 0 nothing is pruned and sync_meta stays
+            // strictly compared, so this exclusion cannot quietly widen.
+            if(table === 'sync_meta' && this._syncMetaWindowArmed()) continue;
             // table names here come straight from the remote source's /status
             // payload: validate before they reach getTableCount's identifier
             // interpolation, mirroring the schema-application loop above. Skip
@@ -2451,20 +2526,31 @@ class ClientSync {
     //       default 20), since dispensers cannot ride the block stream;
     //   (c) intervalDue  - the last reconcile is older than DISPENSERS_RECONCILE_MAX_INTERVAL_MS
     //       (default 30 min; 0 disables), so a slow/stalled catch-up cadence cannot let
-    //       dispensers drift unbounded in wall-clock time.
+    //       dispensers drift unbounded in wall-clock time. Sampled from the recurring
+    //       status tick as well as from this catch-up path (see
+    //       _dispenserReconcileIntervalDue and its caller in _handleEvent), because a
+    //       healthy live-following replica never enters a catch-up at all, which is
+    //       precisely the cadence this clause claims to bound.
     // `_lastDispenserReconcileAt` is stamped by _reconcileDispensers on success (covering
     // the bootstrap reconcile too), so firstResume is false once any reconcile has run.
     _shouldReconcileDispensers(nowMs){
         this._catchUpCount = (this._catchUpCount || 0) + 1;
         let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
         if(isNaN(every) || every < 1) every = 20;
-        let maxIntervalMs = parseInt(this.config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'], 10);
-        if(isNaN(maxIntervalMs) || maxIntervalMs < 0) maxIntervalMs = 1800000;
         let firstResume = (this._lastDispenserReconcileAt == null);
         let periodic    = (this._catchUpCount % every === 0);
-        let intervalDue = (maxIntervalMs > 0 && this._lastDispenserReconcileAt != null &&
-                           (nowMs - this._lastDispenserReconcileAt) >= maxIntervalMs);
-        return firstResume || periodic || intervalDue;
+        // Free function, not this._dispenserReconcileIntervalDue: this method is exercised
+        // through prototype.call with hand-built contexts, which carry config and the stamp
+        // and nothing else.
+        return firstResume || periodic ||
+               dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
+    }
+
+    // Wall-clock term of the reconcile decision, WITHOUT _shouldReconcileDispensers'
+    // cycle-counter side effect, so a recurring caller can sample the same bound without
+    // corrupting the every-Nth catch-up cadence.
+    _dispenserReconcileIntervalDue(nowMs){
+        return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
     }
 
     async _reconcileDispensers(source){
@@ -2658,11 +2744,48 @@ class ClientSync {
                 this._logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
                 await this._incrementalCatchUp(this.lastAppliedBlock + 1);
             }
+            // Wall-clock dispensers reconcile. DISPENSERS_RECONCILE_MAX_INTERVAL_MS was
+            // sampled only from inside _incrementalCatchUp, every caller of which is an
+            // exceptional path (resume, block gap, empty-replica refusal, head fork), so
+            // a decoder replica that bootstraps and then follows cleanly never evaluated
+            // it: the one cadence the bound claims to protect against (no catch-ups at
+            // all) was the one it could not reach, and the replica went on serving rows
+            // the source soft-expired or hard-purged for the life of the process. Row
+            // counts cannot substitute (replicatedTables.js: a soft-expire leaves counts
+            // equal, a hard-purge leaves the replica ahead, reported for indexer only).
+            // Deliberately NOT folded into _maybeVerifyCompleteness: that sweep returns
+            // early when COMPLETENESS_CHECK_INTERVAL is falsy and when the heights differ,
+            // and carries its own throttle, none of which this bound may inherit. Uses the
+            // side-effect-free predicate so the every-Nth catch-up counter is untouched.
+            if(this.dbType === 'decoder' && !this._halted && this.lastAppliedBlock !== null &&
+               !this._dispenserReconcileInFlight && this._dispenserReconcileIntervalDue(Date.now())){
+                this._dispenserReconcileInFlight = true;
+                try { await this._reconcileDispensers(this.sources[sourceIndex]); }
+                finally { this._dispenserReconcileInFlight = false; }
+            }
             // Periodic replica-completeness sweep (throttled, equal-heights only). The
             // status tick is the one recurring signal a live client gets from its own
             // primary source, which is exactly the source the sweep could not reach.
             await this._maybeVerifyCompleteness(this.sources[sourceIndex], event.block_height);
         }
+    }
+
+    // Unwind the orphaned tip a head-fork detector just found, then re-fetch it.
+    //
+    // A bare _incrementalCatchUp(tip + 1) on either fork branch cannot reach the fork:
+    // the sinceBlock argument is inert because _runIncrementalCatchUp re-reads the DB
+    // tip itself and resolves since = dbTip + 1. With the orphan still committed that
+    // asks the source for /since/<orphan + 1>, which either 404s at the source's own
+    // tip or streams later blocks on top of the orphaned row, leaving the decoder
+    // silently diverged and the indexer wedged on the orphaned predecessor.
+    // Route the rewind through _handleReorg, the one proven unwind path (depth guard,
+    // lastAppliedBlock/lastHashes kept in step, durable fail-closed halt when the
+    // rollback itself fails), so the DB tip actually moves and the follow-up catch-up
+    // resolves since = <forked height>. _incrementalCatchUp refuses while _halted, so a
+    // rollback that failed closed can never be followed by an advance.
+    async _rewindForkedHead(blockIndex){
+        await this._handleReorg({ block_index: blockIndex });
+        await this._incrementalCatchUp(this.lastAppliedBlock + 1);
     }
 
     async _handleBlock(event, sourceIndex){
@@ -2702,8 +2825,8 @@ class ClientSync {
                event.block_hash && event.block_hash !== this.lastHashes.block_hash){
                 console.error('Chain continuity error (decoder): fork at head block ' + blockIndex +
                     '; stored block_hash ' + this.lastHashes.block_hash +
-                    ' != incoming ' + event.block_hash + '; triggering catch-up');
-                await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+                    ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
+                await this._rewindForkedHead(blockIndex);
             } else if(this.dbType === 'indexer' &&
                blockIndex === this.lastAppliedBlock &&
                this.lastHashes){
@@ -2726,8 +2849,8 @@ class ClientSync {
                     (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
                 if(mismatch){
                     console.error('Chain continuity error (indexer): fork at head block ' + blockIndex +
-                        '; stored ledger/actions/contract hash != incoming; triggering catch-up');
-                    await this._incrementalCatchUp(this.lastAppliedBlock + 1);
+                        '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
+                    await this._rewindForkedHead(blockIndex);
                 }
             }
             return;
@@ -2991,6 +3114,12 @@ class ClientSync {
             console.error('disconnect), so the replica cannot prove its state. HALTING (applying');
             console.error('no further blocks). Operator must fix the local fault (DB, schema) and');
             console.error('clear before this validator can resume.');
+        } else if(this._halted.reason === 'boundary-read-error'){
+            console.error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
+            console.error('retries, so the bulk-range verification could not run at all. An unreadable');
+            console.error('hash is not an absent one: treating it as absent would skip the only check');
+            console.error('the applied range gets. HALTING (applying no further blocks). Operator must');
+            console.error('fix the local database fault and clear before this validator can resume.');
         } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
             console.error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
             console.error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
@@ -3102,14 +3231,43 @@ class ClientSync {
 
     // Fail-CLOSED recompute of one boundary block of a bulk-applied range
     // (bootstrap terminal, catch-up join, catch-up terminal). Halts durably on a
-    // hash mismatch AND on a recompute error that survives the retries: unlike
+    // hash mismatch AND on a committed-hash READ error or a recompute error that
+    // survives the retries: unlike
     // the live path, this recompute is the only verification of the applied
     // range, so an unverifiable range must not be served. Returns true
     // when it halted (caller must stop), false when the block verified or the
     // committed hash is not yet resolvable (NULL ledger_hash / missing row, the
     // pre-existing skip the lookup re-page minimizes).
     async _verifyRangeBoundary(blockIndex){
-        let committed = await this.db.getBlockHashRow(blockIndex);
+        // Read the committed hash FAIL-CLOSED, on the same retry-then-halt terms as
+        // the recompute below. getBlockHashRow's default is fail-soft (doQuery
+        // collapses a non-transactional query error into [], then null), and null
+        // here means "not yet resolvable" -> return false -> the three callers (the
+        // _bootstrapFromHeight terminal, and the join and terminal boundaries in
+        // _runIncrementalCatchUp) read that as "range verified, continue". A transient
+        // DB fault would therefore skip the ONLY verification of a bulk-applied range,
+        // and the join check is what catches a disconnect-spanning reorg stitched onto
+        // an orphaned tip.
+        // { rethrow: true } separates a failed read from a genuinely absent row.
+        let committed;
+        let readAttempts = 3;
+        for(let attempt = 1; attempt <= readAttempts; attempt++){
+            try {
+                committed = await this.db.getBlockHashRow(blockIndex, null, { rethrow: true });
+                break;
+            } catch(e){
+                if(attempt < readAttempts){
+                    console.error('Boundary hash read errored at block %s (attempt %s/%s, retrying):',
+                        blockIndex, attempt, readAttempts, e);
+                    await this.util.sleep(1000 * attempt);
+                    continue;
+                }
+                await this._haltOnDivergence(blockIndex,
+                    [{ field: 'boundary_hash_read_error', computed: null, committed: String((e && e.message) || e) }],
+                    this.sources.slice(0, 1), 'boundary-read-error');
+                return true;
+            }
+        }
         if(!(committed && committed.ledger_hash)) return false;
         let mismatches;
         try {
@@ -3245,6 +3403,19 @@ class ClientSync {
     // Never automatic: a halted validator must not self-resume onto a contested
     // chain. Caller is responsible for restarting the sync loop afterwards.
     async clearHalt(){
+        // A synthetic 'halt-state-check-failed' state says the durable table could not be
+        // READ, not that a divergence was adjudicated. Deleting sync_halt from here would
+        // destroy a genuine uncleared divergence row this process never managed to see,
+        // and clearing the stall is the one workaround an operator has, so it is exactly
+        // the path that would do it. Drop the in-memory flag only and let start()'s
+        // re-read decide what the table actually holds.
+        if(this._halted && this._halted.reason === 'halt-state-check-failed'){
+            const wasSynthetic = this._halted;
+            this._halted = null;
+            console.log('halt-state-check-failed state cleared for ' + this.chain + '/' + this.network +
+                '/' + this.dbType + '; sync_halt left untouched (it was never successfully read)');
+            return wasSynthetic;
+        }
         try { await this.db.clearHalt(this.dbType); } catch(e){ console.error('clearHalt persistence failed:', e); }
         const was = this._halted;
         this._halted = null;
@@ -3267,6 +3438,33 @@ class ClientSync {
         if(await this._checkTrainActivation(event.block_index)) return;
         try {
             await this._withApplyLock(() => this.applier.applyBlock(event));
+            // Carry the block's computed SMT roots across a post-commit verification
+            // ERROR, so a retry of the same height cannot launder the commitment gate.
+            //
+            // applyBlock COMMITS the block and only then do the gates below run, so a
+            // throw from any of them (the computeStateHash read is the reachable one)
+            // leaves the block committed with lastAppliedBlock unadvanced. On the
+            // redelivery that gap detection then triggers, applyBlock takes its
+            // duplicate early return, which clears _lastComputedRoots to null, and the
+            // commitment gate below is gated on those roots being set: it is skipped,
+            // and the tip advances with the source's balances_root/block_merkle_root/
+            // state_root never compared to anything. Database presence is not proof of
+            // verification.
+            //
+            // So stash the roots the FIRST apply computed, keyed by height, and restore
+            // them when the duplicate path returns null for that same height. The
+            // comparison then runs on the retry against exactly the values it would
+            // have used on the first pass. The stash is replaced on every apply and
+            // cleared once all gates pass, so it can never carry a stale height, and
+            // nothing is read back out of storage (a seeded snapshot roots row is never
+            // a live block's committed roots and must not be compared to one).
+            let computedRoots = this.applier._lastComputedRoots;
+            if(!computedRoots && this._unverifiedRoots
+                    && this._unverifiedRoots.blockIndex === event.block_index)
+                computedRoots = this._unverifiedRoots.roots;
+            this._unverifiedRoots = computedRoots
+                ? { blockIndex: event.block_index, roots: computedRoots }
+                : null;
             // Independent recomputation (validator track). The block's raw rows are
             // now in the replica; recompute its consensus hashes and confirm they
             // match the committed hashes the source published for it. A mismatch
@@ -3323,8 +3521,8 @@ class ClientSync {
             // can see the replica is not running the apply-time commitment check.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
                     && !this.isTruncated()
-                    && this.applier._lastComputedRoots){
-                let computed   = this.applier._lastComputedRoots;
+                    && computedRoots){
+                let computed   = computedRoots;
                 // Fail closed on WITHHELD roots (uuid:4b95ddef). Reaching here means the
                 // replica's OWN bundled flag-day map says the commitment is live at this
                 // height: ClientApplier.applyBlock sets _lastComputedRoots solely under
@@ -3361,6 +3559,9 @@ class ClientSync {
                     return; // halted: do not advance lastAppliedBlock
                 }
             }
+            // Every gate passed, so the committed block is now a VERIFIED block and the
+            // carried-roots stash has nothing left to protect.
+            this._unverifiedRoots     = null;
             this.lastAppliedBlock     = event.block_index;
             this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
             // Report our applied height back to the source(s), debounced.

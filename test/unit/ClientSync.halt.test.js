@@ -128,6 +128,44 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(sync.getHaltInfo().reason, 'halt-state-check-failed');
         assert.strictEqual(db.getLastBlock.called, false, 'must NOT begin catch-up on an uncertain halt check');
     });
+
+    // Failing closed is right; failing closed FOREVER on a single read is not. The idle
+    // loop never retried, so a transient MariaDB blip left replication idle after the
+    // database recovered, and the process stayed up so `unless-stopped` never restarted it.
+    it('re-reads the halt table while idling, so a recovered database is not stalled forever', async function(){
+        db.getActiveHalt.onFirstCall().rejects(new Error('sync_halt read blip'));
+        db.getActiveHalt.onSecondCall().resolves({ block_index: 77, reason: 'cross-source-divergence',
+            mismatches: '[]', sources: '[]', detected_at: '2026-09-12' });
+        let sleeps = 0;
+        sinon.stub(util, 'sleep').callsFake(() => { if(++sleeps >= 2) sync.running = false; return Promise.resolve(); });
+        sync.running = true;
+        await sync.start();
+
+        assert.ok(db.getActiveHalt.callCount >= 2,
+            'the idle loop must re-read the authoritative halt table, not sit on one failed read');
+        assert.strictEqual(sync.getHaltInfo().reason, 'cross-source-divergence',
+            'a positive re-read installs the REAL durable halt in place of the synthetic one');
+        assert.strictEqual(sync.getHaltInfo().blockIndex, 77);
+        assert.strictEqual(db.getLastBlock.called, false, 'and still no catch-up while halted');
+    });
+
+    // Clearing the stall was the only workaround an operator had, and it went straight
+    // through db.clearHalt: the row a genuinely diverged replica depends on would be
+    // deleted by the very act of recovering from a read the process never completed.
+    it('clearing a halt-state-check-failed state does not wipe the unread sync_halt row', async function(){
+        db.getActiveHalt.rejects(new Error('sync_halt read blip'));
+        sinon.stub(util, 'sleep').callsFake(() => { sync.running = false; return Promise.resolve(); });
+        sync.running = true;
+        await sync.start();
+        assert.strictEqual(sync.getHaltInfo().reason, 'halt-state-check-failed');
+
+        const was = await sync.clearHalt();
+
+        assert.strictEqual(sync.isHalted(), false, 'the in-memory stall flag is dropped');
+        assert.strictEqual(was.reason, 'halt-state-check-failed');
+        assert.strictEqual(db.clearHalt.called, false,
+            'a halt state that was never READ must not delete the durable row');
+    });
 });
 
 describe('ClientSync: independent recompute halt @regression', function(){
@@ -279,6 +317,45 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
         assert.strictEqual(halted, false);
         assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false, 'no recompute without a committed hash');
         assert.strictEqual(sync.isHalted(), false);
+    });
+
+    // A FAILED committed-hash read is not an absent one. getBlockHashRow's default is
+    // fail-soft (doQuery swallows a non-transactional query error to [] -> null), and
+    // null is the "not yet resolvable" skip above, so a transient DB fault read through
+    // that default returns false and tells bootstrap/catch-up the range was verified.
+    it('HALTS (boundary-read-error) when the committed hash READ fails on every retry @regression', async function(){
+        db.getBlockHashRow.rejects(new Error('ER_LOCK_WAIT_TIMEOUT: errno 1205'));
+        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, true, 'an unverifiable range must not be served');
+        assert.strictEqual(db.getBlockHashRow.callCount, 3, 'bounded retries before halting');
+        assert.strictEqual(sync.isHalted(), true);
+        assert.strictEqual(sync.getHaltInfo().reason, 'boundary-read-error');
+        assert.strictEqual(sync.getHaltInfo().blockIndex, 500);
+        assert.ok(db.recordHalt.calledOnce, 'halt persisted durably');
+        assert.strictEqual(db.recordHalt.firstCall.args[2], 'boundary-read-error');
+        assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false);
+    });
+
+    it('reads the committed boundary hash FAIL-CLOSED (rethrow), not on the fail-soft default @regression', async function(){
+        await sync._verifyRangeBoundary(500);
+        const opts = db.getBlockHashRow.firstCall.args[2];
+        assert.ok(opts && opts.rethrow === true,
+            'a swallowed query error would otherwise be indistinguishable from an absent row');
+    });
+
+    it('does NOT halt when a transient READ error clears within the retries @regression', async function(){
+        db.getBlockHashRow = sinon.stub();
+        db.getBlockHashRow.onFirstCall().rejects(new Error('transient'));
+        db.getBlockHashRow.resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
+        sync.blockHasher.computeBlockHashes = sinon.stub()
+            .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
+        const halted = await sync._verifyRangeBoundary(500);
+
+        assert.strictEqual(halted, false);
+        assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');
+        assert.strictEqual(db.getBlockHashRow.callCount, 2);
     });
 
     it('the LIVE path still fails open: a persistent error does not throw without failClosed', async function(){

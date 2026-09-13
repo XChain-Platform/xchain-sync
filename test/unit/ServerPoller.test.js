@@ -896,6 +896,28 @@ describe('ServerPoller', function(){
             assert.strictEqual(status.block_time, null);
         });
 
+        // An undated status is indistinguishable from a stale one, which is what let a
+        // cached healthy object keep certifying freshness after the poll started failing.
+        it('stamps measured_at on a successful measurement, and publishes nothing on a failed one', async function(){
+            poller.lastPolledBlock = 50;
+            db.getBlockHashRow.resolves({ block_index: 50, block_time: 1700000000,
+                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+            let before = Date.now();
+            await poller._updateStatus();
+            let status = broadcaster.updateStatus.firstCall.args[2];
+            assert.ok(typeof status.measured_at === 'number' && status.measured_at >= before,
+                'a successful poll dates its own observation');
+
+            // The confirmed fault path: the block-hash read rejects, so nothing is
+            // published and the previous healthy object survives in the cache untouched.
+            broadcaster.updateStatus.resetHistory();
+            db.getBlockHashRow.rejects(new Error('replica read failed'));
+            await assert.rejects(() => poller._updateStatus());
+            assert.strictEqual(broadcaster.updateStatus.called, false,
+                'a failed measurement publishes no status, so only its AGE can expose it');
+        });
+
         // Replication freshness. source_block_height falls back to
         // db.getLastBlock(), a MAX(block_index) against the SERVED database, so on
         // a node fronting a native SQL replica both heights freeze together when

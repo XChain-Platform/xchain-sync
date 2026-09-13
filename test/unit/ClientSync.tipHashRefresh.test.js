@@ -112,6 +112,10 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
         // Negative control for the two assertions above: with genuinely different
         // hashes at the same height the guard must still fire, so a green result on
         // the previous test means "no bogus alarm", not "the guard stopped working".
+        //
+        // It also pins the rewind: the orphaned tip must be rolled back BEFORE the
+        // catch-up, because _runIncrementalCatchUp resolves `since` from the DB tip and
+        // would otherwise ask for /since/102 while the orphan is still block 101.
         let { sync } = makeSync();
         await sync._runIncrementalCatchUp();
 
@@ -124,6 +128,11 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
         let forkLines = errorStub.getCalls().map(c => String(c.args[0]))
             .filter(l => l.indexOf('fork at head block') !== -1);
         assert.strictEqual(forkLines.length, 1, 'a genuine head fork must still be reported');
-        assert.strictEqual(catchUp.calledWith(102), true, 'and must still trigger the catch-up');
+        assert.strictEqual(sync.rollback.rollback.calledOnceWith(101), true,
+            'the orphaned tip must actually be rolled back');
+        assert.strictEqual(sync.lastAppliedBlock, 100,
+            'the committed tip moves back below the fork');
+        assert.strictEqual(catchUp.calledWith(101), true,
+            'and the catch-up must resume AT the forked height, not above it');
     });
 });

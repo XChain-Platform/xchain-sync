@@ -122,7 +122,7 @@ class BlockBroadcaster {
         // anything else is ignored silently (the channel is otherwise push-only).
         ws.on('message', (data) => this._handleClientMessage(ws, data));
 
-        let status = this.statusData.get(key);
+        let status = this.getStatus(chain, network, type);
         if(status){
             this._send(ws, { type: 'status', chain, network, dbType: type, ...status });
         }
@@ -184,6 +184,40 @@ class BlockBroadcaster {
         // Fall back to 'indexer' for backward compat with code that doesn't set it.
         let dbType = (statusObj && statusObj.dbType) || 'indexer';
         this.statusData.set(this._key(chain, network, dbType), statusObj);
+    }
+
+    // The ONE read path for a cached status object, freshness enforced.
+    //
+    // statusData is an overwrite-only cache that ServerPoller._updateStatus writes only
+    // on a SUCCESSFUL database read, and its callers swallow the rejection
+    // (ServerPoller.js: `await this._updateStatus().catch(() => {})`). So a throw, a
+    // hung query or a stopped poller leaves the last HEALTHY object in place and every
+    // reader here keeps re-serving it: the periodic broadcast, the new-subscriber
+    // snapshot, the validator-lag view and REST /status. Nothing downstream can catch
+    // it, because status events keep arriving on time, which is exactly what the
+    // consumer's 180s silence timeout watches for.
+    //
+    // Past SYNC_STATUS_MAX_AGE_MS the measurement is no longer evidence, so the
+    // FRESHNESS verdict expires: replica_stale goes true (fail closed, the posture
+    // _readReplicaStatus and applyReplicaFreshness already take), replica_seconds_behind
+    // becomes null because it is now unknowable, and status_stale plus measured_age_ms
+    // say why. Heights and hashes are deliberately KEPT: they are the diagnostics an
+    // operator needs during exactly this outage, and nulling block_height would make a
+    // measurement failure indistinguishable from a source at height 0. An undated object
+    // (never written by _updateStatus) is returned as-is, never demoted on a guess.
+    getStatus(chain, network, dbType){
+        let status = this.statusData.get(this._key(chain, network, dbType));
+        if(!status || typeof status.measured_at !== 'number') return status || null;
+        let maxAge = Number(this.config && this.config['SYNC_STATUS_MAX_AGE_MS']);
+        if(!Number.isFinite(maxAge) || maxAge <= 0) maxAge = 180000;
+        let age = Date.now() - status.measured_at;
+        if(age <= maxAge) return status;
+        return Object.assign({}, status, {
+            replica_stale:          true,
+            replica_seconds_behind: null,
+            status_stale:           true,
+            measured_age_ms:        age
+        });
     }
 
     // Broadcast an event to all subscribers for a chain/network/dbType.
@@ -300,7 +334,7 @@ class BlockBroadcaster {
     broadcastStatus(chain, network, dbType){
         let type = dbType || 'indexer';
         let key = this._key(chain, network, type);
-        let status = this.statusData.get(key);
+        let status = this.getStatus(chain, network, type);
         if(!status) return;
 
         let subs = this.subscribers.get(key);
@@ -400,7 +434,7 @@ class BlockBroadcaster {
         let expected      = this.config['EXPECTED_VALIDATORS'] || [];
         let expectedTotal = expected.length > 0 ? expected.length : null;
 
-        let statusData   = this.statusData.get(key);
+        let statusData   = this.getStatus(chain, network, dbType);
         let sourceHeight = (statusData && typeof statusData.block_height === 'number')
             ? statusData.block_height : null;
 

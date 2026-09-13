@@ -16,21 +16,25 @@
  *
  * dispensers rides neither the block stream nor the id-cursor lookup
  * paging (no monotonic id; the decoder soft-expires via UPDATE then
- * hard-purges via DELETE), and it is in SnapshotBuilder's decoderSkip set,
- * so neither the full snapshot nor an incremental catch-up ever carries it.
- * Convergence is entirely the periodic replace-table reconcile:
- *   SnapshotBuilder.streamDispensers (keyset-paged full dump)
- *   -> ClientSync._reconcileDispensers (paged re-fetch under the apply lock)
+ * hard-purges via DELETE). SnapshotBuilder's decoderSkip set lives inside
+ * streamIncrementalSnapshot, so the INCREMENTAL path skips dispensers while
+ * the FULL snapshot carries it: the full-snapshot table filter excludes only
+ * OPERATOR_LOCAL_TABLES / SOURCE_UNSTREAMED_TABLES, and dispensers is in
+ * neither. A full-snapshot bootstrap therefore SEEDS dispensers; parity
+ * after that is held by the periodic replace-table reconcile, which replays
+ * the out-of-band UPDATE/DELETE drift a snapshot dump cannot, and which also
+ * seeds the truncated (from-height) bootstrap path:
+ *   SnapshotBuilder.streamDispensers (full single-response dump)
+ *   -> ClientSync._reconcileDispensers (re-fetch under the apply lock)
  *   -> ClientApplier.applyDispensersReplace (atomic DELETE + INSERT).
  *
  * Unit tests cover the individual pieces, but nothing previously proved
  * end-to-end convergence over a real HTTP surface against a drifted source.
  * Covered here:
- *   - Seed-from-empty: a full-snapshot bootstrap leaves dispensers empty
- *     (snapshot-skipped); a reconcile seeds them to parity.
+ *   - Seed-from-snapshot: a full-snapshot bootstrap seeds dispensers to
+ *     parity, and a following reconcile is idempotent.
  *   - Drift convergence: a source that has hard-purged, soft-expired AND
- *     added dispenser rows out-of-band converges exactly on reconcile,
- *     including multi-page keyset paging (LOOKUP_PAGE_SIZE forced small).
+ *     added dispenser rows out-of-band converges exactly on reconcile.
  *   - Nth-catch-up cadence: DISPENSERS_RECONCILE_EVERY gates the reconcile
  *     (every=1 converges on the next catch-up; a high `every` leaves the
  *     interim drift in place without erroring the catch-up).
@@ -230,7 +234,11 @@ describe('E2E: Decoder dispensers reconcile', function() {
     }
 
     // `every` => DISPENSERS_RECONCILE_EVERY; `pageSize` => LOOKUP_PAGE_SIZE
-    // (forced small to exercise the keyset cursor across multiple pages).
+    // (forced smaller than the fixture row count to prove a small page size does
+    // NOT split the dump: streamDispensers is deliberately single-response and
+    // answers has_more=false whatever the cursor params say, so the client's
+    // fetch walk completes in one round trip. That contract is pinned directly in
+    // test/unit/SnapshotBuilder.test.js, describe('streamDispensers')).
     function makeClient(opts){
         opts = opts || {};
         let applier  = new ClientApplier(replicaDb, util);
@@ -284,8 +292,9 @@ describe('E2E: Decoder dispensers reconcile', function() {
             'full-snapshot bootstrap must seed dispensers to parity');
         assert.strictEqual((await dumpDispensers(replicaDb)).length, 3);
 
-        // A reconcile (multi-page: 3 rows, page size 2) is idempotent on an
-        // already-converged replica: re-dump + atomic replace yields the same set.
+        // A reconcile (one round trip: the 3 rows come back whole despite page
+        // size 2) is idempotent on an already-converged replica: re-dump + atomic
+        // replace yields the same set.
         await client.reconcile();
         assert.deepStrictEqual(await dumpDispensers(replicaDb), await dumpDispensers(sourceDb));
         assert.strictEqual((await dumpDispensers(replicaDb)).length, 3);

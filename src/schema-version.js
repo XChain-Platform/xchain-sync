@@ -177,7 +177,12 @@ const MIGRATION_FRONTIER = {
         through: '2026-09-12',
         accounted: [
             '2026-09-12-bridge-tables.sql',
-            '2026-09-12-token-bridge-fields.sql'
+            '2026-09-12-token-bridge-fields.sql',
+            // Index-only DDL on an already-replicated table: it adds no column a
+            // follower could fail to store, so it accounts at this version rather
+            // than forcing a bump. Enumerated because the tail of a shared date has
+            // to be complete or the gate reads the cursor as covering it.
+            '2026-09-12-state-tree-roots-block-index-idx.sql'
         ]
     },
     decoder: {

@@ -21,6 +21,9 @@ function createMockDb(dbName){
     return {
         dbName: dbName || 'test_db',
         doQuery: sinon.stub().resolves([]),
+        // Always-throw twin of doQuery. The authoritative dump reads use it so a
+        // query error can never ship as an empty-but-successful body.
+        doQueryStrict: sinon.stub().resolves([]),
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
         getFirstActionIndex: sinon.stub().resolves(null),
@@ -554,7 +557,7 @@ describe('SnapshotBuilder', function(){
         it('first page (no cursor) selects the full table ordered by the composite PK', async function(){
             let db = createMockDb();
             db.dbType = 'decoder';
-            db.doQuery.resolves([{ tx_index: 5, address_id: 9 }, { tx_index: 7, address_id: 2 }]);
+            db.doQueryStrict.resolves([{ tx_index: 5, address_id: 9 }, { tx_index: 7, address_id: 2 }]);
             let res = new PassThrough();
             let chunks = [];
             res.on('data', c => chunks.push(c));
@@ -568,7 +571,7 @@ describe('SnapshotBuilder', function(){
             assert.strictEqual(parsed.max_tx, 7, 'max_tx is the last row tx_index');
             assert.strictEqual(parsed.max_addr, 2, 'max_addr is the last row address_id');
             assert.strictEqual(parsed.has_more, false, 'single-response contract: never more');
-            let q = db.doQuery.firstCall.args[0];
+            let q = db.doQueryStrict.firstCall.args[0];
             assert.ok(/ORDER BY tx_index ASC, address_id ASC/.test(q));
             assert.ok(!/LIMIT/.test(q),
                 'no LIMIT: the full table must ship in ONE statement-consistent response ' +
@@ -579,7 +582,7 @@ describe('SnapshotBuilder', function(){
         it('honours a legacy cursor within the same single response and never reports more', async function(){
             let db = createMockDb();
             db.dbType = 'decoder';
-            db.doQuery.resolves([{ tx_index: 8, address_id: 1 }, { tx_index: 8, address_id: 4 }, { tx_index: 9, address_id: 0 }]);
+            db.doQueryStrict.resolves([{ tx_index: 8, address_id: 1 }, { tx_index: 8, address_id: 4 }, { tx_index: 9, address_id: 0 }]);
             let res = new PassThrough();
             let chunks = [];
             res.on('data', c => chunks.push(c));
@@ -591,10 +594,45 @@ describe('SnapshotBuilder', function(){
             let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
             assert.strictEqual(parsed.has_more, false,
                 'has_more is always false so an old paging client completes in one round trip');
-            let q = db.doQuery.firstCall.args[0];
+            let q = db.doQueryStrict.firstCall.args[0];
             assert.ok(/WHERE \(tx_index > \? OR \(tx_index = \? AND address_id > \?\)\)/.test(q), 'composite keyset predicate');
             assert.ok(!/LIMIT/.test(q), 'legacy limit arg is ignored: no paging');
-            assert.deepStrictEqual(db.doQuery.firstCall.args[1], [8, 8, 1]);
+            assert.deepStrictEqual(db.doQueryStrict.firstCall.args[1], [8, 8, 1]);
+        });
+
+        // Fail CLOSED on the dump read. doQuery is fail-soft outside a transaction, so
+        // a source-DB fault read through it becomes a 200 body of zero rows, which the
+        // follower applies as DELETE-without-insert over its whole dispensers table.
+        it('rejects instead of shipping an empty dump when the source read fails @regression', async function(){
+            let db = createMockDb();
+            db.dbType = 'decoder';
+            db.doQueryStrict.rejects(new Error('ER_LOCK_WAIT_TIMEOUT: errno 1205'));
+            // doQuery must not be the escape hatch: a fail-soft [] here would ship a dump.
+            db.doQuery.resolves([]);
+            let chunks = [];
+            let res = new PassThrough();
+            res.on('data', c => chunks.push(c));
+            res.setHeader = sinon.stub();
+
+            await assert.rejects(
+                () => builder.streamDispensers(db, NaN, NaN, 50000, res),
+                /errno 1205/,
+                'the read error must reach the route handler, which answers 500');
+            assert.strictEqual(res.setHeader.called, false, 'no response headers before the read succeeds');
+            assert.strictEqual(Buffer.concat(chunks).length, 0, 'no dump body written');
+        });
+
+        it('rejects on a failed read in the cursor branch too @regression', async function(){
+            let db = createMockDb();
+            db.dbType = 'decoder';
+            db.doQueryStrict.rejects(new Error('ER_LOCK_WAIT_TIMEOUT: errno 1205'));
+            let res = new PassThrough();
+            res.on('data', () => {});
+            res.setHeader = sinon.stub();
+
+            await assert.rejects(
+                () => builder.streamDispensers(db, 8, 1, 3, res),
+                /errno 1205/);
         });
     });
 
@@ -1053,7 +1091,7 @@ describe('SnapshotBuilder', function(){
 
         it('streamDispensers: swallows the abort and destroys gzip on client disconnect', async function(){
             let db = createMockDb(); db.dbType = 'decoder';
-            db.doQuery.resolves([{ tx_index: 1, address_id: 2 }]);
+            db.doQueryStrict.resolves([{ tx_index: 1, address_id: 2 }]);
             let fake = fakeBackpressuredGzip();
             sinon.stub(zlib, 'createGzip').returns(fake);
             let res = new PassThrough(); res.setHeader = sinon.stub(); res.on('data', () => {});
