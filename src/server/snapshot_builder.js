@@ -128,7 +128,7 @@ const OPERATOR_LOCAL_TABLES = new Set([
 // trail, wall-clock detected_at included) and hit the incremental path's
 // action_index fall-through, where its errno 1054 was silently swallowed; now the
 // omission is a classification on record. The registry-exhaustiveness test
-// (test/unit/syncTableClassification.test.js) keeps the next sync-owned table from
+// (test/unit/sync_table_classification.test.js) keeps the next sync-owned table from
 // falling through the same way.
 const SOURCE_UNSTREAMED_TABLES = new Set([
     'merkle_reorgs',

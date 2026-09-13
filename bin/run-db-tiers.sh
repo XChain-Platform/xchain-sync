@@ -33,7 +33,7 @@
 #   bin/run-db-tiers.sh integration e2e       # both, in order
 #   bin/run-db-tiers.sh unit                  # unit tier WITH siblings required
 #   bin/run-db-tiers.sh --keep integration    # leave the database up afterwards
-#   bin/run-db-tiers.sh -- test/integration/replication-insert-shape.test.js
+#   bin/run-db-tiers.sh -- test/integration/replication_insert_shape.test.js
 #                                             # one file, straight to mocha
 #
 # ENVIRONMENT (all optional)

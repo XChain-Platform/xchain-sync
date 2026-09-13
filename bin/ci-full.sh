@@ -112,11 +112,11 @@ run_tier "e2e: bring up service containers (source-db, replica-db)" \
 run_tier "e2e: cross-repo consensus drift guards" \
   env XCHAIN_REQUIRE_SIBLINGS=1 \
   npx mocha --timeout 10000 \
-    test/unit/rollback-coverage.test.js \
-    test/unit/blockhash-conformance-twin.test.js \
-    test/unit/protocolAddressRoles.twin.test.js \
-    test/unit/stakesValidatorSetParity.test.js \
-    test/unit/generatedColumns.test.js
+    test/unit/rollback_coverage.test.js \
+    test/unit/blockhash_conformance_twin.test.js \
+    test/unit/protocol_address_roles_twin.test.js \
+    test/unit/stakes_validator_set_parity.test.js \
+    test/unit/generated_columns.test.js
 
 run_tier "e2e: e2e tier (test:e2e:ci)" npm run test:e2e:ci
 

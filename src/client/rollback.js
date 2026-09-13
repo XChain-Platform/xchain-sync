@@ -17,7 +17,7 @@
  * Handles rolling back the local replica database to a given block.
  * Table lists are copied from xchain-indexer/src/rollback.js and
  * MUST be kept in sync when new tables are added to the indexer.
- * test/unit/rollback-coverage.test.js enforces that the sync set
+ * test/unit/rollback_coverage.test.js enforces that the sync set
  * covers every table ServerPoller replicates.
  *
  ********************************************************************/
@@ -88,7 +88,7 @@ class ClientRollback {
         // registry joins both sides at once. Per-table rationale lives with
         // the registry entries; the bespoke in-place resets/restores below
         // stay hand-written (and remain drift-guarded by the parity tests in
-        // test/unit/rollback-coverage.test.js).
+        // test/unit/rollback_coverage.test.js).
         let rollbackLists = lifecycle.replicaRollbackTables();
         this.blockTables  = rollbackLists.blockTables;
         this.indexTables  = rollbackLists.indexTables;
@@ -1251,7 +1251,7 @@ class ClientRollback {
 // path, after the block's offers/statuses are inserted) so both derive
 // byte-identical gate values. The SQL between the //<ESCROW-REDERIVE-SQL> markers
 // is kept logically identical with xchain-indexer/src/rollback.js (cross-repo drift
-// guard in test/unit/rollback-coverage.test.js). Uses db.doQuery so it joins
+// guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
 // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
@@ -1297,7 +1297,7 @@ async function rederiveEscrowGate(db){
 // status disagrees and no-op when the target status has never been minted locally, so
 // neither can blank a status_id. The SQL between the //<COINPAY-MATCH-REDERIVE-SQL>
 // markers is kept logically identical with xchain-indexer/src/rollback.js (cross-repo
-// drift guard in test/unit/rollback-coverage.test.js). Uses db.doQuery so it joins
+// drift guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 //
 // Skipped on a truncated replica: it holds only [base..tip] of coinpay_statuses, so

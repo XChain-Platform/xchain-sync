@@ -174,7 +174,7 @@
  * is the newest migration DATE whose replicated DDL is folded into the version
  * above, and `accounted` names the migration files bearing exactly that date
  * (dates are not unique, so the tail has to be enumerated or a same-day
- * migration would hide behind the cursor). test/unit/schema-version-gate.test.js
+ * migration would hide behind the cursor). test/unit/schema_version_gate.test.js
  * reads both, walks the sibling migration ledgers, and fails when a migration
  * past the frontier carries DDL against a wire-replicated table of that dbType
  * while the frontier stands still. Pure-DML backfills do not change what a

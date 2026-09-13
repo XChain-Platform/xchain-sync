@@ -80,7 +80,7 @@ const lifecycle = require('../tableLifecycle');
 const TOPOLOGY = {
 
     // Decoder schema: a much smaller surface area than indexer, and the one
-    // topology still declared by hand. test/unit/decoderTableClassification.test.js
+    // topology still declared by hand. test/unit/decoder_table_classification.test.js
     // enumerates xchain-decoder/src/sql and fails on any table classified neither
     // here nor in its DECODER_EXCLUDED set, so the count is proven, not counted.
     // mempool_transactions is intentionally excluded, being non-deterministic

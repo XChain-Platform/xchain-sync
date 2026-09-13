@@ -89,7 +89,7 @@ jobs:
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      # The cross-repo consensus drift guards (rollback-coverage.test.js) compare
+      # The cross-repo consensus drift guards (rollback_coverage.test.js) compare
       # this repo's rollback/SQL/byte-identical twins against the source indexer.
       # They live in the unit tier but the shared `ci` job never checks out the
       # sibling, so they silently skip there (#4631). Run them HERE, where the
@@ -108,7 +108,7 @@ jobs:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js test/unit/decoderTableClassification.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback_coverage.test.js test/unit/blockhash_conformance_twin.test.js test/unit/protocol_address_roles_twin.test.js test/unit/stakes_validator_set_parity.test.js test/unit/generated_columns.test.js test/unit/decoder_table_classification.test.js
 
       - name: Run the e2e tier
         env:

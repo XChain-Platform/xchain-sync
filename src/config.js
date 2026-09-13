@@ -433,7 +433,7 @@ module.exports = {
         // launch validator set must flip this default to ON in the same change (an operator
         // who has a trust root available and does not use it is still trusting the source);
         // an explicit VERIFY_CHECKPOINT_QUORUM=false remains the opt-out for throwaway
-        // mirrors. test/unit/checkpointQuorumFlagDay.test.js enforces both halves, and the
+        // mirrors. test/unit/checkpoint_quorum_flag_day.test.js enforces both halves, and the
         // launch activation runbook carries the deploy-side ordering (the federation must
         // be serving signed checkpoints first).
         config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';

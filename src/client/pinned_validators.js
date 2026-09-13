@@ -59,7 +59,7 @@
  * The SAME change must flip the VERIFY_CHECKPOINT_QUORUM default to true in
  * config.js, because a pinned set with the anchor still defaulting off leaves
  * replicas trusting their source when a trust root is available.
- * test/unit/checkpointQuorumFlagDay.test.js fails until both halves land.
+ * test/unit/checkpoint_quorum_flag_day.test.js fails until both halves land.
  *
  ********************************************************************/
 

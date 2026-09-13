@@ -125,7 +125,7 @@ class Database {
             // replicated DATETIME column on BOTH dbTypes, today decoder events.time
             // and indexer events.time + events.witness_time (indexer `events` rides
             // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
-            // drop it per dbType; test/unit/replicatedDatetimeColumns.test.js pins
+            // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
             // the inventory and this flag. (dispensers.expiration is a BIGINT unix
             // timestamp, replicated as a number via bigIntAsNumber.)
             dateStrings:        true,

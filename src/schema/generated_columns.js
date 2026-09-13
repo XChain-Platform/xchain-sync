@@ -25,7 +25,7 @@
 // Frozen map rather than an information_schema lookup, deliberately: the applier's
 // insert path is on the hot loop and its query sequence is pinned by unit tests, so a
 // per-table schema probe would cost a round trip and change what those tests observe.
-// Correctness is held by the drift guard in test/unit/generatedColumns.test.js, which
+// Correctness is held by the drift guard in test/unit/generated_columns.test.js, which
 // derives this map from the indexer's own DDL and fails if a table gains or loses a
 // generated column.
 const GENERATED_COLUMNS = Object.freeze({

@@ -2,6 +2,7 @@
   "../../src/ClientRollback.js": "../../src/client/rollback.js",
   "../../src/SnapshotBuilder.js": "../../src/server/snapshot_builder.js",
   "../../src/replicatedTables.js": "../../src/schema/replicated_tables.js",
+  "./rollback-coverage.test.js": "./rollback_coverage.test.js",
   "_abort": "abort",
   "_abortError": "abortError",
   "_acquirePoolConnection": "acquirePoolConnection",
