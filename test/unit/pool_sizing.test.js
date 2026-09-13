@@ -186,7 +186,11 @@ describe('Database pool sizing per dbType', function(){
     });
 });
 
-// Fan-out load test: drives the real per-block query fan-out (QUERIES_PER_BLOCK queries, issued
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. Fan-out load test
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Drives the real per-block query fan-out (QUERIES_PER_BLOCK queries, issued
 // as fast as the pool hands out connections) through a pool harness that
 // enforces a connection limit exactly like mariadb's does, and measures how
 // deep the fan-out serializes. This is the load the pool sizing exists for:

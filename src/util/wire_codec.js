@@ -37,8 +37,9 @@
 // Reserved single-key sentinel wrapping a base64-encoded binary column value.
 const BINARY_TAG = '__xbin__';
 
-// Returns the original row object unchanged when it carries no Buffers, which
-// avoids a copy for the overwhelming majority of rows.
+// Shallow-encode one row's Buffer columns to the wire sentinel. Returns the
+// original row object unchanged when it carries no Buffers (avoids needless
+// allocation for the overwhelming majority of rows, which have none).
 function encodeRow(row){
     if(!row || typeof row !== 'object') return row;
     let out = null;
@@ -62,8 +63,10 @@ function encodeTables(tables){
     return out;
 }
 
-// The strict shape check (plain object, exactly one key, the reserved key, a
-// string value) keeps a JSON-typed column from being misread as binary.
+// Decode one column value from the wire: a sentinel object -> Buffer, everything
+// else passthrough. The strict shape check (plain object, exactly one key, the
+// reserved key, string value) keeps a JSON-typed column from being misread as
+// binary.
 function decodeValue(v){
     if(v && typeof v === 'object' && !Array.isArray(v) && !Buffer.isBuffer(v)
         && typeof v[BINARY_TAG] === 'string'

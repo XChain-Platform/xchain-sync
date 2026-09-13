@@ -33,7 +33,8 @@ const GENERATED_COLUMNS = Object.freeze({
     contract_state: Object.freeze(['state_key_bin'])
 });
 
-// Cached per table so the applier's per-batch call stays a map lookup.
+// The generated columns of `table` as a Set, empty for every table that has none.
+// Cached per table so the applier's per-batch call is a map lookup.
 const _sets = new Map();
 function generatedColumns(table){
     if(!_sets.has(table))

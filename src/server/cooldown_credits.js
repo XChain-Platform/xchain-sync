@@ -45,12 +45,19 @@
 
 const { gasTickSymbol } = require('../consensus-constants');
 
-// Selects the matured refund credits whose cooldown_end_block falls in the
-// inclusive window [fromBlock, toBlock] and returns raw `credits` rows for the
-// caller to merge into the block or snapshot `credits` array. `db` must be an
-// indexer-dbType Database (callers gate that), and passing `conn` lets a
-// snapshot's REPEATABLE READ view read these at the same height as the rest of
-// its payload.
+// Select the matured cooldown-refund credit rows whose maturity block
+// (cooldown_end_block) falls in the inclusive window [fromBlock, toBlock].
+// Returns raw `credits` rows (action_index, address_id, tick_id, amount),
+// deduped by their logical identity (action_index, address_id, tick_id); the
+// credits table has no unique key, so the dedup is explicit. The caller merges
+// these into the block / snapshot `credits` array (and dedups the union).
+//
+//   db        the source Database (indexer dbType only; callers must gate)
+//   fromBlock inclusive lower maturity-block bound
+//   toBlock   inclusive upper maturity-block bound (for a single live block,
+//             pass fromBlock === toBlock)
+//   conn      optional connection (so a snapshot's REPEATABLE READ view reads
+//             these at the same height as the rest of the payload)
 async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
@@ -58,9 +65,10 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     let completedStatusId = await db.getStatusId('completed');
     if(completedStatusId === null || completedStatusId === undefined) return [];
 
-    // Dedup on (action_index, address_id, tick_id) because `credits` has no unique
-    // key: an unstake created AND matured inside one incremental window is reached
-    // both here and by the caller's action-scoped selection.
+    // Dedup by the credit's logical identity (credits has no unique key). An
+    // unstake created AND matured inside the same incremental window can be
+    // reached both here and by the caller's action-scoped selection; the caller
+    // dedups the union on the same triple.
     let acc = new Map();
     function add(rows){
         for(let r of (rows || [])){
@@ -69,8 +77,10 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
         }
     }
 
-    // Capability maturity refund: paid in GAS, keyed by the unstake's action_index.
-    // The GAS tick is the frozen consensus constant, never a hub poll.
+    // Capability maturity refund: paid in GAS, keyed by the unstake's
+    // action_index. Forward mirror of ClientRollback's capability reverse delete
+    // (same join keys + cooldown_end_block/status predicate); the GAS tick is the
+    // frozen consensus constant, never a hub poll.
     let gasTick = gasTickSymbol();
     if(gasTick){
         try {
@@ -82,7 +92,8 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
         }
     }
 
-    // Contract maturity refund: paid in the unstake's own tick.
+    // Contract maturity refund: paid in the unstake's own tick. Forward mirror
+    // of ClientRollback's contract reverse delete.
     try {
         let rows = await db.findMaturedContractCooldownCredits(completedStatusId, from, to, conn);
         add(rows);

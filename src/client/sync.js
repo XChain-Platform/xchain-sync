@@ -1056,7 +1056,7 @@ class ClientSync {
         let source = this.sources[0];
         if(!source) return false;
 
-        // Fetch and apply schema before downloading data
+        // Fetch and apply schema from a remote sync server
         await this.fetchAndApplySchema(source);
         // A schema-apply halt means the replica can't build a complete schema;
         // abort this round (the snapshot apply would only fail 1146/1054).

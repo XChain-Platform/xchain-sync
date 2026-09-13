@@ -49,9 +49,10 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
 
-    // The same survivor can be reached by both the live per-block channel and the
-    // incremental snapshot when their windows overlap. The follower's INSERT IGNORE
-    // already makes a duplicate a no-op; dedup here anyway to keep the payload minimal.
+    // Dedup by the validator_rewards UNIQUE identity. The same survivor can be reached by
+    // both the live per-block channel and the incremental snapshot when their windows
+    // overlap; the follower's INSERT IGNORE also makes a duplicate a no-op, but dedup the
+    // selection here so the payload stays minimal.
     let acc = new Map();
     try {
         // applied_block (= the reorg point B) is the forward-window key, mirroring

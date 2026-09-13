@@ -139,7 +139,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
         it('clears tables in reverse order via DELETE (FK-safe)', function () {
             // applyFullSnapshot clears via `DELETE FROM` (not TRUNCATE) for FK
             // compatibility, iterating the table keys in reverse so child tables are
-            // cleared before their parents.
+            // cleared before their parents. Capture the DELETE order from doQuery.
             return fc.assert(fc.asyncProperty(
                 fc.array(
                     fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), minLength: 1, maxLength: 15 }),

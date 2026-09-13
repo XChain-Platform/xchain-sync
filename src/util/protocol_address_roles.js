@@ -7,16 +7,21 @@
 // General Public License v3.0 or later; see LICENSE.md.
 
 // CONSENSUS-CRITICAL: protocol special-address canonicalization for the block
-// hash preimage, a frozen mirror of xchain-indexer/src/consensus/protocolAddressRoles.js
-// (which derives the same map from src/configs/*.js). The indexer hashes a
-// protocol special address (BURN / GAS / DONATE1 / DONATE2 / REWARD) as its
-// chain-independent role token rather than the per-chain address encoding, so
-// identical actions hash identically on every chain; the replica has no
-// per-coin config, hence the vendored snapshot. FEE_DESTINATION is excluded:
-// native-fee mode writes no ledger credit/debit and it is env-overridable.
-// Any divergence from the indexer copy makes the replica's recomputed hash
-// mismatch the stored one and halts the divergence breaker, so keep the two
-// byte-identical.
+// hash preimage. Frozen, byte-identical mirror of the canonical source in
+// xchain-indexer/src/consensus/protocolAddressRoles.js (which derives this same map from
+// src/configs/*.js and asserts equality in its unit suite).
+//
+// BlockHasher recomputes the ledger/actions/contracts hashes from replicated
+// rows. The indexer hashes a protocol special address (BURN / GAS / DONATE1 /
+// DONATE2 / REWARD) as its chain-independent role token rather than the per-chain
+// address encoding, so identical actions hash identically on every chain. The
+// replica has no per-coin config, so the map is vendored here as a frozen
+// snapshot. FEE_DESTINATION is excluded (native-fee mode writes no ledger
+// credit/debit, and it is env-overridable).
+//
+// If this map ever diverges from the indexer's, the replica's recomputed hash
+// will mismatch the source's stored hash and the divergence breaker will halt:
+// keep it byte-identical with the indexer copy.
 
 const ROLE_BY_ADDRESS = {
     // BTC

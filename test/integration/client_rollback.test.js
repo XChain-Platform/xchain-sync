@@ -105,7 +105,7 @@ describe('Integration: ClientRollback', function() {
             let balancesBefore = await replicaDb.doQuery("SELECT * FROM balances");
             assert.ok(balancesBefore.length > 0);
 
-            // rollback(6) removes blocks >= 6, keeping blocks 1-5.
+            // Rollback to block 6 (removes blocks 6-10, keeping 1-5)
             await rollback.rollback(6);
 
             // Verify balances recalculated

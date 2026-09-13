@@ -56,9 +56,9 @@ describe('Integration: REST API', function() {
 
         // Trust-proxy and rate-limiter wiring come from src/api.js itself (not a
         // re-declaration), so a change to either seam is exercised here the same
-        // way it is in production. A hand-rolled app that never set 'trust proxy'
-        // or mounted a limiter would pass this suite while the real service
-        // resolved every caller to one IP, which happened before this fix.
+        // way it is in production.  was exactly this class of bug: a
+        // hand-rolled app that never set 'trust proxy' or mounted a limiter would
+        // pass this suite while the real service resolved every caller to one IP.
         let app = express();
         app.set('trust proxy', trustProxyHops(false)); // matches production default: no reverse proxy trusted
         app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));

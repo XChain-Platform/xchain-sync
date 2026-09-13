@@ -376,9 +376,10 @@ class SyncService {
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
-        // Fire and forget: a throw here means this chain's poller is permanently dead,
-        // which /status cannot show (stale block_height under a live timestamp), so log
-        // the full error and exit and let the container restart policy surface it.
+        // Start polling in background (fire and forget; runs indefinitely).
+        // A throw here means this chain's poller is permanently dead, which is
+        // invisible at the /status endpoint (stale block_height, live timestamp).
+        // Log the full error and exit so the container restart policy surfaces it.
         poller.start().catch(e => {
             getLogger().error(util.format('Poller crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
@@ -538,7 +539,8 @@ class SyncService {
         return this.snapshotBuilder;
     }
 
-    // dbType defaults to 'indexer' for callers that are not yet dbType-aware.
+    // Get the database for a chain/network/dbType (used by api.js for status/snapshot endpoints).
+    // dbType defaults to 'indexer' for callers that haven't been updated to be dbType-aware yet.
     getDatabase(chain, network, dbType){
         let type = dbType || 'indexer';
         let key = chain + ':' + network + ':' + type;
@@ -562,7 +564,8 @@ class SyncService {
         return chains;
     }
 
-    // Client mode only; fields not yet observed come back null rather than absent.
+    // Get client sync state for a chain/network/dbType (client mode only).
+    // Returns an object with null values for fields not yet observed.
     getClientSyncState(chain, network, dbType){
         let type = dbType || 'indexer';
         let key  = chain + ':' + network + ':' + type;

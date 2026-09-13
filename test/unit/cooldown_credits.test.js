@@ -1,8 +1,9 @@
-// Unit coverage for src/cooldownCredits.js. A follower that misses matured
-// cooldown-refund credits drifts into hash-blind balance divergence, so the
-// collector's early-return, dedup, and missing-table tolerance are
-// consensus-relevant. Exercised against a mock source Database (no live
-// MariaDB): the collector only calls getStatusId and doQuery.
+//  doctrine test-coverage program: unit coverage for src/server/cooldown_credits.js.
+// A follower that misses matured cooldown-refund credits drifts into hash-blind
+// balance divergence, so the collector's early-return, dedup, and
+// missing-table tolerance are consensus-relevant. Exercised against a mock
+// source Database (no live MariaDB): the collector only calls getStatusId and
+// doQuery.
 
 const assert = require('assert');
 const { collectMaturedCooldownCredits: collectFromRealFake } = require('../../src/server/cooldown_credits.js');

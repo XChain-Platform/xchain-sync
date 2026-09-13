@@ -495,7 +495,10 @@ describe('Database.commitReadSnapshot() / rollbackReadSnapshot()', function () {
     });
 });
 
-// Uses proxyquire because mariadb is an ES module; sinon can't stub it directly.
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. verifyDatabase(): retry loop
+// (Uses proxyquire because mariadb is an ES module; sinon can't stub it directly)
+// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.verifyDatabase()', function () {
     afterEach(async function () { sinon.restore(); });
 
@@ -894,7 +897,10 @@ describe('Database.getReplicaStatus()', function () {
     });
 });
 
-// The basic happy-path cases live in db-schema-evolution.test.js.
+// ═══════════════════════════════════════════════════════════════════════════
+// 14b. addMissingColumns(): remaining branch coverage
+// (The basic happy-path cases live in db-schema-evolution.test.js)
+// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.addMissingColumns(): edge branches', function () {
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
@@ -1900,10 +1906,13 @@ describe('Database: table identifier guard', function () {
     });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ensureReplicaSecondaryIndexes(): votes append-only unique-key migration (M-20)
 // A replica that bootstrapped before indexer 219da33 carries the stale
 // UNIQUE(poll_voter_choice) key; append-only re-ballot rows then wedge it on
 // ER_DUP_ENTRY (unhealable, since the applier's last-write-wins pre-delete was
 // removed). The self-heal must drop the stale key and add the widened one.
+// ═══════════════════════════════════════════════════════════════════════════
 describe('Database.ensureReplicaSecondaryIndexes(): votes append-only migration', function () {
     // Fake doQuery that treats only `votes` as present and all other tables
     // (index_tickers/index_addresses/attests) as absent, so the pre-existing

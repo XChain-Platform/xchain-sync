@@ -194,8 +194,8 @@ describe('CE-DST-02: Slow Write Responses', function () {
         await seedSourceBlocks(11, 18);
         await server.poll();
 
-        // Generous timeout: each block application involves multiple
-        // queries, each adding 2s latency.
+        // Wait with generous timeout; each block application involves
+        // multiple queries, each adding 2s latency
         const recoveryMs = await waitForSyncRecovery(18, 120000);
         expect(recoveryMs).to.be.above(-1,
             'Blocks should still be applied despite 2s write latency');

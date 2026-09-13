@@ -328,7 +328,7 @@ describe('CE-SRC-05: Source Down → Blocks Accumulate → Recovery', function (
         await sourceFaults.dbDown();
         await sleep(3000);
 
-        // Direct connection bypasses the now-disabled source proxy.
+        // Seed blocks via DIRECT connection (bypasses disabled proxy)
         await seedSourceDirect(21, 35);
 
         // Let poll failures accumulate against the circuit breaker.

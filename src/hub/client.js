@@ -99,11 +99,12 @@ class HubClient {
         this.lastSuccessfulFetchAt = null;
     }
 
-    // Tries each endpoint starting from the last one that succeeded, wrapping around
-    // through the rest. x-api-key is attached whenever HUB_API_KEY is configured:
-    // getallconfigs sits in the hub's sensitive-read tier (its response carries DB
-    // credentials) and 401s without it once the hub sets a key, while methods that do
-    // not need it ignore it, so sending unconditionally is safe.
+    // Internal: call a JSON-RPC method, trying each endpoint starting from the
+    // last one that succeeded and wrapping around through the rest.
+    // Attaches x-api-key when HUB_API_KEY is configured: getallconfigs is in
+    // the hub's sensitive-read tier (its response carries DB credentials) and
+    // 401s without it once the hub sets a key. Methods that don't need it
+    // ignore it, so sending unconditionally is safe.
     // HUB_CONFIG_SECRETS_API_KEY wins when set: the hub can split the credential
     // tier (getallconfigs with include_secrets, the only way this client gets the
     // replication sources' DB passwords) onto a key of its own, and one request
@@ -163,10 +164,15 @@ class HubClient {
             'then every replication source built from this config will fail to authenticate.');
     }
 
-    // Returns the full nested tree { coin: { network: { module: { param: value } } } }
-    // whatever shape the hub answered in; see _applyConfigResult for the version
-    // handling. Sync discovers DBs at startup, so this.lastSeq is tracked for
-    // completeness rather than used for invalidation here.
+    // Get all configs from the hub
+    // Returns nested object: { coin: { network: { module: { param: value } } } }
+    //
+    // Newer hubs wrap the config map as { configs, seq } so consumers can detect a
+    // config change committed between polls; older hubs return the bare nested map.
+    // We record the committed sequence on this.lastSeq and always return the bare
+    // map, so _extractDbConfigs sees the same shape regardless of hub version. seq
+    // is 0 against an old hub. (Sync discovers DBs at startup, so the seq is tracked
+    // for completeness rather than used for invalidation here.)
     async getallconfigs(){
         let cursorEndpoint = this._watermarkEndpointIdx;
         let sentCursor     = this.lastWatermark;
@@ -257,12 +263,15 @@ class HubClient {
                ((this.lastSeq || 0) > 0 && seq < this.lastSeq);
     }
 
-    // Folds a getallconfigs result into this.configs and returns the full nested map,
-    // absorbing the hub-version differences so _extractDbConfigs sees one shape. Newer
-    // hubs wrap the payload as { configs, seq, watermark }, and a watermark means the
-    // payload is a delta against the cursor we sent, so it is MERGED and the cursor
-    // advances. Older hubs return the bare map, or a { configs, seq } wrapper with no
-    // watermark; those are the full tree and REPLACE the cache, with seq 0.
+    // Fold a getallconfigs result into this.configs and return the full nested
+    // map. Newer hubs wrap the payload as { configs, seq, watermark }: when a
+    // watermark is present the payload is a delta (only rows changed since the
+    // cursor we sent), so we MERGE it into the cache and advance the cursor.
+    // Older hubs return the bare map (or a { configs, seq } wrapper without a
+    // watermark); those are the full tree, so we REPLACE. _extractDbConfigs sees
+    // the same full-map shape regardless of hub version. seq is 0 against an old
+    // hub. The configs table is upsert-only (no row deletes), so merging
+    // successive deltas reconstructs exactly what a full fetch would have returned.
     _applyConfigResult(result){
         // Every envelope, initial fetch and delta poll alike, funnels through here.
         this._checkHubConsensusHash(result && typeof result === 'object' ? result.coin_consensus_hashes : null);
@@ -337,8 +346,8 @@ class HubClient {
         return this._extractDbConfigs(await this.getallconfigs(), 'xchain-decoder', 'decoder');
     }
 
-    // Walks the hub config tree for one module type, returning
-    // [{ coin, network, dbType, db_host, db_port, db_name, db_user, db_pass }].
+    // Extract indexer database configs from the hub response.
+    // Returns array of: [{ coin, network, dbType, db_host, db_port, db_name, db_user, db_pass }]
     _extractDbConfigs(allConfigs, moduleName, dbType){
         if(!allConfigs) return [];
 

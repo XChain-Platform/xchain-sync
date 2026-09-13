@@ -989,7 +989,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(db.commitReadSnapshot.calledOnce);
             });
 
-            // A transient/operational error (deadlock 1213, lock-wait 1205,
+            // Finding 1323: a transient/operational error (deadlock 1213, lock-wait 1205,
             // connection drop) must NOT be swallowed. Rows are fully fetched before any byte
             // is written, so swallowing it would ship a structurally-valid but silently
             // INCOMPLETE catch-up (the table's window vanishes yet the payload still parses).
@@ -1024,7 +1024,7 @@ describe('SnapshotBuilder', function(){
                 assert.ok(db.rollbackReadSnapshot.calledOnce);
             });
 
-            // A catch-up window with zero actions (getFirstActionIndex null)
+            // Finding 1322: a catch-up window with zero actions (getFirstActionIndex null)
             // that contains only a legacy-era cooldown maturity mints NO actions row, so the
             // credits action-scoped base query is empty. The matured-cooldown merge keys off
             // the maturity block, not action_index, and must still run so the backdated refund

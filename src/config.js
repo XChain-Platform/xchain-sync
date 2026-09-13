@@ -281,7 +281,7 @@ module.exports = {
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure: a replica is dropped only when its send buffer
+        // WebSocket backpressure (item 5410): a replica is dropped only when its send buffer
         // is genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory (a peer
         // accumulating past this is not draining); STALL_MS is how long the buffer may go
         // without making downward progress before the peer is dropped. This replaces the old

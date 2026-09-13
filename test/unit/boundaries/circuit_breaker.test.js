@@ -12,7 +12,9 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const Utility = require('../../../src/util');
 
-// The mariadb import is at module level, so proxyquire injects a mock pool to test the circuit breaker logic without a real connection.
+// We test the circuit breaker logic by constructing a Database instance
+// with a stubbed pool. Since the mariadb import is at module level, we
+// use proxyquire to inject a mock pool.
 const proxyquire = require('proxyquire');
 
 function createDatabase(poolStub){

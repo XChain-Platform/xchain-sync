@@ -89,7 +89,8 @@ describe('Integration: contract_emissions reorg-safe streaming (emissions fix) @
         assert.ok(slash, 'SLASH emission present in the streamed set');
         assert.strictEqual(slash.action_index, null, 'SLASH emission carries NULL action_index');
 
-        // The bug this replaces (see header): the action-scoped INNER JOIN drops the NULL row.
+        // The bug it fixes: the generic action-scoped INNER JOIN silently drops the NULL row,
+        // so a follower fed by this path would recompute a divergent contract_hash and halt.
         const actionScoped = await sourceDb.getActionScopedRows('contract_emissions', B);
         assert.strictEqual(actionScoped.length, 1,
             'action-scoped path drops the NULL-action_index SLASH row (the divergence bug)');

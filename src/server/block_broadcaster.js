@@ -302,13 +302,15 @@ class BlockBroadcaster {
         }
     }
 
-    // Per-subscriber lag info for /status:
-    // { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived, lagStatus }.
-    // lastSentBlock is null until the first block is broadcast, appliedBlock until the
-    // subscriber's first heartbeat, and lag whenever either side is unavailable.
-    // heartbeatReceived is what lets a caller tell a caught-up subscriber (lag 0) from
-    // one that has never reported (lag null because unknown, not because in sync);
-    // clients that never send heartbeats stay false forever.
+    // Return per-subscriber lag info for a chain/network/dbType, used by /status.
+    // Each entry: { ip, lastSentBlock, appliedBlock, lag, heartbeatReceived, lagStatus }.
+    // lastSentBlock is null until the first block is broadcast; appliedBlock is null
+    // until the subscriber sends its first heartbeat; lag (lastSentBlock - appliedBlock)
+    // is null whenever either side is unavailable. heartbeatReceived is true once the
+    // subscriber has reported an applied block at least once; it lets callers tell a
+    // caught-up subscriber (lag 0) apart from one that has never reported (lag null
+    // because it is unknown, not because it is in sync). Clients that never send a
+    // heartbeat (legacy builds, third-party validators) stay heartbeatReceived:false.
     getSubscribers(chain, network, dbType){
         let subs = this.subscribers.get(this._key(chain, network, dbType));
         if(!subs) return [];
@@ -324,10 +326,13 @@ class BlockBroadcaster {
                 appliedBlock: applied,
                 lag,
                 heartbeatReceived,
-                // Machine-readable so an alerting script never has to guess what a null
-                // `lag` means: 'known' is a real number including a genuine 0, while
-                // 'unknown' means undetermined, NOT in sync. Scanning only for non-zero
-                // `lag` would silently skip every 'unknown' subscriber.
+                // lagStatus is an explicit machine-readable signal so an operator or
+                // alerting script does not have to interpret what a null `lag` means.
+                // 'known':   a heartbeat established a baseline, so `lag` is a real
+                //            number (including a genuine 0 = caught up).
+                // 'unknown': no heartbeat yet, so `lag` is null because it is
+                //            undetermined, NOT because the subscriber is in sync.
+                //            Scanning only for non-zero `lag` would silently skip these.
                 lagStatus: heartbeatReceived ? 'known' : 'unknown'
             });
         }
@@ -355,7 +360,7 @@ class BlockBroadcaster {
 
         let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
 
-        // Backpressure: drop a peer only when it is genuinely stuck, not merely
+        // Backpressure (item 5410): drop a peer only when it is genuinely stuck, not merely
         // slow. Two independent signals on the OS send buffer:
         //   1) a hard byte ceiling - the peer is accumulating unboundedly (server-memory risk);
         //   2) a non-draining stall timeout - the buffer has not made any downward progress for

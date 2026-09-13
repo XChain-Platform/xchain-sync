@@ -88,15 +88,21 @@ const TOPOLOGY = {
     decoder: {
         // Block-scoped tables (key off block_index directly)
         blockScoped:  ['blocks', 'transactions'],
-        // Keyed off tx_index -> transactions.block_index. dispensers is deliberately
-        // absent: that join captures only rows INSERTED in a block, while the decoder
-        // also soft-expires and later hard-purges dispensers off-stream, so streaming
-        // inserts alone would let a follower's count drift. It rides `special` instead.
+        // Tx-scoped tables (key off tx_index -> transactions.block_index).
+        // dispensers is deliberately NOT per-block-streamed: per-block replication
+        // captures only rows *inserted* in a block (via the tx_index->block_index
+        // join), but the decoder also soft-expires dispensers (UPDATE
+        // expired_block_index) and defers the hard-purge to purgeExpiredDispensers.
+        // Neither mutation rides the block stream, so streaming inserts alone would
+        // let a follower's dispensers count drift away from the source. dispensers
+        // is instead listed in `special` below, where it converges through the
+        // periodic full-table reconcile; the count it joins there cannot detect
+        // that UPDATE/DELETE drift (see the note on that bucket).
         txScoped:     ['transaction_outputs'],
         // Decoder doesn't have action-scoped tables
         actionScoped: [],
-        // Append-only lookups that grow as blocks are processed. events is
-        // operational/logging, included so consumers can see decoder activity.
+        // Append-only lookup tables that may grow as new blocks are processed.
+        // events is operational/logging; included so consumers see decoder activity.
         index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
         // Counted for completeness but NOT read by ServerPoller's per-scope loops.
         // dispensers converges only through the full snapshot plus the periodic
@@ -188,8 +194,9 @@ function contentParityPlan(dbType){
 
 // Every replicated table that is NOT in the content-parity plan, mapped to the
 // reason it is out. Exists so the coverage guard can assert the complement is
-// exactly the two declared exclusion classes: a replicated table that is neither
-// checked nor knowingly excluded is the defect this whole check exists to catch.
+// exactly the two declared exclusion classes and nothing has silently fallen
+// through: a replicated table that is neither checked nor knowingly excluded is
+// the defect  was raised for.
 function contentParityExclusions(dbType){
     let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
     let mutable = new Set(lifecycle.contentParityMutableTables());

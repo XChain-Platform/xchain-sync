@@ -49,10 +49,10 @@ class Utility {
         logger.error(util.format('logError: ' + error, info));
     }
 
-    // JSON.stringify with BigInt support. The replacer reads the RAW pre-toJSON value
-    // via this[key] rather than the post-toJSON `value`, so a global
-    // BigInt.prototype.toJSON patch (one a loaded SDK installs, say) cannot flip a
-    // bigint's serialized form and desync the two hashers. Consensus pair with
+    // JSON.stringify with BigInt support. Byte-identical to xchain-indexer's hardened
+    // copy: the replacer reads the RAW pre-toJSON value via this[key] (not the post-toJSON
+    // `value`), so a global BigInt.prototype.toJSON patch (e.g. one a loaded SDK installs)
+    // cannot flip a bigint's serialized form and desync the two hashers. Consensus pair with
     // xchain-indexer/src/utility.js jsonStringify(); the two MUST stay byte-identical.
     jsonStringify(obj){
         return JSON.stringify(obj, function(key, value){
@@ -61,7 +61,8 @@ class Utility {
         });
     }
 
-    // Must produce identical output to xchain-indexer/src/utility.js getDataHash().
+    // Get a SHA256 hash of a given data object
+    // NOTE: Must produce identical output to xchain-indexer/src/utility.js getDataHash()
     getDataHash(data){
         let obj  = Object.assign({}, data);
         let json = this.jsonStringify(obj);

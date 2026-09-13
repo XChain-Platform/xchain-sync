@@ -331,7 +331,7 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // BET in-place flip resets: the updated_rows BET classes
+                // BET in-place flip resets ( P4): the updated_rows BET classes
                 // carried surviving bet_feeds / bets rows latched, terminal-flipped or
                 // settled in the now-orphaned range; the action-scoped delete below
                 // cannot un-flip them. Mirrors xchain-indexer/src/rollback.js's BET

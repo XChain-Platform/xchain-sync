@@ -43,7 +43,7 @@ const envConfig = require('../config');
 const logger = getLogger();
 
 // How many recently broadcast block hashes to retain in memory for the
-// net-forward reorg walk-back. Comfortably above the source
+// net-forward reorg walk-back (item 4830). Comfortably above the source
 // indexer's MAX_ROLLBACK_DEPTH (100) so a deep same-interval reorg can be
 // walked back one height per poll against the pre-reorg hash we recorded,
 // rather than against a fresh (post-reorg) source read that always matches.
@@ -95,14 +95,14 @@ class ServerPoller {
         this.lastPolledBlock = null;
         // Hash of lastPolledBlock's content on the source, so a net-forward reorg
         // (rollback + readvance within one poll interval, which keeps the height
-        // monotonic) is detectable by a changed hash, not just a lower height.
+        // monotonic) is detectable by a changed hash, not just a lower height (4623).
         this.lastPolledBlockHash = null;
         // Bounded map of recently broadcast block hashes (block_index -> content
         // hash WE broadcast for that height). On a net-forward reorg the walk-back
         // seeds lastPolledBlockHash from the PRE-reorg hash recorded here, so a
-        // reorg deeper than one block keeps walking back over subsequent polls.
-        // Works for both dbTypes (the decoder has no sync_meta to read a recorded
-        // hash from). Capped to the last RECENT_HASH_CAP heights.
+        // reorg deeper than one block keeps walking back over subsequent polls
+        // (item 4830). Works for both dbTypes (the decoder has no sync_meta to read
+        // a recorded hash from). Capped to the last RECENT_HASH_CAP heights.
         this.recentBroadcastHashes = new Map();
         this.running = false;
 
@@ -269,7 +269,7 @@ class ServerPoller {
         // fires, yet the block we already broadcast was orphaned and re-mined. Detect
         // it by re-reading the source hash at lastPolledBlock; a change means the chain
         // forked at or below it. Roll back one block and re-read the prior hash so a
-        // deeper reorg is walked back over subsequent polls.
+        // deeper reorg is walked back over subsequent polls (item 4623).
         if(this.lastPolledBlockHash !== null){
             let srcHash = await this.sourceBlockHash(this.lastPolledBlock);
             if(srcHash !== null && srcHash !== this.lastPolledBlockHash){
@@ -418,10 +418,10 @@ class ServerPoller {
                         this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
 
                         // Track the hash we just broadcast so the next poll can detect a
-                        // net-forward reorg that rewrites this block.
+                        // net-forward reorg that rewrites this block (item 4623).
                         this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
                         // Record it for the net-forward walk-back so a deeper reorg can be
-                        // detected against this pre-reorg hash on a later poll.
+                        // detected against this pre-reorg hash on a later poll (item 4830).
                         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
                         if(nextBlock > RECENT_HASH_CAP)
                             this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);

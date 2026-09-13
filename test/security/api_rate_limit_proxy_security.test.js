@@ -253,7 +253,7 @@ describe('API rate-limit proxy trust security', function(){
             assert.strictEqual(res.body.ip, CLIENT_A);
         });
 
-        // The actual defect: without the seam both clients resolve to
+        // The actual defect in : without the seam both clients resolve to
         // 127.0.0.1, share one bucket, and the first caller 429s the second.
         it('gives two different client addresses independent snapshot buckets', async function(){
             harness = await startHarness({ trustProxy: true, cfg: { SNAPSHOT_RATE_FULL: 2 } });

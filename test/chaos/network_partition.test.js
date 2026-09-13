@@ -184,7 +184,7 @@ describe('CE-NET-02: High Latency on WebSocket Link', function () {
     });
 
     it('blocks still delivered despite 500ms WebSocket latency', async function () {
-        // 500ms latency, 100ms jitter
+        // Inject 500ms ± 100ms latency on the WebSocket link
         await wsFaults.addLatency(500, 100);
 
         await seedSourceBlocks(21, 35);

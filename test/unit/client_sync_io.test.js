@@ -339,10 +339,14 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
     });
 });
 
-// A production DOGE:testnet replica froze for weeks because a full-history
+// ─────────────────────────────────────────────────────────────────────────────
+// 2a. bootstrap size wall + rate limit 
+//
+// The DOGE:testnet replica on origin-host froze for weeks because a full-history
 // snapshot outgrew SNAPSHOT_MAX_CONTENT: every bootstrap round hit the same wall,
 // BootstrapExhaustedError exited the process, systemd restarted it, and the loop
 // drained the source's hourly full-snapshot budget until every request 429'd.
+// ─────────────────────────────────────────────────────────────────────────────
 describe('ClientSync: bootstrap size wall', function(){
     let sync, db, applier;
 
@@ -1109,8 +1113,11 @@ describe('ClientSync: incrementalCatchUp coalescing', function(){
     });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 4b. HASH_CONFIRM_STRICT carried into the catch-up path (M-22)
 // A block rejected by the strict cross-source hash gate must not be silently
 // re-applied single-source by the incremental catch-up path seconds later.
+// ─────────────────────────────────────────────────────────────────────────────
 describe('ClientSync: strict cross-source gate survives catch-up (M-22)', function(){
     let sync, db, applier;
 
@@ -1472,8 +1479,8 @@ describe('ClientSync: heartbeat', function(){
     it('flushHeartbeat returns early when lastAppliedBlock is null', function(){
         ({ sync, db } = makeSync());
         sync.lastAppliedBlock = null;
-        // Without the early return it would iterate wsConns and sources; axios.post
-        // never firing is the signal that it bailed out instead.
+        // If it didn't return early it would try to iterate wsConns and sources
+        // Just verify it doesn't crash and axios.post is never called
         let postStub = sinon.stub(axios, 'post').resolves();
         sync.flushHeartbeat();
         assert.strictEqual(postStub.called, false);

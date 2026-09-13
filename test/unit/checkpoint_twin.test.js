@@ -97,14 +97,17 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             'sync canonicalCheckpoint drifted from the canonical XCHECKPOINT signing string; re-align the vendored twin to the SDK copy');
     });
 
-    // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical, the launch-epoch shape real
-    // hub-signed federation checkpoints use. Every quorum case below signs and verifies through sync's own
-    // builder, so a one-sided drift of the appended state_root|state_root_version|block_merkle_root|block_merkle_version
-    // suffix (or the EQUIV header wrap) would keep sign==verify green and keep the rootless mainnet golden
-    // green, while sync silently fails to verify real hub checkpoints. Regtest activates both CHECKPOINT_COMMITMENT
-    // and the EQUIV header at height 0, so the canonical commits the four SPV-root fields and is EQUIV-wrapped;
-    // the expected string below is reconstructed from the documented spec parts (not from the builder) so
-    // drift fails here rather than in production. Mirrors the explorer's 'regtest row with SPV roots' cross-check.
+    // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical: the
+    // launch-epoch shape real hub-signed federation checkpoints use. Every quorum
+    // case below signs and verifies through sync's OWN builder, so a one-sided drift
+    // of the appended state_root|state_root_version|block_merkle_root|block_merkle_version
+    // suffix (or the EQUIV header wrap) keeps sign==verify green AND keeps the rootless
+    // mainnet golden green, while sync silently fails to verify real hub checkpoints.
+    // regtest activates both CHECKPOINT_COMMITMENT and the EQUIV header at height 0, so
+    // the canonical commits the four SPV-root fields and is EQUIV-wrapped. The expected
+    // string is reconstructed here from the documented spec parts (NOT from the builder),
+    // so a drift of canonicalCheckpoint fails here rather than in production. Mirrors the
+    // explorer's 'regtest row with SPV roots' cross-check, but for the sync verifier.
     it('canonicalCheckpoint matches the ACTIVE SPV-root spec byte-for-byte (EQUIV-wrapped, roots committed)', function(){
         const cp = { chain: 'BTC', network: 'regtest', block_index: 100,
             block_hash: 'c0'.repeat(32), ledger_hash: 'a1'.repeat(32),

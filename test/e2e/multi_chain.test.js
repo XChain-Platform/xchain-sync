@@ -56,8 +56,8 @@ describe('E2E: Multi-Chain Synchronization', function() {
         await setup.resetDatabases();
     });
 
-    // Serves two chains from the same source DB, using different block
-    // ranges to simulate independent chains.
+    // Multi-chain server: serves two chains from the same source DB
+    // (using different block ranges to simulate independent chains)
     function startMultiChainServer() {
         let config = {
             WS_MAX_PER_IP: 20,

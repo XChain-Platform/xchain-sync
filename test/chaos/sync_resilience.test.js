@@ -116,7 +116,7 @@ describe('CE-SYNC-01: Server Crash → Reconnect → Gap Healing', function () {
         await server.stop();
         server = null;
 
-        // Direct connection: the normal (server-fronted) seed path is down.
+        // Seed new blocks while server is down (via direct DB connection)
         await seedSourceDirect(21, 30);
 
         // The crash only exercises reconnect once the client has SEEN the socket
@@ -171,7 +171,7 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         const initialSync = await waitForSyncRecovery(30, 30000);
         expect(initialSync).to.be.above(-1, 'Initial sync should complete');
 
-        // Simulate a brief disconnect.
+        // Stop client WebSocket (simulate brief disconnect)
         client.stop();
 
         // Seed more blocks while client is disconnected
@@ -179,7 +179,8 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         await server.poll();
         await sleep(1000);
 
-        // Simulates resumption: the client's replica already has blocks 1-30.
+        // Don't do full bootstrap; just connect live sync
+        // The client's replica already has blocks 1-30
         // Reconnect client; simulates resumption from block 30
         client = createClient(server.getUrl(), { reconnectDelay: 500 });
 
@@ -233,7 +234,7 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         await fixtures.deleteBlocksFrom(sourceDbDirect, 18);
 
-        // Poll should detect the reorg (currentBlock=17 < lastPolled=20).
+        // Force server poll; will detect reorg (currentBlock=17 < lastPolled=20)
         try { await server.poll(); } catch { /* may fail under latency */ }
         await sleep(2000);
 
@@ -299,13 +300,13 @@ describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function (
         // Phase 1: Source DB goes down
         await sourceFaults.dbDown();
 
-        // Direct connection, since the source proxy is disabled.
+        // Seed blocks via DIRECT connection while proxy is disabled
         await seedSourceDirect(16, 25);
 
         // Let the server's circuit breaker start failing before crashing it.
         await sleep(5000);
 
-        // Server crashes while source is still down.
+        // Phase 2: Server crashes (while source is still down)
         await server.stop();
         server = null;
 

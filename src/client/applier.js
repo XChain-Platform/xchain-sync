@@ -100,7 +100,7 @@ class ClientApplier {
             // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
             'sync_meta',
             // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent.
+            // full-dump re-send on an incremental catch-up idempotent (item 4622).
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
             // reward_type, round_reference, round_qualifier). The recovery-redriven collector
@@ -152,7 +152,7 @@ class ClientApplier {
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
         // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values.
+        // STALE row, so they must UPSERT to overwrite with the source values (4622).
         this.upsertFullDumpTables = new Set([
             'markets',
             'attest_validator_stats'

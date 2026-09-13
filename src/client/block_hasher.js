@@ -143,7 +143,7 @@ class BlockHasher {
         for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-        // Hash the resolved action-type string, never the index_actions id.
+        // actions (hash the resolved action-type string, never the index_actions id)
         query = `SELECT
                     a.action_index,
                     a.tx_index,

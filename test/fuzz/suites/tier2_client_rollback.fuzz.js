@@ -108,6 +108,7 @@ describe('Tier 2 - ClientRollback @tier2', function () {
             // 1146 unknown table / 1054 unknown column) so an older replica missing a
             // table/column still completes the reorg-reset; every other error (deadlock,
             // lock-wait, connection drop) MUST abort so the reset is never half-applied.
+            // Inject a schema-gap error to exercise the skip path and assert commit.
             return fc.assert(fc.asyncProperty(
                 blockIndex(),
                 fc.array(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }),

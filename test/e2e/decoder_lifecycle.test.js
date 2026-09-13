@@ -243,7 +243,8 @@ describe('E2E: Decoder DB Lifecycle', function() {
         await decoderFixtures.seedDecoderSchema(sourceDb);
         await decoderFixtures.seedDecoderSchema(replicaDb);
 
-        // Mute chatty src/ console output; unstub when debugging a hook/setup failure.
+        // Mute the chatty src/ console output during the run.
+        // (Unstub temporarily when debugging a hook/setup failure.)
         if(!process.env.E2E_DEBUG){
             sinon.stub(console, 'log');
             sinon.stub(console, 'error');
@@ -414,11 +415,13 @@ describe('E2E: Decoder DB Lifecycle', function() {
             let replicaLast = await replicaDb.getLastBlock();
             assert.strictEqual(replicaLast, 10);
 
-            // Row-count parity across replicated decoder tables: events and pubkeys
-            // are idempotently re-dumped/upserted on each snapshot so they converge
-            // to source; dispensers are excluded from per-block replication (their
-            // soft-expire/hard-purge mutations don't ride the block stream) but the
-            // full snapshot dumps current rows so parity still holds here.
+            // Row-count parity for all replicated decoder tables.
+            // events: re-dumped in full on every snapshot (INSERT IGNORE on PK),
+            //   so the replica count converges to source at bootstrap.
+            // pubkeys: fetched per-block by address_id; idempotent INSERT IGNORE.
+            // dispensers: intentionally excluded from per-block replication (soft-
+            //   expire/hard-purge mutations don't ride the block stream), but the
+            //   full snapshot dumps current rows, so count should match here too.
             let tables = ['blocks', 'transactions', 'transaction_outputs',
                           'index_addresses', 'index_transactions', 'events', 'pubkeys'];
             for(let t of tables){

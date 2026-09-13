@@ -46,8 +46,9 @@ function validateIdentifier(val){
     return { valid: true };
 }
 
-// DDL arrives from a remote source, so it must start with CREATE TABLE and carry
-// no dangerous statement type or post-semicolon multi-statement injection.
+// Validate a DDL statement from a remote source.
+// Must start with CREATE TABLE; rejects dangerous statement types and
+// multi-statement injection (DROP, TRIGGER, PROCEDURE, etc. after semicolons).
 function validateDdl(sql){
     if(sql === null || sql === undefined)
         return { valid: false, reason: 'DDL is null or undefined' };
@@ -64,9 +65,11 @@ function validateDdl(sql){
     return { valid: true };
 }
 
-// In SHOW CREATE TABLE output, column definition lines are the only ones starting
-// with a backtick-quoted identifier: the opening line begins with CREATE and
-// constraint lines with PRIMARY/UNIQUE/KEY/CONSTRAINT/FULLTEXT. Returns [] for
+// Extract the ordered list of column names from a CREATE TABLE DDL
+// (as produced by SHOW CREATE TABLE). Column definition lines are the
+// only lines that start with a backtick-quoted identifier; the opening
+// `CREATE TABLE \`name\` (` line begins with CREATE, and constraint lines
+// begin with PRIMARY/UNIQUE/KEY/CONSTRAINT/FULLTEXT etc. Returns [] for
 // non-string input or a DDL with no parseable columns.
 function extractColumnNames(ddl){
     if(typeof ddl !== 'string') return [];
@@ -81,16 +84,23 @@ function extractColumnNames(ddl){
     return names;
 }
 
-// Extracts one column's definition for use as the body of `ALTER TABLE ... ADD
-// COLUMN`, e.g. "`new_col` varchar(255) DEFAULT NULL". Returns null when the
-// column cannot be cleanly located or when the definition would smuggle extra
-// actions into the ALTER, which takes two guards: a semicolon anywhere on the
-// line (a hostile DDL ending it with "; DROP TABLE ..." slips a second statement
-// past validateDdl), and a bare comma at parenthesis-depth 0, because MariaDB
-// treats "ADD COLUMN `c` int, DROP COLUMN victim" as ONE valid semicolon-free
-// statement that both the first guard and multipleStatements:false miss. Commas
-// inside parentheses (decimal(18,8), enum('a','b')) are part of the type and must
-// survive. Callers treat null as "skip this column" rather than aborting.
+// Extract a single column's definition from a CREATE TABLE DDL, suitable
+// for use as the body of `ALTER TABLE ... ADD COLUMN`. Returns the
+// backtick-quoted name plus its type/attributes (e.g.
+// "`new_col` varchar(255) DEFAULT NULL") with any trailing comma stripped.
+// Returns null if the column cannot be cleanly located, or if the
+// definition would smuggle additional actions into the ALTER. Two guards:
+//   1. Reject any line containing a semicolon (a hostile DDL could end the
+//      column line with "; DROP TABLE ...", slipping a second statement
+//      past validateDdl into the ALTER).
+//   2. Reject any line carrying a bare comma at parenthesis-depth 0 (after
+//      the trailing comma is stripped). MariaDB treats a single
+//      "ADD COLUMN `c` int, DROP COLUMN victim" ALTER as ONE valid
+//      statement; no semicolon, so guard 1 and multipleStatements:false
+//      both miss it. Commas inside parentheses (decimal(18,8),
+//      enum('a','b'), etc.) are part of the type and must survive, so the
+//      scan only trips on a comma at depth 0.
+// Callers should treat null as "skip this column" rather than aborting.
 function extractColumnDefinition(ddl, columnName){
     if(typeof ddl !== 'string' || typeof columnName !== 'string')
         return null;
@@ -102,12 +112,15 @@ function extractColumnDefinition(ddl, columnName){
         if(trimmed.substring(1, endTick) !== columnName) continue;
         let def = trimmed.replace(/,\s*$/, '');
         if(def.indexOf(';') !== -1) return null;
-        // The depth scan must be QUOTE-AWARE. Without it a hostile line like
+        // Depth scan for a bare top-level comma (a smuggled second ALTER action),
+        // QUOTE-AWARE: a '(' or ',' inside a string literal ('...'), a backtick
+        // identifier (`...`) or COMMENT text must not inflate depth or be read as a
+        // real separator. Without this a hostile schema line like
         //   `evil` int COMMENT '(' , DROP COLUMN `victim`
-        // pushes depth to 1 on the quoted '(', so the real top-level comma is read at
-        // depth 1 and splices a second action into the ALTER. MariaDB escapes a quote
-        // by doubling it ('' / ``), so skip the pair or the quoted region closes early
-        // and re-exposes attacker text.
+        // pushes depth to 1 on the quoted '(' so the top-level ", DROP COLUMN" comma
+        // is seen at depth 1 and slips past, splicing a second action into the ALTER.
+        // MariaDB escapes a quote by doubling it ('' / ``); skip the pair so the quoted
+        // region does not close early and re-expose attacker text.
         let depth = 0;
         let inStr = false, inTick = false;
         for(let i = 0; i < def.length; i++){
@@ -219,8 +232,10 @@ function extractKeyForColumn(ddl, columnName){
     return best;
 }
 
-// block/reorg require a non-negative integer block_index; status requires a finite
-// block_height or null.
+// Validate a WebSocket event has the expected shape.
+// Accepted types: block, reorg, status.
+// block/reorg require a positive integer block_index.
+// status requires a non-negative block_height (or null).
 function validateWsEvent(event){
     if(event === null || event === undefined)
         return { valid: false, reason: 'Event is null or undefined' };
