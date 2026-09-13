@@ -83,6 +83,7 @@ const MIXIN_FILES = [
     './validator_rewards.js',
     './credits.js',
     './index_lookups.js',
+    './state_checkpoints.js',
 ];
 
 class Database {

@@ -238,4 +238,17 @@ module.exports = {
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE id IN (" + ids.map(() => '?').join(',') + ")", ids, conn);
     },
 
+    /**
+     * The name of every base table in this database, in name order. Views are
+     * excluded, because only a base table has DDL a client can recreate.
+     *
+     * @returns {Promise<object[]>} the driver's row array, one row per table
+     */
+    async findBaseTableNames(){
+        return await this.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
+            [this.dbName]
+        );
+    },
+
 };

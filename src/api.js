@@ -633,9 +633,6 @@ async function startApi(){
             validator_signatures: r.validator_signatures
         };
     }
-    const CHECKPOINT_COLS = 'chain, network, block_index, block_hash, ledger_hash, actions_hash, ' +
-        'contract_hash, checkpoint_seq, snapshot_block, state_root, state_root_version, ' +
-        'block_merkle_root, block_merkle_version, validator_signatures';
 
     app.get('/checkpoint/:dbType/:chain/:network/latest', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
@@ -645,8 +642,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints ORDER BY block_index DESC, checkpoint_seq DESC LIMIT 1');
+            let rows = await db.getLatestCheckpoint();
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
@@ -681,12 +677,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints sc ' +
-                'WHERE block_index >= ? AND block_index <= ? ' +
-                'AND checkpoint_seq = (SELECT MAX(s2.checkpoint_seq) FROM state_checkpoints s2 WHERE s2.block_index = sc.block_index) ' +
-                'ORDER BY block_index ASC LIMIT ?',
-                [from, to, CHECKPOINT_RANGE_LIMIT]);
+            let rows = await db.findCheckpointsInRange(from, to, CHECKPOINT_RANGE_LIMIT);
             res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
         } catch(e){
             console.error('[API error] /checkpoint/.../range:', e);
@@ -704,9 +695,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
-                [h]);
+            let rows = await db.getCheckpointAtHeight(h);
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
@@ -773,10 +762,7 @@ async function startApi(){
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         try {
-            let tables = await db.doQuery(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
-                [db.dbName]
-            );
+            let tables = await db.findBaseTableNames();
             let schema = {};
             for(let row of tables){
                 let tableName = row.table_name || row.TABLE_NAME;
