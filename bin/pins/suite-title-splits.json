@@ -1,0 +1,14 @@
+{
+  "note": "The declared test-file splits, read by bin/suite-title-map.js --split-map against bin/pins/at1-suite-titles.json. splits maps each pinned test file that became several files to the full list of files its tests now live in, keyed by the path the compare sees after the rename map is applied. For every npm test script that pinned the old file, the titles those files collect together must equal the old file's titles exactly: none lost, none added, none carried by two parts, and none moved into a file the list does not name. A part may keep the old path; a single destination is a rename and belongs in the rename map. A split that also renames a symbol a title quotes declares it in the name map, which is applied to the old file's titles before the union is graded, so a difference that is not declared is a regression rather than a restructure.",
+  "date": "2026-09-14",
+  "pin": "bin/pins/at1-suite-titles.json",
+  "pin_before_sha256": "e98c59c8a3cd7eb035adc526ad0c03fb3e335101c303b334a46507be29bd15ef",
+  "compare": "node bin/suite-title-map.js --compare bin/pins/at1-suite-titles.json --rename-map bin/pins/suite-title-renames.json --name-map bin/pins/m2-name-delta.json --split-map bin/pins/suite-title-splits.json",
+  "example": {
+    "test/unit/big_suite.test.js": [
+      "test/unit/big_suite/reads.test.js",
+      "test/unit/big_suite/writes.test.js"
+    ]
+  },
+  "splits": {}
+}
