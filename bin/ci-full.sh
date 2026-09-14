@@ -145,6 +145,13 @@ run_tier "drift-guards: coin consensus-pin conformance" node -e '
   console.log("consensus pin conformance OK (testnet, regtest)");
 '
 
+# --- identity pin (this gate only; no ci.yml job runs it) --------------------
+# bin/pins/identity.json holds the armed-map fingerprint, the per-file hashes
+# behind it, and the sha256 of each vendored coin file. Nothing else reads it,
+# so this tier re-hashes the tree against it and fails on any moved, renamed,
+# missing or unreadable carrier instead of letting the pin go stale.
+run_tier "identity pin (armed map, vendored coins)" node bin/pin-identity.js --compare bin/pins/identity.json
+
 # --- job: coverage -----------------------------------------------------------
 run_tier "coverage ratchet (coverage:check)" npm run coverage:check
 
