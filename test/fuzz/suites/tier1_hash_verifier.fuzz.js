@@ -24,10 +24,9 @@ const { NUM_RUNS } = require('../setup/harness');
 const { blockHashPair, continuityPayload } = require('../helpers/generators/payloads');
 const { blockIndex } = require('../helpers/generators/values');
 
-describe('Tier 1 - HashVerifier @tier1', function () {
-    this.timeout(0);
-    let HashVerifier, verifier;
+let HashVerifier, verifier;
 
+function useHashVerifierHooks() {
     before(function () {
         HashVerifier = require('../../../src/client/hash_verifier');
     });
@@ -35,6 +34,11 @@ describe('Tier 1 - HashVerifier @tier1', function () {
     beforeEach(function () {
         verifier = new HashVerifier();
     });
+}
+
+describe('Tier 1 - HashVerifier @tier1', function () {
+    this.timeout(0);
+    useHashVerifierHooks();
 
     describe('compareBlockHashes', function () {
 
@@ -78,6 +82,14 @@ describe('Tier 1 - HashVerifier @tier1', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 1 - HashVerifier @tier1', function () {
+    this.timeout(0);
+    useHashVerifierHooks();
+
+    describe('compareBlockHashes', function () {
 
         it('same object reference always matches', function () {
             fc.assert(fc.property(
@@ -117,6 +129,11 @@ describe('Tier 1 - HashVerifier @tier1', function () {
             ), { numRuns: NUM_RUNS });
         });
     });
+});
+
+describe('Tier 1 - HashVerifier @tier1', function () {
+    this.timeout(0);
+    useHashVerifierHooks();
 
     describe('verifyChainContinuity', function () {
 
@@ -153,6 +170,14 @@ describe('Tier 1 - HashVerifier @tier1', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 1 - HashVerifier @tier1', function () {
+    this.timeout(0);
+    useHashVerifierHooks();
+
+    describe('verifyChainContinuity', function () {
 
         it('valid is true for exactly sequential blocks', function () {
             fc.assert(fc.property(
