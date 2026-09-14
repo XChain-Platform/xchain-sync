@@ -21,7 +21,7 @@
  ********************************************************************/
 
 const path       = require('path');
-const lifecycle = require('../tableLifecycle');
+const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
 
 module.exports = {

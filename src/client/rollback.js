@@ -23,7 +23,7 @@
  ********************************************************************/
 
 const balanceHelpers = require('../db/balance_helpers');
-const lifecycle      = require('../tableLifecycle');
+const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL } = require('../stateHash');

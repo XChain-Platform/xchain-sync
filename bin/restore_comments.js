@@ -67,7 +67,7 @@ const FROZEN = [
     /^src\/coins\//, /^src\/observability\//,
     /^src\/[a-z_]+_activation\.js$/,
     /^src\/(stateHash|equivocation_header|stake_weighted_quorum|consensus-constants)\.js$/,
-    /^src\/(merkle|contractStateSubtree|escrowLeafSubtree|tableLifecycle|stateCommitment|checkpoint|armedMapFingerprint)\.js$/,
+    /^src\/(merkle|contract_state_subtree|escrow_leaf_subtree|table_lifecycle|stateCommitment|checkpoint|armedMapFingerprint)\.js$/,
     /^test\/unit\/(stateSubtreeActivation|contractStateSubtree|escrowLeafSubtree)\.test\.js$/,
 ];
 

@@ -38,7 +38,7 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const lifecycle        = require('../../src/tableLifecycle');
+const lifecycle        = require('../../src/table_lifecycle');
 const replicatedTables = require('../../src/schema/replicated_tables');
 
 // The registry declares indexer-schema tables plus the handful xchain-sync owns,

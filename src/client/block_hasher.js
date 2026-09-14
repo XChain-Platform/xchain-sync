@@ -54,7 +54,7 @@ const BLOCK_HASH_VERSION = 1;
 const DEFAULT_CONTENT_PARITY_WINDOW = 100;
 
 const replicatedTables = require('../schema/replicated_tables');
-const lifecycle = require('../tableLifecycle');
+const lifecycle = require('../table_lifecycle');
 const { buildStateHashData } = require('../stateHash');
 const { gasTickSymbol } = require('../consensus-constants');
 const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
