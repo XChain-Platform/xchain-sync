@@ -275,6 +275,13 @@ for (const method of ['getStateRootsRow', 'getBlockLeafRows',
                       'getBlockScopedRows'])
     TestDatabase.prototype[method] = RealDatabase.prototype[method];
 
+// Every other real query method too, for the same reason: the services read the
+// database through named mixin methods, so a wrapper without them throws on the
+// first query a poller, snapshot builder or transparency log issues. A method this
+// wrapper already defines is kept.
+const { withDbMixins } = require('../../helpers/db_mixins.js');
+withDbMixins(TestDatabase.prototype);
+
 // Create a TestDatabase for a given db name
 async function createDb(dbName) {
     let mariadb = await getMariadb();
