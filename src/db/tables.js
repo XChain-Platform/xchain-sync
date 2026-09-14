@@ -251,4 +251,119 @@ module.exports = {
         );
     },
 
+    /**
+     * The name of every base table in this database, unordered: the snapshot
+     * builder imposes its own dependency order.
+     *
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array, one row per table
+     */
+    async findStreamableTableNames(conn){
+        return await this.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+            [this.dbName],
+            conn
+        );
+    },
+
+    /**
+     * Every row of a table from a block onward, keyed by a block_index column.
+     * The table is interpolated because an identifier cannot be a bind parameter;
+     * the caller passes a name from the replicated-table topology.
+     *
+     * @param {string} table
+     * @param {number} sinceBlock first block, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findRowsFromBlockIndex(table, sinceBlock, conn){
+        return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
+    },
+
+    /**
+     * Every row of a table. The table is interpolated from the replicated-table
+     * topology, never user input.
+     *
+     * @param {string} table
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findAllRows(table, conn){
+        return await this.doQuery("SELECT * FROM `" + table + "`", null, conn);
+    },
+
+    /**
+     * Every row of a table from a block onward, keyed by the column the table
+     * lifecycle registry names for it. Both names are interpolated from the
+     * registry, never user input.
+     *
+     * @param {string} table
+     * @param {string} key the table's block scope column
+     * @param {number} sinceBlock first block, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findRowsFromBlockKey(table, key, sinceBlock, conn){
+        return await this.doQuery("SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key, [sinceBlock], conn);
+    },
+
+    /**
+     * Every row of a table from an action index onward. The table is interpolated
+     * from the replicated-table topology, never user input.
+     *
+     * @param {string} table
+     * @param {number} firstActionIndex first action, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findRowsFromActionIndex(table, firstActionIndex, conn){
+        return await this.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
+    },
+
+    /**
+     * One page of an append-only lookup table after an id cursor. The table and
+     * cursor column come from the replicated-table allowlist, never user input.
+     *
+     * @param {string} table
+     * @param {string} col the cursor column
+     * @param {number} after the last cursor value already read
+     * @param {number} limit the page size
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findLookupPageAfter(table, col, after, limit, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
+            [after, limit],
+            conn
+        );
+    },
+
+    /**
+     * The decoder's dispensers rows after a keyset cursor, read strictly so a
+     * query error throws rather than reading as an empty table.
+     *
+     * @param {number} afterTx   the cursor's tx_index
+     * @param {number} afterAddr the cursor's address_id
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findDispensersAfter(afterTx, afterAddr){
+        return await this.doQueryStrict(
+            "SELECT * FROM `dispensers` WHERE (tx_index > ? OR (tx_index = ? AND address_id > ?)) " +
+            "ORDER BY tx_index ASC, address_id ASC",
+            [afterTx, afterTx, afterAddr]
+        );
+    },
+
+    /**
+     * Every row of the decoder's dispensers table, read strictly.
+     *
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findAllDispensers(){
+        return await this.doQueryStrict(
+            "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC"
+        );
+    },
+
 };

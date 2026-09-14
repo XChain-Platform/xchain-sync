@@ -265,4 +265,18 @@ module.exports = {
         return await this.doQuery(query, [block_index], conn);
     },
 
+    // Every contract_emissions row from a block onward, internal emissions
+    // included: the catch-up window form of getEmissionRowsForBlock, reaching them
+    // through the same execution_index chain and naming the same four columns.
+    async findEmissionRowsFromBlock(sinceBlock, conn){
+        return await this.doQuery(
+            "SELECT em.execution_index, em.emitted_action, em.action_index, em.position " +
+            "FROM `contract_emissions` em " +
+            "INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index) " +
+            "INNER JOIN actions a ON (a.action_index = ce.action_index) " +
+            "WHERE a.block_index >= ? " +
+            "ORDER BY em.execution_index ASC, em.position ASC",
+            [sinceBlock], conn);
+    },
+
 };

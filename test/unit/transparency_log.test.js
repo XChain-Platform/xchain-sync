@@ -12,13 +12,14 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const TransparencyLog = require('../../src/server/transparency_log');
 const MerkleTree = require('../../src/server/merkle_tree');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 describe('TransparencyLog', function(){
 
     let log, db;
 
     beforeEach(function(){
-        db = { doQuery: sinon.stub().resolves([]) };
+        db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
         log = new TransparencyLog(db);
     });
 

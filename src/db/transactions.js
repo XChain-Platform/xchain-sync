@@ -39,4 +39,16 @@ module.exports = {
         return await this.doQuery(query, [block_index], conn);
     },
 
+    // Rows of a tx_index-scoped table for every transaction from a block onward,
+    // the catch-up window form of getTxScopedRows.
+    async findTxScopedRowsFromBlock(table, sinceBlock, conn){
+        return await this.doQuery(
+            "SELECT t.* FROM `" + table + "` t " +
+            "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
+            "WHERE tx.block_index >= ? ORDER BY t.tx_index",
+            [sinceBlock],
+            conn
+        );
+    },
+
 };

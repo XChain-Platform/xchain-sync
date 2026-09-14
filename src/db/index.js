@@ -85,6 +85,7 @@ const MIXIN_FILES = [
     './credits.js',
     './index_lookups.js',
     './state_checkpoints.js',
+    './merkle_epochs.js',
 ];
 
 class Database {

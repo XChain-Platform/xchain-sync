@@ -12,8 +12,9 @@
  *
  **********************************************************************
  *
- * The sync_meta table: the replica's own key/value cursor store, read and
- * written on every applied block.
+ * The sync_meta table, where the source transparency log records the three
+ * block hashes of every block it broadcasts, and the replica's durable
+ * sync_state key/value markers kept beside it.
  *
  * A Database mixin: every method below is installed on Database.prototype by
  * db/index.js, so `this` is the Database instance and call sites are unchanged.
@@ -89,6 +90,88 @@ module.exports = {
             logger.error(util.format('deleteSyncState(' + key + ') failed (continuing):', e));
             return false;
         }
+    },
+
+    // --- Transparency log leaves (sync_meta) ---------------------------------
+    // The source transparency log's per-block rows. Plain doQuery throughout: the
+    // log runs from the poll loop, where a transaction would contend with other
+    // writers, and each step is idempotent on retry.
+
+    // Record one block's three hashes. INSERT IGNORE on the UNIQUE block_index,
+    // so a block already recorded keeps the hashes it was broadcast with.
+    async recordSyncMetaHashes(block_index, block_time, ledger_hash, actions_hash, contract_hash){
+        let query = `INSERT IGNORE INTO sync_meta
+            (block_index, block_time, ledger_hash, actions_hash, contract_hash)
+            VALUES (?, ?, ?, ?, ?)`;
+        return await this.doQuery(query, [block_index, block_time, ledger_hash, actions_hash, contract_hash]);
+    },
+
+    // Delete every recorded block at or below a committed epoch boundary.
+    async deleteSyncMetaThrough(boundary){
+        return await this.doQuery(
+            "DELETE FROM sync_meta WHERE block_index <= ?", [boundary]
+        );
+    },
+
+    // The Merkle leaves of one block range, in block order.
+    async findSyncMetaLeaves(startBlock, endBlock){
+        return await this.doQuery(
+            `SELECT block_index, ledger_hash, actions_hash, contract_hash
+             FROM sync_meta
+             WHERE block_index >= ? AND block_index <= ?
+             ORDER BY block_index ASC`,
+            [startBlock, endBlock]
+        );
+    },
+
+    // Delete every recorded block at or above an orphaned height.
+    async deleteSyncMetaFrom(block_index){
+        return await this.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
+    },
+
+    // The highest recorded block, one row carrying `tip`.
+    async getSyncMetaTip(){
+        return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
+    },
+
+    // The ledger hash recorded for one height, at most one row.
+    async getRecordedLedgerHash(height){
+        return await this.doQuery(
+            "SELECT ledger_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
+        );
+    },
+
+    // The lowest and highest recorded block, one row carrying `lo` and `hi`.
+    async getSyncMetaBounds(){
+        return await this.doQuery(
+            "SELECT MIN(block_index) AS lo, MAX(block_index) AS hi FROM sync_meta"
+        );
+    },
+
+    // Source blocks strictly between two heights that have no recorded row.
+    async findUnrecordedBlocksBetween(lo, hi){
+        return await this.doQuery(
+            `SELECT b.block_index AS block_index
+             FROM blocks b
+             LEFT JOIN sync_meta s ON s.block_index = b.block_index
+             WHERE b.block_index > ? AND b.block_index < ? AND s.block_index IS NULL
+             ORDER BY b.block_index ASC`,
+            [lo, hi]
+        );
+    },
+
+    // How many blocks are recorded, one row carrying `total`.
+    async countSyncMetaRows(){
+        return await this.doQuery("SELECT COUNT(*) as total FROM sync_meta");
+    },
+
+    // One page of recorded blocks, newest first.
+    async findSyncMetaPage(limit, offset){
+        let query = `SELECT block_index, block_time, ledger_hash, actions_hash, contract_hash, logged_at
+            FROM sync_meta
+            ORDER BY block_index DESC
+            LIMIT ? OFFSET ?`;
+        return await this.doQuery(query, [limit, offset]);
     },
 
 };

@@ -18,13 +18,14 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const TransparencyLog = require('../../src/server/transparency_log');
 const ServerPoller    = require('../../src/server/poller');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 describe('TransparencyLog (read-only replica)', function(){
 
     let db, log;
 
     beforeEach(function(){
-        db  = { doQuery: sinon.stub().resolves([]) };
+        db  = withDbMixins({ doQuery: sinon.stub().resolves([]) });
         log = new TransparencyLog(db, 100, true);
     });
 

@@ -18,12 +18,13 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const TransparencyLog = require('../../src/server/transparency_log');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 const MerkleTree = require('../../src/server/merkle_tree');
 
 // db double whose SELECTs are keyed by query shape. hwm = MAX(block_index) in
 // sync_meta, boundary = MAX(end_block) of a committed epoch at/below the cutoff.
 function createDb({ hwm, boundary, straddling } = {}){
-    let db = { doQuery: sinon.stub() };
+    let db = withDbMixins({ doQuery: sinon.stub() });
     db.doQuery.withArgs(sinon.match(/MAX\(block_index\) AS tip FROM sync_meta/))
         .resolves([{ tip: (hwm === undefined ? null : hwm) }]);
     db.doQuery.withArgs(sinon.match(/MAX\(end_block\) AS eb FROM merkle_epochs/))
@@ -217,7 +218,7 @@ describe('TransparencyLog sync_meta retention', function(){
 
     describe('getProof after retention', function(){
         it('reports not-available (null) for an epoch whose leaves were pruned', async function(){
-            let db = { doQuery: sinon.stub().resolves([]) };
+            let db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
             db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
                 .resolves([{ epoch: 1, start_block: 1, end_block: 100, merkle_root: 'r', leaf_count: 100 }]);
             db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves([]);
@@ -226,7 +227,7 @@ describe('TransparencyLog sync_meta retention', function(){
         });
 
         it('refuses a proof rather than serving one from a partial leaf set', async function(){
-            let db = { doQuery: sinon.stub().resolves([]) };
+            let db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
             db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
                 .resolves([{ epoch: 1, start_block: 1, end_block: 100, merkle_root: 'r', leaf_count: 100 }]);
             db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves([
@@ -244,7 +245,7 @@ describe('TransparencyLog sync_meta retention', function(){
             let leaves = rows.map(r => MerkleTree.computeLeaf(r.ledger_hash, r.actions_hash, r.contract_hash));
             let tree = MerkleTree.buildTree(leaves);
 
-            let db = { doQuery: sinon.stub().resolves([]) };
+            let db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
             db.doQuery.withArgs(sinon.match(/SELECT \* FROM merkle_epochs WHERE epoch/))
                 .resolves([{ epoch: 1, start_block: 1, end_block: 4, merkle_root: tree.root, leaf_count: 4 }]);
             db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves(rows);

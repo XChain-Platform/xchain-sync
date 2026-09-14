@@ -49,10 +49,7 @@ class TransparencyLog {
     // Crossing an epoch boundary commits that epoch's Merkle root as a side effect.
     async recordBlock(block_index, block_time, ledger_hash, actions_hash, contract_hash){
         if(this.readOnly) return;
-        let query = `INSERT IGNORE INTO sync_meta
-            (block_index, block_time, ledger_hash, actions_hash, contract_hash)
-            VALUES (?, ?, ?, ?, ?)`;
-        await this.db.doQuery(query, [block_index, block_time, ledger_hash, actions_hash, contract_hash]);
+        await this.db.recordSyncMetaHashes(block_index, block_time, ledger_hash, actions_hash, contract_hash);
 
         if (block_index > 0 && block_index % this.epochSize === 0) {
             let epoch = Math.floor(block_index / this.epochSize);
@@ -115,9 +112,7 @@ class TransparencyLog {
 
         // Highest committed epoch that lies wholly outside the window. Its end_block is
         // the only safe delete boundary; if no epoch qualifies there is nothing to do.
-        let boundRows = await this.db.doQuery(
-            "SELECT MAX(end_block) AS eb FROM merkle_epochs WHERE end_block <= ?", [cutoff]
-        );
+        let boundRows = await this.db.getHighestEpochEndAtOrBelow(cutoff);
         let boundary = (boundRows.length > 0 && boundRows[0].eb !== null && boundRows[0].eb !== undefined)
             ? Number(boundRows[0].eb) : null;
         if (boundary === null || boundary < 1)
@@ -127,19 +122,14 @@ class TransparencyLog {
         // MERKLE_EPOCH_SIZE (ranges are disjoint and aligned), reachable only if the
         // epoch size changed after epochs were already committed; pruning then would
         // leave a committed epoch with a partial leaf set and unprovable proofs.
-        let straddling = await this.db.doQuery(
-            "SELECT COUNT(*) AS c FROM merkle_epochs WHERE start_block <= ? AND end_block > ?",
-            [boundary, boundary]
-        );
+        let straddling = await this.db.countEpochsStraddling(boundary);
         if (straddling.length > 0 && Number(straddling[0].c) > 0) {
             logger.error('sync_meta retention skipped: a committed epoch straddles block ' + boundary +
                 ' (MERKLE_EPOCH_SIZE likely changed after epochs were committed); refusing a partial prune');
             return { enabled: true, skipped: true, reason: 'straddling_epoch', deleted: 0, tip, cutoff };
         }
 
-        let result = await this.db.doQuery(
-            "DELETE FROM sync_meta WHERE block_index <= ?", [boundary]
-        );
+        let result = await this.db.deleteSyncMetaThrough(boundary);
         let deleted = (result && result.affectedRows) ? Number(result.affectedRows) : 0;
         if (deleted > 0)
             logger.info('sync_meta retention: pruned ' + deleted + ' row(s) at or below block ' + boundary +
@@ -152,18 +142,10 @@ class TransparencyLog {
         let startBlock = (epoch - 1) * this.epochSize + 1;
         let endBlock   = epoch * this.epochSize;
 
-        let existing = await this.db.doQuery(
-            "SELECT id FROM merkle_epochs WHERE epoch = ?", [epoch]
-        );
+        let existing = await this.db.findMerkleEpochId(epoch);
         if (existing.length > 0) return;
 
-        let rows = await this.db.doQuery(
-            `SELECT block_index, ledger_hash, actions_hash, contract_hash
-             FROM sync_meta
-             WHERE block_index >= ? AND block_index <= ?
-             ORDER BY block_index ASC`,
-            [startBlock, endBlock]
-        );
+        let rows = await this.db.findSyncMetaLeaves(startBlock, endBlock);
 
         if (rows.length === 0) return;
 
@@ -174,20 +156,13 @@ class TransparencyLog {
         let tree = MerkleTree.buildTree(leaves);
         if (!tree.root) return;
 
-        await this.db.doQuery(
-            `INSERT INTO merkle_epochs (epoch, start_block, end_block, merkle_root, leaf_count)
-             VALUES (?, ?, ?, ?, ?)`,
-            [epoch, rows[0].block_index, rows[rows.length - 1].block_index, tree.root, leaves.length]
-        );
+        await this.db.insertMerkleEpoch(epoch, rows[0].block_index, rows[rows.length - 1].block_index, tree.root, leaves.length);
 
         // If this epoch was previously invalidated by a reorg, backfill its audit
         // marker with the freshly recomputed root to complete the old->new trail.
         // No-op when the epoch was never reorged; tolerant of an older schema with
         // no merkle_reorgs table.
-        await this.db.doQuery(
-            "UPDATE merkle_reorgs SET new_root = ? WHERE epoch = ? AND new_root IS NULL",
-            [tree.root, epoch]
-        ).catch(e => logger.error(util.format('Error backfilling reorg marker for epoch ' + epoch + ':', e)));
+        await this.db.backfillReorgMarkerRoot(tree.root, epoch).catch(e => logger.error(util.format('Error backfilling reorg marker for epoch ' + epoch + ':', e)));
 
         logger.info('Merkle: Epoch ' + epoch + ' committed (blocks ' + startBlock + '-' + endBlock +
             ', root: ' + tree.root.substring(0, 16) + '...)');
@@ -218,31 +193,21 @@ class TransparencyLog {
         // A replicated log prunes at the source; the DELETEs arrive over replication.
         if(this.readOnly) return;
         // Committed epochs whose block range overlaps the orphaned suffix.
-        let invalidated = await this.db.doQuery(
-            `SELECT epoch, start_block, end_block, merkle_root
-             FROM merkle_epochs WHERE end_block >= ?`,
-            [block_index]
-        );
+        let invalidated = await this.db.findEpochsEndingAtOrAfter(block_index);
         for(let e of invalidated){
             // Idempotent: skip if a pending (not-yet-re-committed) marker for this
             // epoch already exists, so a retry after a mid-prune fault can't pile up
             // duplicate audit rows during a sustained outage.
-            let pending = await this.db.doQuery(
-                "SELECT id FROM merkle_reorgs WHERE epoch = ? AND new_root IS NULL LIMIT 1", [e.epoch]
-            );
+            let pending = await this.db.findPendingReorgMarker(e.epoch);
             if(pending.length === 0){
-                await this.db.doQuery(
-                    `INSERT INTO merkle_reorgs (reorg_block, epoch, start_block, end_block, old_root)
-                     VALUES (?, ?, ?, ?, ?)`,
-                    [block_index, e.epoch, e.start_block, e.end_block, e.merkle_root]
-                );
+                await this.db.insertReorgMarker(block_index, e.epoch, e.start_block, e.end_block, e.merkle_root);
             }
         }
         // Epochs before sync_meta: if we fault between, the retry re-reads
         // merkle_epochs (now empty for this range, so no duplicate marker) and still
         // prunes sync_meta. Both are idempotent range-deletes.
-        await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
-        await this.db.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);
+        await this.db.deleteEpochsEndingAtOrAfter(block_index);
+        await this.db.deleteSyncMetaFrom(block_index);
         if(invalidated.length > 0)
             logger.info('Transparency log pruned at reorg to block ' + block_index + ': ' +
                 invalidated.length + ' committed epoch(s) invalidated (will re-commit from canonical chain)');
@@ -254,20 +219,12 @@ class TransparencyLog {
 
         let epoch = Math.ceil(blockIndex / this.epochSize);
 
-        let epochRows = await this.db.doQuery(
-            "SELECT * FROM merkle_epochs WHERE epoch = ?", [epoch]
-        );
+        let epochRows = await this.db.getMerkleEpoch(epoch);
         if (epochRows.length === 0) return { error: 'epoch not yet committed' };
 
         let epochData = epochRows[0];
 
-        let rows = await this.db.doQuery(
-            `SELECT block_index, ledger_hash, actions_hash, contract_hash
-             FROM sync_meta
-             WHERE block_index >= ? AND block_index <= ?
-             ORDER BY block_index ASC`,
-            [epochData.start_block, epochData.end_block]
-        );
+        let rows = await this.db.findSyncMetaLeaves(epochData.start_block, epochData.end_block);
 
         // No leaves on hand for a committed epoch. Normal for an epoch whose rows were
         // dropped by the retention window (pruneSyncMeta), where the honest answer is
@@ -313,7 +270,7 @@ class TransparencyLog {
     // indexer advanced while the sync server was down, leaving a permanent hole in
     // sync_meta. Returns null when sync_meta is empty (fresh node, nothing recorded).
     async getHighWaterMark() {
-        let rows = await this.db.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
+        let rows = await this.db.getSyncMetaTip();
         if (rows.length > 0 && rows[0].tip !== null)
             return Number(rows[0].tip);
         return null;
@@ -326,9 +283,7 @@ class TransparencyLog {
     // reorg that completed entirely during downtime is still detected on the first
     // poll after restart. Indexer-only (the decoder has no transparency log).
     async getRecordedHash(height) {
-        let rows = await this.db.doQuery(
-            "SELECT ledger_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
-        );
+        let rows = await this.db.getRecordedLedgerHash(height);
         if (rows.length > 0 && rows[0].ledger_hash !== null && rows[0].ledger_hash !== undefined)
             return rows[0].ledger_hash;
         return null;
@@ -344,22 +299,13 @@ class TransparencyLog {
     // block_index list; empty on a healthy log (the common case, so the bounded
     // anti-join is cheap on the indexed block_index column).
     async findGaps() {
-        let bounds = await this.db.doQuery(
-            "SELECT MIN(block_index) AS lo, MAX(block_index) AS hi FROM sync_meta"
-        );
+        let bounds = await this.db.getSyncMetaBounds();
         if (bounds.length === 0 || bounds[0].lo === null) return [];
         let lo = Number(bounds[0].lo);
         let hi = Number(bounds[0].hi);
         if (hi - lo < 2) return [];  // no room for an interior hole
 
-        let rows = await this.db.doQuery(
-            `SELECT b.block_index AS block_index
-             FROM blocks b
-             LEFT JOIN sync_meta s ON s.block_index = b.block_index
-             WHERE b.block_index > ? AND b.block_index < ? AND s.block_index IS NULL
-             ORDER BY b.block_index ASC`,
-            [lo, hi]
-        );
+        let rows = await this.db.findUnrecordedBlocksBetween(lo, hi);
         return rows.map(r => Number(r.block_index));
     }
 
@@ -380,14 +326,12 @@ class TransparencyLog {
         let endBlock = epoch * this.epochSize;
         if(highWaterMark !== undefined && highWaterMark !== null && endBlock > highWaterMark)
             return;  // epoch not yet complete; let recordBlock commit it at the boundary
-        await this.db.doQuery("DELETE FROM merkle_epochs WHERE epoch = ?", [epoch]);
+        await this.db.deleteMerkleEpoch(epoch);
         await this.commitEpoch(epoch);
     }
 
     async getLatestRoot() {
-        let rows = await this.db.doQuery(
-            "SELECT * FROM merkle_epochs ORDER BY epoch DESC LIMIT 1"
-        );
+        let rows = await this.db.getLatestMerkleEpoch();
         return rows.length > 0 ? rows[0] : null;
     }
 
@@ -396,15 +340,10 @@ class TransparencyLog {
         limit = Math.min(1000, Math.max(1, parseInt(limit) || 100));
         let offset = page * limit;
 
-        let countQuery = "SELECT COUNT(*) as total FROM sync_meta";
-        let countRows  = await this.db.doQuery(countQuery);
+        let countRows  = await this.db.countSyncMetaRows();
         let total      = Number(countRows[0].total);
 
-        let query = `SELECT block_index, block_time, ledger_hash, actions_hash, contract_hash, logged_at
-            FROM sync_meta
-            ORDER BY block_index DESC
-            LIMIT ? OFFSET ?`;
-        let rows = await this.db.doQuery(query, [limit, offset]);
+        let rows = await this.db.findSyncMetaPage(limit, offset);
 
         return { page, limit, total, results: rows };
     }

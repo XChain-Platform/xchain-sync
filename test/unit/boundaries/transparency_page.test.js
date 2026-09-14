@@ -11,15 +11,16 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const TransparencyLog = require('../../../src/server/transparency_log');
+const { withDbMixins } = require('../../helpers/db_mixins.js');
 
 function createMockDb(total){
-    return {
+    return withDbMixins({
         doQuery: sinon.stub().callsFake(async (query, args) => {
             if(query.includes('COUNT'))
                 return [{ total: total || 0 }];
             return [];
         })
-    };
+    });
 }
 
 describe('Boundary: Transparency Log Pagination', function(){

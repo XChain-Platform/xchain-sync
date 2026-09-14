@@ -313,11 +313,7 @@ class SnapshotBuilder {
     // Discover all tables in the database and return them in dependency order.
     // Priority tables come first, trailing tables last, everything else alphabetically in between.
     async getOrderedTables(db, conn){
-        let rows = await db.doQuery(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
-            [db.dbName],
-            conn
-        );
+        let rows = await db.findStreamableTableNames(conn);
         let allTables = rows.map(r => r.table_name || r.TABLE_NAME)
             .filter(t => !OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t));
         return orderSnapshotTables(allTables);
@@ -592,7 +588,7 @@ class SnapshotBuilder {
             // these tables carry NO action_index column (e.g. the slash debit logs key off
             // execution_index / slash_action_index, not action_index), so the action_index
             // branch below cannot reach them. A follower catching up incrementally over their
-            // range would hit `SELECT ... WHERE action_index >= ?` -> ER_BAD_FIELD_ERROR ->
+            // range would hit SELECT ... WHERE action_index >= ? -> ER_BAD_FIELD_ERROR ->
             // caught -> continue, silently dropping every row (short /status count; the reorg
             // restore, which JOINs the debit logs, then finds nothing to restore).
             //
@@ -670,7 +666,7 @@ class SnapshotBuilder {
             for(let table of tableOrder){
                 try {
                     // Append-only id-PK lookup tables (index_*, and decoder pubkeys/
-                    // events) are full-dumped, but a single unbounded `SELECT *` would
+                    // events) are full-dumped, but a single unbounded SELECT * would
                     // materialize the whole table - millions of rows on a fast chain
                     // (e.g. DOGE-testnet index_transactions ~8.5M) - into the driver
                     // array before a byte is written, a cheap unauthenticated OOM path
@@ -692,7 +688,7 @@ class SnapshotBuilder {
                     // The indexer `events` log is the one indexerFullDump member that is
                     // append-only on an AUTO_INCREMENT id yet absent from lookupSet: its
                     // replication class is 'snapshot', not 'stream:index', so the branch
-                    // above cannot reach it and it fell to the bundled `SELECT *` below,
+                    // above cannot reach it and it fell to the bundled SELECT * below,
                     // materializing the whole audit log per catch-up. Page it
                     // by the same id cursor, which emits a byte-identical "events":[...]
                     // key, so no client, protocol, or schema change is implied. Unlike the
@@ -708,18 +704,12 @@ class SnapshotBuilder {
                         if(decoderSkip.has(table)){
                             continue;
                         } else if(decoderBlockScoped.has(table)){
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
+                            rows = await db.findRowsFromBlockIndex(table, sinceBlock, conn);
                         } else if(decoderTxScoped.has(table)){
-                            rows = await db.doQuery(
-                                "SELECT t.* FROM `" + table + "` t " +
-                                "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
-                                "WHERE tx.block_index >= ? ORDER BY t.tx_index",
-                                [sinceBlock],
-                                conn
-                            );
+                            rows = await db.findTxScopedRowsFromBlock(table, sinceBlock, conn);
                         } else if(decoderFullDump.has(table)){
                             if(skipLookups && lookupSet.has(table)) continue;
-                            rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
+                            rows = await db.findAllRows(table, conn);
                         } else {
                             continue;
                         }
@@ -729,10 +719,10 @@ class SnapshotBuilder {
                             // keyed by another column raises errno 1054, which this loop's
                             // catch tolerates as an older source schema and skips forever.
                             let key = tableLifecycle.blockKey(table);
-                            rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key, [sinceBlock], conn);
+                            rows = await db.findRowsFromBlockKey(table, key, sinceBlock, conn);
                         } else if(indexerFullDump.has(table)){
                             if(skipLookups && lookupSet.has(table)) continue;
-                            rows = await db.doQuery("SELECT * FROM `" + table + "`", null, conn);
+                            rows = await db.findAllRows(table, conn);
                         } else if(table === 'contract_emissions'){
                             // contract_emissions.action_index is NULL for INTERNAL emissions
                             // (SLASH and friends, which move ledger state without minting an
@@ -754,14 +744,7 @@ class SnapshotBuilder {
                             // into a plain INSERT is the ER_DUP_ENTRY freeze that
                             // ClientApplier.localSurrogateIdTables documents.
                             try {
-                                rows = await db.doQuery(
-                                    "SELECT em.execution_index, em.emitted_action, em.action_index, em.position " +
-                                    "FROM `contract_emissions` em " +
-                                    "INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index) " +
-                                    "INNER JOIN actions a ON (a.action_index = ce.action_index) " +
-                                    "WHERE a.block_index >= ? " +
-                                    "ORDER BY em.execution_index ASC, em.position ASC",
-                                    [sinceBlock], conn);
+                                rows = await db.findEmissionRowsFromBlock(sinceBlock, conn);
                             } catch(e){
                                 // Same rule as the generic branch: swallow ONLY a genuine
                                 // schema gap on an older source (1146 missing table / 1054
@@ -771,7 +754,7 @@ class SnapshotBuilder {
                             }
                         } else if(firstActionIndex !== null){
                             try {
-                                rows = await db.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
+                                rows = await db.findRowsFromActionIndex(table, firstActionIndex, conn);
                             } catch(e){
                                 // Swallow ONLY a genuine schema gap (1146 missing table /
                                 // 1054 missing action_index column on an older source);
@@ -952,11 +935,7 @@ class SnapshotBuilder {
         let wrote = false;
         let firstRow = true;
         while(true){
-            let page = await db.doQuery(
-                "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
-                [after, this.pageSize],
-                conn
-            );
+            let page = await db.findLookupPageAfter(table, col, after, this.pageSize, conn);
             if(!page.length) break;
             if(!wrote){
                 if(!first) await writer.write(',');
@@ -999,7 +978,7 @@ class SnapshotBuilder {
         let allowed = new Set(replicatedTables.getTopology(dbType).index);
         if(!allowed.has(table)){
             // Not an allowlisted append-only lookup table. Refuse rather than run an
-            // arbitrary `SELECT *` (the allowlist is also the SQL-identifier guard:
+            // arbitrary SELECT * (the allowlist is also the SQL-identifier guard:
             // only these hardcoded names are ever interpolated into the query).
             return res.status(400).json({ error: 'Table not pageable: ' + table });
         }
@@ -1011,10 +990,7 @@ class SnapshotBuilder {
         // pubkeys, via its surrogate monotonic `id`) page by `id`; address_id is
         // non-monotonic w.r.t. insert order and must NOT be used as the cursor.
         let col = replicatedTables.lookupCursorColumn(table);
-        let rows = await db.doQuery(
-            "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
-            [after, lim]
-        );
+        let rows = await db.findLookupPageAfter(table, col, after, lim);
         let maxId   = rows.length ? Number(rows[rows.length - 1][col]) : after;
         let hasMore = rows.length === lim;
         let schemaVersion = SCHEMA_VERSION[dbType];
@@ -1089,15 +1065,9 @@ class SnapshotBuilder {
         // the local rows intact.
         let rows;
         if(Number.isFinite(afterTx) && Number.isFinite(afterAddr)){
-            rows = await db.doQueryStrict(
-                "SELECT * FROM `dispensers` WHERE (tx_index > ? OR (tx_index = ? AND address_id > ?)) " +
-                "ORDER BY tx_index ASC, address_id ASC",
-                [afterTx, afterTx, afterAddr]
-            );
+            rows = await db.findDispensersAfter(afterTx, afterAddr);
         } else {
-            rows = await db.doQueryStrict(
-                "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC"
-            );
+            rows = await db.findAllDispensers();
         }
         let hasMore = false;
         let maxTx   = rows.length ? Number(rows[rows.length - 1].tx_index)   : (Number.isFinite(afterTx)   ? afterTx   : 0);
