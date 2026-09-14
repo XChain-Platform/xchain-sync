@@ -26,10 +26,9 @@ const { blockIndex } = require('../helpers/generators/values');
 
 let crashLog = [];
 
-describe('Tier 2 - ClientRollback @tier2', function () {
-    this.timeout(0);
-    let ClientRollback, rollback, db, util;
+let ClientRollback, rollback, db, util;
 
+function useClientRollbackHooks() {
     before(function () {
         ClientRollback = require('../../../src/client/rollback');
     });
@@ -45,6 +44,22 @@ describe('Tier 2 - ClientRollback @tier2', function () {
     afterEach(function () {
         sinon.restore();
     });
+}
+
+function reportCrashes() {
+    if (crashLog.length > 0) {
+        let unique = [...new Set(crashLog.map(c => c.error))];
+        console.log('\n    [FUZZ CRASH REPORT] ' + crashLog.length + ' crashes across ' + unique.length + ' unique error types:');
+        for (let err of unique) {
+            let count = crashLog.filter(c => c.error === err).length;
+            console.log('      - (' + count + 'x) ' + err.substring(0, 120));
+        }
+    }
+}
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
 
     describe('rollback', function () {
 
@@ -57,6 +72,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('transaction is always committed or rolled back, never leaked', function () {
             return fc.assert(fc.asyncProperty(
@@ -102,6 +125,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('schema-gap (missing table/column) errors do not abort the operation', function () {
             // The rollback's per-query guards skip ONLY schema-gap errors (MySQL errno
@@ -154,6 +185,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('balance DELETE comes before balance INSERT', function () {
             return fc.assert(fc.asyncProperty(
@@ -183,6 +222,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('sync_meta DELETE uses correct block_index argument', function () {
             return fc.assert(fc.asyncProperty(
@@ -209,14 +256,5 @@ describe('Tier 2 - ClientRollback @tier2', function () {
         });
     });
 
-    after(function () {
-        if (crashLog.length > 0) {
-            let unique = [...new Set(crashLog.map(c => c.error))];
-            console.log('\n    [FUZZ CRASH REPORT] ' + crashLog.length + ' crashes across ' + unique.length + ' unique error types:');
-            for (let err of unique) {
-                let count = crashLog.filter(c => c.error === err).length;
-                console.log('      - (' + count + 'x) ' + err.substring(0, 120));
-            }
-        }
-    });
+    after(reportCrashes);
 });
