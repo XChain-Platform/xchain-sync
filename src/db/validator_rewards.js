@@ -73,4 +73,24 @@ module.exports = {
             [from, to], conn);
     },
 
+    /**
+     * Delete every validator_rewards row a replicated reconcile-log pre-image
+     * names, keyed on the full five-column reward identity. round_qualifier is part
+     * of the key because two distinct archive rewards can share the other four.
+     *
+     * @param {string} scopeSql  predicate over the log alias `d` bounding its rows to the applied window
+     * @param {Array} scopeArgs  the predicate's bind values
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteReconciledValidatorRewards(scopeSql, scopeArgs){
+        return await this.doQuery(
+            "DELETE vr FROM validator_rewards vr " +
+            "JOIN anchor_reward_reconcile_log d " +
+            "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
+            " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
+            " AND d.round_qualifier = vr.round_qualifier " +
+            "WHERE " + scopeSql,
+            scopeArgs);
+    },
+
 };

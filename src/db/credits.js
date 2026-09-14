@@ -65,4 +65,31 @@ module.exports = {
             [completedStatusId, from, to], conn);
     },
 
+    /**
+     * The current tokens row of every tick a credit, debit or escrow touched in
+     * this window, which is exactly the set whose supply may have moved. Each
+     * ledger table joins actions on its own and the tick ids are UNIONed, so the
+     * block-range predicate drives from actions into each table's index instead of
+     * materializing all three ledgers first. UNION, not UNION ALL, keeps the tick
+     * set distinct.
+     *
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findLedgerTouchedTokens(from, to, conn){
+        return await this.doQuery(
+            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
+                "SELECT c.tick_id FROM credits c JOIN actions a ON a.action_index = c.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
+                "UNION " +
+                "SELECT d.tick_id FROM debits d JOIN actions a ON a.action_index = d.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
+                "UNION " +
+                "SELECT e.tick_id FROM escrows e JOIN actions a ON a.action_index = e.action_index " +
+                    "WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL)",
+            [from, to, from, to, from, to], conn);
+    },
+
 };

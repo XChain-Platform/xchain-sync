@@ -23,6 +23,7 @@
 const path       = require('path');
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
+const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../stateHash');
 
 module.exports = {
 
@@ -364,6 +365,298 @@ module.exports = {
         return await this.doQueryStrict(
             "SELECT * FROM `dispensers` ORDER BY tx_index ASC, address_id ASC"
         );
+    },
+
+    /**
+     * Empty one table on the replica before a full snapshot re-imports it. DELETE
+     * rather than TRUNCATE, because MariaDB refuses TRUNCATE on a table a foreign
+     * key references. The caller validates the name first.
+     *
+     * @param {string} table
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteAllRows(table){
+        return await this.doQuery('DELETE FROM `' + table + '`');
+    },
+
+    /**
+     * Empty the decoder's dispensers table ahead of a reconcile re-insert, inside
+     * the caller's transaction.
+     *
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteAllDispensers(){
+        return await this.doQuery('DELETE FROM `dispensers`');
+    },
+
+    /**
+     * Clear every row already holding one of these natural-key values, so a
+     * re-sent row replaces rather than collides. Both names are interpolated
+     * because an identifier cannot be a bind parameter; the caller validates them.
+     *
+     * @param {string} table
+     * @param {string} naturalKey the column the values belong to
+     * @param {Array} slice       the values, a bounded chunk of them
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteRowsByKeyValues(table, naturalKey, slice){
+        return await this.doQuery(
+            'DELETE FROM `' + table + '` WHERE `' + naturalKey + '` IN (' +
+                slice.map(() => '?').join(', ') + ')',
+            slice);
+    },
+
+    /**
+     * One multi-row INSERT of `rowCount` rows over `columns`, with `args` holding
+     * every row's values in column order. `useIgnore` skips a row whose key already
+     * exists; `useUpsert` overwrites the existing row with the carried values. The
+     * caller validates every identifier and decodes the values.
+     *
+     * @param {string} table
+     * @param {Array<string>} columns
+     * @param {number} rowCount
+     * @param {Array} args
+     * @param {boolean} useIgnore
+     * @param {boolean} useUpsert
+     * @returns {Promise<object>} the driver's result
+     */
+    async insertRowValues(table, columns, rowCount, args, useIgnore, useUpsert){
+        let colList      = columns.map(c => '`' + c + '`').join(', ');
+        let placeholders = columns.map(() => '?').join(', ');
+
+        let insertPrefix = useIgnore
+            ? 'INSERT IGNORE INTO `' + table + '` (' + colList + ') VALUES '
+            : 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
+        // VALUES(col) back-reference is the MariaDB idiom for "the value this row
+        // would have inserted"; updating the key column to itself is a harmless no-op.
+        let updateSuffix = useUpsert
+            ? ' ON DUPLICATE KEY UPDATE ' + columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ')
+            : '';
+
+        let valueClauses = [];
+        for(let i = 0; i < rowCount; i++) valueClauses.push('(' + placeholders + ')');
+
+        let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
+        return await this.doQuery(query, args);
+    },
+
+    /**
+     * The row holding one surrogate id, if any.
+     *
+     * @param {string} table
+     * @param {number} id
+     * @returns {Promise<object[]>} the driver's row array, at most one row
+     */
+    async findRowIdById(table, id){
+        return await this.doQuery('SELECT id FROM `' + table + '` WHERE id = ? LIMIT 1', [id]);
+    },
+
+    /**
+     * The ids of rows matching one natural key. LIMIT 2, because the caller only
+     * needs to tell "exactly one holder" from "none" or "ambiguous".
+     *
+     * @param {string} table
+     * @param {Array<string>} keyColumns validated column names of the key
+     * @param {Array} values             one value per key column
+     * @returns {Promise<object[]>} the driver's row array, at most two rows
+     */
+    async findRowIdsByKeyColumns(table, keyColumns, values){
+        return await this.doQuery(
+            'SELECT id FROM `' + table + '` WHERE ' +
+                keyColumns.map(c => '`' + c + '` = ?').join(' AND ') + ' LIMIT 2',
+            values);
+    },
+
+    /**
+     * Delete one row by its surrogate id.
+     *
+     * @param {string} table
+     * @param {number} holderId
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteRowById(table, holderId){
+        return await this.doQuery('DELETE FROM `' + table + '` WHERE id = ?', [holderId]);
+    },
+
+    /**
+     * The ordered column names of one index of one table in this database.
+     *
+     * @param {string} table
+     * @param {string} indexName
+     * @returns {Promise<object[]>} the driver's row array, one row per column in index order
+     */
+    async findIndexColumnNames(table, indexName){
+        return await this.doQuery(
+            "SELECT column_name FROM information_schema.statistics " +
+            "WHERE table_schema = ? AND table_name = ? AND index_name = ? ORDER BY seq_in_index ASC",
+            [this.dbName, table, indexName]);
+    },
+
+    // The updated-rows channel's reads (server/updated_rows.js). Each returns the
+    // CURRENT full state of surviving rows mutated in place inside a block window,
+    // which the action-scoped stream cannot carry because the row's own action is
+    // older than the window. Table names are interpolated because an identifier
+    // cannot be a bind parameter; every one comes from that module's fixed lists.
+
+    /**
+     * Rows whose deactivation_block stamp falls in the window. The caller shifts
+     * the window by the chain's activation delay, because a stamp is written that
+     * many blocks ahead of the action that set it.
+     *
+     * @param {string} table
+     * @param {number} fromStamp first stamp value, inclusive
+     * @param {number} toStamp   last stamp value, inclusive
+     * @param {object} [conn]    a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findDeactivationStampedRows(table, fromStamp, toStamp, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + table + "` WHERE deactivation_block IS NOT NULL AND deactivation_block BETWEEN ? AND ?",
+            [fromStamp, toStamp], conn);
+    },
+
+    /**
+     * Stake or unstake rows a SLASH reduced in this window, reached through the
+     * debit log entry that records the reduction.
+     *
+     * @param {{table: string, debits: string, target: string}} spec one SLASH_SPECS entry
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findSlashDebitedRows(spec, from, to, conn){
+        return await this.doQuery(
+            "SELECT t.* FROM `" + spec.table + "` t " +
+            "JOIN `" + spec.debits + "` d ON d.stake_action_index = t.action_index " +
+            "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ?",
+            [spec.target, from, to], conn);
+    },
+
+    /**
+     * Contract stake rows a DELEGATE v1 signing-key rotation rewrote in this
+     * window, pinned to a block only by the rotations journal.
+     *
+     * @param {string} rotTbl one ROTATION_TABLES entry
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findRotatedStakeRows(rotTbl, from, to, conn){
+        return await this.doQuery(
+            "SELECT t.* FROM `" + rotTbl + "` t " +
+            "JOIN `contract_delegation_rotations` r ON r.stake_action_index = t.action_index " +
+            "WHERE r.target_table = ? AND r.block_index BETWEEN ? AND ?",
+            [rotTbl, from, to], conn);
+    },
+
+    /**
+     * Version 0 request rows whose request_status resolved in this window.
+     *
+     * @param {string} table  one REQUEST_STATUS_TABLES entry
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findResolvedRequestRows(table, from, to, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + table + "` WHERE version = 0 AND resolved_block BETWEEN ? AND ?",
+            [from, to], conn);
+    },
+
+    /**
+     * Poll rows finalized in this window, or whose deferred binding callback
+     * fired at a due block in this window.
+     *
+     * @param {string} table  one POLL_FINALIZE_TABLES entry
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findFinalizedPollRows(table, from, to, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ? " +
+            "OR (callback_due_block BETWEEN ? AND ? AND callback_execute_action_index IS NOT NULL)",
+            [from, to, from, to], conn);
+    },
+
+    /**
+     * Unstake rows whose cooldown matured in this window.
+     *
+     * @param {string} table  one COOLDOWN_STATUS_TABLES entry
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findMaturedCooldownRows(table, from, to, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + table + "` WHERE cooldown_end_block BETWEEN ? AND ?",
+            [from, to], conn);
+    },
+
+    /**
+     * BET rows matching a window predicate the caller built over the spec's
+     * stamp columns.
+     *
+     * @param {{table: string}} spec one BET_STATUS_SPECS entry
+     * @param {string} where         the OR-joined stamp predicate
+     * @param {Array<number>} args   one window pair per stamp column
+     * @param {object} [conn]        a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findBetStampedRows(spec, where, args, conn){
+        return await this.doQuery(
+            "SELECT * FROM `" + spec.table + "` WHERE " + where, args, conn);
+    },
+
+    /**
+     * Archive-head anchor parents stamped invalid_archive by a completing chunk
+     * that landed in this window. The height key is the shared chunk-height column
+     * from stateHash.js, which a v2 continuation row actually populates.
+     *
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findInvalidArchiveHeadRows(from, to, conn){
+        return await this.doQuery(
+            "SELECT DISTINCT p.* FROM anchor_actions p " +
+            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
+            "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
+            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
+            [from, to], conn);
+    },
+
+    /**
+     * ATTEST batch heads whose failure verdict was stamped when a valid
+     * continuation by the same author completed the batch inside this window.
+     *
+     * @param {number} headVersion         the batch head's attests version
+     * @param {number} continuationVersion the continuation chunk's attests version
+     * @param {string} completionStamp     the status suffix a completion stamp carries
+     * @param {number} from                first block of the window, inclusive
+     * @param {number} to                  last block of the window, inclusive
+     * @param {object} [conn]              a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findFailedAttestBatchHeads(headVersion, continuationVersion, completionStamp, from, to, conn){
+        return await this.doQuery(
+            "SELECT ah.* FROM attests ah " +
+            "JOIN index_statuses ahs ON ahs.id = ah.status_id AND ahs.status LIKE ? " +
+            "JOIN actions aha ON aha.action_index = ah.action_index " +
+            "JOIN attests ac ON ac.request_id = ah.request_id " +
+                "AND ac.version = " + continuationVersion + " AND ac.batch_chunk_index IS NOT NULL " +
+            "JOIN index_statuses acs ON acs.id = ac.status_id AND acs.status = 'valid' " +
+            "JOIN actions aca ON aca.action_index = ac.action_index AND aca.source_id = aha.source_id " +
+            "WHERE ah.version = " + headVersion + " AND ah.batch_chunk_index = 0 " +
+                "AND ac.block_index BETWEEN ? AND ?",
+            ['%' + completionStamp, from, to], conn);
     },
 
 };

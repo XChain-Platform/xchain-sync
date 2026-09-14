@@ -101,6 +101,7 @@ const pathMod = require('path');
 const fs = require('fs');
 const assertLocal = require('assert');
 const sh = require('../../src/consensus/state_hash');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 const widenSet = require('../../src/schema/utf8mb4_columns');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
@@ -653,7 +654,10 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(COOLDOWN_STATUS_TABLES, ['unstakes', 'contract_unstakes'],
             'updated_rows must track the cooldown status flip on both unstake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name, so the
+        // guard reads both: the key it pins is the contract, not the file.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
@@ -720,7 +724,10 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(/collectDerivedAnchorRewards\s*\(/.test(src),
                 `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
         }
-        const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/applier.js'), 'utf8'));
+        // The reconcile DELETE lives in the validator_rewards mixin and ClientApplier
+        // calls it by name, so the guard reads both.
+        const applier = norm(['../../src/client/applier.js', '../../src/db/validator_rewards.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
             'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
         // RB-ANCHOR restore parity on that same identity. The source twin
@@ -908,7 +915,9 @@ describe('Rollback coverage guard @regression', function(){
             'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1)');
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8'));
+        // The anchor SELECT lives in the tables mixin and the collector calls it by name.
+        const ur = norm(['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND ARCHIVE_CHUNK_HEIGHT_COL BETWEEN \? AND \?/.test(ur),
             'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
             'scoped by the shared ARCHIVE_CHUNK_HEIGHT_COL');
@@ -965,7 +974,9 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(POLL_FINALIZE_TABLES, ['polls'],
             'updated_rows must track the poll finalization flip on polls');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
@@ -986,7 +997,9 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
             'updated_rows must track the rotation rewrite on both contract stake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
@@ -1289,13 +1302,13 @@ describe('Rollback coverage guard @regression', function(){
         const { collectUpdatedRows } = require('../../src/server/updated_rows');
         // Fake DB: the anchor self-join query returns a v1 parent stamped invalid_archive.
         let anchorParent = { action_index: 301, version: 1, status_id: 99, match_batch_seq: 7 };
-        let db = {
+        let db = withDbMixins({
             dbType: 'indexer',
             doQuery: async (sql) => {
                 if(sql.indexOf('anchor_actions p') !== -1) return [anchorParent];
                 return [];
             }
-        };
+        });
         let out = await collectUpdatedRows(db, 300, 300, null);
         assert.ok(Array.isArray(out.anchor_actions) && out.anchor_actions.length === 1,
             'collectUpdatedRows must return the anchor_actions parent row for the CRC-failure window');

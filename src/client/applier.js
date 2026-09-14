@@ -184,7 +184,7 @@ class ClientApplier {
         //
         // Nothing joins `blocks.id`: the source's own createBlock INSERTs without it,
         // the other *_hash_id columns point into index_transactions, and the client
-        // cursor is `SELECT MAX(block_index)` (db.js getLastBlock), never an id.
+        // cursor is the highest block_index (db getLastBlock), never an id.
         this.localSurrogateIdTables = new Map([
             ['blocks', 'block_index']
         ]);
@@ -384,10 +384,8 @@ class ClientApplier {
         if(!pairs.size) return [];
         let aIn = Array.from(addrIds);
         let tIn = Array.from(tickIds);
-        let addrRows = await this.db.doQuery(
-            'SELECT id, address FROM index_addresses WHERE id IN (' + aIn.map(() => '?').join(',') + ')', aIn);
-        let tickRows = await this.db.doQuery(
-            'SELECT id, tick FROM index_tickers WHERE id IN (' + tIn.map(() => '?').join(',') + ')', tIn);
+        let addrRows = await this.db.findIndexAddressTextByIds(aIn);
+        let tickRows = await this.db.findIndexTickTextByIds(tIn);
         let addrMap = new Map(); for(let r of addrRows) addrMap.set(String(r.id), r.address);
         let tickMap = new Map(); for(let r of tickRows) tickMap.set(String(r.id), r.tick);
         let out = [];
@@ -455,10 +453,7 @@ class ClientApplier {
             // the narrow catch at the escrow-gate rederive below.
             let localTables = [];
             try {
-                let schemaRows = await this.db.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
-                    [this.db.dbName]
-                );
+                let schemaRows = await this.db.findStreamableTableNames();
                 localTables = (schemaRows || [])
                     .map(r => r.table_name || r.TABLE_NAME)
                     .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
@@ -493,7 +488,7 @@ class ClientApplier {
                     logger.error('Skipping clear of invalid table: ' + tables[i]);
                     continue;
                 }
-                await this.db.doQuery('DELETE FROM `' + tables[i] + '`');
+                await this.db.deleteAllRows(tables[i]);
             }
 
             for(let table of tables){
@@ -524,9 +519,7 @@ class ClientApplier {
             // the hub's full lowercase coin name into the constructor), so the full name
             // matches zero rows and the cleanup silently no-ops on every production chain.
             try {
-                await this.db.doQuery(
-                    'DELETE FROM state_tree_roots WHERE chain = ? AND network = ? AND block_index >= ?',
-                    [this.coinTicker, this.network, snapshotData.block_height]);
+                await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
             } catch(e){
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
@@ -622,7 +615,7 @@ class ClientApplier {
         if(!Array.isArray(rows)) return;
         await this.db.beginTransaction();
         try {
-            await this.db.doQuery('DELETE FROM `dispensers`');
+            await this.db.deleteAllDispensers();
             if(rows.length) await this.insertRows('dispensers', rows);
             await this.db.commitTransaction();
         } catch(e){
@@ -699,10 +692,7 @@ class ClientApplier {
             let deleteBatch = 500;
             for(let i = 0; i < keyValues.length; i += deleteBatch){
                 let slice = keyValues.slice(i, i + deleteBatch);
-                await this.db.doQuery(
-                    'DELETE FROM `' + table + '` WHERE `' + naturalKey + '` IN (' +
-                        slice.map(() => '?').join(', ') + ')',
-                    slice);
+                await this.db.deleteRowsByKeyValues(table, naturalKey, slice);
             }
         }
 
@@ -714,27 +704,15 @@ class ClientApplier {
                 throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
-        let colList   = columns.map(c => '`' + c + '`').join(', ');
-        let placeholders = columns.map(() => '?').join(', ');
-
-        let insertPrefix = useIgnore
-            ? 'INSERT IGNORE INTO `' + table + '` (' + colList + ') VALUES '
-            : 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
-        // Mutable-aggregate full-dump tables overwrite their existing row so a
-        // re-dump on a non-empty replica refreshes (not skips) stale values.
-        let updateSuffix = useUpsert
-            ? ' ON DUPLICATE KEY UPDATE ' + columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ')
-            : '';
-
+        // Mutable-aggregate full-dump tables (useUpsert) overwrite their existing row so
+        // a re-dump on a non-empty replica refreshes (not skips) stale values.
         // Batch inserts in groups of 100 for efficiency
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
             let batch = rows.slice(i, i + batchSize);
-            let valueClauses = [];
             let args = [];
 
             for(let row of batch){
-                valueClauses.push('(' + placeholders + ')');
                 for(let col of columns){
                     // decodeValue restores base64 binary sentinels back to Buffers
                     // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
@@ -743,8 +721,7 @@ class ClientApplier {
                 }
             }
 
-            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
-            await this.db.doQuery(query, args);
+            await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
 
             // 5284: events rows >64KB silently truncate on a still-TEXT (pre-migration)
             // replica when INSERT IGNORE is used: the id collision guard skips the row
@@ -798,7 +775,7 @@ class ClientApplier {
                 if(suspect.length){
                     let retired = await this.retireStaleNaturalKeyRows(table, batch, rows, suspect);
                     if(retired.length){
-                        await this.db.doQuery(query, args);
+                        await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
                         suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
                     }
                     for(let w of suspect){
@@ -868,22 +845,19 @@ class ClientApplier {
 
             for(let row of batch){
                 let id = Number(row.id);
-                let mine = await this.db.doQuery('SELECT id FROM `' + table + '` WHERE id = ? LIMIT 1', [id]);
+                let mine = await this.db.findRowIdById(table, id);
                 if(mine && mine.length) continue;                 // the source's row is already here
 
                 let values = keyColumns.map(c => row[c]);
                 if(values.some(v => v === undefined)) continue;
-                let holder = await this.db.doQuery(
-                    'SELECT id FROM `' + table + '` WHERE ' +
-                        keyColumns.map(c => '`' + c + '` = ?').join(' AND ') + ' LIMIT 2',
-                    values);
+                let holder = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
                 if(!holder || holder.length !== 1) continue;       // absent, or ambiguous: not this shape
 
                 let holderId = Number(holder[0].id);
                 if(holderId === id || carried.has(holderId)) continue;
                 if(holderId < low || holderId > high) continue;
 
-                await this.db.doQuery('DELETE FROM `' + table + '` WHERE id = ?', [holderId]);
+                await this.db.deleteRowById(table, holderId);
                 retired.push(holderId);
                 logger.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
                     ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
@@ -899,10 +873,7 @@ class ClientApplier {
     async uniqueKeyColumns(table, indexName){
         let check = validation.validateIdentifier(indexName);
         if(!check.valid) return [];
-        let rows = await this.db.doQuery(
-            "SELECT column_name FROM information_schema.statistics " +
-            "WHERE table_schema = ? AND table_name = ? AND index_name = ? ORDER BY seq_in_index ASC",
-            [this.db.dbName, table, indexName]);
+        let rows = await this.db.findIndexColumnNames(table, indexName);
         let columns = [];
         for(let r of (rows || [])){
             let name = String(r.column_name || r.COLUMN_NAME || '');
@@ -939,14 +910,7 @@ class ClientApplier {
     // (d.block_index = B live; d.block_index >= since on an incremental catch-up).
     async mirrorAnchorRewardReconcile(scopeSql, scopeArgs){
         try {
-            await this.db.doQuery(
-                "DELETE vr FROM validator_rewards vr " +
-                "JOIN anchor_reward_reconcile_log d " +
-                "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
-                " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
-                " AND d.round_qualifier = vr.round_qualifier " +
-                "WHERE " + scopeSql,
-                scopeArgs);
+            await this.db.deleteReconciledValidatorRewards(scopeSql, scopeArgs);
         } catch(e){
             // Schema-gap errors (log table / columns absent on an older replica) are safe
             // to skip: such a replica received no log rows either. Anything else must
@@ -1013,27 +977,17 @@ class ClientApplier {
                 throw new Error('Rejected column name in upsertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
-        let colList      = columns.map(c => '`' + c + '`').join(', ');
-        let placeholders = columns.map(() => '?').join(', ');
-        // VALUES(col) back-reference is the MariaDB idiom for "the value this row
-        // would have inserted"; updating the key column to itself is a harmless no-op.
-        let updateList   = columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ');
-
-        let insertPrefix = 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
-        let updateSuffix = ' ON DUPLICATE KEY UPDATE ' + updateList;
-
+        // A plain INSERT with the ON DUPLICATE KEY UPDATE suffix: every carried column
+        // is written on both insert and update.
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
             let batch = rows.slice(i, i + batchSize);
-            let valueClauses = [];
             let args = [];
             for(let row of batch){
-                valueClauses.push('(' + placeholders + ')');
                 for(let col of columns)
                     args.push(decodeValue(row[col] !== undefined ? row[col] : null));
             }
-            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
-            await this.db.doQuery(query, args);
+            await this.db.insertRowValues(table, columns, batch.length, args, false, true);
         }
     }
 

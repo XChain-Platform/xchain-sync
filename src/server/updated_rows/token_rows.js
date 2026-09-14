@@ -60,17 +60,7 @@ async function collectTokenSupplyRows(db, from, to, conn, acc){
         // let the optimiser drive from `actions` (block_index range) into each table
         // via its action_index index. UNION (not UNION ALL) preserves the original
         // SELECT DISTINCT semantics, so the emitted tick set is byte-identical.
-        let tokenRows = await db.doQuery(
-            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
-                "SELECT c.tick_id FROM credits c JOIN actions a ON a.action_index = c.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
-                "UNION " +
-                "SELECT d.tick_id FROM debits d JOIN actions a ON a.action_index = d.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
-                "UNION " +
-                "SELECT e.tick_id FROM escrows e JOIN actions a ON a.action_index = e.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL)",
-            [from, to, from, to, from, to], conn);
+        let tokenRows = await db.findLedgerTouchedTokens(from, to, conn);
         add(acc, 'tokens', tokenRows);
     } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
 }

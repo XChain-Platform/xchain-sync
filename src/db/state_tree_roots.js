@@ -56,4 +56,19 @@ module.exports = {
             'SELECT state_root, block_merkle_root FROM state_tree_roots WHERE block_index=? LIMIT 1', [blockIndex]);
     },
 
+    /**
+     * Delete one chain's root rows at and above a height, the same predicate a
+     * rollback applies to this table. `chain` is the TICKER every writer stores.
+     *
+     * @param {string} chain       the coin ticker
+     * @param {string} network
+     * @param {number} blockHeight first height to delete, inclusive
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteStateTreeRootsFromBlock(chain, network, blockHeight){
+        return await this.doQuery(
+            'DELETE FROM state_tree_roots WHERE chain = ? AND network = ? AND block_index >= ?',
+            [chain, network, blockHeight]);
+    },
+
 };

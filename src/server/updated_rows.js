@@ -106,11 +106,12 @@ async function collectDeactivationAndSlashRows(db, from, to, activationDelay, co
     if(activationDelay != null){
         for(let table of DEACTIVATION_TABLES){
             try {
-                let rows = await db.doQuery(
-                    "SELECT * FROM `" + table + "` WHERE deactivation_block IS NOT NULL AND deactivation_block BETWEEN ? AND ?",
-                    [from + activationDelay, to + activationDelay], conn);
+                let rows = await db.findDeactivationStampedRows(table, from + activationDelay, to + activationDelay, conn);
                 add(acc, table, rows);
-            } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+            } catch(e){
+                if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+                // Table/column may not exist on older source schemas; skip.
+            }
         }
     }
 
@@ -119,13 +120,12 @@ async function collectDeactivationAndSlashRows(db, from, to, activationDelay, co
     //    (avoids DISTINCT over wide/blob columns).
     for(let spec of SLASH_SPECS){
         try {
-            let rows = await db.doQuery(
-                "SELECT t.* FROM `" + spec.table + "` t " +
-                "JOIN `" + spec.debits + "` d ON d.stake_action_index = t.action_index " +
-                "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ?",
-                [spec.target, from, to], conn);
+            let rows = await db.findSlashDebitedRows(spec, from, to, conn);
             add(acc, spec.table, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table may not exist on older source schemas; skip.
+        }
     }
 }
 
@@ -137,13 +137,12 @@ async function collectRotationAndRequestRows(db, from, to, conn, acc){
     //     staker set than the source (and slashes a key the source no longer carries).
     for(let rotTbl of ROTATION_TABLES){
         try {
-            let rows = await db.doQuery(
-                "SELECT t.* FROM `" + rotTbl + "` t " +
-                "JOIN `contract_delegation_rotations` r ON r.stake_action_index = t.action_index " +
-                "WHERE r.target_table = ? AND r.block_index BETWEEN ? AND ?",
-                [rotTbl, from, to], conn);
+            let rows = await db.findRotatedStakeRows(rotTbl, from, to, conn);
             add(acc, rotTbl, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table may not exist on older source schemas; skip.
+        }
     }
 
     // 3. request_status flips on surviving v0 attest/xcall request rows. Keyed on
@@ -151,11 +150,12 @@ async function collectRotationAndRequestRows(db, from, to, conn, acc){
     //    and the deadline-expiry flip paths, mirroring ClientRollback's reset key.
     for(let table of REQUEST_STATUS_TABLES){
         try {
-            let rows = await db.doQuery(
-                "SELECT * FROM `" + table + "` WHERE version = 0 AND resolved_block BETWEEN ? AND ?",
-                [from, to], conn);
+            let rows = await db.findResolvedRequestRows(table, from, to, conn);
             add(acc, table, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table/column may not exist on older source schemas; skip.
+        }
     }
 }
 
@@ -170,12 +170,12 @@ async function collectPollAndCooldownRows(db, from, to, conn, acc){
     //     predicate: polls has one row shape (the v0 create), unlike attests/xcalls.
     for(let table of POLL_FINALIZE_TABLES){
         try {
-            let rows = await db.doQuery(
-                "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ? " +
-                "OR (callback_due_block BETWEEN ? AND ? AND callback_execute_action_index IS NOT NULL)",
-                [from, to, from, to], conn);
+            let rows = await db.findFinalizedPollRows(table, from, to, conn);
             add(acc, table, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table/column may not exist on older source schemas; skip.
+        }
     }
 
     // 4. cooldown-maturity status_id flip on surviving unstakes / contract_unstakes.
@@ -188,11 +188,12 @@ async function collectPollAndCooldownRows(db, from, to, conn, acc){
     //    the UNIQUE action_index against any SLASH row for the same unstake.
     for(let table of COOLDOWN_STATUS_TABLES){
         try {
-            let rows = await db.doQuery(
-                "SELECT * FROM `" + table + "` WHERE cooldown_end_block BETWEEN ? AND ?",
-                [from, to], conn);
+            let rows = await db.findMaturedCooldownRows(table, from, to, conn);
             add(acc, table, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table/column may not exist on older source schemas; skip.
+        }
     }
 }
 
@@ -208,10 +209,12 @@ async function collectBetStatusRows(db, from, to, conn, acc){
             let where = spec.stamps.map(col => "`" + col + "` BETWEEN ? AND ?").join(' OR ');
             let args  = [];
             for(let i = 0; i < spec.stamps.length; i++){ args.push(from); args.push(to); }
-            let rows = await db.doQuery(
-                "SELECT * FROM `" + spec.table + "` WHERE " + where, args, conn);
+            let rows = await db.findBetStampedRows(spec, where, args, conn);
             add(acc, spec.table, rows);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+        } catch(e){
+            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Table/columns may not exist on older source schemas; skip.
+        }
     }
 }
 
@@ -235,15 +238,12 @@ async function collectInvalidArchiveRows(db, from, to, conn, acc){
     //    this fix must be live BEFORE the state-hash flag day or the follower halts on
     //    a parent row it was never sent.
     try {
-        let anchorRows = await db.doQuery(
-            "SELECT DISTINCT p.* FROM anchor_actions p " +
-            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
-            "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
-            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
-            [from, to], conn);
+        let anchorRows = await db.findInvalidArchiveHeadRows(from, to, conn);
         add(acc, 'anchor_actions', anchorRows);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+    } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        // Table/columns may not exist on older source schemas; skip.
+    }
 }
 
 async function collectAttestBatchHeadRows(db, from, to, conn, acc){
@@ -288,19 +288,13 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     carry must be live before any future state-hash twin of this class arms, or a
     //     follower halts on a head row it was never sent.
     try {
-        let attestHeadRows = await db.doQuery(
-            "SELECT ah.* FROM attests ah " +
-            "JOIN index_statuses ahs ON ahs.id = ah.status_id AND ahs.status LIKE ? " +
-            "JOIN actions aha ON aha.action_index = ah.action_index " +
-            "JOIN attests ac ON ac.request_id = ah.request_id " +
-                "AND ac.version = " + ATTEST_BATCH_CONTINUATION_VERSION + " AND ac.batch_chunk_index IS NOT NULL " +
-            "JOIN index_statuses acs ON acs.id = ac.status_id AND acs.status = 'valid' " +
-            "JOIN actions aca ON aca.action_index = ac.action_index AND aca.source_id = aha.source_id " +
-            "WHERE ah.version = " + ATTEST_BATCH_HEAD_VERSION + " AND ah.batch_chunk_index = 0 " +
-                "AND ac.block_index BETWEEN ? AND ?",
-            ['%' + ATTEST_BATCH_COMPLETION_STAMP, from, to], conn);
+        let attestHeadRows = await db.findFailedAttestBatchHeads(
+            ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, from, to, conn);
         add(acc, 'attests', attestHeadRows);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+    } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        // Table/columns may not exist on older source schemas (pre-batch-rail builds); skip.
+    }
 }
 
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
