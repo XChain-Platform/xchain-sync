@@ -17,7 +17,7 @@
 // In the active light-client class (STATE_COMMITMENT regtest/testnet = block 0),
 // ClientApplier.computeFollowerRoots recomputes stakes_root every block via
 // gatherStakeEntries, and ClientSync halts on any state_root mismatch. The leaf
-// encoders (merkle.js) and _stakeWeightsSql are byte-guarded, but the *inputs*
+// encoders (merkle.js) and stakeWeightsSql are byte-guarded, but the *inputs*
 // to gatherStakeEntries were not: BTC_STAKE_CAPABILITIES (the capability set and
 // per-cap MIN_STAKE floors) and VALIDATOR_QUERY_LIMIT are hand-mirrored from the
 // indexer's src/coins/BTC.js. A future indexer edit (a sixth capability, a

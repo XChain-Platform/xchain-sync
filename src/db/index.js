@@ -749,7 +749,7 @@ class Database {
     // assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
     // declared contract so the two services cannot disagree about what "undrifted"
     // means. The follower rebuilds stakes_root from the byte-mirrored
-    // _cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
+    // cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
     // collation selects different cap survivors and the replica halts on a root it
     // computed wrong. Once the collation gate is armed, a drifted CHARSET fails the
     // query outright (errno 1253), so halting at boot with the column named is the

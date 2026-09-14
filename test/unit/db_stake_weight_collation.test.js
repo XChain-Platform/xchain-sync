@@ -9,7 +9,7 @@
 // Replica half of the stake-weight ordering-collation flag-day (see
 // src/stake_weight_collation_activation.js, a byte-identical twin of the
 // xchain-indexer copy). The follower rebuilds stakes_root from
-// _cappedStakeWeightsSql, whose window caps truncate on an ORDER over
+// cappedStakeWeightsSql, whose window caps truncate on an ORDER over
 // index_addresses.address / index_pubkeys.pubkey. Those columns are declared
 // utf8_general_ci (folding), so the collation decides WHICH sources and keys
 // survive the cap - and pinning it on ONE side of the seam is itself the fork
