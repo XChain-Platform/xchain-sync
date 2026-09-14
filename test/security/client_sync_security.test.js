@@ -13,9 +13,12 @@ const sinon  = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const HashVerifier = require('../../src/client/hash_verifier');
 const Database = require('../../src/db');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
+// Queries read through named Database methods; the real ones are installed for any
+// this fake does not stub, so they still reach the doQuery stub the suite inspects.
 function createMockDb(){
-    return {
+    return withDbMixins({
         dbName: 'test_db',
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
@@ -25,7 +28,7 @@ function createMockDb(){
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves(),
         recordHalt: sinon.stub().resolves()
-    };
+    });
 }
 
 function createMockApplier(){

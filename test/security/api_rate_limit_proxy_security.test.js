@@ -19,6 +19,10 @@ const assert     = require('assert');
 const sinon      = require('sinon');
 const express    = require('express');
 const proxyquire = require('proxyquire');
+// src/api.js is the process entry point and patches console as it loads. The unit
+// tier's bootstrap opts out of that; the security tier has no bootstrap, so this file
+// opts out itself, or every later suite that stubs console stops seeing logger output.
+process.env.XCHAIN_LOG_PATCH = '0';
 const { trustProxyHops, snapshotKey, createRateLimiters } = require('../../src/api');
 
 // A stand-in for the co-located Apache: the socket peer is loopback and the
