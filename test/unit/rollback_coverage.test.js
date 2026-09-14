@@ -431,7 +431,7 @@ describe('Rollback coverage guard @regression', function(){
 
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
     // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
-    // byte-identical to xchain-indexer/src/db/stakes.js _stakeWeightsSql, or the follower's
+    // byte-identical to the xchain-indexer _stakeWeightsSql, or the follower's
     // stakes_root (hence state_root) diverges from the source and the state-commitment
     // check false-halts. Both files carry the method verbatim; this extracts the body
     // and asserts whitespace-normalised equality. If you edit one, edit the other.
@@ -443,11 +443,11 @@ describe('Rollback coverage guard @regression', function(){
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db/stakes.js');
-        // The indexer split its 19k-line src/db.js into src/db/index.js plus per-feature
-        // mixins, and _stakeWeightsSql landed in the stakes mixin. Pin the exact file
-        // rather than the src/db/ directory: if the method is moved again, stakeSql()'s
-        // assert.ok fires by name here instead of silently finding a copy elsewhere.
-        const indexerPath = indexerFile('src/db/stakes.js');
+        // The indexer split its stakes mixin into parts, and _stakeWeightsSql now lives in
+        // src/db/stakes/effective_set_sql.js. Pin the exact file rather than the src/db/
+        // tree: if the method is moved again, stakeSql()'s assert.ok fires by name here
+        // instead of silently finding a copy elsewhere.
+        const indexerPath = indexerFile('src/db/stakes/effective_set_sql.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(stakeSql(syncPath), stakeSql(indexerPath),
             '_stakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (the stakes_root is consensus-critical)');
@@ -470,8 +470,8 @@ describe('Rollback coverage guard @regression', function(){
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db/stakes.js');
         // Same split as above: the capped wrapper sits beside _stakeWeightsSql in the
-        // stakes mixin, and cappedSql()'s assert.ok is what fails loudly if it moves.
-        const indexerPath = indexerFile('src/db/stakes.js');
+        // effective-set part, and cappedSql()'s assert.ok is what fails loudly if it moves.
+        const indexerPath = indexerFile('src/db/stakes/effective_set_sql.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(cappedSql(syncPath), cappedSql(indexerPath),
             '_cappedStakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
