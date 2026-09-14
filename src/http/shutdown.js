@@ -28,6 +28,8 @@
  *
  ********************************************************************/
 
+const envConfig = require('../config');
+
 // Hard-exit budget for the whole drain. Docker's default stop grace is 10s and
 // xchain-node issues a bare `docker stop`, so the default sits under it: an
 // overrun that ends in our own logged exit is diagnosable, one that ends in the
@@ -36,7 +38,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 
 function resolveTimeoutMs(timeoutMs, env){
     if(Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
-    const raw = parseInt((env || process.env).SHUTDOWN_TIMEOUT_MS, 10);
+    const raw = parseInt((env || envConfig.envSource()).SHUTDOWN_TIMEOUT_MS, 10);
     return (Number.isFinite(raw) && raw > 0) ? raw : DEFAULT_SHUTDOWN_TIMEOUT_MS;
 }
 

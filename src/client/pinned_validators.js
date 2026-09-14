@@ -65,6 +65,7 @@
 
 'use strict';
 const { getLogger } = require('../observability');
+const envConfig = require('../config');
 const logger = getLogger();
 
 /**
@@ -119,7 +120,7 @@ function parseValidatorSetEnv(raw) {
 // unusable. Never throws: this is on the per-verify read path, and startup already
 // refused an invalid explicit value.
 function fromEnv(chain, network) {
-    const raw = process.env[envKey(chain, network)];
+    const raw = envConfig.envValueByName(envKey(chain, network));
     if (!raw) return null;
     const { set, error } = parseValidatorSetEnv(raw);
     if (error) {
@@ -193,7 +194,7 @@ function parseSeedEnv(raw) {
 // Resolve the env-supplied seed for (chain, network), or null when it is absent or
 // unusable. Never throws, for the same reason fromEnv does not.
 function seedFromEnv(chain, network) {
-    const raw = process.env[seedEnvKey(chain, network)];
+    const raw = envConfig.envValueByName(seedEnvKey(chain, network));
     if (!raw) return null;
     const { seed, error } = parseSeedEnv(raw);
     if (error) {
@@ -248,7 +249,7 @@ function isChainNetworkShaped(prefix, envKey) {
  * @throws {Error} naming every offending variable and why it is unusable.
  */
 function assertPinnedEnvOverrides(env) {
-    const source = env || process.env;
+    const source = env || envConfig.envSource();
     const bad = [];
     for (const envKey of Object.keys(source)) {
         for (const { prefix, parse, what } of _OVERRIDE_PREFIXES) {

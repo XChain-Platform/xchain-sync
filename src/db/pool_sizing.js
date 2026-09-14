@@ -41,6 +41,8 @@
  *
  ********************************************************************/
 
+const envConfig = require('../config');
+
 // Per-dbType defaults. Unknown dbTypes fall back to the indexer profile:
 // an unrecognized type is more likely a new fan-out-heavy schema than a
 // narrow one, and over-sizing degrades gracefully while under-sizing
@@ -71,7 +73,7 @@ function normalizeDbType(dbType){
 // when neither is set (or both are empty), so the caller can apply its
 // own default rather than guessing here.
 function readEnvOverride(name, dbType, env){
-    let source = env || process.env;
+    let source = env || envConfig.envSource();
     let scoped = source[name + '_' + normalizeDbType(dbType).toUpperCase()];
     if(scoped !== undefined && String(scoped).trim() !== '') return scoped;
     let global = source[name];

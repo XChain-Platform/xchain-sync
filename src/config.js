@@ -42,6 +42,11 @@ function parseIntMin1(val, defaultVal){
     return Math.max(1, parseIntSafe(val, defaultVal));
 }
 
+// A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
+function parseCsvSet(val){
+    return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
+}
+
 const BOOTSTRAP_DEPTH_PREFIX = 'SYNC_BOOTSTRAP_DEPTH_';
 
 // Canonical SYNC_BOOTSTRAP_DEPTH map key, '<TICKER>:<NETWORK>' uppercased.
@@ -146,6 +151,12 @@ module.exports = {
     /** The replication connection to measure replica lag on, empty when unset. */
     replicaConnectionFromEnv: () => process.env.SYNC_REPLICA_CONNECTION,
 
+    /** One variable whose NAME the caller computes (SYNC_MODE_<CHAIN>, a pinned-validator override). */
+    envValueByName: (name) => process.env[name],
+
+    /** The live environment, for a caller that also accepts an injected one in tests. */
+    envSource: () => process.env,
+
     bootstrapDepthKey,
     bootstrapDepthEnvKey,
     unmatchedBootstrapDepthKeys,
@@ -195,12 +206,7 @@ module.exports = {
         // bootstrap (fast chains with tens of millions of blocks) wherever the
         // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is not in place.
         // Trimmed + deduplicated; empty/unset -> [] (no chain excluded).
-        config['SYNC_EXCLUDE'] = [...new Set(
-            (process.env.SYNC_EXCLUDE || '')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0)
-        )];
+        config['SYNC_EXCLUDE'] = parseCsvSet(process.env.SYNC_EXCLUDE);
 
         // Per-chain start-from-recent-height bootstrap (client mode). Opt-in via
         // SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>=N (e.g.
@@ -275,8 +281,7 @@ module.exports = {
         // How often client mode runs that sweep, in ms (default 1 hour). A clock rather
         // than a per-block hook: bulk snapshot catch-up applies many blocks at once and
         // would skip epoch-boundary events. No timer at all when the window is 0.
-        config['SYNC_META_RETENTION_INTERVAL_MS'] =
-            parseInt(process.env.SYNC_META_RETENTION_INTERVAL_MS) || (60 * 60 * 1000);
+        config['SYNC_META_RETENTION_INTERVAL_MS'] = parseInt(process.env.SYNC_META_RETENTION_INTERVAL_MS) || (60 * 60 * 1000);
 
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
@@ -558,12 +563,7 @@ module.exports = {
         // node network-partitioned before it ever POSTed. Empty/unset -> [] (the
         // service runs exactly as before, with no roster anchor). Deduplicated and
         // trimmed so the denominator is accurate.
-        config['EXPECTED_VALIDATORS'] = [...new Set(
-            (process.env.EXPECTED_VALIDATORS || '')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0)
-        )];
+        config['EXPECTED_VALIDATORS'] = parseCsvSet(process.env.EXPECTED_VALIDATORS);
 
         return config;
     }
