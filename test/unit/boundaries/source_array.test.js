@@ -17,8 +17,10 @@ const HashVerifier  = require('../../../src/client/hash_verifier');
 const Utility       = require('../../../src/util');
 const axios = require('axios');
 
+const { withDbMixins } = require('../../helpers/db_mixins.js');
+
 function createMockDb(){
-    return {
+    return withDbMixins({
         doQuery: sinon.stub().resolves([]),
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
@@ -28,7 +30,7 @@ function createMockDb(){
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves(),
         dbName: 'test_db'
-    };
+    });
 }
 
 function createSync(sources, opts){

@@ -14,9 +14,10 @@ const ServerPoller  = require('../../../src/server/poller');
 const ClientApplier = require('../../../src/client/applier');
 const HashVerifier  = require('../../../src/client/hash_verifier');
 const Utility       = require('../../../src/util');
+const { withDbMixins } = require('../../helpers/db_mixins.js');
 
 function createMockDb(){
-    return {
+    return withDbMixins({
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
         getBlockScopedRows: sinon.stub().resolves([]),
@@ -30,7 +31,7 @@ function createMockDb(){
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves()
-    };
+    });
 }
 
 describe('Boundary: Block Index Values', function(){

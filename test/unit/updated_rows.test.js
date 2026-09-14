@@ -18,12 +18,13 @@ const { collectUpdatedRows } = require('../../src/server/updated_rows');
 const ClientApplier = require('../../src/client/applier');
 const ClientRollback = require('../../src/client/rollback');
 const Utility = require('../../src/util');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 // A doQuery stub that branches on a substring of the SQL so each in-place class
 // can be given canned rows independently. Records every (sql, args) pair.
 function fakeDb(routes){
     let calls = [];
-    return {
+    return withDbMixins({
         calls,
         dbType: 'indexer',
         doQuery: sinon.stub().callsFake(async (sql, args) => {
@@ -37,7 +38,7 @@ function fakeDb(routes){
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves(),
         getBlockHashRow: sinon.stub().resolves(null)
-    };
+    });
 }
 
 describe('updatedRows.collectUpdatedRows', function(){

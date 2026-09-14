@@ -12,16 +12,17 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientApplier = require('../../../src/client/applier');
 const Utility = require('../../../src/util');
+const { withDbMixins } = require('../../helpers/db_mixins.js');
 
 function createMockDb(){
-    return {
+    return withDbMixins({
         doQuery: sinon.stub().resolves([]),
         getBlockHashRow: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves()
-    };
+    });
 }
 
 // These cover batch-size boundaries only and need any plain-INSERT table. They used

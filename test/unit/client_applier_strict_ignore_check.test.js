@@ -20,16 +20,17 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientApplier = require('../../src/client/applier');
 const Utility = require('../../src/util');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 function createMockDb(){
-    return {
+    return withDbMixins({
         doQuery: sinon.stub().resolves([]),
         getBlockHashRow: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves()
-    };
+    });
 }
 
 describe('ClientApplier strictIgnoreCheck', function(){
@@ -121,7 +122,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
         let rows = new Map(initialRows.map(r => [Number(r.id), r.status]));
         let warnings = [];
         let log = [];
-        let db = {
+        let db = withDbMixins({
             dbName: 'replica_db',
             getBlockHashRow: sinon.stub().resolves(null),
             beginTransaction: sinon.stub().resolves(),
@@ -166,7 +167,7 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
                 }
                 return [];
             }
-        };
+        });
         return db;
     }
 

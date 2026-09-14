@@ -18,8 +18,10 @@ const ClientApplier = proxyquire('../../src/client/applier', {
 });
 const { SCHEMA_VERSION } = require('../../src/schema/version');
 
+const { withDbMixins } = require('../helpers/db_mixins.js');
+
 function createMockDb(){
-    return {
+    return withDbMixins({
         dbName: 'test_db',
         doQuery: sinon.stub().resolves([]),
         truncateTable: sinon.stub().resolves(),
@@ -27,7 +29,7 @@ function createMockDb(){
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(true),
         rollbackTransaction: sinon.stub().resolves()
-    };
+    });
 }
 
 function createMockUtil(){

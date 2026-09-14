@@ -14,16 +14,17 @@ const ClientApplier = require('../../src/client/applier');
 const Utility = require('../../src/util');
 const { SCHEMA_VERSION } = require('../../src/schema/version');
 const balanceHelpers = require('../../src/db/balance_helpers');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 
 function createMockDb(){
-    return {
+    return withDbMixins({
         doQuery: sinon.stub().resolves([]),
         getBlockHashRow: sinon.stub().resolves(null),
         beginTransaction: sinon.stub().resolves(),
         commitTransaction: sinon.stub().resolves(),
         rollbackTransaction: sinon.stub().resolves(),
         truncateTable: sinon.stub().resolves()
-    };
+    });
 }
 
 describe('ClientApplier', function(){
@@ -824,14 +825,7 @@ describe('ClientApplier: anchor_actions bundle sections', function(){
     let applier, db, util;
 
     beforeEach(function(){
-        db = {
-            doQuery: sinon.stub().resolves([]),
-            getBlockHashRow: sinon.stub().resolves(null),
-            beginTransaction: sinon.stub().resolves(),
-            commitTransaction: sinon.stub().resolves(),
-            rollbackTransaction: sinon.stub().resolves(),
-            truncateTable: sinon.stub().resolves()
-        };
+        db = createMockDb();
         util = new Utility();
         applier = new ClientApplier(db, util, 'DOGE', 'regtest');
         sinon.stub(console, 'log');
