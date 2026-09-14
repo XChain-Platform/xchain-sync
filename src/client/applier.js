@@ -100,7 +100,7 @@ class ClientApplier {
             // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
             'sync_meta',
             // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent (item 4622).
+            // full-dump re-send on an incremental catch-up idempotent.
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
             // reward_type, round_reference, round_qualifier). The recovery-redriven collector
@@ -152,7 +152,7 @@ class ClientApplier {
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
         // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values (4622).
+        // STALE row, so they must UPSERT to overwrite with the source values.
         this.upsertFullDumpTables = new Set([
             'markets',
             'attest_validator_stats'
@@ -232,6 +232,16 @@ class ClientApplier {
         ]);
     }
 
+    /**
+     * Apply a single block payload from a WebSocket event.
+     *
+     * Runs the whole block inside one transaction: a duplicate or malformed payload
+     * returns before anything is written, and any failure rolls the block back so
+     * ClientSync retries it rather than committing part of it.
+     *
+     * @param {object} payload the server's block event: block_index, data (a
+     *                         { table: [rows] } map) and any updated_rows
+     */
     async applyBlock(payload){
         // Clear any prior block's computed roots up front: on an early return
         // (malformed payload or an already-applied duplicate) ClientSync must NOT
@@ -540,9 +550,16 @@ class ClientApplier {
         }
     }
 
-    // opts.strictIgnoreCheck: see the SHOW WARNINGS block in insertRows.
-    // Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
-    // live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
+    /**
+     * Apply an incremental snapshot.
+     *
+     * opts.strictIgnoreCheck: see the SHOW WARNINGS block in insertRows.
+     * Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
+     * live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
+     *
+     * @param {object} snapshotData the server's catch-up payload since a block
+     * @param {object} [opts]
+     */
     async applyIncrementalSnapshot(snapshotData, opts){
         if(!snapshotData || !snapshotData.tables) return;
 
@@ -628,6 +645,9 @@ class ClientApplier {
     async insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
 
+        // The table name is spliced into every statement below rather than bound as a
+        // parameter, so refuse anything that is not a plain identifier before it can
+        // reach the database.
         let tableCheck = validation.validateIdentifier(table);
         if(!tableCheck.valid){
             // Fail closed, not open: a `return` here silently drops every row for this
@@ -696,6 +716,7 @@ class ClientApplier {
             }
         }
 
+        // Column names are spliced in the same way, so each one gets the same check.
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
@@ -723,7 +744,7 @@ class ClientApplier {
 
             await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
 
-            // 5284: events rows >64KB silently truncate on a still-TEXT (pre-migration)
+            // events rows >64KB silently truncate on a still-TEXT (pre-migration)
             // replica when INSERT IGNORE is used: the id collision guard skips the row
             // on re-send, so the truncated copy is never healed. Detect this by reading
             // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
