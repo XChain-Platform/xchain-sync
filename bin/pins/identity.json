@@ -19,6 +19,6 @@
     "src/coins/DOGE.js": "a0952d619edec50c09d0cbac90023cba2e8e75f0fa98b650e2ee1f4eadd7540b",
     "src/coins/LTC.js": "c227025a7b1e8d70f5165f6065cd2894161abd4966814c8f7b0f462e036474c9",
     "src/coins/consensus_pin.js": "f41142b6b3c9e3f1c1d491b9737fee5e6fd988d700bd96f0d200f7bd0b301ae7",
-    "src/coins/index.js": "a0c16cab7d5969e062822dc70fd9565a513cd363f3d7bd3b76806ed6679c5213"
+    "src/coins/index.js": "dd350bc0ec999849fe302ac4381f37b7be3eaa866f019a35cbcceebb4d5ebd4b"
   }
 }
