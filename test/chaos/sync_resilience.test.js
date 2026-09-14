@@ -70,32 +70,81 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
-describe('Chaos: Sync Resilience', function () {
+const SERVER_PORT = 30400;
+let server, client;
 
-    const SERVER_PORT = 30400;
-
-before(async function () {
+async function setupSyncResilience() {
+    server = null;
+    client = null;
     await waitForToxiproxy();
     await createProxy(SOURCE_PROXY);
     await createProxy(REPLICA_PROXY);
     await bootstrapDatabases();
-});
+}
 
-after(async function () {
+async function teardownSyncResilience() {
     await teardownDatabases();
     await resetBoth();
-});
+}
+
+async function resetSyncScenario() {
+    if (client) client.stop();
+    if (server) await server.stop();
+    await resetDatabases();
+    await resetBoth();
+}
+
+async function startSyncThroughBlock(block) {
+    await seedSourceBlocks(1, block);
+
+    server = createServer(SERVER_PORT);
+    await server.start();
+
+    client = createClient(server.getUrl(), { reconnectDelay: 500 });
+    await client.start();
+
+    return waitForSyncRecovery(block, 30000);
+}
+
+async function recoverFromCompoundFailure() {
+    // Phase 1: Source DB goes down
+    await sourceFaults.dbDown();
+
+    // Seed blocks via DIRECT connection while proxy is disabled
+    await seedSourceDirect(16, 25);
+
+    // Let the server's circuit breaker start failing before crashing it.
+    await sleep(5000);
+
+    // Phase 2: Server crashes (while source is still down)
+    await server.stop();
+    server = null;
+
+    // Client loses WebSocket connection
+    await sleep(3000);
+
+    // Phase 3: Recovery (source comes back, server restarts)
+    await sourceFaults.dbUp();
+    await sleep(2000);
+
+    server = createServer(SERVER_PORT);
+    await server.start();
+
+    // Force server to poll and catch up on blocks 16-25
+    for (let i = 0; i < 10; i++) {
+        try { await server.poll(); } catch { /* circuit may be recovering */ }
+        await sleep(500);
+    }
+}
+
+describe('Chaos: Sync Resilience', function () {
+
+before(setupSyncResilience);
+after(teardownSyncResilience);
 
 describe('CE-SYNC-01: Server Crash → Reconnect → Gap Healing', function () {
 
-    let server, client;
-
-    afterEach(async function () {
-        if (client) client.stop();
-        if (server) await server.stop();
-        await resetDatabases();
-        await resetBoth();
-    });
+    afterEach(resetSyncScenario);
 
     it('client recovers from server crash and heals block gap', async function () {
         await seedSourceBlocks(1, 20);
@@ -144,16 +193,16 @@ describe('CE-SYNC-01: Server Crash → Reconnect → Gap Healing', function () {
     });
 });
 
+});
+
+describe('Chaos: Sync Resilience', function () {
+
+before(setupSyncResilience);
+after(teardownSyncResilience);
+
 describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function () {
 
-    let server, client;
-
-    afterEach(async function () {
-        if (client) client.stop();
-        if (server) await server.stop();
-        await resetDatabases();
-        await resetBoth();
-    });
+    afterEach(resetSyncScenario);
 
     it('client detects and heals a multi-block gap via status event', async function () {
         // Seed initial blocks and bootstrap
@@ -201,27 +250,19 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
     });
 });
 
+});
+
+describe('Chaos: Sync Resilience', function () {
+
+before(setupSyncResilience);
+after(teardownSyncResilience);
+
 describe('CE-SYNC-03: Reorg During Active Sync', function () {
 
-    let server, client;
-
-    afterEach(async function () {
-        if (client) client.stop();
-        if (server) await server.stop();
-        await resetDatabases();
-        await resetBoth();
-    });
+    afterEach(resetSyncScenario);
 
     it('client handles reorg while source DB has injected latency', async function () {
-        await seedSourceBlocks(1, 20);
-
-        server = createServer(SERVER_PORT);
-        await server.start();
-
-        client = createClient(server.getUrl(), { reconnectDelay: 500 });
-        await client.start();
-
-        const initialSync = await waitForSyncRecovery(20, 30000);
+        const initialSync = await startSyncThroughBlock(20);
         expect(initialSync).to.be.above(-1);
 
         // Latency on source DB reads means reorg detection will be slow too.
@@ -270,58 +311,23 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
     });
 });
 
+});
+
+describe('Chaos: Sync Resilience', function () {
+
+before(setupSyncResilience);
+after(teardownSyncResilience);
+
 describe('CE-SYNC-04: Compound Failure (Source Down + Server Crash)', function () {
 
-    let server, client;
-
-    afterEach(async function () {
-        if (client) client.stop();
-        if (server) await server.stop();
-        await resetDatabases();
-        await resetBoth();
-    });
+    afterEach(resetSyncScenario);
 
     it('full data integrity after compound source outage + server crash', async function () {
         // Setup: seed blocks, establish full sync
-        await seedSourceBlocks(1, 15);
-
-        server = createServer(SERVER_PORT);
-        await server.start();
-
-        client = createClient(server.getUrl(), { reconnectDelay: 500 });
-        await client.start();
-
-        const initialSync = await waitForSyncRecovery(15, 30000);
+        const initialSync = await startSyncThroughBlock(15);
         expect(initialSync).to.be.above(-1);
 
-        // Phase 1: Source DB goes down
-        await sourceFaults.dbDown();
-
-        // Seed blocks via DIRECT connection while proxy is disabled
-        await seedSourceDirect(16, 25);
-
-        // Let the server's circuit breaker start failing before crashing it.
-        await sleep(5000);
-
-        // Phase 2: Server crashes (while source is still down)
-        await server.stop();
-        server = null;
-
-        // Client loses WebSocket connection
-        await sleep(3000);
-
-        // Phase 3: Recovery (source comes back, server restarts)
-        await sourceFaults.dbUp();
-        await sleep(2000);
-
-        server = createServer(SERVER_PORT);
-        await server.start();
-
-        // Force server to poll and catch up on blocks 16-25
-        for (let i = 0; i < 10; i++) {
-            try { await server.poll(); } catch { /* circuit may be recovering */ }
-            await sleep(500);
-        }
+        await recoverFromCompoundFailure();
 
         // Client reconnects (500ms delay), status event, gap detected, catch-up.
         const recoveryMs = await waitForSyncRecovery(25, 120000);
