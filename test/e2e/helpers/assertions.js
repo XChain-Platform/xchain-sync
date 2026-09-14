@@ -11,7 +11,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const { getReplicatedTables } = require('../../../src/schema/replicated_tables');
-const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/tableLifecycle');
+const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/table_lifecycle');
 const BlockHasher = require('../../../src/client/block_hasher');
 const testDbModule = require('./testDb');
 

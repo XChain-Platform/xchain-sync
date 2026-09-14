@@ -46,7 +46,7 @@ const fixtures = require('./helpers/fixtures');
 const ServerPoller  = require('../../src/server/poller');
 const ClientApplier = require('../../src/client/applier');
 const SUB = require('../../src/state_subtree_activation');
-const CST = require('../../src/contractStateSubtree');
+const CST = require('../../src/contract_state_subtree');
 const SC  = require('../../src/stateCommitment');
 
 const CHAIN   = 'litecoin';     // full-name form, as the services pass it

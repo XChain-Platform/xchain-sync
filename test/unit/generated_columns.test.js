@@ -32,7 +32,7 @@ const fs     = require('fs');
 const path   = require('path');
 
 const { GENERATED_COLUMNS, generatedColumns } = require('../../src/schema/generated_columns');
-const lifecycle = require('../../src/tableLifecycle');
+const lifecycle = require('../../src/table_lifecycle');
 
 // BOTH sibling schemas, resolved the way the DB-backed suites do. Absent by default
 // in a standalone checkout; XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip fail instead.

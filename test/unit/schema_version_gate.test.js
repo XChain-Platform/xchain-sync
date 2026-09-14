@@ -31,7 +31,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const lifecycle        = require('../../src/tableLifecycle');
+const lifecycle        = require('../../src/table_lifecycle');
 const replicatedTables = require('../../src/schema/replicated_tables');
 const { MIGRATION_FRONTIER } = require('../../src/schema/version');
 

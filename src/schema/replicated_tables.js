@@ -77,7 +77,7 @@
  *
  ********************************************************************/
 
-const lifecycle = require('../tableLifecycle');
+const lifecycle = require('../table_lifecycle');
 
 // Per-block replicated table topology by dbType. ServerPoller consumes the
 // structured form (it needs the per-scope split for its index joins); the

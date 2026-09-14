@@ -96,7 +96,7 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 // rollback buckets, derived from the table-lifecycle registry twin
 // (src/tableLifecycle.js, byte-identical to the xchain-indexer copy; asserted
 // below). Per-table rationale lives with each registry entry.
-const lifecycleTwin = require('../../src/tableLifecycle');
+const lifecycleTwin = require('../../src/table_lifecycle');
 const pathMod = require('path');
 const fs = require('fs');
 const assertLocal = require('assert');
@@ -1062,9 +1062,9 @@ describe('Rollback coverage guard @regression', function(){
         ['state_key_collation_activation.js',    'src/state_key_collation_activation.js'],
         ['stake_weight_collation_activation.js', 'src/stake_weight_collation_activation.js'],
         ['state_subtree_activation.js',          'src/state_subtree_activation.js'],
-        ['contractStateSubtree.js',              'src/consensus/contractStateSubtree.js'],
-        ['escrowLeafSubtree.js',                 'src/consensus/escrowLeafSubtree.js'],
-        ['tableLifecycle.js',                    'src/hub/tableLifecycle.js'],
+        ['contract_state_subtree.js',            'src/consensus/contract_state_subtree.js'],
+        ['escrow_leaf_subtree.js',               'src/consensus/escrow_leaf_subtree.js'],
+        ['table_lifecycle.js',                   'src/hub/table_lifecycle.js'],
         ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js',  'schema/utf8mb4_columns.js'],
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
@@ -1384,7 +1384,7 @@ describe('dispensers convergence wording does not drift back', function(){
         '../../src/client/rollback.js',
         '../../src/schema/replicated_tables.js',
         '../../src/server/snapshot_builder.js',
-        '../../src/tableLifecycle.js',
+        '../../src/table_lifecycle.js',
         './rollback_coverage.test.js',
     ];
     // Deliberately narrow. A bare /full snapshot only/ scan would false-positive on

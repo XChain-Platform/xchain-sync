@@ -42,7 +42,7 @@ const setup   = require('./helpers/setup');
 const testDb  = require('./helpers/testDb');
 
 const ClientApplier = require('../../src/client/applier');
-const lifecycle     = require('../../src/tableLifecycle');
+const lifecycle     = require('../../src/table_lifecycle');
 
 // The classes that ride a block/catch-up payload into insertRows. 'local',
 // 'follower-derived' and 'hub-mirror' tables are written by other paths and are not

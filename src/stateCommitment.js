@@ -67,8 +67,8 @@
 const M = require('./merkle.js');
 const CC = require('./consensus-constants.js');
 const SUB = require('./state_subtree_activation.js');
-const CST = require('./contractStateSubtree.js');
-const ESC = require('./escrowLeafSubtree.js');
+const CST = require('./contract_state_subtree.js');
+const ESC = require('./escrow_leaf_subtree.js');
 const { minimalDecimal } = require('./db/balance_helpers.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT

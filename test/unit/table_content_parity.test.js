@@ -31,7 +31,7 @@
 
 const assert = require('assert');
 
-const lifecycle       = require('../../src/tableLifecycle');
+const lifecycle       = require('../../src/table_lifecycle');
 const replicatedTables = require('../../src/schema/replicated_tables');
 const BlockHasher     = require('../../src/client/block_hasher');
 const HashVerifier    = require('../../src/client/hash_verifier');
@@ -84,7 +84,7 @@ describe('Advisory table-content parity', function(){
                 assert.deepStrictEqual(orphans, [],
                     'replicated tables with NO content commitment and NO declared exclusion: ' + orphans.join(', ') +
                     '. Add the table to the content-parity plan or declare why it cannot be bounded ' +
-                    '(src/tableLifecycle.js CONTENT_PARITY_*).');
+                    '(src/table_lifecycle.js CONTENT_PARITY_*).');
 
                 // ...and nothing is claimed twice, which would hide an exclusion behind
                 // a check that never runs (or vice versa).
