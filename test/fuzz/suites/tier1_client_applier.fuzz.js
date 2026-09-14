@@ -31,10 +31,9 @@ const { SCHEMA_VERSION } = require('../../../src/schema/version');
 
 let crashLog = [];
 
-describe('Tier 1 - ClientApplier @tier1', function () {
-    this.timeout(0);
-    let ClientApplier, applier, db, util;
+let ClientApplier, applier, db, util;
 
+function useClientApplierHooks() {
     before(function () {
         ClientApplier = require('../../../src/client/applier');
     });
@@ -50,16 +49,21 @@ describe('Tier 1 - ClientApplier @tier1', function () {
     afterEach(function () {
         sinon.restore();
     });
+}
 
-    // Helper: run and log crashes
-    async function runAndLog(fn, input) {
-        try {
-            await fn();
-        } catch (err) {
-            crashLog.push({ input: JSON.stringify(input).substring(0, 200), error: err.message });
-            throw err;
-        }
+// Helper: run and log crashes
+async function runAndLog(fn, input) {
+    try {
+        await fn();
+    } catch (err) {
+        crashLog.push({ input: JSON.stringify(input).substring(0, 200), error: err.message });
+        throw err;
     }
+}
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
 
     describe('applyBlock', function () {
 
@@ -88,6 +92,14 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
+
+    describe('applyBlock', function () {
 
         it('transaction is always committed or rolled back, never leaked', function () {
             return fc.assert(fc.asyncProperty(
@@ -124,6 +136,11 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             ), { numRuns: NUM_RUNS });
         });
     });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
 
     describe('applyFullSnapshot', function () {
 
@@ -168,6 +185,11 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             ), { numRuns: Math.min(NUM_RUNS, 500) });
         });
     });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
 
     describe('applyIncrementalSnapshot', function () {
 
@@ -193,6 +215,11 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             ), { numRuns: NUM_RUNS });
         });
     });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
 
     describe('insertRows', function () {
 
@@ -226,6 +253,14 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 }
             ), { numRuns: Math.min(NUM_RUNS, 200) });
         });
+    });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
+
+    describe('insertRows', function () {
 
         it('uses plain INSERT for non-index tables', function () {
             return fc.assert(fc.asyncProperty(
@@ -257,6 +292,14 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                 }
             ), { numRuns: 50 });
         });
+    });
+});
+
+describe('Tier 1 - ClientApplier @tier1', function () {
+    this.timeout(0);
+    useClientApplierHooks();
+
+    describe('insertRows', function () {
 
         it('null and undefined column values become null in query args', function () {
             return fc.assert(fc.asyncProperty(
