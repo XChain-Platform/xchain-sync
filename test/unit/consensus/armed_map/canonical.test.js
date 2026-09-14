@@ -26,6 +26,8 @@ const { siblingCheckout, skipOrFail } = require('../../../helpers/sibling_checko
 const sha = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 const refuses = (value) => assert.throws(() => C.canonicalValue(value), C.ArmedMapCanonicalError);
 
+// Declared once per section under one title, so each callback stays under the 60-line
+// function limit and the pinned suite titles do not move.
 describe('armed map v2: canonical value serialisation', function () {
 
     describe('scalars', function () {
@@ -52,6 +54,9 @@ describe('armed map v2: canonical value serialisation', function () {
             for (const value of [NaN, Infinity, -Infinity, 10n, undefined, Symbol('x'), () => 1]) refuses(value);
         });
     });
+});
+
+describe('armed map v2: canonical value serialisation', function () {
 
     describe('containers', function () {
         it('keeps array order, because an ordered list is part of the meaning', function () {
@@ -86,6 +91,9 @@ describe('armed map v2: canonical value serialisation', function () {
             for (const value of nested) refuses(value);
         });
     });
+});
+
+describe('armed map v2: canonical value serialisation', function () {
 
     describe('preimage and fingerprint', function () {
         const ROWS = [['b_mod.X', 1], ['a_mod.Y', { k: null }], ['A_mod.Z', 's']];
@@ -130,6 +138,9 @@ describe('armed map v2: canonical value serialisation', function () {
             assert.strictEqual(C.fingerprint(keys.map((k) => [k, 1])).count, keys.length);
         });
     });
+});
+
+describe('armed map v2: canonical value serialisation', function () {
 
     describe('twin discipline', function () {
         it('requires nothing but crypto, so the same bytes serve both repos', function () {

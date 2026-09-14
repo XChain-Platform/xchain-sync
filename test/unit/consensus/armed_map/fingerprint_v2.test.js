@@ -67,6 +67,8 @@ const get = (port) => new Promise((resolve, reject) => {
 })().catch((e) => { process.stderr.write(String(e && e.stack)); process.exit(1); });
 `;
 
+// Declared once per section under one title, so each callback stays under the 60-line
+// function limit and the pinned suite titles do not move.
 describe('armed map v2: fingerprint module and publication', function () {
 
     it('publishes a 64-hex fingerprint over every manifest row', function () {
@@ -105,6 +107,9 @@ describe('armed map v2: fingerprint module and publication', function () {
         assert.strictEqual(fields.armed_map_fingerprint, computeArmedMapFingerprint().fingerprint);
         assert.strictEqual(fields.armed_map_fingerprint_v2, computeArmedMapFingerprintV2().hex);
     });
+});
+
+describe('armed map v2: fingerprint module and publication', function () {
 
     it('both /health bodies, 503 starting and 200 ready, carry v1 and v2', function () {
         this.timeout(30000);

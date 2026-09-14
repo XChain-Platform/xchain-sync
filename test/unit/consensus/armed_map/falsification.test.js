@@ -73,18 +73,25 @@ function runCompleteness(root) {
 
 const movedRows = (a, b) => Object.keys({ ...a.rows, ...b.rows }).filter((k) => a.rows[k] !== b.rows[k]).sort();
 
+let baseline;
+
+// The unmodified tree's reading, taken once and shared by both blocks of the suite.
+function readBaseline() {
+    if (baseline) return;
+    baseline = readV2(tree());
+    assert.match(baseline.hex, /^[0-9a-f]{64}$/, baseline.reason);
+}
+
+function removeTrees() {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+}
+
+// Declared once per section under one title, so each callback stays under the 60-line
+// function limit and the pinned suite titles do not move.
 describe('armed map v2: falsification on temp trees', function () {
     this.timeout(120000);
-    let baseline;
-
-    before(function () {
-        baseline = readV2(tree());
-        assert.match(baseline.hex, /^[0-9a-f]{64}$/, baseline.reason);
-    });
-
-    after(function () {
-        for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
-    });
+    before(readBaseline);
+    after(removeTrees);
 
     it('a copied tree reads the same v2 as this checkout, so the harness measures the real thing', function () {
         const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
@@ -124,6 +131,12 @@ describe('armed map v2: falsification on temp trees', function () {
             "require('../../activations/state_key_collation_activation')");
         assert.strictEqual(readV2(root).hex, baseline.hex);
     });
+});
+
+describe('armed map v2: falsification on temp trees', function () {
+    this.timeout(120000);
+    before(readBaseline);
+    after(removeTrees);
 
     it('a deleted manifest row moves v2 and turns the completeness suite red', function () {
         const control = runCompleteness(tree());
