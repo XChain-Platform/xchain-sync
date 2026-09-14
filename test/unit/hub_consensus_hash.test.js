@@ -14,7 +14,7 @@
 // field. The hub serves { network: { COIN: sha256 } } of its OWN bundled coin
 // files on getallconfigs; sync derives consensus values only from its vendored
 // bundle, so the field is compared and logged, NEVER applied. Before this the
-// field was destructured away in _applyConfigResult and a hub running a
+// field was destructured away in applyConfigResult and a hub running a
 // divergent bundle reached sync only later, as a recompute-divergence halt.
 
 const assert = require('assert');
@@ -57,7 +57,7 @@ describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
     afterEach(() => sinon.restore());
 
     it('logs when the hub serves a consensus hash this build does not bundle', function(){
-        client._applyConfigResult(envelope(driftedHashes('BTC', 'testnet')));
+        client.applyConfigResult(envelope(driftedHashes('BTC', 'testnet')));
         assert.strictEqual(errors.length, 1, 'a drifted hub must report exactly once');
         assert.match(errors[0], /CONSENSUS HASH MISMATCH/);
         assert.match(errors[0], /BTC\/testnet/);
@@ -65,35 +65,35 @@ describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
     });
 
     it('says nothing when every served hash matches the bundle', function(){
-        client._applyConfigResult(envelope(trueHashes()));
+        client.applyConfigResult(envelope(trueHashes()));
         assert.deepStrictEqual(errors, []);
     });
 
     it('says nothing when the hub predates the field', function(){
         const e = envelope(undefined);
         delete e.coin_consensus_hashes;
-        client._applyConfigResult(e);
+        client.applyConfigResult(e);
         assert.deepStrictEqual(errors, []);
     });
 
     it('says nothing for an old hub that returns the bare config map', function(){
-        client._applyConfigResult({ bitcoin: { testnet: { 'xchain-indexer': { DB_NAME: 'x' } } } });
+        client.applyConfigResult({ bitcoin: { testnet: { 'xchain-indexer': { DB_NAME: 'x' } } } });
         assert.deepStrictEqual(errors, []);
     });
 
     it('does not re-log an unchanged mismatch on the next poll', function(){
         const drifted = driftedHashes('LTC', 'regtest');
-        client._applyConfigResult(envelope(drifted));
-        client._applyConfigResult(envelope(drifted));
-        client._applyConfigResult(envelope(drifted));
+        client.applyConfigResult(envelope(drifted));
+        client.applyConfigResult(envelope(drifted));
+        client.applyConfigResult(envelope(drifted));
         assert.strictEqual(errors.length, 1, 'a poll loop must not flood the log');
     });
 
     it('reports again when the mismatch set widens', function(){
-        client._applyConfigResult(envelope(driftedHashes('BTC', 'testnet')));
+        client.applyConfigResult(envelope(driftedHashes('BTC', 'testnet')));
         const wider = driftedHashes('BTC', 'testnet');
         wider.regtest = Object.assign({}, wider.regtest, { DOGE: 'e'.repeat(64) });
-        client._applyConfigResult(envelope(wider));
+        client.applyConfigResult(envelope(wider));
         assert.strictEqual(errors.length, 2);
         assert.match(errors[1], /DOGE\/regtest/);
     });
@@ -101,13 +101,13 @@ describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
     it('ignores a coin the hub serves that this build does not bundle', function(){
         const extra = trueHashes();
         extra.testnet = Object.assign({}, extra.testnet, { XYZ: 'a'.repeat(64) });
-        client._applyConfigResult(envelope(extra));
+        client.applyConfigResult(envelope(extra));
         assert.deepStrictEqual(errors, []);
     });
 
     it('leaves the returned config tree and the cursor untouched', function(){
         const e    = envelope(driftedHashes('BTC', 'testnet'));
-        const tree = client._applyConfigResult(e);
+        const tree = client.applyConfigResult(e);
         assert.deepStrictEqual(tree, e.configs);
         assert.strictEqual(client.lastSeq, 7);
         assert.strictEqual(client.lastWatermark, 1234);

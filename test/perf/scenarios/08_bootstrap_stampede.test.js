@@ -102,7 +102,7 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
         const env = await bootEnvironment();
         sourceDb = env.sourceDb;
 
-        // Fidelity fix, and the reason it matters: SnapshotBuilder._snapshotCap
+        // Fidelity fix, and the reason it matters: SnapshotBuilder.snapshotCap
         // derives the cap from `db.connectionPoolParams.connectionLimit`, falling
         // back to poolSizing's per-dbType DEFAULT when the field is absent. The
         // e2e TestDatabase carries neither field, so without this the semaphore
@@ -192,7 +192,7 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
         }
         await server.start();
 
-        const cap = server.snapshotBuilder._snapshotCap(sourceDb);
+        const cap = server.snapshotBuilder.snapshotCap(sourceDb);
         const observed = instrumentSemaphore(server.snapshotBuilder);
 
         // The poller starts at the seeded tip, so /snapshot has nothing recorded
@@ -347,15 +347,15 @@ describe('08 Bootstrap Stampede (N-concurrent-bootstrap load)', function () {
         const db = { dbType: 'indexer', connectionPoolParams: { connectionLimit: POOL_LIMIT } };
 
         delete process.env.MAX_CONCURRENT_SNAPSHOTS;
-        assert.strictEqual(builder._snapshotCap(db), POOL_LIMIT - 2,
+        assert.strictEqual(builder.snapshotCap(db), POOL_LIMIT - 2,
             'default cap should reserve one connection for the poller and one for short reads');
 
         process.env.MAX_CONCURRENT_SNAPSHOTS = '1000';
-        assert.strictEqual(builder._snapshotCap(db), POOL_LIMIT - 1,
+        assert.strictEqual(builder.snapshotCap(db), POOL_LIMIT - 1,
             'an over-large override must clamp to poolSize - 1, never the whole pool');
 
         process.env.MAX_CONCURRENT_SNAPSHOTS = '0';
-        assert.strictEqual(builder._snapshotCap(db), 1,
+        assert.strictEqual(builder.snapshotCap(db), 1,
             'a zero/negative override must clamp to 1, not deadlock every bootstrap');
 
         delete process.env.MAX_CONCURRENT_SNAPSHOTS;

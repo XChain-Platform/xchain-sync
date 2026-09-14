@@ -35,7 +35,7 @@
  * which overrides the baked-in entry for that key.
  *
  * ABSENT is not INVALID. An unset override is inert: no trust root exists, so
- * ClientSync._verifyCheckpointQuorum skips the step, which is what the config.js
+ * ClientSync.verifyCheckpointQuorum skips the step, which is what the config.js
  * VERIFY_CHECKPOINT_QUORUM contract means by "skipped, never bypassed". An override
  * the operator DID supply but got wrong used to resolve to the same null, and with
  * every baked-in key still null that silently switched checkpoint authentication OFF
@@ -100,7 +100,7 @@ function envKey(chain, network) {
 // value is usable, `error` naming WHY it is not. The reason is what separates an
 // absent override from an explicitly supplied invalid one, which the getters cannot
 // express in their null and assertPinnedEnvOverrides refuses to start on.
-function _parseValidatorSetEnv(raw) {
+function parseValidatorSetEnv(raw) {
     let arr;
     try { arr = JSON.parse(raw); } catch (e) { return { set: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!Array.isArray(arr)) return { set: null, error: 'is not a JSON array' };
@@ -118,10 +118,10 @@ function _parseValidatorSetEnv(raw) {
 // Resolve the env-supplied set for (chain, network), or null when it is absent or
 // unusable. Never throws: this is on the per-verify read path, and startup already
 // refused an invalid explicit value.
-function _fromEnv(chain, network) {
+function fromEnv(chain, network) {
     const raw = process.env[envKey(chain, network)];
     if (!raw) return null;
-    const { set, error } = _parseValidatorSetEnv(raw);
+    const { set, error } = parseValidatorSetEnv(raw);
     if (error) {
         logger.warn('[pinnedValidators] ' + envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
         return null;
@@ -138,7 +138,7 @@ function _fromEnv(chain, network) {
  */
 function getPinnedValidators(chain, network) {
     if (chain == null || network == null) return null;
-    const env = _fromEnv(chain, network);
+    const env = fromEnv(chain, network);
     if (env) return env;
     const entry = PINNED[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
     return entry || null;
@@ -176,7 +176,7 @@ function seedEnvKey(chain, network) {
 }
 
 // Parse + lightly validate an env-supplied seed checkpoint into { seed, error }, the
-// same absent-versus-invalid split as _parseValidatorSetEnv. state_root is the field
+// same absent-versus-invalid split as parseValidatorSetEnv. state_root is the field
 // the forward walk anchors successor-set proofs to, so it is required and a string.
 function parseSeedEnv(raw) {
     let cp;
@@ -191,7 +191,7 @@ function parseSeedEnv(raw) {
 }
 
 // Resolve the env-supplied seed for (chain, network), or null when it is absent or
-// unusable. Never throws, for the same reason _fromEnv does not.
+// unusable. Never throws, for the same reason fromEnv does not.
 function seedFromEnv(chain, network) {
     const raw = process.env[seedEnvKey(chain, network)];
     if (!raw) return null;
@@ -221,7 +221,7 @@ function getPinnedCheckpoint(chain, network) {
 // Env names the getters can actually read: the prefix plus a CHAIN_NETWORK suffix,
 // both halves non-empty. Mirrors config.js bootstrapDepthEnvKey's shape rule.
 const _OVERRIDE_PREFIXES = [
-    { prefix: 'CHECKPOINT_VALIDATORS_', parse: _parseValidatorSetEnv, what: 'pinned validator set' },
+    { prefix: 'CHECKPOINT_VALIDATORS_', parse: parseValidatorSetEnv, what: 'pinned validator set' },
     { prefix: 'CHECKPOINT_SEED_',       parse: parseSeedEnv,         what: 'pinned seed checkpoint' },
 ];
 
@@ -238,7 +238,7 @@ function isChainNetworkShaped(prefix, envKey) {
  *
  * A malformed override is not inert. The getters answer null for it, exactly as they
  * do for an override nobody set, and every baked-in pin still ships null, so
- * ClientSync._verifyCheckpointQuorum's `if(!validators || !validators.length) return;`
+ * ClientSync.verifyCheckpointQuorum's `if(!validators || !validators.length) return;`
  * skips checkpoint authentication entirely on a replica whose operator turned
  * VERIFY_CHECKPOINT_QUORUM on. An unset variable stays inert and is NOT an error; only
  * a value the operator supplied and got wrong is. Same rationale, and the same

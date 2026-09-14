@@ -60,7 +60,7 @@ describe('Boundary: Block Index Values', function(){
             });
 
             poller.lastPolledBlock = null;
-            await poller._poll();
+            await poller.poll();
             // Should initialize to 0, not treat it as null
             assert.strictEqual(poller.lastPolledBlock, 0);
         });
@@ -96,11 +96,11 @@ describe('Boundary: Block Index Values', function(){
 
             // First poll: initialize
             poller.lastPolledBlock = null;
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(poller.lastPolledBlock, 1);
 
             // Second poll: no new blocks
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
     });
@@ -141,7 +141,7 @@ describe('Boundary: Block Index Values', function(){
             db.getLastBlock.resolves(0);
             db.getBlockHashRow.resolves({ block_index: 0, block_time: 0, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
 
-            await poller._poll();
+            await poller.poll();
             let event = broadcaster.broadcast.firstCall.args[2];
             assert.strictEqual(event.type, 'reorg');
             assert.strictEqual(event.block_index, 1); // currentBlock(0) + 1

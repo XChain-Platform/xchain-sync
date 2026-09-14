@@ -209,15 +209,15 @@ describe('ClientApplier', function(){
         });
     });
 
-    describe('_rebuildBalances error handling', function(){
+    describe('rebuildBalances error handling', function(){
         it('swallows a 1146 (table-missing) error on rebuildBalances', async function(){
             sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('no table'), { errno: 1146 }));
-            await applier._rebuildBalances(); // must not throw
+            await applier.rebuildBalances(); // must not throw
         });
 
         it('rethrows a non-1146 error on rebuildBalances', async function(){
             sinon.stub(balanceHelpers, 'rebuildBalances').rejects(Object.assign(new Error('real'), { errno: 1234 }));
-            await assert.rejects(() => applier._rebuildBalances(), { message: 'real' });
+            await assert.rejects(() => applier.rebuildBalances(), { message: 'real' });
         });
     });
 

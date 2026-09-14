@@ -314,11 +314,11 @@ describe('BlockBroadcaster', function(){
         });
     });
 
-    describe('_send', function(){
+    describe('send', function(){
         it('skips non-OPEN WebSocket', function(){
             let ws = mockWs();
             ws.readyState = WebSocket.CLOSED;
-            broadcaster._send(ws, 'test');
+            broadcaster.send(ws, 'test');
             assert.strictEqual(ws.send.called, false);
         });
 
@@ -329,7 +329,7 @@ describe('BlockBroadcaster', function(){
             ws._syncChain = 'bitcoin';
             ws._syncNetwork = 'mainnet';
             ws.bufferedAmount = 1001;
-            bp._send(ws, 'test');
+            bp.send(ws, 'test');
             assert.strictEqual(ws.close.calledOnce, true);
         });
 
@@ -338,7 +338,7 @@ describe('BlockBroadcaster', function(){
             let ws = mockWs();
             ws.bufferedAmount = 0;
             ws._syncBackpressureSince = Date.now() - 999999; // stale window
-            bp._send(ws, 'test');
+            bp.send(ws, 'test');
             assert.strictEqual(ws._syncBackpressureSince, null);
             assert.strictEqual(ws.close.called, false);
         });

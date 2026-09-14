@@ -1297,7 +1297,7 @@ describe('SnapshotBuilder', function(){
         it('defaults the cap to poolSize - 2 (reserves poller + one short-read conn)', function(){
             let db = createMockDb();
             db.connectionPoolParams = { connectionLimit: 5 };
-            assert.strictEqual(builder._snapshotCap(db), 3);
+            assert.strictEqual(builder.snapshotCap(db), 3);
         });
 
         // With no connectionPoolParams to read, the cap falls back to the
@@ -1307,12 +1307,12 @@ describe('SnapshotBuilder', function(){
             let indexerDb  = createMockDb();
             let decoderDb  = createMockDb();
             decoderDb.dbType = 'decoder';
-            assert.strictEqual(builder._snapshotCap(indexerDb), poolSizing.DEFAULT_POOL_SIZE.indexer - 2);
-            assert.strictEqual(builder._snapshotCap(decoderDb), poolSizing.DEFAULT_POOL_SIZE.decoder - 2);
+            assert.strictEqual(builder.snapshotCap(indexerDb), poolSizing.DEFAULT_POOL_SIZE.indexer - 2);
+            assert.strictEqual(builder.snapshotCap(decoderDb), poolSizing.DEFAULT_POOL_SIZE.decoder - 2);
             process.env.DB_POOL_SIZE = '10';
-            assert.strictEqual(builder._snapshotCap(createMockDb()), 8);
+            assert.strictEqual(builder.snapshotCap(createMockDb()), 8);
             process.env.DB_POOL_SIZE_DECODER = '6';
-            assert.strictEqual(builder._snapshotCap(decoderDb), 4);
+            assert.strictEqual(builder.snapshotCap(decoderDb), 4);
             delete process.env.DB_POOL_SIZE_DECODER;
         });
 
@@ -1320,19 +1320,19 @@ describe('SnapshotBuilder', function(){
             let db = createMockDb();
             db.connectionPoolParams = { connectionLimit: 5 };
             process.env.MAX_CONCURRENT_SNAPSHOTS = '2';
-            assert.strictEqual(builder._snapshotCap(db), 2);
+            assert.strictEqual(builder.snapshotCap(db), 2);
             // Can never hand the poller's last connection to snapshots.
             process.env.MAX_CONCURRENT_SNAPSHOTS = '99';
-            assert.strictEqual(builder._snapshotCap(db), 4);
+            assert.strictEqual(builder.snapshotCap(db), 4);
             // Never below 1 (a 0/negative override would deadlock bootstraps).
             process.env.MAX_CONCURRENT_SNAPSHOTS = '0';
-            assert.strictEqual(builder._snapshotCap(db), 1);
+            assert.strictEqual(builder.snapshotCap(db), 1);
         });
 
         it('cap is per Database instance, floored at 1 for tiny pools', function(){
             let db = createMockDb();
             db.connectionPoolParams = { connectionLimit: 2 };
-            assert.strictEqual(builder._snapshotCap(db), 1);
+            assert.strictEqual(builder.snapshotCap(db), 1);
         });
 
         it('rejects a full snapshot with 503 SNAPSHOT_BUSY once the cap is reached, without opening a read view', async function(){

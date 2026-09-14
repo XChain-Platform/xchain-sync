@@ -51,9 +51,9 @@ describe('Integration: ServerPoller', function() {
         sinon.restore();
     });
 
-    describe('_poll', function() {
+    describe('poll', function() {
         it('returns early when no blocks in DB', async function() {
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
 
@@ -61,7 +61,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 3);
             poller.lastPolledBlock = null;
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(poller.lastPolledBlock, 3);
             assert.strictEqual(broadcaster.broadcast.called, false); // initialization only
@@ -72,7 +72,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 1);
             poller.lastPolledBlock = 0;
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
             let event = broadcaster.broadcast.firstCall.args[2];
@@ -90,7 +90,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
             poller.lastPolledBlock = 0;
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.callCount, 5);
             assert.strictEqual(poller.lastPolledBlock, 5);
@@ -106,7 +106,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 3);
             poller.lastPolledBlock = 0;
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(transparencyLog.recordBlock.callCount, 3);
         });
@@ -118,7 +118,7 @@ describe('Integration: ServerPoller', function() {
             // Simulate reorg at source
             await fixtures.deleteBlocksFrom(sourceDb, 8);
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
             let event = broadcaster.broadcast.firstCall.args[2];
@@ -131,7 +131,7 @@ describe('Integration: ServerPoller', function() {
             await fixtures.seedBlocks(sourceDb, 1, 5);
             poller.lastPolledBlock = 5;
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.called, false);
             assert.strictEqual(transparencyLog.recordBlock.called, false);

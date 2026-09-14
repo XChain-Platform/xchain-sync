@@ -254,7 +254,7 @@ describe('SyncService', function(){
         });
 
         // A malformed CHECKPOINT_VALIDATORS_* is not inert either: it resolves to the same
-        // null an ABSENT override does, so _verifyCheckpointQuorum skips the anchor on a
+        // null an ABSENT override does, so verifyCheckpointQuorum skips the anchor on a
         // replica whose operator armed VERIFY_CHECKPOINT_QUORUM believing it on. Discovery
         // must refuse it on the same pass, before any ClientSync replicates a block.
         it('client mode REFUSES a malformed checkpoint pin override, before starting any sync', async function(){

@@ -25,7 +25,7 @@
  * the out-of-band UPDATE/DELETE drift a snapshot dump cannot, and which also
  * seeds the truncated (from-height) bootstrap path:
  *   SnapshotBuilder.streamDispensers (full single-response dump)
- *   -> ClientSync._reconcileDispensers (re-fetch under the apply lock)
+ *   -> ClientSync.reconcileDispensers (re-fetch under the apply lock)
  *   -> ClientApplier.applyDispensersReplace (atomic DELETE + INSERT).
  *
  * Unit tests cover the individual pieces, but nothing previously proved
@@ -80,7 +80,7 @@ const util = new Utility();
 
 // Mini HTTP+WS server mirroring the decoder surface of src/api.js, plus the
 // /snapshot-dispensers reconcile route (param parsing copied from api.js so the
-// test exercises the real ClientSync._reconcileDispensers fetch path).
+// test exercises the real ClientSync.reconcileDispensers fetch path).
 function buildServer(sourceDb, broadcaster, snapshotBuilder){
     let app = express();
     app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
@@ -230,7 +230,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
         await new Promise(r => server.listen(SERVER_PORT, r));
         poller.lastPolledBlock = await sourceDb.getLastBlock();
         await poller.updateStatus();
-        pollInterval = setInterval(async () => { try { await poller._poll(); } catch(e){} }, 200);
+        pollInterval = setInterval(async () => { try { await poller.poll(); } catch(e){} }, 200);
     }
 
     // `every` => DISPENSERS_RECONCILE_EVERY; `pageSize` => LOOKUP_PAGE_SIZE
@@ -261,7 +261,7 @@ describe('E2E: Decoder dispensers reconcile', function() {
                 await sync.bootstrapFromSnapshot();
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();
             },
-            reconcile: () => sync._reconcileDispensers('http://127.0.0.1:' + SERVER_PORT),
+            reconcile: () => sync.reconcileDispensers('http://127.0.0.1:' + SERVER_PORT),
             incrementalCatchUp: async (sinceBlock) => {
                 await sync.incrementalCatchUp(sinceBlock);
                 sync.lastAppliedBlock = await replicaDb.getLastBlock();

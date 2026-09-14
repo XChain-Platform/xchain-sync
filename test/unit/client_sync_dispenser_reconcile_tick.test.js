@@ -88,10 +88,10 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
             _catchUpCount: 3,
             _dispenserReconcileInFlight: false,
             recordUpstreamStatus: sinon.stub(),
-            _logGap: sinon.stub(),
+            logGap: sinon.stub(),
             incrementalCatchUp: sinon.stub().resolves(),
             maybeVerifyCompleteness: sinon.stub().resolves(),
-            _reconcileDispensers: sinon.stub().resolves(),
+            reconcileDispensers: sinon.stub().resolves(),
             dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
         };
         return Object.assign(ctx, over || {});
@@ -113,8 +113,8 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
     it('reconciles on a tick when the stamp is older than the interval', async function(){
         let ctx = tickCtx();
         await tick(ctx, 1000 + 60000);
-        assert.strictEqual(ctx._reconcileDispensers.calledOnce, true);
-        assert.strictEqual(ctx._reconcileDispensers.firstCall.args[0], 'http://source1:3006');
+        assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
+        assert.strictEqual(ctx.reconcileDispensers.firstCall.args[0], 'http://source1:3006');
         // The completeness sweep still runs afterwards, and the catch-up path is untouched.
         assert.strictEqual(ctx.maybeVerifyCompleteness.calledOnce, true);
         assert.strictEqual(ctx.incrementalCatchUp.called, false);
@@ -129,48 +129,48 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
     it('does not reconcile inside the interval', async function(){
         let ctx = tickCtx();
         await tick(ctx, 1000 + 59999);
-        assert.strictEqual(ctx._reconcileDispensers.called, false);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
 
     it('does not reconcile for an indexer replica', async function(){
         let ctx = tickCtx({ dbType: 'indexer' });
         await tick(ctx, 1000 + 60000);
-        assert.strictEqual(ctx._reconcileDispensers.called, false);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
 
     it('does not reconcile while halted', async function(){
         let ctx = tickCtx({ _halted: { reason: 'divergence' } });
         await tick(ctx, 1000 + 60000);
-        assert.strictEqual(ctx._reconcileDispensers.called, false);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
 
     it('does not reconcile before bootstrap has applied a block', async function(){
         let ctx = tickCtx({ lastAppliedBlock: null });
         await tick(ctx, 1000 + 60000);
-        assert.strictEqual(ctx._reconcileDispensers.called, false);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
 
     it('does not reconcile while one is already in flight', async function(){
         let ctx = tickCtx({ _dispenserReconcileInFlight: true });
         await tick(ctx, 1000 + 60000);
-        assert.strictEqual(ctx._reconcileDispensers.called, false);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
 
     it('clears the in-flight flag even when the reconcile rejects', async function(){
-        let ctx = tickCtx({ _reconcileDispensers: sinon.stub().rejects(new Error('boom')) });
+        let ctx = tickCtx({ reconcileDispensers: sinon.stub().rejects(new Error('boom')) });
         await assert.rejects(() => tick(ctx, 1000 + 60000), /boom/);
         assert.strictEqual(ctx._dispenserReconcileInFlight, false);
     });
 
     it('stops firing once the reconcile stamps a fresh time', async function(){
         let ctx = tickCtx({
-            _reconcileDispensers: sinon.stub().callsFake(async function(){
+            reconcileDispensers: sinon.stub().callsFake(async function(){
                 ctx._lastDispenserReconcileAt = 61000;
             })
         });
         await tick(ctx, 61000);
-        assert.strictEqual(ctx._reconcileDispensers.calledOnce, true);
+        assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
         await tick(ctx, 61001);
-        assert.strictEqual(ctx._reconcileDispensers.calledOnce, true);
+        assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
     });
 });

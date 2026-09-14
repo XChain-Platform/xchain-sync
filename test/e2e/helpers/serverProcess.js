@@ -301,10 +301,10 @@ class ServerProcess {
 
         // Start polling loop
         // Serialize poll cycles. Production's ServerPoller.start() is a
-        // sequential while-loop; one _poll() can never overlap the next. A
+        // sequential while-loop; one poll() can never overlap the next. A
         // bare setInterval breaks that invariant whenever a cycle runs longer
         // than the interval (easy against a remote/loaded MariaDB): two
-        // concurrent _poll()s race the cursor and broadcast blocks out of
+        // concurrent poll()s race the cursor and broadcast blocks out of
         // order. Skip the tick if the previous cycle is still in flight, and
         // remember the in-flight promise so stop() can drain it. An
         // un-awaited zombie poll outliving stop() kept writing to the shared
@@ -312,7 +312,7 @@ class ServerProcess {
         this.pollInterval = setInterval(() => {
             if (this._pollInFlight) return;
             this._pollInFlight = (async () => {
-                try { await this.poller._poll(); } catch (e) { this.pollFailures++; }
+                try { await this.poller.poll(); } catch (e) { this.pollFailures++; }
                 finally { this.pollCycles++; this._pollInFlight = null; }
             })();
         }, this.config.BLOCK_POLL_INTERVAL);
@@ -359,7 +359,7 @@ class ServerProcess {
         this._pollInFlight = (async () => {
             // Counted like a background cycle, but the error still propagates: a
             // manual poll is a test's own step and must fail it, not be swallowed.
-            try { await this.poller._poll(); } catch (e) { this.pollFailures++; throw e; }
+            try { await this.poller.poll(); } catch (e) { this.pollFailures++; throw e; }
             finally { this.pollCycles++; this._pollInFlight = null; }
         })();
         await this._pollInFlight;
@@ -368,7 +368,7 @@ class ServerProcess {
     // Drain poll cycles until the poller has processed (hashed + recorded)
     // through `height`. Seeding the source DB does not make blocks servable:
     // /snapshot serves only what the poller has recorded into sync_meta, and
-    // each _poll() cycle is capped at 100 blocks, so a test that seeds and
+    // each poll() cycle is capped at 100 blocks, so a test that seeds and
     // immediately snapshots/catches-up races the 200ms background loop.
     async pollUntil(height, maxCycles = 50) {
         for (let i = 0; i < maxCycles; i++) {

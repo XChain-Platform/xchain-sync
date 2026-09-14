@@ -66,7 +66,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('processes 0 blocks when at current (no-op)', async function(){
         poller.lastPolledBlock = 50;
         db.getLastBlock.resolves(50);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 0);
         assert.strictEqual(poller.lastPolledBlock, 50);
     });
@@ -74,7 +74,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('processes 1 new block', async function(){
         poller.lastPolledBlock = 49;
         db.getLastBlock.resolves(50);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 1);
         assert.strictEqual(poller.lastPolledBlock, 50);
     });
@@ -82,7 +82,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('processes exactly 99 blocks in one poll', async function(){
         poller.lastPolledBlock = 1;
         db.getLastBlock.resolves(100);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 99);
         assert.strictEqual(poller.lastPolledBlock, 100);
     });
@@ -90,7 +90,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('processes exactly 100 blocks in one poll (at limit)', async function(){
         poller.lastPolledBlock = 0;
         db.getLastBlock.resolves(100);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 100);
         assert.strictEqual(poller.lastPolledBlock, 100);
     });
@@ -98,7 +98,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('caps at 100 blocks when 101 available', async function(){
         poller.lastPolledBlock = 0;
         db.getLastBlock.resolves(101);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 100);
         assert.strictEqual(poller.lastPolledBlock, 100);
     });
@@ -106,11 +106,11 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('processes remaining 1 block on second poll after cap', async function(){
         poller.lastPolledBlock = 0;
         db.getLastBlock.resolves(101);
-        await poller._poll(); // processes 1–100
+        await poller.poll(); // processes 1–100
         assert.strictEqual(poller.lastPolledBlock, 100);
 
         broadcaster.broadcast.resetHistory();
-        await poller._poll(); // processes 101
+        await poller.poll(); // processes 101
         assert.strictEqual(broadcaster.broadcast.callCount, 1);
         assert.strictEqual(poller.lastPolledBlock, 101);
     });
@@ -118,7 +118,7 @@ describe('Boundary: Poll Loop Limit (100 blocks)', function(){
     it('caps at 100 blocks when 200 available', async function(){
         poller.lastPolledBlock = 0;
         db.getLastBlock.resolves(200);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.callCount, 100);
         assert.strictEqual(poller.lastPolledBlock, 100);
     });

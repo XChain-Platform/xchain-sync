@@ -86,7 +86,7 @@ class ClientProcess {
     }
 
     // Start live WebSocket sync. Mirror ClientSync.start():
-    //  - `running` must be true or _scheduleReconnect() bails out (if(!this.running)
+    //  - `running` must be true or scheduleReconnect() bails out (if(!this.running)
     //    return), which would silently disable reconnect-after-disconnect (the very
     //    behavior the recovery tests exercise).
     //  - lastAppliedBlock must be initialized from the replica DB when resuming

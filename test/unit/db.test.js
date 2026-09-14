@@ -640,7 +640,7 @@ describe('Database.verifySyncTables()', function () {
         assert.ok(db.doQuery.notCalled);
     });
 
-    it('creates table when it does not exist (calls _createTableFromFile)', async function () {
+    it('creates table when it does not exist (calls createTableFromFile)', async function () {
         sinon.stub(fs, 'readdirSync').returns(['sync_meta.sql']);
         // First call (information_schema check) returns empty → table missing
         let conn = { query: sinon.stub().resolves([]), release: sinon.stub().resolves() };
@@ -692,10 +692,10 @@ describe('Database.verifySyncTables()', function () {
         );
     });
 
-    it('_createTableFromFile: executes all statements from file', async function () {
+    it('createTableFromFile: executes all statements from file', async function () {
         sinon.stub(fs, 'readFileSync').returns('CREATE TABLE foo (id INT); CREATE INDEX idx ON foo(id);');
         let doQueryStub = sinon.stub(db, 'doQuery').resolves([]);
-        await db._createTableFromFile('foo.sql');
+        await db.createTableFromFile('foo.sql');
         assert.strictEqual(doQueryStub.callCount, 2);
     });
 });

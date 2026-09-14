@@ -57,7 +57,7 @@ const RECENT_HASH_CAP = 256;
 // valid but silently INCOMPLETE block that followers durably record (false
 // VERIFY_RECOMPUTE halts on hashed tables; silent stake-state divergence on the
 // unhashed slash-debit/reconcile tables ClientRollback restores from on reorg). Only
-// schema gaps may be skipped; anything else must re-throw so _poll's loop freezes the
+// schema gaps may be skipped; anything else must re-throw so poll's loop freezes the
 // cursor and retries the block. Mirrors SnapshotBuilder.streamIncrementalSnapshot's
 // errno discrimination.
 function isSchemaGapError(e){
@@ -128,19 +128,19 @@ class ServerPoller {
             ]);
         }
 
-        // Count of consecutive _poll() failures so updateStatus can surface
+        // Count of consecutive poll() failures so updateStatus can surface
         // a stale-status signal to /health callers when the poller is wedged.
         this.pollErrorCount = 0;
 
         // Throttle stamp for the action-scoped query-count metric (0 = never emitted,
         // so the first block of a process publishes a baseline). See
-        // _reportActionScopedQueryMetric.
+        // reportActionScopedQueryMetric.
         this._lastQueryMetricAt = 0;
     }
 
     async start(){
-        this.lastPolledBlock = await this._resumeCursor();
-        this.lastPolledBlockHash = await this._seedReorgGuardHash(this.lastPolledBlock);
+        this.lastPolledBlock = await this.resumeCursor();
+        this.lastPolledBlockHash = await this.seedReorgGuardHash(this.lastPolledBlock);
         this.running = true;
         logger.info('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
@@ -159,7 +159,7 @@ class ServerPoller {
         while(this.running){
             let blocksProcessed = 0;
             try {
-                blocksProcessed = await this._poll() || 0;
+                blocksProcessed = await this.poll() || 0;
                 this.pollErrorCount = 0;
             } catch(e){
                 this.pollErrorCount++;
@@ -179,15 +179,15 @@ class ServerPoller {
     // this poller actually recorded and broadcast (MAX(block_index) in sync_meta). The
     // source DB tip (db.getLastBlock) is NOT a record of broadcast progress: if the
     // sync server was down while the co-located indexer advanced, seeding from the
-    // tip would jump the cursor past every missed block, so _poll's while-loop never
+    // tip would jump the cursor past every missed block, so poll's while-loop never
     // runs for them, recordBlock is never called, and any epoch boundary in the gap
     // is never committed, leaving a permanent hole in sync_meta and missing Merkle
     // proofs while the poller falsely reports caught-up. A null high-water mark (empty
-    // sync_meta, fresh node) leaves the cursor null so _poll initialises from the
+    // sync_meta, fresh node) leaves the cursor null so poll initialises from the
     // current tip on its first pass, as before. The decoder has no transparency log,
     // so it resumes from the source tip (decoder content is deterministic from the
     // coin node and carries no synthetic hash chain to keep gap-free).
-    async _resumeCursor(){
+    async resumeCursor(){
         if(this.transparencyLog)
             return await this.transparencyLog.getHighWaterMark();
         return await this.db.getLastBlock();
@@ -245,7 +245,7 @@ class ServerPoller {
         this.running = false;
     }
 
-    async _poll(){
+    async poll(){
         // Fail CLOSED on the cursor read (M-17). db.doQuery collapses a
         // non-transactional query error into [], so the fail-soft default answers a
         // source-DB outage with null - the same answer a genuinely empty source
@@ -507,7 +507,7 @@ class ServerPoller {
     // always has one; the live fallback covers only the theoretical miss (and the
     // null-cursor fresh-node case), where disabling the guard for that step is safer
     // than seeding a wrong value.
-    async _seedReorgGuardHash(blockIndex){
+    async seedReorgGuardHash(blockIndex){
         if(blockIndex === null) return null;
         if(this.transparencyLog){
             let recorded = await this.transparencyLog.getRecordedHash(blockIndex);
@@ -610,7 +610,7 @@ class ServerPoller {
             // sync_meta drifts behind the source between snapshots. Built inline from
             // the hashes rather than read from the table: the server's
             // transparencyLog.recordBlock runs AFTER this payload is built (see
-            // _poll), so the row isn't in sync_meta yet at this point. id/logged_at
+            // poll), so the row isn't in sync_meta yet at this point. id/logged_at
             // are node-local and intentionally omitted (the client assigns its own);
             // the client applies sync_meta with INSERT IGNORE on the unique
             // block_index, so re-sends are idempotent.
@@ -731,7 +731,7 @@ class ServerPoller {
                 }
             }
 
-            this._reportActionScopedQueryMetric(scopedQueries, scopedNonEmpty,
+            this.reportActionScopedQueryMetric(scopedQueries, scopedNonEmpty,
                                                Date.now() - scopedStartedAt, probeQueries);
 
             // Cooldown-maturity refund credits mint AT this block but carry the
@@ -971,7 +971,7 @@ class ServerPoller {
         // only (decoder has none of these tables). tokens.escrow_action_index rides
         // along (the tokens class carries the full row); the follower additionally
         // re-derives it from the replicated offer/status tables when a payload
-        // touches an escrow table (ClientApplier._maybeRederiveEscrow), so the wire
+        // touches an escrow table (ClientApplier.maybeRederiveEscrow), so the wire
         // value is a convergent carry, not the gate's only writer. Kept OUT of payload.data so an
         // old follower that doesn't recognise the field simply ignores it (its apply
         // loop iterates payload.data only) rather than mis-applying a non-row map.
@@ -1003,7 +1003,7 @@ class ServerPoller {
     // counters only, never payload.data, so the consensus hash is untouched. Interval is
     // SYNC_QUERY_METRIC_INTERVAL_MS (default 15m, 0 disables), so this is one line per
     // interval, not per block. Twin of SyncService's STATE_TREE_METRIC_INTERVAL_MS.
-    _reportActionScopedQueryMetric(queries, nonEmpty, elapsedMs, probeQueries){
+    reportActionScopedQueryMetric(queries, nonEmpty, elapsedMs, probeQueries){
         let raw = envConfig.syncQueryMetricIntervalMsFromEnv();
         let intervalMs = Number.isFinite(raw) ? raw : (15 * 60 * 1000);
         if(intervalMs === 0) return;   // explicitly disabled
@@ -1032,7 +1032,7 @@ class ServerPoller {
         // Replication freshness. source_block_height above is read from the
         // SERVED database, so on a node fronting a native SQL replica both heights
         // freeze together when replication stalls and the derived lag reads 0.
-        let rep = await this._readReplicaStatus();
+        let rep = await this.readReplicaStatus();
         status.replica_seconds_behind = rep.secondsBehind;
         status.replica_stale          = rep.stale;
         if(this.dbType === 'decoder'){
@@ -1057,7 +1057,7 @@ class ServerPoller {
     // reports Seconds_Behind_Source NULL, which is unbounded lag, never zero; an
     // unreadable status (no grant, older db object without the method) is unknown
     // and must not certify freshness either.
-    async _readReplicaStatus(){
+    async readReplicaStatus(){
         let rep = null;
         try {
             if(typeof this.db.getReplicaStatus === 'function')

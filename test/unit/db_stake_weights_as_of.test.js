@@ -133,7 +133,7 @@ describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
     });
 });
 
-describe('ClientSync._oraclePublishSetAt uses the as-of reconstruction (#4927)', function(){
+describe('ClientSync.oraclePublishSetAt uses the as-of reconstruction (#4927)', function(){
 
     let sync, db;
     beforeEach(function(){
@@ -154,7 +154,7 @@ describe('ClientSync._oraclePublishSetAt uses the as-of reconstruction (#4927)',
     afterEach(function(){ sinon.restore(); });
 
     it('calls getStakeWeightsByCapabilityAsOf, not the live getStakeWeightsByCapability', async function(){
-        let set = await sync._oraclePublishSetAt(106);
+        let set = await sync.oraclePublishSetAt(106);
         assert.ok(db.getStakeWeightsByCapabilityAsOf.calledOnce, 'forward-follow uses the as-of reconstruction');
         assert.strictEqual(db.getStakeWeightsByCapability.called, false, 'must NOT use the slash-mutated live query');
         assert.strictEqual(db.getStakeWeightsByCapabilityAsOf.firstCall.args[1], 106, 'queried at the snapshot block');

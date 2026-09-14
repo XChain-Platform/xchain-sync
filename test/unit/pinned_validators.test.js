@@ -96,7 +96,7 @@ describe('pinnedValidators: rotation seed checkpoint @regression', function(){
 
 // The getters answer null for an override nobody set AND for one the operator set and
 // got wrong, and with every baked-in pin null those two states reach
-// ClientSync._verifyCheckpointQuorum identically: `if(!validators||!validators.length)
+// ClientSync.verifyCheckpointQuorum identically: `if(!validators||!validators.length)
 // return;` skips checkpoint authentication on a replica whose operator armed
 // VERIFY_CHECKPOINT_QUORUM. assertPinnedEnvOverrides is the startup refusal that keeps
 // an explicit-but-invalid value from reading as "no pin configured".

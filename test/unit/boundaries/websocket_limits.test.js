@@ -113,7 +113,7 @@ describe('Boundary: WebSocket Limits', function(){
             // Buffer trends DOWN each send (peer is draining) but stays > 0: must survive.
             for(let b of [900, 800, 700, 600, 500, 400, 300, 200, 100, 50]){
                 ws.bufferedAmount = b;
-                broadcaster._send(ws, 'msg');
+                broadcaster.send(ws, 'msg');
             }
             assert.strictEqual(ws.close.called, false);
             assert.strictEqual(ws._syncBackpressureSince, null); // downward progress kept resetting it
@@ -124,7 +124,7 @@ describe('Boundary: WebSocket Limits', function(){
             let ws = mockWs();
             ws._syncIp = 'test';
             ws.bufferedAmount = MAX_BYTES + 1;
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.close.calledOnce, true);
             assert.strictEqual(ws.close.firstCall.args[0], 1008);
             assert.strictEqual(ws.send.called, false);
@@ -136,7 +136,7 @@ describe('Boundary: WebSocket Limits', function(){
             ws.bufferedAmount = 100;                                   // below ceiling, non-empty
             ws._syncLastBuffered = 100;                               // flat: no downward progress
             ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);  // window already elapsed
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.close.calledOnce, true);
             assert.strictEqual(ws.close.firstCall.args[0], 1008);
         });
@@ -147,7 +147,7 @@ describe('Boundary: WebSocket Limits', function(){
             ws.bufferedAmount = 100;
             ws._syncLastBuffered = 200;                               // drained 200 -> 100: progress
             ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);  // stale window, must be cleared
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.close.called, false);
             assert.strictEqual(ws._syncBackpressureSince, null);
             assert.strictEqual(ws.send.calledOnce, true);
@@ -158,7 +158,7 @@ describe('Boundary: WebSocket Limits', function(){
             ws._syncIp = 'test';
             ws.bufferedAmount = 0;
             ws._syncBackpressureSince = Date.now() - (STALL_MS + 1);
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.close.called, false);
             assert.strictEqual(ws._syncBackpressureSince, null);
             assert.strictEqual(ws.send.calledOnce, true);
@@ -168,7 +168,7 @@ describe('Boundary: WebSocket Limits', function(){
             let ws = mockWs();
             ws._syncIp = 'test';
             ws.bufferedAmount = 100;
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.close.called, false);
             assert.notStrictEqual(ws._syncBackpressureSince, null);   // window armed for next time
             assert.strictEqual(ws.send.calledOnce, true);
@@ -177,7 +177,7 @@ describe('Boundary: WebSocket Limits', function(){
         it('skips closed WebSocket', function(){
             let ws = mockWs();
             ws.readyState = WebSocket.CLOSED;
-            broadcaster._send(ws, 'msg');
+            broadcaster.send(ws, 'msg');
             assert.strictEqual(ws.send.called, false);
         });
     });

@@ -141,7 +141,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             sync._evictedSources.add(3);
             let clock = sinon.useFakeTimers();
             let connect = sinon.stub(sync, 'connectWebSocket');
-            sync._scheduleReconnect('http://d:3006', 3);
+            sync.scheduleReconnect('http://d:3006', 3);
             clock.tick(sync.config.CLIENT_RECONNECT_DELAY + 100);
             assert.strictEqual(connect.called, false, 'evicted source is not reconnected');
             clock.restore();
@@ -299,7 +299,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             sync.lastAppliedBlock = 1000;
             sync._lastVerifiedCheckpointSeq = 4; // already anchored once -> strict is enforced
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
-            await sync._verifyCheckpointQuorum();
+            await sync.verifyCheckpointQuorum();
             assert.strictEqual(sync.isHalted(), true);
             assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-freshness-stale');
         });
@@ -313,7 +313,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             sync.lastAppliedBlock = 1000;
             sync._lastVerifiedCheckpointSeq = null; // never anchored -> not enforced at startup
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
-            await sync._verifyCheckpointQuorum();
+            await sync.verifyCheckpointQuorum();
             assert.notStrictEqual((sync.getHaltInfo() || {}).reason, 'checkpoint-freshness-stale',
                 'a replica that never anchored is not halted on freshness');
         });
@@ -324,7 +324,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             sync.lastAppliedBlock = 1000;
             sync._lastVerifiedCheckpointSeq = 4;
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
-            await sync._verifyCheckpointQuorum();
+            await sync.verifyCheckpointQuorum();
             assert.notStrictEqual((sync.getHaltInfo() || {}).reason, 'checkpoint-freshness-stale',
                 'default freshness posture is advisory, never halts on freshness');
         });

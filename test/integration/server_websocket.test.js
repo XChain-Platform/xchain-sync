@@ -96,7 +96,7 @@ describe('Integration: WebSocket Broadcasting', function() {
 
             let { ws, messages } = await connectWs('bitcoin', 'mainnet');
             try {
-                await poller._poll();
+                await poller.poll();
                 await waitForMessages(messages, 1);
 
                 // Find the block message (skip any status messages)
@@ -118,7 +118,7 @@ describe('Integration: WebSocket Broadcasting', function() {
 
             let { ws, messages } = await connectWs('bitcoin', 'mainnet');
             try {
-                await poller._poll();
+                await poller.poll();
                 await waitForMessages(messages, 1);
 
                 let reorgMsg = messages.find(m => m.type === 'reorg');

@@ -28,7 +28,7 @@ const Database    = require('../../src/db');
 const BlockHasher = require('../../src/client/block_hasher');
 const HashVerifier= require('../../src/client/hash_verifier');
 
-// Byte-identical copy of ClientSync._recordIndexMapMismatch's body, exercised here
+// Byte-identical copy of ClientSync.recordIndexMapMismatch's body, exercised here
 // against a real Database so the counter logic + real sync_state persistence are
 // validated together (the method itself lives on ClientSync, which is too heavy to
 // stand up for a storage check).

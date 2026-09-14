@@ -98,7 +98,7 @@ describe('Integration: armed source handshake (server-tier rollout rehearsal)', 
         const sync = makeClient({ SYNC_UPSTREAM_KEY: SERVER_KEY });
         const url  = 'http://127.0.0.1:' + PORT + '/snapshot/indexer/bitcoin/mainnet';
 
-        const res = await axios.get(url, { headers: sync._upstreamHeaders(), timeout: 5000 });
+        const res = await axios.get(url, { headers: sync.upstreamHeaders(), timeout: 5000 });
 
         assert.strictEqual(res.status, 200);
         assert.strictEqual(res.data.ok, true);
@@ -110,7 +110,7 @@ describe('Integration: armed source handshake (server-tier rollout rehearsal)', 
 
         let status = null;
         try {
-            await axios.get(url, { headers: sync._upstreamHeaders(), timeout: 5000 });
+            await axios.get(url, { headers: sync.upstreamHeaders(), timeout: 5000 });
         } catch(e){
             status = e.response ? e.response.status : null;
         }
@@ -124,7 +124,7 @@ describe('Integration: armed source handshake (server-tier rollout rehearsal)', 
 
         let status = null;
         try {
-            await axios.get(url, { headers: sync._upstreamHeaders(), timeout: 5000 });
+            await axios.get(url, { headers: sync.upstreamHeaders(), timeout: 5000 });
         } catch(e){
             status = e.response ? e.response.status : null;
         }
@@ -134,7 +134,7 @@ describe('Integration: armed source handshake (server-tier rollout rehearsal)', 
     it('WS: the upgrade succeeds only when the client carries the upstream key', function(done){
         const sync  = makeClient({ SYNC_UPSTREAM_KEY: SERVER_KEY });
         const wsUrl = 'ws://127.0.0.1:' + PORT + '/subscribe/indexer/bitcoin/mainnet';
-        const ws    = new WebSocket(wsUrl, { headers: sync._upstreamHeaders() });
+        const ws    = new WebSocket(wsUrl, { headers: sync.upstreamHeaders() });
 
         ws.on('open',  () => { ws.close(); done(); });
         ws.on('error', (e) => done(new Error('armed source refused a keyed client: ' + e.message)));
@@ -143,7 +143,7 @@ describe('Integration: armed source handshake (server-tier rollout rehearsal)', 
     it('WS: the upgrade is refused without it, so streaming sync stops too, not just bootstrap', function(done){
         const sync  = makeClient({});
         const wsUrl = 'ws://127.0.0.1:' + PORT + '/subscribe/indexer/bitcoin/mainnet';
-        const ws    = new WebSocket(wsUrl, { headers: sync._upstreamHeaders() });
+        const ws    = new WebSocket(wsUrl, { headers: sync.upstreamHeaders() });
 
         ws.on('open',  () => { ws.close(); done(new Error('armed source accepted a keyless upgrade')); });
         ws.on('error', () => done());

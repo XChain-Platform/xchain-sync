@@ -288,7 +288,7 @@ describe('E2E: Decoder DB Lifecycle', function() {
         poller.lastPolledBlock = await sourceDb.getLastBlock();
         await poller.updateStatus();
         pollInterval = setInterval(async () => {
-            try { await poller._poll(); } catch(e){}
+            try { await poller.poll(); } catch(e){}
         }, 200);
     }
 

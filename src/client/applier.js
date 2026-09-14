@@ -47,7 +47,7 @@ const MAX_SCOPED_REBUILD_IDS = 1000;
 // updated_rows tokens class (full-row carry, all-column upsert), so this derive
 // is the corrective pass over a convergent carried value, not the gate's sole
 // writer. Checked against the payload's data/tables map only; updated_rows keys
-// do not trigger it. See _maybeRederiveEscrow.
+// do not trigger it. See maybeRederiveEscrow.
 const ESCROW_TRIGGER_TABLES = new Set([
     'orders', 'order_statuses', 'swaps', 'swap_statuses',
     'dispensers', 'dispenser_statuses', 'tokens'
@@ -201,7 +201,7 @@ class ClientApplier {
         // and that the source reassigns ids wholesale on reorg
         // (Rollback._recomputeAttestationValidatorStats). The replica mints its own
         // instead: sync runs no migrations, so an aged replica takes the column through
-        // db.addMissingColumns + _autoIncrementKeyAction, which lets the engine backfill
+        // db.addMissingColumns + autoIncrementKeyAction, which lets the engine backfill
         // the sequence in LOCAL row order. The two id spaces then disagree, and because
         // the table is full-dumped with SELECT * and upserted over every carried column,
         // the applier would emit `id` = VALUES(`id`) against the replica's PRIMARY KEY:
@@ -260,7 +260,7 @@ class ClientApplier {
         // doQuery turns a query error into [], so a transient fault would read as "block not
         // applied yet" and re-run insertRows for a block already in the replica - credits,
         // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
-        // upsertFullDumpTables), and _rebuildBalancesTouchedBy would then run over the
+        // upsertFullDumpTables), and rebuildBalancesTouchedBy would then run over the
         // duplicated rows. Let the error propagate: applyBlockEvent's catch logs it and
         // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
@@ -297,12 +297,12 @@ class ClientApplier {
                 // loser validator_rewards rows this block's reconcile-log rows pre-image
                 // (rows from EARLIER blocks the action-scoped delete never reaches).
                 if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
-                    await this._mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
+                    await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
                 // Re-derive tokens.escrow_action_index when this block moved any
                 // offer/status (the gate is replica-derived, not wire-carried).
-                await this._maybeRederiveEscrow(data);
+                await this.maybeRederiveEscrow(data);
                 if(data.credits || data.debits)
-                    await this._rebuildBalancesTouchedBy(data.credits, data.debits);
+                    await this.rebuildBalancesTouchedBy(data.credits, data.debits);
                 // Light-client state commitment (SPV spec sec.4-5): recompute + persist
                 // the per-block SMT roots over the replica INSIDE this txn (atomic with
                 // the data apply, so block B+1's incremental update always finds B's
@@ -334,7 +334,7 @@ class ClientApplier {
     // null when the rows can't be scoped: a row missing either id (NULL ids
     // can't be matched by an IN-list), or more distinct ids than an IN-list
     // should carry (in which case the caller falls back to the full rebuild).
-    _collectRebuildScope(rowArrays, keyField){
+    collectRebuildScope(rowArrays, keyField){
         let keys  = new Set();
         let ticks = new Set();
         for(let rows of rowArrays){
@@ -353,10 +353,10 @@ class ClientApplier {
     // Rebuild balances scoped to the ids the given credit/debit rows touched;
     // unscopable rows fall back to the full rebuild, empty arrays touch
     // nothing and skip the rebuild entirely.
-    async _rebuildBalancesTouchedBy(credits, debits){
-        let scope = this._collectRebuildScope([credits, debits], 'address_id');
+    async rebuildBalancesTouchedBy(credits, debits){
+        let scope = this.collectRebuildScope([credits, debits], 'address_id');
         if(scope && !scope.keys.length) return;
-        await this._rebuildBalances(scope);
+        await this.rebuildBalances(scope);
     }
 
     // Distinct (address, tick) string pairs the applied block touched, for the
@@ -403,9 +403,9 @@ class ClientApplier {
 
     // Recompute the balances table from the current credits/debits rows.
     // SQL lives in balance-helpers so ClientRollback uses the same query.
-    // scope (optional): { keys, ticks } from _collectRebuildScope; null/absent
+    // scope (optional): { keys, ticks } from collectRebuildScope; null/absent
     // recomputes the whole table.
-    async _rebuildBalances(scope){
+    async rebuildBalances(scope){
         try {
             await balanceHelpers.rebuildBalances(this.db,
                 scope ? { addressIds: scope.keys, tickIds: scope.ticks } : undefined);
@@ -586,10 +586,10 @@ class ClientApplier {
                 // DELETEd); a replica that held the losers at since_block converges.
                 if(snapshotData.tables.anchor_reward_reconcile_log && snapshotData.tables.anchor_reward_reconcile_log.length
                         && snapshotData.since_block != null)
-                    await this._mirrorAnchorRewardReconcile('d.block_index >= ?', [snapshotData.since_block]);
-                await this._maybeRederiveEscrow(snapshotData.tables);
+                    await this.mirrorAnchorRewardReconcile('d.block_index >= ?', [snapshotData.since_block]);
+                await this.maybeRederiveEscrow(snapshotData.tables);
                 if(snapshotData.tables.credits || snapshotData.tables.debits)
-                    await this._rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
+                    await this.rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
                 // Re-seed the SMT at the new tip: the incremental window's blocks never
                 // had per-block roots computed, so without this the next live block would
                 // find no prior balances_root. Full build over the now-complete replica
@@ -611,7 +611,7 @@ class ClientApplier {
     // set. dispensers is excluded from the block stream and the id-cursor lookup
     // paging (no monotonic id; the decoder soft-expires then hard-purges rows), so
     // neither the incremental catch-up nor the truncated bootstrap can converge it.
-    // The client re-fetches the full table (ClientSync._reconcileDispensers) and
+    // The client re-fetches the full table (ClientSync.reconcileDispensers) and
     // swaps it in atomically: DELETE + INSERT inside one transaction, so a reader
     // outside the txn never observes an empty table and a mid-apply failure rolls
     // back to the prior contents. dispensers is not in ignoreTables, so the post-
@@ -863,7 +863,7 @@ class ClientApplier {
         }
 
         for(let indexName of indexNames){
-            let keyColumns = await this._uniqueKeyColumns(table, indexName);
+            let keyColumns = await this.uniqueKeyColumns(table, indexName);
             if(!keyColumns.length) continue;
 
             for(let row of batch){
@@ -896,7 +896,7 @@ class ClientApplier {
 
     // Ordered column list of one index, for building the natural-key predicate. Names come
     // from information_schema and are re-validated before they reach the query string.
-    async _uniqueKeyColumns(table, indexName){
+    async uniqueKeyColumns(table, indexName){
         let check = validation.validateIdentifier(indexName);
         if(!check.valid) return [];
         let rows = await this.db.doQuery(
@@ -937,7 +937,7 @@ class ClientApplier {
     // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`
     // / `scopeArgs` bound the log rows to the window this apply carried
     // (d.block_index = B live; d.block_index >= since on an incremental catch-up).
-    async _mirrorAnchorRewardReconcile(scopeSql, scopeArgs){
+    async mirrorAnchorRewardReconcile(scopeSql, scopeArgs){
         try {
             await this.db.doQuery(
                 "DELETE vr FROM validator_rewards vr " +
@@ -977,7 +977,7 @@ class ClientApplier {
         for(let table in updated){
             let rows = updated[table];
             if(!rows || rows.length === 0) continue;
-            await this._upsertRows(table, rows);
+            await this.upsertRows(table, rows);
         }
     }
 
@@ -986,7 +986,7 @@ class ClientApplier {
     // its mutated columns overwritten to the source's current values while a
     // not-yet-present row (e.g. created and mutated within the same window) is
     // inserted. Identifier validation + binary decode mirror insertRows.
-    async _upsertRows(table, rows){
+    async upsertRows(table, rows){
         if(!rows || rows.length === 0) return;
 
         let tableCheck = validation.validateIdentifier(table);
@@ -994,7 +994,7 @@ class ClientApplier {
             // Fail closed, not open: a `return` here silently drops every row for this
             // table while the apply transaction commits, permanently diverging the replica
             // with no signal. Throw so the transaction rolls back and the block is retried.
-            throw new Error('Rejected table name in _upsertRows: ' + table + ' (' + tableCheck.reason + ')');
+            throw new Error('Rejected table name in upsertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
 
         let columns = Object.keys(rows[0]);
@@ -1010,7 +1010,7 @@ class ClientApplier {
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
                 // Fail closed, not open: a `return` here drops the entire table's rows.
-                throw new Error('Rejected column name in _upsertRows: ' + col + ' (' + colCheck.reason + ')');
+                throw new Error('Rejected column name in upsertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
         let colList      = columns.map(c => '`' + c + '`').join(', ');
@@ -1045,7 +1045,7 @@ class ClientApplier {
     // re-derive ClientRollback runs on reorg, keeping source and replica
     // byte-identical. `tables` is the payload's table map (live block `data` or
     // incremental `tables`); updated_rows does not trigger it.
-    async _maybeRederiveEscrow(tables){
+    async maybeRederiveEscrow(tables){
         if(!tables) return;
         let touched = false;
         for(let t in tables){
@@ -1061,7 +1061,7 @@ class ClientApplier {
             // the block is retried: tokens.escrow_action_index is replica-derived and is
             // NOT covered by any hash / SMT / recompute check, so a swallowed error here
             // commits a stale or half-derived ownership-escrow gate with no divergence
-            // signal. Mirrors _rebuildBalances' narrow catch.
+            // signal. Mirrors rebuildBalances' narrow catch.
             if(e.errno !== 1146 && e.errno !== 1054) throw e;
         }
     }

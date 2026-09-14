@@ -49,7 +49,7 @@ describe('sync: stake-weight ordering collation gate', function () {
         assert.strictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'], null,
             'this test needs an unpinned chain; re-point it if testnet is ever armed');
         const db = dbWithCapturedQueries();
-        await db._applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'testnet', 'probe');
+        await db.applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'testnet', 'probe');
         const q = db._calls.map(c => c.q).join('\n');
         assert.ok(q.length > 0, 'no query was emitted');
         assert.doesNotMatch(q, /COLLATE/,
@@ -61,7 +61,7 @@ describe('sync: stake-weight ordering collation gate', function () {
     // the two rebuild different cap survivors and commit different stakes_roots.
     it('mainnet is armed at genesis and pins utf8_bin on the follower too', async function () {
         const db = dbWithCapturedQueries();
-        await db._applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'mainnet', 'probe');
+        await db.applyStakeWeightCap(INNER, 5000000, 100, 'BTC', 'mainnet', 'probe');
         const q = db._calls.map(c => c.q).join('\n').replace(/\s+/g, ' ');
         assert.match(q, /DENSE_RANK\(\) OVER \(ORDER BY b\.source COLLATE utf8_bin\)/);
         assert.match(q, /ORDER BY r\.source COLLATE utf8_bin, r\.pubkey COLLATE utf8_bin/);
@@ -69,13 +69,13 @@ describe('sync: stake-weight ordering collation gate', function () {
 
     it('a null coin/network stays inert, as it does for the source cap', async function () {
         const db = dbWithCapturedQueries();
-        await db._applyStakeWeightCap(INNER, 10, 100, null, null, 'probe');
+        await db.applyStakeWeightCap(INNER, 10, 100, null, null, 'probe');
         assert.doesNotMatch(db._calls.map(c => c.q).join('\n'), /COLLATE/);
     });
 
     it('regtest is armed and pins utf8_bin at every ordering site', async function () {
         const db = dbWithCapturedQueries();
-        await db._applyStakeWeightCap(INNER, 10, 100, 'BTC', 'regtest', 'probe');
+        await db.applyStakeWeightCap(INNER, 10, 100, 'BTC', 'regtest', 'probe');
         const q = db._calls.map(c => c.q).join('\n').replace(/\s+/g, ' ');
         assert.match(q, /DENSE_RANK\(\) OVER \(ORDER BY b\.source COLLATE utf8_bin\)/);
         assert.match(q, /ROW_NUMBER\(\) OVER \(PARTITION BY b\.source COLLATE utf8_bin ORDER BY b\.pubkey COLLATE utf8_bin\)/);

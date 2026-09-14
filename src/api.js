@@ -877,7 +877,7 @@ async function startApi(){
     // reconcile. dispensers rides neither the block stream nor the id-cursor lookup
     // paging (no monotonic id; the decoder soft-expires/hard-purges rows), so the
     // client periodically re-dumps the full table and swaps it in atomically; see
-    // SnapshotBuilder.streamDispensers + ClientSync._reconcileDispensers. Decoder-only;
+    // SnapshotBuilder.streamDispensers + ClientSync.reconcileDispensers. Decoder-only;
     // rate-limited as an incremental fetch.
     app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')

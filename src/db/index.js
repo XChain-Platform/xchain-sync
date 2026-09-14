@@ -57,7 +57,7 @@ const KEY_REBUILD_PRECONDITION_COLUMNS = [
       definition: 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `action_index`' },
     // xchain-indexer 2026-08-24-validator-rewards-round-qualifier, both tables it alters:
     // the reward identity and the reconcile-log pre-image the replica mirror joins on
-    // (ClientApplier._mirrorAnchorRewardReconcile).
+    // (ClientApplier.mirrorAnchorRewardReconcile).
     { table: 'validator_rewards', column: 'round_qualifier',
       definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' },
     { table: 'anchor_reward_reconcile_log', column: 'round_qualifier',
@@ -238,7 +238,7 @@ class Database {
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
                     if(results.length === 0){
-                        await this._createTableFromFile(file);
+                        await this.createTableFromFile(file);
                         created++;
                     }
                 } catch(e){
@@ -254,7 +254,7 @@ class Database {
 
     // Only for sync-service-owned tables such as sync_meta; replicated tables come
     // from the source's own DDL.
-    async _createTableFromFile(file){
+    async createTableFromFile(file){
         let dir     = path.join(__dirname, 'sql');
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
         let queries = splitSqlStatements(data);
@@ -324,7 +324,7 @@ class Database {
 
             let actions = ['ADD COLUMN ' + def];
             if(validation.isAutoIncrementDefinition(def)){
-                let keyAction = await this._autoIncrementKeyAction(tableName, col, sourceDdl);
+                let keyAction = await this.autoIncrementKeyAction(tableName, col, sourceDdl);
                 actions.push(keyAction);
             }
             let alter = "ALTER TABLE `" + tableName + "` " + actions.join(', ');
@@ -364,7 +364,7 @@ class Database {
     // the source's covering key is multi-column or absent) a UNIQUE key on the
     // column alone satisfies the auto-increment requirement without disturbing
     // the existing keys.
-    async _autoIncrementKeyAction(tableName, col, sourceDdl){
+    async autoIncrementKeyAction(tableName, col, sourceDdl){
         let key = validation.extractKeyForColumn(sourceDdl, col);
 
         if(key && key.type === 'primary' && !(await this.hasPrimaryKey(tableName)))

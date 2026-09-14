@@ -104,7 +104,7 @@ class SyncService {
         }
 
         this.scheduleHubRepoll();
-        this._startStateTreeMetric();
+        this.startStateTreeMetric();
         this.startSyncMetaRetention();
 
         // Last statement in start(): everything a /health caller is entitled to
@@ -326,7 +326,7 @@ class SyncService {
             assertBootstrapDepthChains(this.config, this.getChains());
             // REFUSE a present-but-invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value on
             // the same pass, and for the same reason: it is not inert either. It resolves to
-            // the null an ABSENT override resolves to, so _verifyCheckpointQuorum skips the
+            // the null an ABSENT override resolves to, so verifyCheckpointQuorum skips the
             // anchor on a replica whose operator armed VERIFY_CHECKPOINT_QUORUM. Client mode
             // only (a server reads no pinned set) and before any ClientSync is constructed.
             assertPinnedEnvOverrides();
@@ -434,7 +434,7 @@ class SyncService {
     // self-overlap guarded, reads on a POOLED connection (db.pool, NOT the apply transaction).
     // No deletion: see stateCommitment.reportOrphanStats. STATE_TREE_METRIC_INTERVAL_MS (default
     // 4h; 0 disables). Decoder DBs are skipped (no state_tree_* tables).
-    _startStateTreeMetric(){
+    startStateTreeMetric(){
         if(this._stateTreeMetricTimer) return;
         const raw = envConfig.stateTreeMetricIntervalMsFromEnv();
         const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
@@ -486,7 +486,7 @@ class SyncService {
     // A periodic timer rather than a per-block hook: bulk snapshot catch-up applies many
     // blocks at once and would skip epoch-boundary events, whereas pruneSyncMeta recomputes
     // its own cutoff from the current tip and is an idempotent range delete, so calling it
-    // on a clock is both sufficient and safe. Modelled on _startStateTreeMetric: one unref'd
+    // on a clock is both sufficient and safe. Modelled on startStateTreeMetric: one unref'd
     // interval, self-overlap guarded, try/catch per DB, cleared in stop().
     //
     // Server mode is deliberately untouched: it already prunes, and a second driver there

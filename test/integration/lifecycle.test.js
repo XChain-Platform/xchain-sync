@@ -156,7 +156,7 @@ describe('Integration: Full Lifecycle', function() {
             // 4. Add blocks 11-15 to source and poll
             await fixtures.seedBlocks(sourceDb, 11, 15);
             poller.lastPolledBlock = 10;
-            await poller._poll();
+            await poller.poll();
 
             // Wait for replica to catch up
             await waitFor(async () => {
@@ -168,7 +168,7 @@ describe('Integration: Full Lifecycle', function() {
             // 5. Simulate reorg: delete blocks 13-15, insert new blocks 13-16
             await fixtures.deleteBlocksFrom(sourceDb, 13);
             poller.lastPolledBlock = 15;
-            await poller._poll(); // Broadcasts the reorg event.
+            await poller.poll(); // Broadcasts the reorg event.
 
             // Wait for client to process reorg
             await waitFor(async () => {
@@ -178,7 +178,7 @@ describe('Integration: Full Lifecycle', function() {
             // Now source has blocks 1-12, add new 13-16
             await fixtures.seedBlocks(sourceDb, 13, 16, { creditAmount: '7777' });
             poller.lastPolledBlock = 12;
-            await poller._poll();
+            await poller.poll();
 
             // Wait for replica to have 16 blocks
             await waitFor(async () => {

@@ -57,7 +57,7 @@ describe('Boundary: Reorg Detection', function(){
     it('no change (currentBlock === lastPolledBlock): no-op', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(10);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.called, false);
         assert.strictEqual(poller.lastPolledBlock, 10);
     });
@@ -65,7 +65,7 @@ describe('Boundary: Reorg Detection', function(){
     it('one new block: no reorg', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(11);
-        await poller._poll();
+        await poller.poll();
         let event = broadcaster.broadcast.firstCall.args[2];
         assert.strictEqual(event.type, 'block');
         assert.strictEqual(poller.lastPolledBlock, 11);
@@ -74,7 +74,7 @@ describe('Boundary: Reorg Detection', function(){
     it('one block rollback: reorg detected', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(9);
-        await poller._poll();
+        await poller.poll();
         let event = broadcaster.broadcast.firstCall.args[2];
         assert.strictEqual(event.type, 'reorg');
         assert.strictEqual(event.block_index, 10); // currentBlock + 1
@@ -84,7 +84,7 @@ describe('Boundary: Reorg Detection', function(){
     it('deep rollback (10 blocks): reorg at correct index', async function(){
         poller.lastPolledBlock = 100;
         db.getLastBlock.resolves(90);
-        await poller._poll();
+        await poller.poll();
         let event = broadcaster.broadcast.firstCall.args[2];
         assert.strictEqual(event.type, 'reorg');
         assert.strictEqual(event.block_index, 91); // currentBlock + 1
@@ -101,7 +101,7 @@ describe('Boundary: Reorg Detection', function(){
         // Recorded broadcast hashes: 4 matches the live source ('l'), 5..10 were broadcast pre-reorg with a different content hash.
         poller.recentBroadcastHashes.set(4, 'l');
         for(let bi = 5; bi <= 10; bi++) poller.recentBroadcastHashes.set(bi, 'pre-reorg');
-        await poller._poll();
+        await poller.poll();
         let event = broadcaster.broadcast.firstCall.args[2];
         assert.strictEqual(event.type, 'reorg');
         assert.strictEqual(event.block_index, 5);
@@ -114,7 +114,7 @@ describe('Boundary: Reorg Detection', function(){
     it('currentBlock = null (all blocks deleted): early return', async function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(null);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.called, false);
         assert.strictEqual(poller.lastPolledBlock, 10); // unchanged
     });
@@ -122,7 +122,7 @@ describe('Boundary: Reorg Detection', function(){
     it('first poll (lastPolledBlock = null): initializes without processing', async function(){
         poller.lastPolledBlock = null;
         db.getLastBlock.resolves(50);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(poller.lastPolledBlock, 50);
         assert.strictEqual(broadcaster.broadcast.called, false); // no block broadcasts
         assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
@@ -131,7 +131,7 @@ describe('Boundary: Reorg Detection', function(){
     it('first poll with empty DB: remains null', async function(){
         poller.lastPolledBlock = null;
         db.getLastBlock.resolves(null);
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(poller.lastPolledBlock, null);
         assert.strictEqual(broadcaster.broadcast.called, false);
     });
@@ -140,7 +140,7 @@ describe('Boundary: Reorg Detection', function(){
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(10);
         // Even if underlying data changed at block 10, poller does not detect it
-        await poller._poll();
+        await poller.poll();
         assert.strictEqual(broadcaster.broadcast.called, false);
     });
 });

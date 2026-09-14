@@ -172,35 +172,35 @@ describe('ClientSync', function(){
         });
     });
 
-    describe('_logGap throttling', function(){
+    describe('logGap throttling', function(){
         // On a fast chain (e.g. Dogecoin testnet) the replica trails the tip and
-        // would log a gap line per block (thousands/min). _logGap collapses that
+        // would log a gap line per block (thousands/min). logGap collapses that
         // into one line per window, folding in a suppressed count.
         it('logs the first occurrence immediately', function(){
             sync._gapLogIntervalMs = 30000;
-            sync._logGap('gap', 1000);
+            sync.logGap('gap', 1000);
             assert.strictEqual(console.log.calledOnce, true);
             assert.match(console.log.firstCall.args[0], /^gap/);
         });
 
         it('suppresses repeats within the window, then emits one summary with the count', function(){
             sync._gapLogIntervalMs = 30000;
-            sync._logGap('gap', 1000);           // emits
-            sync._logGap('gap', 5000);           // suppressed
-            sync._logGap('gap', 10000);          // suppressed
+            sync.logGap('gap', 1000);           // emits
+            sync.logGap('gap', 5000);           // suppressed
+            sync.logGap('gap', 10000);          // suppressed
             assert.strictEqual(console.log.callCount, 1);
 
-            sync._logGap('gap', 40000);          // past window → emits summary
+            sync.logGap('gap', 40000);          // past window → emits summary
             assert.strictEqual(console.log.callCount, 2);
             assert.match(console.log.secondCall.args[0], /\+2 similar/);
         });
 
         it('resets the suppressed count after emitting a summary', function(){
             sync._gapLogIntervalMs = 30000;
-            sync._logGap('gap', 1000);           // emits
-            sync._logGap('gap', 5000);           // suppressed (+1)
-            sync._logGap('gap', 40000);          // emits with (+1)
-            sync._logGap('gap', 80000);          // emits, no leftover count
+            sync.logGap('gap', 1000);           // emits
+            sync.logGap('gap', 5000);           // suppressed (+1)
+            sync.logGap('gap', 40000);          // emits with (+1)
+            sync.logGap('gap', 80000);          // emits, no leftover count
             assert.strictEqual(console.log.callCount, 3);
             assert.doesNotMatch(console.log.thirdCall.args[0], /similar/);
         });
@@ -1233,11 +1233,11 @@ describe('ClientSync', function(){
     });
 });
 
-describe('ClientSync._shouldReconcileDispensers (decoder resume cadence)', function(){
+describe('ClientSync.shouldReconcileDispensers (decoder resume cadence)', function(){
     // Pure decision over (config, _catchUpCount, _lastDispenserReconcileAt); exercise it
     // in isolation via prototype.call with a hand-built context.
     function decide(ctx, now){
-        return ClientSync.prototype._shouldReconcileDispensers.call(ctx, now);
+        return ClientSync.prototype.shouldReconcileDispensers.call(ctx, now);
     }
 
     it('reconciles on the first cycle after a resume that skipped bootstrap', function(){

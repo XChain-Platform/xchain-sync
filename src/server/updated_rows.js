@@ -26,7 +26,7 @@
  * full state of every surviving row mutated in place during that window, keyed
  * by the table's natural row identity (action_index, which is UNIQUE on every
  * affected table). The follower applies them with INSERT ... ON DUPLICATE KEY
- * UPDATE (see ClientApplier._upsertRows), so re-sending a row already current is
+ * UPDATE (see ClientApplier.upsertRows), so re-sending a row already current is
  * a harmless no-op. The detection mirrors (in the forward direction) the exact
  * reorg-reset predicates ClientRollback already runs (which themselves mirror
  * xchain-indexer/src/rollback.js), so source and follower converge byte-for-byte.
@@ -73,7 +73,7 @@
  * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
  * source's own authoritative gate value lands on the replica. The follower ALSO
  * re-derives it from the already-replicated offer/status tables whenever a payload
- * touches an escrow-relevant table (ClientApplier._maybeRederiveEscrow), so the wire
+ * touches an escrow-relevant table (ClientApplier.maybeRederiveEscrow), so the wire
  * value is a convergent carry and the local derive is the corrective pass rather than
  * the sole writer. That derive is triggered only by payload.data tables, never by
  * updated_rows itself.

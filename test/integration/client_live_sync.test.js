@@ -149,7 +149,7 @@ describe('Integration: Client Live Sync', function() {
 
             await fixtures.seedBlocks(sourceDb, 6, 6);
             poller.lastPolledBlock = 5;
-            await poller._poll();
+            await poller.poll();
 
             await waitFor(async () => {
                 let count = await testDb.getRowCount(replicaDb, 'blocks');
@@ -187,7 +187,7 @@ describe('Integration: Client Live Sync', function() {
 
             await fixtures.seedBlocks(sourceDb, 6, 10);
             poller.lastPolledBlock = 5;
-            await poller._poll();
+            await poller.poll();
 
             await waitFor(async () => {
                 let count = await testDb.getRowCount(replicaDb, 'blocks');
@@ -215,7 +215,7 @@ describe('Integration: Client Live Sync', function() {
             let payload = await poller.buildBlockPayload(5);
             if (!payload) {
                 poller.lastPolledBlock = 4;
-                await poller._poll();
+                await poller.poll();
                 payload = { block_index: 5, data: {} };
             }
 

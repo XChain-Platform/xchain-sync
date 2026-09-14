@@ -457,7 +457,7 @@ describe('Rollback coverage guard @regression', function(){
     // liveness half). At/after SWQ_SOURCE_CAP_ACTIVATION this replaces the raw key-row
     // LIMIT and feeds the hashed stakes_root, so it MUST stay byte-identical to the
     // xchain-indexer twin or the follower's stakes_root diverges above the height. The
-    // per-repo JS gate wrappers (_stakeWeightsWithCap / _applyStakeWeightCap) differ by
+    // per-repo JS gate wrappers (_stakeWeightsWithCap / applyStakeWeightCap) differ by
     // design - the indexer reads network/coin from this.config, sync from params - but
     // both call THIS builder + the shared swq_source_cap_activation.js caps, which are
     // the consensus-relevant surface. If you edit one _cappedStakeWeightsSql, edit both.
@@ -1375,7 +1375,7 @@ describe('Rollback coverage guard @regression', function(){
 // the reconcile it predates and was restated across several consumer-side files, so a
 // rollback author reading them learned that the replace-table reconcile does not exist.
 // The authority is src/schema/replicated_tables.js:47-49: parity rests on the apply-side
-// reconcile, ClientApplier.applyDispensersReplace via ClientSync._reconcileDispensers.
+// reconcile, ClientApplier.applyDispensersReplace via ClientSync.reconcileDispensers.
 describe('dispensers convergence wording does not drift back', function(){
     // Fixed in-repo list on purpose: no repo walk, nothing outside xchain-sync, and
     // nothing under any archive/ or reports/ tree (dated records were accurate when

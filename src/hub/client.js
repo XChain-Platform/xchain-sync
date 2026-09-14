@@ -73,14 +73,14 @@ class HubClient {
         // answered, so a degraded first endpoint isn't retried first every call
         // (which would cost the full timeout per call before falling back).
         this._lastGoodIdx = 0;
-        // Per-endpoint failure detail from the most recent _call(). Populated with
+        // Per-endpoint failure detail from the most recent call(). Populated with
         // "url => code|message" strings for each unreachable endpoint so callers
         // can report exactly what was tried and why, instead of a bare null.
         this.lastFailures = [];
         // Cached full config tree + its high-water mark (epoch seconds). The mark
         // is sent back as `since_updated_at` so the hub returns only rows changed
         // since the previous poll; the delta is merged into this cache and the
-        // full map returned, so _extractDbConfigs is unaffected. 0 (initial /
+        // full map returned, so extractDbConfigs is unaffected. 0 (initial /
         // post-restart / old hub) requests the full tree. The client is long-lived
         // (one per SyncService), so the cursor persists across poll cycles, and
         // getIndexerConfigs + getDecoderConfigs within one cycle share the cache.
@@ -109,7 +109,7 @@ class HubClient {
     // tier (getallconfigs with include_secrets, the only way this client gets the
     // replication sources' DB passwords) onto a key of its own, and one request
     // carries one x-api-key header. Unset, the bulk key covers both tiers.
-    async _call(data, timeout = 5000){
+    async call(data, timeout = 5000){
         this.lastFailures = [];
         let headers = {};
         let hubKey = envConfig.hubApiKeyFromEnv();
@@ -132,13 +132,13 @@ class HubClient {
     }
 
     async ping(){
-        let result = await this._call({ jsonrpc: '2.0', method: 'ping', id: 1 });
+        let result = await this.call({ jsonrpc: '2.0', method: 'ping', id: 1 });
         return result !== null;
     }
 
     // Params for every getallconfigs call this client makes.
     //
-    // include_secrets is NOT optional for sync: _extractDbConfigs turns this tree
+    // include_secrets is NOT optional for sync: extractDbConfigs turns this tree
     // into the replication sources' connection details (db_user/db_pass per
     // coin/network), so a redacted response hands every source the literal
     // "[redacted]" as its password. The hub redacts secret-bearing params by
@@ -170,7 +170,7 @@ class HubClient {
     // Newer hubs wrap the config map as { configs, seq } so consumers can detect a
     // config change committed between polls; older hubs return the bare nested map.
     // We record the committed sequence on this.lastSeq and always return the bare
-    // map, so _extractDbConfigs sees the same shape regardless of hub version. seq
+    // map, so extractDbConfigs sees the same shape regardless of hub version. seq
     // is 0 against an old hub. (Sync discovers DBs at startup, so the seq is tracked
     // for completeness rather than used for invalidation here.)
     async getallconfigs(){
@@ -187,17 +187,17 @@ class HubClient {
         // re-receiving it a harmless no-op. 0 still means "send me the full tree"
         // (initial fetch, post-restart, or a hub too old to report a watermark).
         let deltaCursor = this.lastWatermark > 0 ? this.lastWatermark - 1 : 0;
-        let result = await this._call({
+        let result = await this.call({
             jsonrpc: '2.0',
             method:  'getallconfigs',
             params:  this.configParams(deltaCursor),
             id:      1
         }, 10000);
-        // _call returns null when every endpoint failed; preserve that signal so
-        // _extractDbConfigs (which treats null as "no configs") stays unchanged.
+        // call returns null when every endpoint failed; preserve that signal so
+        // extractDbConfigs (which treats null as "no configs") stays unchanged.
         if(result === null) return null;
 
-        // If _call failed over to a different endpoint than the one our cursor came
+        // If call failed over to a different endpoint than the one our cursor came
         // from, the delta we just received was filtered against a stale cross-hub
         // cursor and may have skipped rows (each hub's updated_at for the same config
         // differs). Discard it and re-fetch the full tree from the new endpoint with a
@@ -205,7 +205,7 @@ class HubClient {
         if(sentCursor > 0 && this._lastGoodIdx !== cursorEndpoint){
             this.lastWatermark = 0;
             this.configs       = null;
-            result = await this._call({
+            result = await this.call({
                 jsonrpc: '2.0',
                 method:  'getallconfigs',
                 params:  this.configParams(0),
@@ -230,7 +230,7 @@ class HubClient {
                           ' (hub restart or restore from an older snapshot); discarding cached config and re-fetching the full tree.');
             this.lastWatermark = 0;
             this.configs       = null;
-            result = await this._call({
+            result = await this.call({
                 jsonrpc: '2.0',
                 method:  'getallconfigs',
                 params:  this.configParams(0),
@@ -240,7 +240,7 @@ class HubClient {
         }
 
         this.warnIfRedacted(result);
-        this.configs = this._applyConfigResult(result);
+        this.configs = this.applyConfigResult(result);
         // Bind the (possibly advanced) cursor to the endpoint that answered.
         this._watermarkEndpointIdx = this._lastGoodIdx;
         // A non-null result means at least one endpoint answered; record the fetch time
@@ -252,7 +252,7 @@ class HubClient {
     // True when a watermarked envelope from the cursor's own endpoint reports a
     // seq or watermark BELOW the last one it served us (hub restart / restore
     // from an older snapshot). A missing watermark is the full tree (handled by
-    // _applyConfigResult) and a zero watermark means an empty configs table, so
+    // applyConfigResult) and a zero watermark means an empty configs table, so
     // neither counts; the next poll re-fetches in full either way.
     hubConfigRegressed(result){
         let wrapped = result && typeof result === 'object' && result.configs && typeof result.configs === 'object' && ('seq' in result);
@@ -268,13 +268,13 @@ class HubClient {
     // watermark is present the payload is a delta (only rows changed since the
     // cursor we sent), so we MERGE it into the cache and advance the cursor.
     // Older hubs return the bare map (or a { configs, seq } wrapper without a
-    // watermark); those are the full tree, so we REPLACE. _extractDbConfigs sees
+    // watermark); those are the full tree, so we REPLACE. extractDbConfigs sees
     // the same full-map shape regardless of hub version. seq is 0 against an old
     // hub. The configs table is upsert-only (no row deletes), so merging
     // successive deltas reconstructs exactly what a full fetch would have returned.
-    _applyConfigResult(result){
+    applyConfigResult(result){
         // Every envelope, initial fetch and delta poll alike, funnels through here.
-        this._checkHubConsensusHash(result && typeof result === 'object' ? result.coin_consensus_hashes : null);
+        this.checkHubConsensusHash(result && typeof result === 'object' ? result.coin_consensus_hashes : null);
 
         let payload, seq, watermark;
         if(result && typeof result === 'object' && result.configs && typeof result.configs === 'object' && ('seq' in result)){
@@ -313,7 +313,7 @@ class HubClient {
     // the first poll instead of later as an opaque local-recompute divergence.
     // Mirrors XChainIndexer._checkHubConsensusHash, widened to every coin and network
     // because sync serves whatever chain set the hub hands it.
-    _checkHubConsensusHash(hubHashes){
+    checkHubConsensusHash(hubHashes){
         if(!hubHashes || typeof hubHashes !== 'object') return;   // older hub: field absent
         let mismatches = [];
         for(const network of coins.NETWORKS){
@@ -339,16 +339,16 @@ class HubClient {
     }
 
     async getIndexerConfigs(){
-        return this._extractDbConfigs(await this.getallconfigs(), 'xchain-indexer', 'indexer');
+        return this.extractDbConfigs(await this.getallconfigs(), 'xchain-indexer', 'indexer');
     }
 
     async getDecoderConfigs(){
-        return this._extractDbConfigs(await this.getallconfigs(), 'xchain-decoder', 'decoder');
+        return this.extractDbConfigs(await this.getallconfigs(), 'xchain-decoder', 'decoder');
     }
 
     // Extract indexer database configs from the hub response.
     // Returns array of: [{ coin, network, dbType, db_host, db_port, db_name, db_user, db_pass }]
-    _extractDbConfigs(allConfigs, moduleName, dbType){
+    extractDbConfigs(allConfigs, moduleName, dbType){
         if(!allConfigs) return [];
 
         let configs = [];

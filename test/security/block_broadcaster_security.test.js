@@ -46,46 +46,46 @@ describe('BlockBroadcaster security', function(){
         sinon.restore();
     });
 
-    // ── _getIp: TRUST_PROXY=false (default) ──
+    // ── getIp: TRUST_PROXY=false (default) ──
 
-    describe('_getIp: TRUST_PROXY=false', function(){
+    describe('getIp: TRUST_PROXY=false', function(){
 
         it('ignores x-forwarded-for when TRUST_PROXY is false', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: false, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1', '10.0.0.1');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '192.168.1.1');
         });
 
         it('uses socket remoteAddress when no forwarded header', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: false, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('172.16.0.1');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '172.16.0.1');
         });
 
         it('returns unknown when no socket address and no forwarded header', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: false, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = { headers: {}, socket: { remoteAddress: undefined } };
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, 'unknown');
         });
     });
 
-    // ── _getIp: TRUST_PROXY=true ──
+    // ── getIp: TRUST_PROXY=true ──
 
-    // ── _getIp: TRUST_PROXY=true ──
+    // ── getIp: TRUST_PROXY=true ──
     //
     // TRUST_PROXY means one trusted hop, the co-located Apache, which APPENDS the peer
     // it saw to the right of X-Forwarded-For. The rightmost entry is therefore the only
     // address our own infrastructure vouched for; anything left of it is client-supplied.
 
-    describe('_getIp: TRUST_PROXY=true', function(){
+    describe('getIp: TRUST_PROXY=true', function(){
 
         it('uses x-forwarded-for when TRUST_PROXY is true', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1', '10.0.0.1');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '10.0.0.1');
         });
 
@@ -93,7 +93,7 @@ describe('BlockBroadcaster security', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             // Client sent "10.0.0.1, 172.16.0.1"; Apache appended the real peer 203.0.113.7.
             let req = createMockReq('192.168.1.1', '10.0.0.1, 172.16.0.1, 203.0.113.7');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '203.0.113.7');
         });
 
@@ -101,7 +101,7 @@ describe('BlockBroadcaster security', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             // Attacker claims to be a peer validator; the appended address is what counts.
             let req = createMockReq('127.0.0.1', '198.51.100.9, 203.0.113.7');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.notStrictEqual(ip, '198.51.100.9');
             assert.strictEqual(ip, '203.0.113.7');
         });
@@ -111,35 +111,35 @@ describe('BlockBroadcaster security', function(){
             let forged = [];
             for(let i = 0; i < 64; i++) forged.push('10.0.0.' + i);
             let req = createMockReq('127.0.0.1', forged.join(', ') + ', 203.0.113.7');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '203.0.113.7');
         });
 
         it('trims whitespace around the appended address', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1', '10.0.0.1  ,   172.16.0.1  ');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '172.16.0.1');
         });
 
         it('falls back to socket when x-forwarded-for absent and TRUST_PROXY true', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '192.168.1.1');
         });
 
         it('falls back to socket on a trailing-comma header rather than keying on an empty string', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1', '10.0.0.1,');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '192.168.1.1');
         });
 
         it('falls back to socket on a whitespace-only header rather than keying on an empty string', function(){
             let broadcaster = new BlockBroadcaster({ TRUST_PROXY: true, WS_MAX_PER_IP: 3, WS_BACKPRESSURE_LIMIT: 50 });
             let req = createMockReq('192.168.1.1', '   ');
-            let ip = broadcaster._getIp(req);
+            let ip = broadcaster.getIp(req);
             assert.strictEqual(ip, '192.168.1.1');
         });
     });

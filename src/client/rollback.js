@@ -66,7 +66,7 @@ class ClientRollback {
         this.network = network;
 
         // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
-        // indexer's reorg deactivation_block re-NULL resets (see _rollbackIndexer). A wrong
+        // indexer's reorg deactivation_block re-NULL resets (see rollbackIndexer). A wrong
         // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
         // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
         // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
@@ -122,7 +122,7 @@ class ClientRollback {
         // design: it is not per-block replicated (the decoder live-prunes it, which
         // the block stream can't model (see replicatedTables.js)); it SEEDS from the
         // full snapshot and is then held in parity by the periodic apply-side reconcile
-        // (ClientSync._reconcileDispensers -> ClientApplier.applyDispensersReplace),
+        // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace),
         // which replicatedTables.js:47-49 names as the whole of its parity story.
         // Deleting its rows on a reorg would corrupt that replicated state with no
         // per-block stream to restore them before the next reconcile, so a reorg leaves
@@ -139,11 +139,11 @@ class ClientRollback {
         if(dbType === 'decoder'){
             return this.rollbackDecoder(block_index);
         }
-        return this._rollbackIndexer(block_index);
+        return this.rollbackIndexer(block_index);
     }
 
     // Indexer rollback (original behaviour)
-    async _rollbackIndexer(block_index){
+    async rollbackIndexer(block_index){
         let timer = this.util.startTimer();
         logger.info('Starting indexer rollback to block ' + block_index + '...');
 
@@ -163,7 +163,7 @@ class ClientRollback {
         // holds only [base..tip] of `orders`/`order_matches`, so the pair-scoped market
         // sweep below cannot tell "no order ever existed" from "the order predates my
         // floor"; it is skipped there rather than deleting a market the source keeps.
-        // Guarded on the method existing, mirroring ClientSync._persistBootstrapBase,
+        // Guarded on the method existing, mirroring ClientSync.persistBootstrapBase,
         // so db instances without the durable store degrade to full-history behaviour.
         let truncatedReplica = false;
         if(this.db && typeof this.db.getSyncState === 'function'){

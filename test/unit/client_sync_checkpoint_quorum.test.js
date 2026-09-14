@@ -86,7 +86,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), false, 'a quorum-signed checkpoint matching local state must not halt');
         assert.ok(getStub.calledOnce, 'fetched the signed checkpoint');
@@ -97,7 +97,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const real = makeSigner(), rogue = makeSigner(); pin(real);
         getStub.resolves({ data: signedCheckpoint(rogue) });   // signed by a key not in the pinned set
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-quorum-divergence');
@@ -111,7 +111,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: 'ab'.repeat(32), block_merkle_root: cp.block_merkle_root }]);  // local differs
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-quorum-divergence');
@@ -120,7 +120,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
 
     it('is INERT with no pinned set: no fetch, no halt', async function(){
         delete process.env[ENVKEY];
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(getStub.called, false, 'no out-of-band trust root => skip entirely (never fetch)');
         assert.strictEqual(sync.isHalted(), false);
     });
@@ -128,7 +128,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
     it('never halts on a transport error (404 / network)', async function(){
         const s = makeSigner(); pin(s);
         getStub.rejects(new Error('connect ECONNREFUSED'));
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync.isHalted(), false, 'a transport fault is not a divergence');
     });
 
@@ -137,7 +137,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const cp = signedCheckpoint(s);
         sync.lastAppliedBlock = 50;                            // checkpoint is at 100, replica behind
         getStub.resolves({ data: cp });
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(db.doQuery.called, false, 'cannot compare a height not yet recomputed');
     });
@@ -155,7 +155,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         cp.state_root = null; cp.block_merkle_root = null;     // withheld / forged: the hub never signs this
         getStub.resolves({ data: cp });
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.ok(warn.getCalls().some(c => /ROOTLESS checkpoint/.test(c.args[0])),
             'a rootless checkpoint past the flag-day must be surfaced, not silently dropped');
@@ -184,7 +184,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
             cp.state_root = null; cp.block_merkle_root = null;
             getStub.resolves({ data: cp });
 
-            await mainSync._verifyCheckpointQuorum();
+            await mainSync.verifyCheckpointQuorum();
 
             assert.strictEqual(warn.getCalls().some(c => /ROOTLESS checkpoint/.test(c.args[0])), false,
                 'below the flag-day a rootless checkpoint is normal and stays silent');
@@ -200,7 +200,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const cp = signedCheckpoint(s);                       // checkpoint_seq 4
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync._lastVerifiedCheckpointSeq, 4);
     });
 
@@ -210,7 +210,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         sync._lastVerifiedCheckpointSeq = 9;                  // already anchored a newer seq
         const cp = signedCheckpoint(s);                       // older: checkpoint_seq 4
         getStub.resolves({ data: cp });
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync.isHalted(), false, 'a regression is suspicious but not proof of forgery');
         assert.strictEqual(db.doQuery.called, false, 'must not anchor (no local root compare) on a regressed seq');
         assert.ok(warn.getCalls().some(c => /seq regression/.test(c.args[0])), 'surfaces the rewind');
@@ -223,7 +223,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const cp = signedCheckpoint(s);
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.ok(getStub.firstCall.args[0].startsWith('http://hub-anchor:9000/'),
             'fetched from the out-of-band anchor, not the audited source');
     });
@@ -236,7 +236,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const cp = signedCheckpoint(s);
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync.isHalted(), false, 'staleness is advisory, never a halt');
         assert.ok(warn.getCalls().some(c => /stale anchor/.test(c.args[0])), 'alarms the freshness gap');
     });
@@ -249,7 +249,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
         const cp = signedCheckpoint(s);
         getStub.resolves({ data: cp });
         db.doQuery.resolves([{ state_root: cp.state_root, block_merkle_root: cp.block_merkle_root }]);
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
         assert.ok(!warn.getCalls().some(c => /stale anchor/.test(c.args[0])));
     });
 });
@@ -326,7 +326,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), false, 'a rotated checkpoint provable from the seed must not halt');
         assert.ok(getStub.getCalls().some(c => c.args[0].includes('/range')), 'walked the checkpoint range');
@@ -342,7 +342,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];   // authoritative = s1, not rogue
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-quorum-divergence');
@@ -359,7 +359,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().mismatches[0].field, 'state_root');
@@ -375,7 +375,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[95]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), false, 'cannot attest the signer set at snapshot 95 from a trust root at 90');
     });
@@ -389,7 +389,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), false);
     });
@@ -403,7 +403,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), true);
         assert.strictEqual(sync.getHaltInfo().mismatches[0].field, 'state_root');
@@ -420,7 +420,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
             throw new Error('unexpected url ' + url);
         });
 
-        await sync._verifyCheckpointQuorum();
+        await sync.verifyCheckpointQuorum();
 
         assert.strictEqual(sync.isHalted(), false, 'a range transport fault is not a divergence');
     });

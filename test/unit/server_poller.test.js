@@ -134,17 +134,17 @@ describe('ServerPoller', function(){
         });
     });
 
-    describe('_poll', function(){
+    describe('poll', function(){
         it('returns early when no blocks in DB', async function(){
             db.getLastBlock.resolves(null);
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
 
         it('initializes lastPolledBlock on first poll', async function(){
             db.getLastBlock.resolves(100);
             poller.lastPolledBlock = null;
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(poller.lastPolledBlock, 100);
             assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
             assert.strictEqual(broadcaster.broadcast.called, false);
@@ -158,7 +158,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(log.recordBlock.calledOnce, true);
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
@@ -173,7 +173,7 @@ describe('ServerPoller', function(){
         it('does nothing when currentBlock equals lastPolledBlock', async function(){
             poller.lastPolledBlock = 100;
             db.getLastBlock.resolves(100);
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
             assert.strictEqual(log.recordBlock.called, false);
         });
@@ -191,7 +191,7 @@ describe('ServerPoller', function(){
             });
             db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
 
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.updateStatus.callCount, 1);
             assert.strictEqual(broadcaster.updateStatus.lastCall.args[2].replica_stale, false);
 
@@ -199,7 +199,7 @@ describe('ServerPoller', function(){
             // later poll ever processes a block.
             db.getReplicaStatus.resolves({ isReplica: true, running: false, secondsBehind: null });
 
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.called, false);
             assert.strictEqual(broadcaster.updateStatus.callCount, 2);
             assert.strictEqual(broadcaster.updateStatus.lastCall.args[2].replica_stale, true);
@@ -214,7 +214,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.callCount, 100);
             assert.strictEqual(poller.lastPolledBlock, 100);
@@ -228,7 +228,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
             let event = broadcaster.broadcast.firstCall.args[2];
@@ -246,7 +246,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'new-ledger-hash', actions_hash: 'a', contract_hash: 'c'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
             let event = broadcaster.broadcast.firstCall.args[2];
@@ -285,7 +285,7 @@ describe('ServerPoller', function(){
             // reorg at 99, not a shallow reorg@100 that would leave block 99 orphaned on
             // followers across subsequent polls. lastPolledBlock drops below the fork so
             // the forward loop re-streams 99..101 fresh.
-            await poller._poll();
+            await poller.poll();
             assert.strictEqual(broadcaster.broadcast.callCount, 1);
             assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].type, 'reorg');
             assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].block_index, 99);
@@ -302,7 +302,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'lh', actions_hash: 'a', contract_hash: 'c'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
@@ -315,7 +315,7 @@ describe('ServerPoller', function(){
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(log.pruneFrom.calledOnce, true);
             assert.strictEqual(log.pruneFrom.firstCall.args[0], 96); // orphaned suffix starts here
@@ -329,7 +329,7 @@ describe('ServerPoller', function(){
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
             decoderPoller.lastPolledBlock = 100;
 
-            await decoderPoller._poll();  // must not throw despite transparencyLog === null
+            await decoderPoller.poll();  // must not throw despite transparencyLog === null
 
             // The reorg is still broadcast to subscribers.
             assert.strictEqual(broadcaster.broadcast.calledOnce, true);
@@ -344,21 +344,21 @@ describe('ServerPoller', function(){
                 ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
             }));
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(broadcaster.broadcast.callCount, 3); // blocks 98, 99, 100
             assert.strictEqual(poller.lastPolledBlock, 100);
         });
     });
 
-    describe('_resumeCursor (restart resume) @regression', function(){
+    describe('resumeCursor (restart resume) @regression', function(){
         it('indexer resumes from the transparency-log high-water mark, not the source tip', async function(){
             // sync_meta recorded up to 100; source DB has since advanced to 250 (e.g.
             // the indexer ran on while the sync server was down).
             log.getHighWaterMark.resolves(100);
             db.getLastBlock.resolves(250);
 
-            let cursor = await poller._resumeCursor();
+            let cursor = await poller.resumeCursor();
 
             assert.strictEqual(cursor, 100, 'must resume from sync_meta high-water mark');
             assert.strictEqual(db.getLastBlock.called, false, 'must not seed from the source tip');
@@ -366,8 +366,8 @@ describe('ServerPoller', function(){
 
         it('indexer resume is null on a fresh node (empty sync_meta)', async function(){
             log.getHighWaterMark.resolves(null);
-            let cursor = await poller._resumeCursor();
-            assert.strictEqual(cursor, null, 'null lets _poll initialise from the current tip');
+            let cursor = await poller.resumeCursor();
+            assert.strictEqual(cursor, null, 'null lets poll initialise from the current tip');
         });
 
         it('decoder resumes from the source tip (no transparency log)', async function(){
@@ -376,13 +376,13 @@ describe('ServerPoller', function(){
             decoderDb.getLastBlock.resolves(777);
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
 
-            let cursor = await decoderPoller._resumeCursor();
+            let cursor = await decoderPoller.resumeCursor();
             assert.strictEqual(cursor, 777);
         });
 
         it('does not skip blocks advanced during downtime when polling resumes', async function(){
             // Restart-mid-advance: recorded through block 100, source now at 105.
-            // After seeding the cursor from the high-water mark, _poll must record
+            // After seeding the cursor from the high-water mark, poll must record
             // every block in [101, 105]: none may be skipped.
             log.getHighWaterMark.resolves(100);
             db.getLastBlock.resolves(105);
@@ -391,8 +391,8 @@ describe('ServerPoller', function(){
                 ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
             }));
 
-            poller.lastPolledBlock = await poller._resumeCursor();
-            await poller._poll();
+            poller.lastPolledBlock = await poller.resumeCursor();
+            await poller.poll();
 
             let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
             assert.deepStrictEqual(recorded, [101, 102, 103, 104, 105],
@@ -406,14 +406,14 @@ describe('ServerPoller', function(){
     // (live == live) and never detected - stale sync_meta/merkle_epochs served
     // chain-wrong proofs forever. Seed from the DURABLE recorded hash instead so the
     // first poll compares recorded(pre-reorg) vs live(post-reorg) and fires.
-    describe('_seedReorgGuardHash (durable reorg-guard seed) @regression', function(){
+    describe('seedReorgGuardHash (durable reorg-guard seed) @regression', function(){
         it('indexer seeds from the recorded (pre-reorg) hash, NOT a live source read', async function(){
             log.getRecordedHash.withArgs(100).resolves('recorded-pre-reorg');
             // The live source at 100 is already post-reorg; seeding from it would mask
             // the reorg. getBlockHashRow (the live read) must not be consulted.
             db.getBlockHashRow.withArgs(100).resolves({ ledger_hash: 'live-post-reorg' });
 
-            let seed = await poller._seedReorgGuardHash(100);
+            let seed = await poller.seedReorgGuardHash(100);
 
             assert.strictEqual(seed, 'recorded-pre-reorg', 'reorg guard seeds from the durable record');
             assert.ok(log.getRecordedHash.calledWith(100));
@@ -424,17 +424,17 @@ describe('ServerPoller', function(){
             // Recorded up through 100 (pre-reorg ledger hash), no advance in height, but
             // the chain forked at 100 while the server was down: live hash differs.
             // Drive the seed + first poll directly (start() would enter its live poll
-            // loop); this mirrors the _resumeCursor regression above.
+            // loop); this mirrors the resumeCursor regression above.
             log.getHighWaterMark.resolves(100);
             log.getRecordedHash.withArgs(100).resolves('l100-pre');
             db.getLastBlock.resolves(100);
             db.getBlockHashRow.withArgs(100).resolves({ ledger_hash: 'l100-post' });
 
-            poller.lastPolledBlock = await poller._resumeCursor();
-            poller.lastPolledBlockHash = await poller._seedReorgGuardHash(poller.lastPolledBlock);
+            poller.lastPolledBlock = await poller.resumeCursor();
+            poller.lastPolledBlockHash = await poller.seedReorgGuardHash(poller.lastPolledBlock);
             assert.strictEqual(poller.lastPolledBlockHash, 'l100-pre', 'seeded from the recorded pre-reorg hash');
 
-            await poller._poll();
+            await poller.poll();
 
             assert.ok(broadcaster.broadcast.calledWith('bitcoin', 'mainnet', sinon.match({ type: 'reorg', block_index: 100 })),
                 'the during-downtime reorg is detected and broadcast');
@@ -442,10 +442,10 @@ describe('ServerPoller', function(){
         });
 
         it('falls back to the live read for a fresh node (no recorded hash) and null cursor', async function(){
-            assert.strictEqual(await poller._seedReorgGuardHash(null), null, 'null cursor -> no seed');
+            assert.strictEqual(await poller.seedReorgGuardHash(null), null, 'null cursor -> no seed');
             log.getRecordedHash.withArgs(42).resolves(null);       // never recorded
             db.getBlockHashRow.withArgs(42).resolves({ ledger_hash: 'live-42' });
-            assert.strictEqual(await poller._seedReorgGuardHash(42), 'live-42', 'live fallback on a recorded miss');
+            assert.strictEqual(await poller.seedReorgGuardHash(42), 'live-42', 'live fallback on a recorded miss');
         });
 
         it('decoder (no transparency log) seeds from the live source read', async function(){
@@ -453,7 +453,7 @@ describe('ServerPoller', function(){
             decoderDb.dbType = 'decoder';
             decoderDb.getBlockHashRow.withArgs(7).resolves({ block_hash: 'bh7' });
             let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
-            assert.strictEqual(await decoderPoller._seedReorgGuardHash(7), 'bh7');
+            assert.strictEqual(await decoderPoller.seedReorgGuardHash(7), 'bh7');
         });
     });
 
@@ -988,7 +988,7 @@ describe('ServerPoller', function(){
     // its post-B state under B's payload and a strict follower's apply-time
     // recompute halted. The forward batch must be pinned to one REPEATABLE READ
     // snapshot and every payload read must observe that snapshot.
-    describe('_poll snapshot pinning (H-P2)', function(){
+    describe('poll snapshot pinning (H-P2)', function(){
         const HASH_ROW = {
             block_index: 100, block_time: 1700000000,
             ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
@@ -1001,7 +1001,7 @@ describe('ServerPoller', function(){
             const snap = { mockSnapshotConn: true };
             db.beginReadSnapshot.resolves(snap);
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(db.beginReadSnapshot.calledOnce, true);
             assert.strictEqual(db.commitReadSnapshot.calledOnce, true);
@@ -1032,7 +1032,7 @@ describe('ServerPoller', function(){
             db.getLastBlock.resolves(100);
             db.getBlockHashRow.rejects(new Error('boom'));
 
-            await assert.rejects(() => poller._poll(), /boom/);
+            await assert.rejects(() => poller.poll(), /boom/);
 
             assert.strictEqual(db.beginReadSnapshot.calledOnce, true);
             assert.strictEqual(db.commitReadSnapshot.calledOnce, true);
@@ -1044,7 +1044,7 @@ describe('ServerPoller', function(){
             db.getLastBlock.onSecondCall().resolves(101);  // view inside the snapshot
             db.getBlockHashRow.resolves(HASH_ROW);
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(poller.lastPolledBlock, 101);
             assert.strictEqual(broadcaster.broadcast.callCount, 2);
@@ -1056,7 +1056,7 @@ describe('ServerPoller', function(){
             db.getLastBlock.onSecondCall().resolves(100);  // snapshot raced a reorg
             db.getBlockHashRow.resolves(HASH_ROW);
 
-            await poller._poll();
+            await poller.poll();
 
             assert.strictEqual(poller.lastPolledBlock, 100,
                 'a block the snapshot cannot see must wait for the next poll');

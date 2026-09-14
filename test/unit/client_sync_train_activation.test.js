@@ -88,7 +88,7 @@ function build(db, chain, required, config){
     let util = new Utility();
     let sync = new ClientSync(chain || 'bitcoin', 'mainnet', db, applier,
         { rollback: sinon.stub().resolves() }, new HashVerifier(), Object.assign({}, QUIET_CONFIG, config || {}), util);
-    // The manifest requirement, injected where _resolveTrainActivationRequirement
+    // The manifest requirement, injected where resolveTrainActivationRequirement
     // caches it (undefined means "resolve from disk", which the file-path cases use).
     if(required !== undefined) sync._trainActivationRequired = required;
     return { sync, applier, util };
@@ -267,7 +267,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
 
     it('halts when the gate itself throws, rather than waving the block through', async function(){
         const { sync, applier } = build(db, 'bitcoin', null);
-        sync._resolveTrainActivationRequirement = () => { throw new Error('boom'); };
+        sync.resolveTrainActivationRequirement = () => { throw new Error('boom'); };
 
         await sync.applyBlockEvent(block(1));
 

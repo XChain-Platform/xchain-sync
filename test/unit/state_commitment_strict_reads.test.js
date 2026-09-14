@@ -8,7 +8,7 @@
 //
 // M-17 regression for the db.js helpers the state-commitment path DELEGATES to.
 // stateCommitment.js is strict everywhere, but the row sets it hashes are gathered
-// by db.js: getBlockLeafRows for block_merkle_root, _applyStakeWeightCap plus the
+// by db.js: getBlockLeafRows for block_merkle_root, applyStakeWeightCap plus the
 // getStatusId behind it for stakes_root. Those went through fail-soft doQuery, which
 // swallows a NON-transactional query error and answers []. On this path [] is not an
 // error signal, it is a wrong answer: a valid-looking root over a truncated (or
@@ -27,7 +27,7 @@ function makeDb() {
     const db = new Database('localhost', 3306, 'idx', 'u', 'p',
         { isNull: (x) => x == null, logError: () => {} }, 'indexer');
     // No transaction open: exactly the state the seed path and the checkpoint
-    // forward-follow (ClientSync._oraclePublishSetAt) run in.
+    // forward-follow (ClientSync.oraclePublishSetAt) run in.
     db.transactionConnection = null;
     sinon.stub(db, 'getConnection').resolves({
         query: async () => { throw new Error('ER_LOCK_WAIT_TIMEOUT: transient'); },
@@ -61,9 +61,9 @@ describe('M-17: state-commitment input reads fail closed outside a transaction',
             /transient/);
     });
 
-    it('_applyStakeWeightCap throws on its own read, past the getStatusId hop', async function () {
+    it('applyStakeWeightCap throws on its own read, past the getStatusId hop', async function () {
         await assert.rejects(
-            () => db._applyStakeWeightCap({ sql: 'SELECT 1', args: [] }, 100, 10, null, null, 'test'),
+            () => db.applyStakeWeightCap({ sql: 'SELECT 1', args: [] }, 100, 10, null, null, 'test'),
             /transient/);
     });
 

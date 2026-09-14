@@ -257,8 +257,8 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
     // not fork the validator). At a bulk-range boundary (catch-up join/terminal,
     // bootstrap terminal) that posture is a hole: the join recompute is the ONLY
     // check that catches a disconnect-spanning reorg stitched onto an orphaned
-    // tip, so an error there previously let the range through unverified.
-    // _verifyRangeBoundary must retry the recompute and then HALT durably.
+    // tip, so an error there that failed open would let the range through unverified.
+    // verifyRangeBoundary must retry the recompute and then HALT durably.
     let sync, db, config;
 
     beforeEach(function(){
@@ -279,7 +279,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
 
     it('HALTS (recompute-error) when the recompute errors on every retry', async function(){
         sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('schema gap'));
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, true, 'caller must be told to stop');
         assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 3, 'bounded retries before halting');
@@ -294,7 +294,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
         sync.blockHasher.computeBlockHashes = sinon.stub()
             .onFirstCall().rejects(new Error('transient'))
             .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, false);
         assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');
@@ -303,7 +303,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
     it('HALTS (local-recompute-divergence) on a boundary hash mismatch', async function(){
         sync.blockHasher.computeBlockHashes = sinon.stub()
             .resolves({ ledger_hash: 'WRONG', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, true);
         assert.strictEqual(sync.getHaltInfo().reason, 'local-recompute-divergence');
@@ -312,7 +312,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
     it('skips (no halt) when the committed boundary hash is not yet resolvable', async function(){
         db.getBlockHashRow.resolves(null);
         sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, false);
         assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false, 'no recompute without a committed hash');
@@ -326,7 +326,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
     it('HALTS (boundary-read-error) when the committed hash READ fails on every retry @regression', async function(){
         db.getBlockHashRow.rejects(new Error('ER_LOCK_WAIT_TIMEOUT: errno 1205'));
         sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, true, 'an unverifiable range must not be served');
         assert.strictEqual(db.getBlockHashRow.callCount, 3, 'bounded retries before halting');
@@ -339,7 +339,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
     });
 
     it('reads the committed boundary hash FAIL-CLOSED (rethrow), not on the fail-soft default @regression', async function(){
-        await sync._verifyRangeBoundary(500);
+        await sync.verifyRangeBoundary(500);
         const opts = db.getBlockHashRow.firstCall.args[2];
         assert.ok(opts && opts.rethrow === true,
             'a swallowed query error would otherwise be indistinguishable from an absent row');
@@ -351,7 +351,7 @@ describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', f
         db.getBlockHashRow.resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
         sync.blockHasher.computeBlockHashes = sinon.stub()
             .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync._verifyRangeBoundary(500);
+        const halted = await sync.verifyRangeBoundary(500);
 
         assert.strictEqual(halted, false);
         assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');

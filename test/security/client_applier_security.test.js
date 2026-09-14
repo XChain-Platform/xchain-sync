@@ -37,7 +37,7 @@ function createMockUtil(){
     };
 }
 
-// Malformed identifiers FAIL CLOSED: insertRows/_upsertRows throw so the apply
+// Malformed identifiers FAIL CLOSED: insertRows/upsertRows throw so the apply
 // transaction rolls back and the block/snapshot is retried or the client halts.
 // (A silent skip would drop the table's rows while the transaction still commits,
 // leaving the replica permanently short with no divergence signal.)

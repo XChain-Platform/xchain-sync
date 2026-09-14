@@ -120,7 +120,7 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
         poller.lastPolledBlock = 6;
         db.getLastBlock.resolves(7);
 
-        await poller._poll();
+        await poller.poll();
 
         const call = db.getNonEmptyActionScopedTables.firstCall;
         assert.ok(call, 'probe must run');

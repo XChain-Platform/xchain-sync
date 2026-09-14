@@ -51,7 +51,7 @@ class BlockBroadcaster {
         this.validatorHeartbeats = new Map();
     }
 
-    _key(chain, network, dbType){
+    key(chain, network, dbType){
         return chain + ':' + network + ':' + (dbType || 'indexer');
     }
 
@@ -64,7 +64,7 @@ class BlockBroadcaster {
     // forgeable. Keying on the leftmost entry therefore let any client rotate a fake
     // leading value to escape the per-IP cap, or claim another validator's address and
     // poison its connection accounting.
-    _getIp(req){
+    getIp(req){
         if(this.config['TRUST_PROXY']){
             let forwarded = req.headers['x-forwarded-for'];
             if(forwarded){
@@ -84,9 +84,9 @@ class BlockBroadcaster {
     // syncMode: 'full' (default) or 'infra-only' (controls which tables are forwarded).
     // dbType:   'indexer' (default) or 'decoder' (controls which DB's events are received).
     addSubscription(ws, req, chain, network, syncMode, dbType){
-        let ip = this._getIp(req);
+        let ip = this.getIp(req);
         let type = dbType || 'indexer';
-        let key = this._key(chain, network, type);
+        let key = this.key(chain, network, type);
 
         if(!this.ipConnections.has(ip))
             this.ipConnections.set(ip, new Set());
@@ -127,7 +127,7 @@ class BlockBroadcaster {
 
         let status = this.getStatus(chain, network, type);
         if(status){
-            this._send(ws, { type: 'status', chain, network, dbType: type, ...status });
+            this.send(ws, { type: 'status', chain, network, dbType: type, ...status });
         }
 
         logger.info('WebSocket subscriber added for ' + key + ' from ' + ip + ' (' + this.subscribers.get(key).size + ' total)');
@@ -141,7 +141,7 @@ class BlockBroadcaster {
         let ip      = ws._syncIp;
         if(!chain || !network) return;
 
-        let key = this._key(chain, network, dbType);
+        let key = this.key(chain, network, dbType);
         let subs = this.subscribers.get(key);
         if(subs){
             subs.delete(ws);
@@ -186,7 +186,7 @@ class BlockBroadcaster {
         // dbType is part of the statusObj per ServerPoller.updateStatus.
         // Fall back to 'indexer' for backward compat with code that doesn't set it.
         let dbType = (statusObj && statusObj.dbType) || 'indexer';
-        this.statusData.set(this._key(chain, network, dbType), statusObj);
+        this.statusData.set(this.key(chain, network, dbType), statusObj);
     }
 
     // The ONE read path for a cached status object, freshness enforced.
@@ -202,14 +202,14 @@ class BlockBroadcaster {
     //
     // Past SYNC_STATUS_MAX_AGE_MS the measurement is no longer evidence, so the
     // FRESHNESS verdict expires: replica_stale goes true (fail closed, the posture
-    // _readReplicaStatus and applyReplicaFreshness already take), replica_seconds_behind
+    // readReplicaStatus and applyReplicaFreshness already take), replica_seconds_behind
     // becomes null because it is now unknowable, and status_stale plus measured_age_ms
     // say why. Heights and hashes are deliberately KEPT: they are the diagnostics an
     // operator needs during exactly this outage, and nulling block_height would make a
     // measurement failure indistinguishable from a source at height 0. An undated object
     // (never written by updateStatus) is returned as-is, never demoted on a guess.
     getStatus(chain, network, dbType){
-        let status = this.statusData.get(this._key(chain, network, dbType));
+        let status = this.statusData.get(this.key(chain, network, dbType));
         if(!status || typeof status.measured_at !== 'number') return status || null;
         let maxAge = Number(this.config && this.config['SYNC_STATUS_MAX_AGE_MS']);
         if(!Number.isFinite(maxAge) || maxAge <= 0) maxAge = 180000;
@@ -229,7 +229,7 @@ class BlockBroadcaster {
     // version containing only infrastructure tables (passed in as `infraTables`).
     broadcast(chain, network, event, infraTables){
         let dbType = (event && event.dbType) || 'indexer';
-        let key  = this._key(chain, network, dbType);
+        let key  = this.key(chain, network, dbType);
         let subs = this.subscribers.get(key);
         if(!subs || subs.size === 0) return;
 
@@ -286,16 +286,16 @@ class BlockBroadcaster {
         // Track the highest block height pushed to each subscriber, so /status can
         // report per-subscriber lag against the applied height each one reports back.
         // Only 'block' events advance this cursor (reorgs/status carry no applied
-        // progression). _send may evict a backpressured subscriber, but writing the
+        // progression). send may evict a backpressured subscriber, but writing the
         // field on an already-removed ws is harmless.
         let sentBlock = (event && event.type === 'block' && typeof event.block_index === 'number')
             ? event.block_index : null;
 
         for(let ws of subs){
             if(ws._syncMode === 'infra-only' && infraMessage){
-                this._send(ws, infraMessage, true);
+                this.send(ws, infraMessage, true);
             } else {
-                this._send(ws, fullMessage, true);
+                this.send(ws, fullMessage, true);
             }
             if(sentBlock !== null)
                 ws._syncLastSentBlock = sentBlock;
@@ -312,7 +312,7 @@ class BlockBroadcaster {
     // because it is unknown, not because it is in sync). Clients that never send a
     // heartbeat (legacy builds, third-party validators) stay heartbeatReceived:false.
     getSubscribers(chain, network, dbType){
-        let subs = this.subscribers.get(this._key(chain, network, dbType));
+        let subs = this.subscribers.get(this.key(chain, network, dbType));
         if(!subs) return [];
         let out = [];
         for(let ws of subs){
@@ -341,7 +341,7 @@ class BlockBroadcaster {
 
     broadcastStatus(chain, network, dbType){
         let type = dbType || 'indexer';
-        let key = this._key(chain, network, type);
+        let key = this.key(chain, network, type);
         let status = this.getStatus(chain, network, type);
         if(!status) return;
 
@@ -351,11 +351,11 @@ class BlockBroadcaster {
         let event = { type: 'status', chain, network, dbType: type, ...status };
         let message = JSON.stringify(event, bigIntReplacer);
         for(let ws of subs){
-            this._send(ws, message, true);
+            this.send(ws, message, true);
         }
     }
 
-    _send(ws, message, isPreSerialized){
+    send(ws, message, isPreSerialized){
         if(ws.readyState !== WebSocket.OPEN) return;
 
         let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
@@ -401,7 +401,7 @@ class BlockBroadcaster {
     // Record a named-validator REST heartbeat for a chain/network/dbType.
     // Called by POST /validator-heartbeat in api.js.
     recordValidatorHeartbeat(chain, network, dbType, validatorId, appliedHeight, appliedBlockTime){
-        let key = this._key(chain, network, dbType);
+        let key = this.key(chain, network, dbType);
         if(!this.validatorHeartbeats.has(key))
             this.validatorHeartbeats.set(key, new Map());
         this.validatorHeartbeats.get(key).set(validatorId, {
@@ -436,7 +436,7 @@ class BlockBroadcaster {
     // its first POST) would be completely invisible. With no roster configured, 'absent'
     // entries never appear and expected_total is null.
     getValidatorHeartbeats(chain, network, dbType){
-        let key = this._key(chain, network, dbType);
+        let key = this.key(chain, network, dbType);
         let map = this.validatorHeartbeats.get(key);
 
         let expected      = this.config['EXPECTED_VALIDATORS'] || [];
@@ -527,7 +527,7 @@ class BlockBroadcaster {
 
     getSubscriberCount(chain, network, dbType){
         if(chain && network){
-            let subs = this.subscribers.get(this._key(chain, network, dbType));
+            let subs = this.subscribers.get(this.key(chain, network, dbType));
             return subs ? subs.size : 0;
         }
         let total = 0;

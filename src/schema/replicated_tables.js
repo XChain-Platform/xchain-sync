@@ -48,7 +48,7 @@
  *                                     the remote count is the larger one. Parity rests
  *                                     entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
- *                                     ClientSync._reconcileDispensers, whose cadence is set
+ *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
  *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block

@@ -111,7 +111,7 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // enumerate all BASE tables, DELETE every one not in this set) would wipe both
     // on every full-snapshot apply, including the runtime oversized-incremental
     // recovery fallback on a live replica: erasing halt/forensic history and the
-    // persisted bootstrap/verification posture _persistBootstrapBase wrote. They are
+    // persisted bootstrap/verification posture persistBootstrapBase wrote. They are
     // exactly the node-local control state this exclusion set exists to protect.
     'sync_halt', 'sync_state',
 ]);
@@ -277,7 +277,7 @@ class SnapshotBuilder {
     // short reads like /status). MAX_CONCURRENT_SNAPSHOTS overrides, but is
     // always clamped to [1, poolSize - 1] so no configuration can hand the
     // poller's last connection to a snapshot stampede.
-    _snapshotCap(db){
+    snapshotCap(db){
         let poolSize = (db && db.connectionPoolParams && db.connectionPoolParams.connectionLimit)
             || poolSizing.resolvePoolSize(db && db.dbType);
         let cap = envConfig.maxConcurrentSnapshotsFromEnv();
@@ -291,7 +291,7 @@ class SnapshotBuilder {
     // from the client's retry logic) and returns false.
     acquireSnapshotSlot(db, res){
         let inflight = this._inflightSnapshots.get(db) || 0;
-        if(inflight >= this._snapshotCap(db)){
+        if(inflight >= this.snapshotCap(db)){
             this.snapshotsRejected = (this.snapshotsRejected || 0) + 1;
             res.setHeader('Retry-After', '30');
             res.status(503).json({
@@ -564,7 +564,7 @@ class SnapshotBuilder {
             // ClientApplier.ignoreTables, so it is not INSERT IGNORE). dispensers seeds
             // from the full snapshot and is then held in parity SOLELY by the apply-side
             // reconcile: ClientApplier.applyDispensersReplace via
-            // ClientSync._reconcileDispensers, gated by DISPENSERS_RECONCILE_EVERY /
+            // ClientSync.reconcileDispensers, gated by DISPENSERS_RECONCILE_EVERY /
             // DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
             // (replicatedTables `special`) is a post-replace equality sanity check, not a
             // backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
@@ -919,7 +919,7 @@ class SnapshotBuilder {
             // `block_index >= sinceBlock` data scoping above (over-inclusion is a
             // harmless UPSERT). tokens.escrow_action_index rides along (full-row
             // carry); the follower also re-derives it locally when escrow tables
-            // move (ClientApplier._maybeRederiveEscrow), so the carried value is
+            // move (ClientApplier.maybeRederiveEscrow), so the carried value is
             // convergent, not the gate's only writer.
             await writer.write('}');
             if(dbType === 'indexer'){
@@ -1055,7 +1055,7 @@ class SnapshotBuilder {
     // an insert-only delta cannot replay the UPDATE/DELETE convergence. A truncated
     // replica therefore never seeds it and an incrementally-caught-up replica drifts.
     // This endpoint powers the client's periodic replace-table reconcile
-    // (ClientSync._reconcileDispensers): it serves the FULL current table in ONE
+    // (ClientSync.reconcileDispensers): it serves the FULL current table in ONE
     // response so the client rebuilds it from a single point-in-time image.
     // Decoder-only. Returns {schema_version, max_tx, max_addr, has_more, rows:[...]}.
     //

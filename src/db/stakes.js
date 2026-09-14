@@ -140,7 +140,7 @@ module.exports = {
     // are byte-mirrored to the indexer so the follower's stakes_root set is identical on
     // both sides of the height. Sync reads coin/network from the caller (it has no
     // per-chain config); a null coin/network stays inert (legacy uncapped path).
-    async _applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
+    async applyStakeWeightCap(inner, blockIndex, limit, coin, network, label){
         // Ordering collation for BOTH regimes (stake_weight_collation_activation.js);
         // the legacy LIMIT branch truncates on the same order the capped branch ranks on.
         // A null coin/network stays inert here exactly as it does for the source cap.
@@ -152,7 +152,7 @@ module.exports = {
             let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation);
             // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
             // stakes_root, and the SPV checkpoint forward-follow
-            // (ClientSync._oraclePublishSetAt) reads it with NO transaction open, so a
+            // (ClientSync.oraclePublishSetAt) reads it with NO transaction open, so a
             // swallowed error here would commit an empty stake set over a populated
             // stakes table. Only the execution wrapper changes; the SQL builders stay
             // byte-mirrored to the indexer.
@@ -191,13 +191,13 @@ module.exports = {
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         let sw = this._stakeWeightsSql(valid_id, blockIndex, String(minStake));
-        let { rows } = await this._applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
+        let { rows } = await this.applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
         return rows;
     },
 
     // HISTORICAL stake weights at snapshotBlock S, reconstructing the amount that
     // stakes_root[S] committed IN ORDER, for the SPV checkpoint forward-follow
-    // (ClientSync._oraclePublishSetAt / _followCheckpointForward). getStakeWeightsByCapability
+    // (ClientSync.oraclePublishSetAt / followCheckpointForward). getStakeWeightsByCapability
     // reads live SUM(stakes.amount), but a SLASH zeroes stakes.amount IN PLACE, so a
     // query for a past S run at the current tip understates the weight committed at S
     // (and via HAVING can false-drop a source below the floor -> false-halt on a
@@ -216,7 +216,7 @@ module.exports = {
     // NOT reused/modified here so the drift guard and the consensus query stay untouched.
     async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit, coin, network){
         // rethrow for the same M-17 reason, and this is the caller that runs with NO
-        // transaction open (ClientSync._oraclePublishSetAt).
+        // transaction open (ClientSync.oraclePublishSetAt).
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         // Membership exclusion is identical to _stakeWeightsSql: a key slashed at
@@ -278,7 +278,7 @@ module.exports = {
                     valid_id, snapshotBlock, snapshotBlock, String(minStake),
                     valid_id, snapshotBlock, snapshotBlock, valid_id, snapshotBlock, snapshotBlock,
                     valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
-        let { rows } = await this._applyStakeWeightCap({ sql, args }, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
+        let { rows } = await this.applyStakeWeightCap({ sql, args }, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
         return rows;
     },
 

@@ -31,7 +31,7 @@ function createMockDb() {
         getBlockHashRow: sinon.stub().resolves(null),
         getLastBlock: sinon.stub().resolves(null),
         getFirstActionIndex: sinon.stub().resolves(null),
-        // ClientRollback._rollbackIndexer resolves the 'completed'/'valid' status ids
+        // ClientRollback.rollbackIndexer resolves the 'completed'/'valid' status ids
         // (for cooldown-credit + status-scoped rebuilds) via getStatusId; a stable
         // integer is enough here since the follow-on doQuery results are stubbed.
         getStatusId: sinon.stub().resolves(1),

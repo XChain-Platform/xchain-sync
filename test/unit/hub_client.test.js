@@ -195,21 +195,21 @@ describe('HubClient', function(){
         });
     });
 
-    describe('_call multi-endpoint fallback', function(){
+    describe('call multi-endpoint fallback', function(){
         it('falls back to the next endpoint and stickies the good one', async function(){
             let h = new HubClient(['http://bad:1', 'http://good:2']);
             let stub = sinon.stub(axios, 'post');
             stub.withArgs('http://bad:1').rejects({ code: 'ECONNREFUSED' });
             stub.withArgs('http://good:2').resolves({ data: { result: 'ok' } });
 
-            let r = await h._call({});
+            let r = await h.call({});
             assert.strictEqual(r, 'ok');
             assert.strictEqual(h._lastGoodIdx, 1);
             assert.deepStrictEqual(h.lastFailures, ['http://bad:1 → ECONNREFUSED']);
 
             // Next call starts at the sticky good endpoint.
             stub.resetHistory();
-            await h._call({});
+            await h.call({});
             assert.strictEqual(stub.firstCall.args[0], 'http://good:2');
         });
 
@@ -217,7 +217,7 @@ describe('HubClient', function(){
             let h = new HubClient(['http://a:1', 'http://b:2']);
             let stub = sinon.stub(axios, 'post');
             stub.rejects(new Error('down'));
-            let r = await h._call({});
+            let r = await h.call({});
             assert.strictEqual(r, null);
             assert.strictEqual(h.lastFailures.length, 2);
         });
@@ -434,7 +434,7 @@ describe('HubClient', function(){
 
     // The hub redacts secret-bearing config params (rpc/DB passwords) unless the
     // caller asks with include_secrets. Sync is one of only two services that
-    // genuinely needs them: _extractDbConfigs turns this tree into the
+    // genuinely needs them: extractDbConfigs turns this tree into the
     // replication sources' db_user/db_pass, so a redacted response points every
     // source at a password of "[redacted]".
     describe('credential tier', function(){

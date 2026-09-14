@@ -412,11 +412,11 @@ describe('Advisory table-content parity', function(){
     describe('wiring', function(){
 
         const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/client/sync.js'), 'utf8');
-        const body = src.slice(src.indexOf('async _verifyTableContentParity('),
-                               src.indexOf('async _recordTableContentMismatch('));
+        const body = src.slice(src.indexOf('async verifyTableContentParity('),
+                               src.indexOf('async recordTableContentMismatch('));
 
         it('case 7: the advisory check never halts', function(){
-            assert.ok(body.length > 200, '_verifyTableContentParity body not found; update this guard');
+            assert.ok(body.length > 200, 'verifyTableContentParity body not found; update this guard');
             assert.ok(!/haltOnDivergence|this\.halted\s*=/.test(body),
                 'table-content parity is advisory: it must never halt a follower');
         });
@@ -436,7 +436,7 @@ describe('Advisory table-content parity', function(){
             let start = src.indexOf('async verifyDecoderCompleteness(');
             assert.ok(start !== -1, 'verifyDecoderCompleteness not found; update this guard');
             const decoderBody = src.slice(start, src.indexOf('\n    async ', start + 10));
-            assert.ok(/_verifyTableContentParity\(/.test(decoderBody),
+            assert.ok(/verifyTableContentParity\(/.test(decoderBody),
                 'the decoder DB has no ledger/actions/contract hash, so this is its only content signal');
         });
 

@@ -184,7 +184,7 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             await fixtures.seedBlocks(sourceDb, 6, 8);
             btcPoller.lastPolledBlock = 5;
-            await btcPoller._poll();
+            await btcPoller.poll();
 
             // Wait on the delivery this test is about, not on a fixed window.
             await waitFor(() => btcMessages.filter(m => m.type === 'block').length >= 3, 10000);
@@ -235,7 +235,7 @@ describe('E2E: Multi-Chain Synchronization', function() {
 
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             btcPoller.lastPolledBlock = 10;
-            await btcPoller._poll();
+            await btcPoller.poll();
 
             await waitFor(() => btcMessages.filter(m => m.type === 'reorg').length >= 1, 10000);
 

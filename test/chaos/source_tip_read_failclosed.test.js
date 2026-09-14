@@ -20,10 +20,10 @@
  * experiment runs against the e2e harness database, whose doQuery throws on
  * every error, so it cannot see how production's src/db.js answers the same
  * fault: there, a non-transactional query error is logged and collapsed into
- * [], which ServerPoller._poll would read as "no blocks yet" and skip - an
+ * [], which ServerPoller.poll would read as "no blocks yet" and skip - an
  * unreachable source and an idle chain producing the identical, silent result.
  *
- * These cases drive _poll against a database stub that reproduces db.js's
+ * These cases drive poll against a database stub that reproduces db.js's
  * fail-soft/fail-closed contract exactly, so the poller's own choice of read is
  * what is under test. No Toxiproxy, no MariaDB, no compose stack: it lives
  * beside the experiment whose claim it completes.
@@ -78,13 +78,13 @@ function makePoller(db){
 
 describe('Chaos: source cursor read fails closed', function () {
 
-    it('a source-DB outage surfaces out of _poll instead of reading as an idle chain', async function () {
+    it('a source-DB outage surfaces out of poll instead of reading as an idle chain', async function () {
         let db = makeSourceDb({ queryFails: true });
         let { poller } = makePoller(db);
         poller.lastPolledBlock = 20;
 
         let error = null;
-        try { await poller._poll(); } catch (e) { error = e; }
+        try { await poller.poll(); } catch (e) { error = e; }
 
         expect(error, 'the outage must propagate so the poll loop can count it').to.be.an('Error');
         expect(error.message).to.contain('ECONNREFUSED');
@@ -99,7 +99,7 @@ describe('Chaos: source cursor read fails closed', function () {
         poller.lastPolledBlock = null;
 
         let error = null;
-        try { await poller._poll(); } catch (e) { error = e; }
+        try { await poller.poll(); } catch (e) { error = e; }
 
         expect(error, 'a first poll against a dead source must fail, not adopt a cursor').to.be.an('Error');
         expect(poller.lastPolledBlock).to.equal(null);
@@ -112,7 +112,7 @@ describe('Chaos: source cursor read fails closed', function () {
         let { poller, broadcaster } = makePoller(db);
         poller.lastPolledBlock = null;
 
-        await poller._poll();
+        await poller.poll();
 
         expect(poller.lastPolledBlock).to.equal(null);
         expect(broadcaster.broadcastCalls).to.equal(0);

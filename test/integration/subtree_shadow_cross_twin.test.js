@@ -67,7 +67,7 @@ describe('Integration: SPV sub-tree shadow columns, cross-twin replication timin
         sourceDb  = setup.getSourceDb();
         replicaDb = setup.getReplicaDb();
 
-        // A poller needs a broadcaster and a transparency log only for _poll; the
+        // A poller needs a broadcaster and a transparency log only for poll; the
         // payload build reads the database, so stubs keep this test to one moving part.
         const broadcaster = { broadcast(){}, addSubscription(){} };
         const log = { recordBlock: async () => {} };

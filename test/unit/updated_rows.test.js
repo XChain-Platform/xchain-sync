@@ -257,8 +257,8 @@ describe('ClientApplier in-place updated-rows apply', function(){
     });
     afterEach(() => sinon.restore());
 
-    it('_upsertRows emits INSERT ... ON DUPLICATE KEY UPDATE writing every column', async function(){
-        await applier._upsertRows('stakes', [{ action_index: 3, deactivation_block: 50 }]);
+    it('upsertRows emits INSERT ... ON DUPLICATE KEY UPDATE writing every column', async function(){
+        await applier.upsertRows('stakes', [{ action_index: 3, deactivation_block: 50 }]);
         let q = db.calls.find(c => c.sql.indexOf('ON DUPLICATE KEY UPDATE') !== -1);
         assert.ok(q, 'expected an upsert query');
         assert.ok(q.sql.indexOf('INSERT INTO `stakes`') === 0);
@@ -266,8 +266,8 @@ describe('ClientApplier in-place updated-rows apply', function(){
         assert.ok(q.sql.indexOf('`action_index` = VALUES(`action_index`)') !== -1);
     });
 
-    it('_upsertRows throws on an invalid table identifier without querying (fail closed)', async function(){
-        await assert.rejects(() => applier._upsertRows('stakes; DROP TABLE x', [{ action_index: 1 }]), /Rejected table name/);
+    it('upsertRows throws on an invalid table identifier without querying (fail closed)', async function(){
+        await assert.rejects(() => applier.upsertRows('stakes; DROP TABLE x', [{ action_index: 1 }]), /Rejected table name/);
         assert.strictEqual(db.calls.length, 0);
     });
 
@@ -283,15 +283,15 @@ describe('ClientApplier in-place updated-rows apply', function(){
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
 
-    it('_maybeRederiveEscrow runs the escrow re-derive only when an escrow-relevant table is present', async function(){
+    it('maybeRederiveEscrow runs the escrow re-derive only when an escrow-relevant table is present', async function(){
         // The re-derive's first query is the affected-tickers SELECT (escrow_action_index
         // IS NOT NULL ...). Observe it directly rather than stubbing the captured fn ref.
         let isEscrowQuery = (c) => c.sql.indexOf('escrow_action_index IS NOT NULL') !== -1;
 
-        await applier._maybeRederiveEscrow({ sends: [{}] });          // not escrow-relevant
+        await applier.maybeRederiveEscrow({ sends: [{}] });          // not escrow-relevant
         assert.strictEqual(db.calls.some(isEscrowQuery), false);
 
-        await applier._maybeRederiveEscrow({ order_statuses: [{}] }); // escrow-relevant
+        await applier.maybeRederiveEscrow({ order_statuses: [{}] }); // escrow-relevant
         assert.strictEqual(db.calls.some(isEscrowQuery), true);
     });
 });

@@ -230,7 +230,7 @@ describe('Smoke: Server Mode', function() {
     // Scenario 4: Basic poll cycle
     it('poll cycle completes without error', async function() {
         poller.lastPolledBlock = 0;
-        await poller._poll();
+        await poller.poll();
         assert.ok(poller.lastPolledBlock >= 1);
     });
 

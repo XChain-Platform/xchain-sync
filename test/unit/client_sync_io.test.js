@@ -11,8 +11,8 @@
 // ClientSync IO/branch coverage. NEW tests only.
 // Covers fetchAndApplySchema, bootstrapFromSnapshot, runIncrementalCatchUp,
 // incrementalCatchUp, verifyAgainstSource, verifyDecoderCompleteness (catch),
-// connectWebSocket/_scheduleReconnect, stop, _scheduleHeartbeat/flushHeartbeat/
-// _sendRestHeartbeat, and several small branches.
+// connectWebSocket/scheduleReconnect, stop, scheduleHeartbeat/flushHeartbeat/
+// sendRestHeartbeat, and several small branches.
 
 const assert     = require('assert');
 const sinon      = require('sinon');
@@ -1507,29 +1507,29 @@ describe('ClientSync: heartbeat', function(){
         clock.restore();
     });
 
-    it('_scheduleHeartbeat flushes immediately when _hbLastSentBlock is null', function(){
+    it('scheduleHeartbeat flushes immediately when _hbLastSentBlock is null', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock  = 10;
         sync._hbLastSentBlock  = null;
         sinon.stub(sync, 'flushHeartbeat');
 
-        sync._scheduleHeartbeat();
+        sync.scheduleHeartbeat();
 
         assert.ok(sync.flushHeartbeat.calledOnce, 'must flush immediately on first heartbeat');
     });
 
-    it('_scheduleHeartbeat flushes immediately when >= 10 blocks advanced', function(){
+    it('scheduleHeartbeat flushes immediately when >= 10 blocks advanced', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock = 110;
         sync._hbLastSentBlock = 100; // delta = 10
         sinon.stub(sync, 'flushHeartbeat');
 
-        sync._scheduleHeartbeat();
+        sync.scheduleHeartbeat();
 
         assert.ok(sync.flushHeartbeat.calledOnce);
     });
 
-    it('_scheduleHeartbeat arms a 5s timer when delta < 10 and no timer running', function(){
+    it('scheduleHeartbeat arms a 5s timer when delta < 10 and no timer running', function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.lastAppliedBlock = 105;
         sync._hbLastSentBlock = 100; // delta = 5
@@ -1537,7 +1537,7 @@ describe('ClientSync: heartbeat', function(){
         let clock = sinon.useFakeTimers();
         sinon.stub(sync, 'flushHeartbeat');
 
-        sync._scheduleHeartbeat();
+        sync.scheduleHeartbeat();
 
         assert.strictEqual(sync.flushHeartbeat.called, false, 'must not flush immediately');
         assert.notStrictEqual(sync._hbTimer, null, 'timer must be set');
@@ -1548,12 +1548,12 @@ describe('ClientSync: heartbeat', function(){
         clock.restore();
     });
 
-    it('_sendRestHeartbeat posts to correct URL with Bearer header when the upstream key is set', async function(){
+    it('sendRestHeartbeat posts to correct URL with Bearer header when the upstream key is set', async function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_UPSTREAM_KEY: 'upkey' }));
         sync.lastAppliedBlock = 99;
         let postStub = sinon.stub(axios, 'post').resolves();
 
-        await sync._sendRestHeartbeat('http://src1:3006');
+        await sync.sendRestHeartbeat('http://src1:3006');
 
         assert.ok(postStub.calledOnce);
         let [url, body, opts] = postStub.firstCall.args;
@@ -1561,12 +1561,12 @@ describe('ClientSync: heartbeat', function(){
         assert.strictEqual(opts.headers['Authorization'], 'Bearer upkey');
     });
 
-    it('_sendRestHeartbeat omits Authorization header when no upstream key', async function(){
+    it('sendRestHeartbeat omits Authorization header when no upstream key', async function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
         sync.config['SYNC_UPSTREAM_KEY'] = '';
         let postStub = sinon.stub(axios, 'post').resolves();
 
-        await sync._sendRestHeartbeat('http://src1:3006');
+        await sync.sendRestHeartbeat('http://src1:3006');
 
         let [, , opts] = postStub.firstCall.args;
         assert.ok(!opts.headers['Authorization'], 'no Authorization header when no upstream key');
@@ -1574,23 +1574,23 @@ describe('ClientSync: heartbeat', function(){
 
     // The split this pair exists to hold: SYNC_API_KEY guards this process's OWN api,
     // so leaking it upstream is what forced every client onto the server's value.
-    it('_sendRestHeartbeat does NOT send the inbound SYNC_API_KEY upstream', async function(){
+    it('sendRestHeartbeat does NOT send the inbound SYNC_API_KEY upstream', async function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_API_KEY: 'inbound-only' }));
         let postStub = sinon.stub(axios, 'post').resolves();
 
-        await sync._sendRestHeartbeat('http://src1:3006');
+        await sync.sendRestHeartbeat('http://src1:3006');
 
         let [, , opts] = postStub.firstCall.args;
         assert.ok(!opts.headers['Authorization'],
             'the inbound guard key must never be presented to a source server');
     });
 
-    it('_upstreamHeaders carries the upstream key to snapshot reads, not just heartbeats', async function(){
+    it('upstreamHeaders carries the upstream key to snapshot reads, not just heartbeats', async function(){
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006', SYNC_UPSTREAM_KEY: 'upkey' }));
-        assert.strictEqual(sync._upstreamHeaders()['Authorization'], 'Bearer upkey');
+        assert.strictEqual(sync.upstreamHeaders()['Authorization'], 'Bearer upkey');
 
         ({ sync, db } = makeSync({ SYNC_SOURCES: 'http://src1:3006' }));
-        assert.deepStrictEqual(sync._upstreamHeaders(), {},
+        assert.deepStrictEqual(sync.upstreamHeaders(), {},
             'no header at all when the source tier is keyless');
     });
 });
@@ -1671,7 +1671,7 @@ describe('ClientSync: connectWebSocket', function(){
         }
     });
 
-    it('triggers _scheduleReconnect when WS constructor throws', function(){
+    it('triggers scheduleReconnect when WS constructor throws', function(){
         // Make FakeWS throw on construction
         let ThrowWS = function(){ throw new Error('ws construct fail'); };
         ThrowWS.OPEN = 1;
@@ -1685,7 +1685,7 @@ describe('ClientSync: connectWebSocket', function(){
             SNAPSHOT_MAX_CONTENT: 200*1024*1024, GAP_LOG_INTERVAL_MS: 30000
         };
         let syncT = new CSThrow('bitcoin', 'mainnet', db, applier, rb, hv, config, util);
-        syncT.running = false; // _scheduleReconnect no-ops when not running
+        syncT.running = false; // scheduleReconnect no-ops when not running
 
         // Should not throw
         syncT.connectWebSocket('http://src1:3006', 0);
@@ -1788,7 +1788,7 @@ describe('ClientSync: connectWebSocket', function(){
         assert.ok(errCalls.some(m => m && m.indexOf('Error handling WebSocket message') !== -1));
     });
 
-    it('close handler: calls _scheduleReconnect', function(){
+    it('close handler: calls scheduleReconnect', function(){
         let { sync } = makeSyncWS();
         sync.running = false; // prevent actual reconnect timer
 
@@ -1809,27 +1809,27 @@ describe('ClientSync: connectWebSocket', function(){
         assert.ok(errCalls.some(m => m && m.indexOf('WebSocket error') !== -1));
     });
 
-    it('_scheduleReconnect: no-op when running=false', function(){
+    it('scheduleReconnect: no-op when running=false', function(){
         let { sync } = makeSyncWS();
         sync.running = false;
         let clock = sinon.useFakeTimers();
         sinon.stub(sync, 'connectWebSocket');
 
-        sync._scheduleReconnect('http://src1:3006', 0);
+        sync.scheduleReconnect('http://src1:3006', 0);
         clock.tick(10000);
 
         assert.strictEqual(sync.connectWebSocket.called, false);
         clock.restore();
     });
 
-    it('_scheduleReconnect: reconnects after CLIENT_RECONNECT_DELAY when running=true', function(){
+    it('scheduleReconnect: reconnects after CLIENT_RECONNECT_DELAY when running=true', function(){
         let { sync } = makeSyncWS({ CLIENT_RECONNECT_DELAY: 100 });
         sync.running = true;
         let clock = sinon.useFakeTimers();
 
         sinon.stub(sync, 'connectWebSocket');
         // Only the schedule, not the one registered in constructor
-        sync._scheduleReconnect('http://src1:3006', 0);
+        sync.scheduleReconnect('http://src1:3006', 0);
         assert.strictEqual(sync.connectWebSocket.called, false);
 
         clock.tick(101);
@@ -1929,10 +1929,10 @@ describe('ClientSync: misc branch coverage', function(){
         assert.strictEqual(result, null);
     });
 
-    it('_safeParse: returns raw string when JSON.parse fails', function(){
+    it('safeParse: returns raw string when JSON.parse fails', function(){
         ({ sync, db } = makeSync());
 
-        let result = sync._safeParse('not-valid-json{{{');
+        let result = sync.safeParse('not-valid-json{{{');
 
         assert.strictEqual(result, 'not-valid-json{{{');
     });
