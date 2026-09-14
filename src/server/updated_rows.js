@@ -315,11 +315,11 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     //    reverse 'unverified' reset predicate. Table may not exist on schemas without
     //    ANCHOR support.
     //    HEIGHT KEY: `block_index_doge` (shared ARCHIVE_CHUNK_HEIGHT_COL), the DOGE
-    //    block the completing chunk landed in. This class used to key on
-    //    `c.block_index`, which a v2 continuation row NEVER populates (it carries the
-    //    CHECKPOINTED height and only anchor.js `_parseCheckpoint` assigns it), so
-    //    `NULL BETWEEN from AND to` was never true and the class shipped ZERO rows: a
-    //    follower never received the stamped parent at all. UN-GATED, unlike the
+    //    block the completing chunk landed in. Keying this class on
+    //    `c.block_index` fails: a v2 continuation row NEVER populates it (it carries the
+    //    CHECKPOINTED height and only anchor/index.js `parseCheckpoint` assigns it), so
+    //    `NULL BETWEEN from AND to` is never true and the class ships ZERO rows: a
+    //    follower never receives the stamped parent at all. UN-GATED, unlike the
     //    state-hash twin of this class: shipping the row is not a hash preimage, and
     //    this fix must be live BEFORE the state-hash flag day or the follower halts on
     //    a parent row it was never sent.
@@ -340,7 +340,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     // 5b. ATTEST batch-head verdict flip, the same shape as class 5 one rail over. When the
     //     v6 continuation that completes a batch's slot coverage lands in this window and the
     //     reassembly or the batch quorum fails, the indexer stamps the FAILURE on the v5 HEAD
-    //     in place (db.setAttestBatchStatus, called from actions/attest.js _absorbCompletedBatch).
+    //     in place (db.setAttestBatchStatus, called from actions/attest/index.js absorbCompletedBatch).
     //     Chunking spans blocks by design, so the head's action_index is below the window and
     //     the action-scoped stream carries the completing chunk row but not the head's flipped
     //     status: every replica kept the head's PRE-FLIP verdict (still 'valid'), served a batch
@@ -361,7 +361,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     //     over the window it names, so anyone can mint wires under another publisher's key,
     //     and (key, author) has been the batch's identity since the rail shipped. An
     //     unresolvable author on either side is a NULL that no equality matches, so it
-    //     authenticates nothing rather than everything (fail closed), matching _authoredBy.
+    //     authenticates nothing rather than everything (fail closed), matching authoredBy.
     //
     //     Aliases are ah/ac (head, chunk) rather than class 5's p/c: the anchor class's
     //     regression guard is a file-wide regex over this source that forbids the literal

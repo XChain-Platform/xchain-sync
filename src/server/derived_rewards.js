@@ -36,7 +36,7 @@
  * re-injection across the live + snapshot channels is idempotent). Indexer dbType only.
  *
  * Coverage boundary: only writers that stamp derive_block_index ride this channel. The
- * pre-flag-day writers (actions/anchor.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
+ * pre-flag-day writers (actions/anchor/index.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
  * push) backdate block_index and leave derive_block_index NULL; their rows remain
  * reachable by a snapshot whose window spans the earn-block only, and their shortfall
  * surfaces through ClientSync.verifyTableCounts.

@@ -16,7 +16,7 @@
 // the CREATE TABLE into a bogus standalone query and silently fails schema
 // creation. This is the exact bug xchain-indexer hit ("attests.sql's header
 // split its comment, crash-looping the indexer"); keep this in sync with
-// xchain-indexer/src/db.js#stripSqlLineComments.
+// xchain-indexer/src/db/index.js#stripSqlLineComments.
 // Remove `--` line comments while respecting quoted strings/identifiers, so a
 // ';' inside a comment never reaches the statement splitter.
 function stripSqlLineComments(sql){

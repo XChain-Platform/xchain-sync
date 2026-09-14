@@ -739,7 +739,7 @@ class Database {
 
     // Fail-closed schema contract for the columns the stake-weight snapshot ORDERS on
     // (stake_weight_collation_activation.js). Twin of xchain-indexer's
-    // _assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
+    // assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
     // declared contract so the two services cannot disagree about what "undrifted"
     // means. The follower rebuilds stakes_root from the byte-mirrored
     // _cappedStakeWeightsSql; its window caps truncate on this order, so a drifted

@@ -38,7 +38,7 @@ const INDEXER_PRESENT = fs.existsSync(INDEXER_MODULE);
 let indexerRoles = null;
 let indexerCanonicalize = null;
 if (INDEXER_PRESENT) {
-    // The indexer module derives its map from xchain-indexer/src/configs/*.js at
+    // The indexer module derives its map from xchain-indexer/src/coins/*.js at
     // require time, so this loads the source-of-truth exactly as the indexer runs it.
     const mod = require(INDEXER_MODULE);
     indexerRoles = mod.ROLE_BY_ADDRESS;

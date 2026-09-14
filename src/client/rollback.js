@@ -40,7 +40,7 @@ const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
 // What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
 // rather than a token: the coin has no index_tickers row, and NULL is distinct inside
 // a UNIQUE index, so the pair would lose its one-row-per-market key. Twin of
-// Database.MARKET_NATIVE_TICK_ID in xchain-indexer/src/db.js; the replica cannot
+// Database.MARKET_NATIVE_TICK_ID in xchain-indexer/src/db/index.js; the replica cannot
 // require indexer code, so the value is restated rather than imported.
 const MARKET_NATIVE_TICK_ID = 0;
 
@@ -104,7 +104,7 @@ class ClientRollback {
         // purely local artifacts that no longer feed any consensus value: under the
         // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
         // (address/tick/action/status), not from address_id/tick_id/etc. (see
-        // xchain-indexer/src/db.js getBlockHashes + xchain-sync/src/BlockHasher.js). If a
+        // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/BlockHasher.js). If a
         // lookup id is ever reintroduced into a consensus-visible projection, these orphan
         // rows would silently fork hashes after a reorg and this skip would become a bug.
 

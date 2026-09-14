@@ -199,7 +199,7 @@ class ClientApplier {
         // migration 2026-08-19-attest-validator-stats-surrogate-id, which states the id
         // is node-local ("NOT consensus-visible ... Nothing reads or signs over the id")
         // and that the source reassigns ids wholesale on reorg
-        // (Rollback._recomputeAttestationValidatorStats). The replica mints its own
+        // (Rollback.recomputeAttestationValidatorStats). The replica mints its own
         // instead: sync runs no migrations, so an aged replica takes the column through
         // db.addMissingColumns + autoIncrementKeyAction, which lets the engine backfill
         // the sequence in LOCAL row order. The two id spaces then disagree, and because

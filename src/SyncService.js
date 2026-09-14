@@ -290,7 +290,7 @@ class SyncService {
                 // halts on a root it computed wrong. Runs AFTER the schema self-heal
                 // above, so a replica that was going to be repaired is judged on its
                 // repaired state. Twin of xchain-indexer's
-                // _assertStakeWeightOrderingCollation.
+                // assertStakeWeightOrderingCollation.
                 await db.assertStakeWeightOrderingCollation();
             } else {
                 // Server mode: connect to the DB this server polls + serves.

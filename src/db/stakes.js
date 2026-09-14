@@ -134,7 +134,7 @@ module.exports = {
 
     // Apply the cap regime in force for `coin`/`network` at `blockIndex` to an inner
     // source-keyed stake-weight builder, returning { rows:[{pubkey,source,weight}],
-    // truncated }. Twin of the indexer's _stakeWeightsWithCap gate: at/after
+    // truncated }. Twin of the indexer's stakeWeightsWithCap gate: at/after
     // SWQ_SOURCE_CAP_ACTIVATION the windowed source-cap (_cappedStakeWeightsSql);
     // below it the legacy uncapped key-row LIMIT. The gate + caps + _cappedStakeWeightsSql
     // are byte-mirrored to the indexer so the follower's stakes_root set is identical on

@@ -25,7 +25,7 @@
  * subsumes the other.)
  *
  * !!! CONSENSUS CONFORMANCE PAIR !!!
- * This is a byte-for-byte port of xchain-indexer/src/db.js getBlockHashes()
+ * This is a byte-for-byte port of xchain-indexer/src/db/actions.js getBlockHashes()
  * (+ utility.js getDataHash, reused here via the same conformance copy in
  * xchain-sync/src/utility.js). The two MUST stay identical: same SELECT
  * column sets, same ORDER BY, same object key-insertion order, the same
@@ -38,7 +38,7 @@
  ********************************************************************/
 
 // Consensus block-hash scheme version. MUST stay identical to
-// xchain-indexer/src/db.js BLOCK_HASH_VERSION; see the conformance-pair banner above.
+// xchain-indexer/src/db/shared.js BLOCK_HASH_VERSION; see the conformance-pair banner above.
 // The scheme hashes the resolved canonical strings (address/tick/action/status) rather
 // than raw AUTO_INCREMENT lookup ids (which diverge across nodes after a reorg); it is
 // id-independent. This resolved-string scheme is the only one that has shipped: version 1.
@@ -73,7 +73,7 @@ class BlockHasher {
     }
 
     // Recompute { ledger_hash, actions_hash, contract_hash } for a block from the
-    // replicated raw rows. Mirrors xchain-indexer/src/db.js getBlockHashes().
+    // replicated raw rows. Mirrors xchain-indexer/src/db/actions.js getBlockHashes().
     // `network`/`coin` drive the state_key collation flag-day
     // (state_key_collation_activation.js, byte-identical twin of the indexer's);
     // omitted -> legacy folding collation, matching pre-activation blocks. Live
@@ -136,7 +136,7 @@ class BlockHasher {
         ledger.escrows = await this.db.doQuery(query, [block_index]);
         // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
         // to their chain-independent role token, byte-for-byte mirror of
-        // xchain-indexer/src/db.js getBlockHashes. A per-chain special address (e.g. an
+        // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
         // issuance fee credited to DONATE1) would otherwise leak the chain's address
         // encoding into the hash, so the replica's recomputed hash must apply the same
         // substitution to match the source. See protocolAddressRoles.js.
@@ -173,7 +173,7 @@ class BlockHasher {
         contracts_data.contracts = await this.db.doQuery(query, [block_index]);
         // contract state (latest value per key written in this block).
         // state_key collation is flag-day gated, byte-for-byte mirror of
-        // xchain-indexer/src/db.js getBlockHashes(): legacy folding
+        // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
         // (utf8_general_ci) below the activation height, COLLATE utf8_bin
         // pinned at/after it (see state_key_collation_activation.js).
         let stateKeyBin = isStateKeyBinCollationActive(block_index, network, coin);
@@ -267,7 +267,7 @@ class BlockHasher {
     // Recompute the replication-integrity state_hash for a block from the replicated
     // raw rows (the fourth hash covering the in-place mutations + backdated refund
     // credits the three consensus hashes structurally cannot see (see stateHash.js).
-    // Conformance twin of xchain-indexer/src/db.js getBlockHashes' state_hash branch:
+    // Conformance twin of xchain-indexer/src/db/actions.js getBlockHashes' state_hash branch:
     // both call the byte-identical buildStateHashData + the shared getDataHash. The
     // caller MUST invoke this APPLY-TIME (tip = block_index), never via a historical
     // recompute, where the in-place-mutated rows have since moved on (see ClientSync).
@@ -298,7 +298,7 @@ class BlockHasher {
     // rows whose id was assigned inside a consensus block tx (block_index IS NOT NULL),
     // up to and including uptoBlock. Rows assigned outside a block tx carry a NULL
     // block_index (recovery reward-source pre-seed, API read-path createAddress; see
-    // xchain-indexer/src/db.js createAddress) and are EXCLUDED, so the benign id drift
+    // xchain-indexer/src/db/index_tables.js createAddress) and are EXCLUDED, so the benign id drift
     // those paths legitimately produce never registers as a mismatch.
     //
     // Purpose: the source resolves a wire ^<id> address reference to its canonical

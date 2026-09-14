@@ -457,7 +457,7 @@ describe('Rollback coverage guard @regression', function(){
     // liveness half). At/after SWQ_SOURCE_CAP_ACTIVATION this replaces the raw key-row
     // LIMIT and feeds the hashed stakes_root, so it MUST stay byte-identical to the
     // xchain-indexer twin or the follower's stakes_root diverges above the height. The
-    // per-repo JS gate wrappers (_stakeWeightsWithCap / applyStakeWeightCap) differ by
+    // per-repo JS gate wrappers (stakeWeightsWithCap / applyStakeWeightCap) differ by
     // design - the indexer reads network/coin from this.config, sync from params - but
     // both call THIS builder + the shared swq_source_cap_activation.js caps, which are
     // the consensus-relevant surface. If you edit one _cappedStakeWeightsSql, edit both.
@@ -1249,7 +1249,7 @@ describe('Rollback coverage guard @regression', function(){
 
     // F-2: anchor CRC-failure fixture (value, not regex). When the final v2 chunk of a
     // chunked archive batch lands in the window and the reassembled blob fails its CRC
-    // check, anchor.js stamps the v1 parent 'invalid_archive' IN PLACE (a surviving row
+    // check, anchor/index.js stamps the v1 parent 'invalid_archive' IN PLACE (a surviving row
     // in an earlier block). collectUpdatedRows must return that parent by value so the
     // follower upserts the updated status_id. buildStateHashData must include it in the
     // anchor_invalid preimage class so a follower that silently drops the upsert halts.

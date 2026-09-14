@@ -311,7 +311,7 @@ class HubClient {
     // never applied (sync derives them from the vendored src/coins bundle), so this
     // only logs; what it buys is that a hub built from a divergent bundle surfaces at
     // the first poll instead of later as an opaque local-recompute divergence.
-    // Mirrors XChainIndexer._checkHubConsensusHash, widened to every coin and network
+    // Mirrors XChainIndexer.checkHubConsensusHash, widened to every coin and network
     // because sync serves whatever chain set the hub hands it.
     checkHubConsensusHash(hubHashes){
         if(!hubHashes || typeof hubHashes !== 'object') return;   // older hub: field absent
