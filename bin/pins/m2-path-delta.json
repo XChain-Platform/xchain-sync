@@ -10,7 +10,7 @@
   "src/ServerPoller.js": "src/server/poller.js",
   "src/SnapshotBuilder.js": "src/server/snapshot_builder.js",
   "src/TransparencyLog.js": "src/server/transparency_log.js",
-  "src/balance-helpers.js": "src/client/balance_helpers.js",
+  "src/balance-helpers.js": "src/db/balance_helpers.js",
   "src/cooldownCredits.js": "src/server/cooldown_credits.js",
   "src/corsOrigin.js": "src/http/cors_origin.js",
   "src/db.js": "src/db/index.js",
