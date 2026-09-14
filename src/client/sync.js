@@ -133,7 +133,7 @@ class ClientSync {
         // weakening gates the repo declares UNSAFE to turn off (operator decision
         // 2026-06-12): the all-gates-off posture stays an explicit operator choice.
         let modeKey    = 'SYNC_MODE_' + String(this.chain).toUpperCase();
-        this._syncMode = process.env[modeKey] || this.config[modeKey] || 'full';
+        this._syncMode = envConfig.envValueByName(modeKey) || this.config[modeKey] || 'full';
         if(this.dbType === 'indexer' && this._syncMode === 'infra-only'){
             let haltingGates = [];
             if(this.config['VERIFY_RECOMPUTE'])                  haltingGates.push('VERIFY_RECOMPUTE');
@@ -2358,7 +2358,7 @@ class ClientSync {
     // every sweep or never).
     numericSetting(key, fallback, min){
         let raw = (this.config && this.config[key] != null && this.config[key] !== '')
-            ? this.config[key] : process.env[key];
+            ? this.config[key] : envConfig.envValueByName(key);
         let n = Number(raw);
         if(!Number.isFinite(n)) n = fallback;
         if(min != null && n < min) n = min;

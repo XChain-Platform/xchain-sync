@@ -163,10 +163,17 @@ module.exports = {
     /** The replication connection to measure replica lag on, empty when unset. */
     replicaConnectionFromEnv: () => process.env.SYNC_REPLICA_CONNECTION,
 
-    /** One variable whose NAME the caller computes (SYNC_MODE_<CHAIN>, a pinned-validator override). */
+    /**
+     * One variable whose NAME the caller computes (a per-chain key such as
+     * SYNC_MODE_<CHAIN> or a pinned-validator override), read when called, so a
+     * variable set after boot is still seen. undefined when unset.
+     */
     envValueByName: (name) => process.env[name],
 
-    /** The live environment, for a caller that also accepts an injected one in tests. */
+    /**
+     * The live environment object, for a resolver or startup scanner that also
+     * accepts an injected environment in tests and falls back to this one.
+     */
     envSource: () => process.env,
 
     bootstrapDepthKey,
