@@ -20,33 +20,39 @@ const { assertBlockExists } = require('./helpers/assertions');
 
 const SERVER_PORT_1 = 29500;
 const SERVER_PORT_2 = 29501;
+let sourceDb, replicaDb, server1, server2, client;
+
+async function setupCrossSource() {
+    await setup.globalSetup();
+    sourceDb  = setup.getSourceDb();
+    replicaDb = setup.getReplicaDb();
+
+    if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
+}
+
+async function teardownCrossSource() {
+    sinon.restore();
+    if (client)  client.stop();
+    if (server1) await server1.stop();
+    if (server2) await server2.stop();
+    client = null;
+    server1 = null;
+    server2 = null;
+    await setup.globalTeardown();
+}
+
+async function resetCrossSource() {
+    if (client)  { client.stop(); client = null; }
+    if (server1) { await server1.stop(); server1 = null; }
+    if (server2) { await server2.stop(); server2 = null; }
+    await setup.resetDatabases();
+}
 
 describe('E2E: Cross-Source Hash Verification', function() {
 
-    let sourceDb, replicaDb, server1, server2, client;
-
-    before(async function() {
-        await setup.globalSetup();
-        sourceDb  = setup.getSourceDb();
-        replicaDb = setup.getReplicaDb();
-
-        if (!process.env.E2E_VERBOSE) { sinon.stub(console, 'log'); sinon.stub(console, 'error'); }
-    });
-
-    after(async function() {
-        sinon.restore();
-        if (client)  client.stop();
-        if (server1) await server1.stop();
-        if (server2) await server2.stop();
-        await setup.globalTeardown();
-    });
-
-    beforeEach(async function() {
-        if (client)  { client.stop(); client = null; }
-        if (server1) { await server1.stop(); server1 = null; }
-        if (server2) { await server2.stop(); server2 = null; }
-        await setup.resetDatabases();
-    });
+    before(setupCrossSource);
+    after(teardownCrossSource);
+    beforeEach(resetCrossSource);
 
     describe('5.1 Two matching sources (normal operation)', function() {
         it('syncs when both sources agree on hashes', async function() {
@@ -80,6 +86,14 @@ describe('E2E: Cross-Source Hash Verification', function() {
             await assertBlockExists(replicaDb, 15);
         });
     });
+
+});
+
+describe('E2E: Cross-Source Hash Verification', function() {
+
+    before(setupCrossSource);
+    after(teardownCrossSource);
+    beforeEach(resetCrossSource);
 
     describe('5.3 Secondary source unavailable (timeout fallback)', function() {
         it('applies from primary after timeout when secondary is unavailable', async function() {
