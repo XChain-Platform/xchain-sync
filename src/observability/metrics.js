@@ -18,8 +18,8 @@
  * (text/plain; version=0.0.4). It exists instead of prom-client because every
  * xchain-* service is an independent repo with its own package.json: a shared
  * npm dependency would need publishing and six lockfile bumps, while this file
- * is vendored byte-identically by bin/sync-observability.sh and gated in CI by
- * a parity check across those copies. Zero deps also means /metrics cannot pull
+ * is vendored byte-identically by bin/sync-observability.sh, whose --check runs
+ * as a drift tier of the hub's CI. Zero deps also means /metrics cannot pull
  * a new supply-chain surface into a consensus-critical service.
  *
  * Cardinality is the failure mode that kills a Prometheus server, so two guards
@@ -68,8 +68,8 @@ function assertMetricName(name) {
 function assertLabelNames(labelNames) {
     for (const l of labelNames) {
         if (!LABEL_NAME_RE.test(l)) throw new Error(`invalid label name: ${l}`);
-        // Reserved by the exposition format itself: `le` belongs to histogram
-        // buckets and `__name__` is the series identity.
+        // `__name__` is the format's reserved series identity. `le` is reserved
+        // too, but only histograms carry it, so the Histogram constructor refuses it.
         if (l === '__name__') throw new Error('label name __name__ is reserved');
     }
 }
@@ -89,7 +89,7 @@ class Metric {
 
     // Series identity is the ordered label-value tuple. Declared order is used
     // (not caller order), so {a,b} and {b,a} address the same series.
-    _key(labels) {
+    seriesKey(labels) {
         if (this.labelNames.length === 0) return '';
         const parts = [];
         for (const name of this.labelNames) {
@@ -99,7 +99,7 @@ class Metric {
         return JSON.stringify(parts);
     }
 
-    _normalizeLabels(labels) {
+    normalizeLabels(labels) {
         const out = {};
         for (const name of this.labelNames) {
             const v = labels[name];
@@ -115,15 +115,15 @@ class Metric {
 
     // Returns null when the series cap is hit; every mutator treats null as
     // "drop this observation" so a cardinality blowup degrades instead of OOMs.
-    _series(labels, makeState) {
-        const key = this._key(labels);
+    seriesFor(labels, makeState) {
+        const key = this.seriesKey(labels);
         let s = this.series.get(key);
         if (s) return s;
         if (this.series.size >= this.maxSeries) {
-            if (this.registry) this.registry._noteSeriesDrop(this.name);
+            if (this.registry) this.registry.noteSeriesDrop(this.name);
             return null;
         }
-        s = { labels: this._normalizeLabels(labels), ...makeState() };
+        s = { labels: this.normalizeLabels(labels), ...makeState() };
         this.series.set(key, s);
         return s;
     }
@@ -139,7 +139,7 @@ class Counter extends Metric {
         if (!Number.isFinite(value) || value < 0) {
             throw new Error(`counter ${this.name}: inc value must be a non-negative finite number`);
         }
-        const s = this._series(labels, () => ({ value: 0 }));
+        const s = this.seriesFor(labels, () => ({ value: 0 }));
         if (s) s.value += value;
         return s ? s.value : undefined;
     }
@@ -149,12 +149,12 @@ class Counter extends Metric {
     // ignored so a source reset cannot make a counter go backwards mid-scrape.
     setMonotonic(labels, value) {
         if (!Number.isFinite(value) || value < 0) return;
-        const s = this._series(labels, () => ({ value: 0 }));
+        const s = this.seriesFor(labels, () => ({ value: 0 }));
         if (s && value >= s.value) s.value = value;
     }
 
     get(labels = {}) {
-        const s = this.series.get(this._key(labels));
+        const s = this.series.get(this.seriesKey(labels));
         return s ? s.value : 0;
     }
 
@@ -171,13 +171,13 @@ class Gauge extends Metric {
     set(labels = {}, value) {
         if (typeof labels === 'number') { value = labels; labels = {}; }
         if (!Number.isFinite(value)) throw new Error(`gauge ${this.name}: set value must be finite`);
-        const s = this._series(labels, () => ({ value: 0 }));
+        const s = this.seriesFor(labels, () => ({ value: 0 }));
         if (s) s.value = value;
     }
 
     inc(labels = {}, value = 1) {
         if (typeof labels === 'number') { value = labels; labels = {}; }
-        const s = this._series(labels, () => ({ value: 0 }));
+        const s = this.seriesFor(labels, () => ({ value: 0 }));
         if (s) s.value += value;
     }
 
@@ -187,7 +187,7 @@ class Gauge extends Metric {
     }
 
     get(labels = {}) {
-        const s = this.series.get(this._key(labels));
+        const s = this.series.get(this.seriesKey(labels));
         return s ? s.value : 0;
     }
 
@@ -211,7 +211,7 @@ class Histogram extends Metric {
     observe(labels = {}, value) {
         if (typeof labels === 'number') { value = labels; labels = {}; }
         if (!Number.isFinite(value)) return;
-        const s = this._series(labels, () => ({ counts: new Array(this.buckets.length).fill(0), sum: 0, count: 0 }));
+        const s = this.seriesFor(labels, () => ({ counts: new Array(this.buckets.length).fill(0), sum: 0, count: 0 }));
         if (!s) return;
         s.count += 1;
         s.sum   += value;
@@ -220,7 +220,7 @@ class Histogram extends Metric {
         }
     }
 
-    // Times a callback (sync or promise) and observes its wall duration in seconds.
+    // Starts a wall-clock timer; the returned stop function observes and returns elapsed seconds.
     startTimer(labels = {}) {
         const start = process.hrtime.bigint();
         return () => {
@@ -231,7 +231,7 @@ class Histogram extends Metric {
     }
 
     get(labels = {}) {
-        const s = this.series.get(this._key(labels));
+        const s = this.series.get(this.seriesKey(labels));
         return s ? { sum: s.sum, count: s.count, counts: s.counts.slice() } : { sum: 0, count: 0, counts: [] };
     }
 
@@ -273,7 +273,7 @@ class Registry {
         this.metrics.set(this.seriesDropped.name, this.seriesDropped);
     }
 
-    _noteSeriesDrop(metricName) {
+    noteSeriesDrop(metricName) {
         // Guarded: the drop counter itself is capped, and a runaway metric name
         // space must not turn the guard into the leak.
         this.seriesDropped.inc({ metric: metricName }, 1);
@@ -288,7 +288,7 @@ class Registry {
     // to be required, and a service that wires observability twice must not die
     // at startup over a duplicate declaration that asks for exactly what is
     // already there.
-    _register(metric) {
+    registerMetric(metric) {
         const existing = this.metrics.get(metric.name);
         if (existing) {
             const same = existing.type === metric.type
@@ -303,9 +303,9 @@ class Registry {
         return metric;
     }
 
-    counter(opts)   { return this._register(new Counter({ maxSeries: this.maxSeries, ...opts, registry: this })); }
-    gauge(opts)     { return this._register(new Gauge({ maxSeries: this.maxSeries, ...opts, registry: this })); }
-    histogram(opts) { return this._register(new Histogram({ maxSeries: this.maxSeries, ...opts, registry: this })); }
+    counter(opts)   { return this.registerMetric(new Counter({ maxSeries: this.maxSeries, ...opts, registry: this })); }
+    gauge(opts)     { return this.registerMetric(new Gauge({ maxSeries: this.maxSeries, ...opts, registry: this })); }
+    histogram(opts) { return this.registerMetric(new Histogram({ maxSeries: this.maxSeries, ...opts, registry: this })); }
 
     get(name) { return this.metrics.get(name) || null; }
 

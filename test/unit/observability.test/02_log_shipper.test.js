@@ -181,7 +181,7 @@ function registerLogShipperTestsPart4({ expect, http, createLogShipper, fakeCons
         expect(log.timer).to.equal(null);
     });
 
-    // Exercises the real _post/fetch path. Every other test here injects a
+    // Exercises the real postBatch/fetch path. Every other test here injects a
     // transport, which is why the unreleased response body below went unseen.
     it('releases the response body so a stalled collector cannot pin the socket', async function () {
         this.timeout(5000);
