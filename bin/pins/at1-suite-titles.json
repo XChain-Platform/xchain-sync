@@ -20,6 +20,17 @@
       "sync boot consensus-pin verification skips on the (currently null) mainnet pin",
       "sync boot consensus-pin verification the pin check runs before the express app is built"
     ],
+    "042207350fe3ef68": [
+      "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
+      "armed map v2: falsification on temp trees a deleted manifest row moves v2 and turns the completeness suite red",
+      "armed map v2: falsification on temp trees a value the canonicaliser refuses reads UNREADABLE",
+      "armed map v2: falsification on temp trees an export that vanishes from a carrier reads UNREADABLE and names the row",
+      "armed map v2: falsification on temp trees does not move under the regtest venue arming environment (no sync carrier reads it)",
+      "armed map v2: falsification on temp trees holds under a comment, a reformat, a rename and a move with only the manifest repointed",
+      "armed map v2: falsification on temp trees moves when NOT-YET-PINNED (null) becomes the UNARMED sentinel",
+      "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
+      "armed map v2: falsification on temp trees without node_modules reads UNREADABLE, never a plausible hex"
+    ],
     "091ee0965b4ff600": [
       "consensus-primitive conformance: byte-identity to canonical source @regression equivocation_header.js is byte-identical to xchain-documentation/protocol/reference-impl",
       "consensus-primitive conformance: byte-identity to canonical source @regression stake_weighted_quorum.js is byte-identical to xchain-documentation/protocol/reference-impl",
@@ -1464,6 +1475,17 @@
       "ClientSync: checkpoint-quorum rotation following @regression does NOT halt on a transport error while fetching the checkpoint range",
       "ClientSync: checkpoint-quorum rotation following @regression follows the pinned seed forward to a rotated checkpoint and does NOT halt"
     ],
+    "8bbb1aab764e0740": [
+      "armed map v2: fingerprint module and publication both /health bodies, 503 starting and 200 ready, carry v1 and v2",
+      "armed map v2: fingerprint module and publication identity pin records v2 and its row count beside v1",
+      "armed map v2: fingerprint module and publication identity pin reports a moved v2 and a changed row count, and nothing for an identical tree",
+      "armed map v2: fingerprint module and publication is memoised per process, like v1",
+      "armed map v2: fingerprint module and publication is the canonical fingerprint of the manifest rows, with no second computation path",
+      "armed map v2: fingerprint module and publication names each row by the sha256 of its exported value, so a mismatch points at the row",
+      "armed map v2: fingerprint module and publication never lists a directory, so the value cannot depend on the file layout",
+      "armed map v2: fingerprint module and publication publishes a 64-hex fingerprint over every manifest row",
+      "armed map v2: fingerprint module and publication publishes v1 unchanged and v2 after it, in that order"
+    ],
     "910a4f5c866b3b8b": [
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 SPV forward-follow getStakeWeightsByCapabilityAsOf at/after activation the reconstruction is source-capped too (matches the committed root)",
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 SPV forward-follow getStakeWeightsByCapabilityAsOf below activation the reconstruction keeps the legacy uncapped LIMIT (unchanged pre-flag-day)",
@@ -2167,6 +2189,27 @@
       "coinTicker() + per-chain activation lookup the trap this exists to prevent the FULL-NAME form silently resolves to OFF (the full-name lookup bug)",
       "coinTicker() + per-chain activation lookup the trap this exists to prevent the TICKER form activates at the armed height on every production chain"
     ],
+    "e03eeb17175d1023": [
+      "armed map v2: canonical value serialisation containers keeps array order, because an ordered list is part of the meaning",
+      "armed map v2: canonical value serialisation containers refuses Map, Set, Date, class instances and a function nested in data",
+      "armed map v2: canonical value serialisation containers serialises a null-prototype object exactly like the same literal",
+      "armed map v2: canonical value serialisation containers sorts object keys by UTF-16 code unit, so declaration order never moves the value",
+      "armed map v2: canonical value serialisation containers treats an undefined property as absent, but a null property as a value",
+      "armed map v2: canonical value serialisation containers writes a RegExp as source and flags, so different patterns never collide",
+      "armed map v2: canonical value serialisation preimage and fingerprint accepts today's stem spellings, including camelCase, hyphenated and nested stems",
+      "armed map v2: canonical value serialisation preimage and fingerprint does not depend on the order rows are listed in",
+      "armed map v2: canonical value serialisation preimage and fingerprint hashes exactly the preimage and gives a per-row hash of each VCS",
+      "armed map v2: canonical value serialisation preimage and fingerprint is DOMAIN followed by key=VCS lines in code-unit key order",
+      "armed map v2: canonical value serialisation preimage and fingerprint moves the fingerprint and exactly one row hash when one value changes",
+      "armed map v2: canonical value serialisation preimage and fingerprint refuses a duplicate key rather than letting one row shadow another",
+      "armed map v2: canonical value serialisation preimage and fingerprint refuses keys outside the grammar",
+      "armed map v2: canonical value serialisation scalars keeps NOT-YET-PINNED (null) distinct from the UNARMED sentinel",
+      "armed map v2: canonical value serialisation scalars refuses non-finite numbers, BigInt, undefined, symbols and functions",
+      "armed map v2: canonical value serialisation scalars writes -0 as 0, so one height has one spelling",
+      "armed map v2: canonical value serialisation scalars writes null, booleans, strings and finite numbers the way JSON does",
+      "armed map v2: canonical value serialisation twin discipline is byte-identical to the xchain-indexer canonicaliser",
+      "armed map v2: canonical value serialisation twin discipline requires nothing but crypto, so the same bytes serve both repos"
+    ],
     "e283c1eed8fe0836": [
       "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
       "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
@@ -2268,6 +2311,14 @@
       "Boundary: Reorg Detection one block rollback: reorg detected",
       "Boundary: Reorg Detection one new block: no reorg",
       "Boundary: Reorg Detection same-height non-detection: no event when data changes at same block"
+    ],
+    "e802cc9cf0d68125": [
+      "armed map v2: manifest completeness over src/ every data export of every carrier is a manifest row",
+      "armed map v2: manifest completeness over src/ every manifest row names a carrier the scan found",
+      "armed map v2: manifest completeness over src/ every row resolves to the very value its carrier exports, with no refusal",
+      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
+      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
+      "armed map v2: manifest completeness over src/ the carrier scan finds a real population, not a reassuring near-empty one"
     ],
     "e89c73ba3a32ab98": [
       "stakes_root validator-set parity: xchain-sync == xchain-indexer @regression BTC_STAKE_CAPABILITIES has the identical capability set as the indexer",
@@ -2480,6 +2531,10 @@
         "test/unit/coin-ticker-activation.test.js": "de57542d908be190",
         "test/unit/coins-conformance.test.js": "2442df610ebb6911",
         "test/unit/config.test.js": "b2efd648f4757794",
+        "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
+        "test/unit/consensus/armed_map/completeness.test.js": "e802cc9cf0d68125",
+        "test/unit/consensus/armed_map/falsification.test.js": "042207350fe3ef68",
+        "test/unit/consensus/armed_map/fingerprint_v2.test.js": "8bbb1aab764e0740",
         "test/unit/consensusPinBoot.test.js": "03d0b8b6f4107f85",
         "test/unit/contractStateSubtree.test.js": "59a7a5d4db89272b",
         "test/unit/cooldownCredits.test.js": "24a72d7a2b04edd3",

@@ -27,7 +27,7 @@
  *
  * So the pin records the combined fingerprint, the per-file hash map behind it
  * (a per-file diff names WHICH carrier moved, which the combined hash cannot),
- * and the sha256 of each vendored coin file.
+ * the v2 meaning hash with its row count, and the sha256 of each vendored coin file.
  *
  * USAGE
  *   node bin/pin-identity.js                    human summary
@@ -64,11 +64,14 @@ function sha256(rel) {
 function buildPin() {
     const { computeArmedMapFingerprint } = require(path.join(REPO_ROOT, 'src/armedMapFingerprint.js'));
     const armed = computeArmedMapFingerprint();
+    const v2 = require(path.join(REPO_ROOT, 'src/consensus/armed_map/fingerprint_v2.js')).computeArmedMapFingerprintV2();
     const coins = {};
     for (const rel of COIN_FILES) coins[rel] = sha256(rel);
     return {
         armedMapFingerprint: armed.fingerprint,
         armedMapFiles: armed.files,
+        armed_map_fingerprint_v2: v2.hex,
+        armed_map_rows: v2.count === undefined ? null : v2.count,
         vendoredCoins: coins,
     };
 }
@@ -78,6 +81,9 @@ function compare(pin, fresh) {
     const differences = [];
     if (pin.armedMapFingerprint !== fresh.armedMapFingerprint) {
         differences.push(`armed-map fingerprint ${pin.armedMapFingerprint} became ${fresh.armedMapFingerprint}`);
+    }
+    for (const field of ['armed_map_fingerprint_v2', 'armed_map_rows']) {
+        if (pin[field] !== fresh[field]) differences.push(`${field} ${pin[field]} became ${fresh[field]}`);
     }
     for (const group of ['armedMapFiles', 'vendoredCoins']) {
         const names = Array.from(new Set(Object.keys(pin[group] || {}).concat(Object.keys(fresh[group] || {})))).sort();
@@ -131,6 +137,8 @@ function main() {
     }
     console.log(`armed-map fingerprint  ${fresh.armedMapFingerprint}`);
     console.log(`armed-map carriers     ${Object.keys(fresh.armedMapFiles).length}`);
+    console.log(`armed-map v2           ${fresh.armed_map_fingerprint_v2}`);
+    console.log(`armed-map v2 rows      ${fresh.armed_map_rows}`);
     console.log(`vendored coin files    ${Object.keys(fresh.vendoredCoins).length}`);
     if (opts.out) console.log(`\nwritten to ${path.relative(REPO_ROOT, opts.out)}`);
 }

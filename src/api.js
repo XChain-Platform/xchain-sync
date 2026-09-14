@@ -32,7 +32,7 @@ const http        = require('http');
 const WebSocket   = require('ws');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
-const { computeArmedMapFingerprint } = require('./armedMapFingerprint');
+const { armedMapFingerprintFields } = require('./consensus/armed_map/fingerprint_v2');
 const SyncService = require('./SyncService');
 const Utility     = require('./util');
 const BlockHasher = require('./client/block_hasher');
@@ -532,7 +532,7 @@ async function startApi(){
                 mode:         cfg['SYNC_MODE'],
                 databases:    [],
                 hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-                armed_map_fingerprint:  computeArmedMapFingerprint().fingerprint,
+                ...armedMapFingerprintFields(),
                 last_updated: new Date().toISOString()
             });
         }
@@ -555,11 +555,11 @@ async function startApi(){
             // Sync rediscovers chains from hub config on a timer; a climbing age here while
             // status stays healthy means the hub is unreachable and the chain set is stale.
             hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-            // Consensus-gate build fingerprint: one string per process so a
-            // fleet sweep can confirm every deployed sync runs the same armed map
-            // before a flag-day height (twin module in xchain-indexer exposes the
-            // same field on the indexer health method).
-            armed_map_fingerprint: computeArmedMapFingerprint().fingerprint,
+            // Consensus-gate build fingerprints, v1 (carrier bytes) and v2 (meaning):
+            // one string each per process so a fleet sweep can confirm every deployed
+            // sync runs the same armed map before a flag-day height (the indexer
+            // health method exposes the same two fields).
+            ...armedMapFingerprintFields(),
             last_updated: new Date().toISOString()
         });
     });
