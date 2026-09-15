@@ -22,7 +22,7 @@
 // and asserts deep equality with the local snapshot. Skipped (not failed) when
 // the sibling repo is absent, so a sync-only checkout / CI clone still runs
 // green; point XCHAIN_INDEXER_DIR at the repo to force it. Mirrors the
-// sibling-present guard pattern in ConsensusPrimitiveConformance.test.js.
+// sibling-present guard pattern in test/unit/consensus/consensus_primitive_conformance.test.js.
 
 const assert = require('assert');
 const fs     = require('fs');

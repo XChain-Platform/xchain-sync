@@ -30,7 +30,7 @@ const { ENTRIES, collectRows } = require(path.join(SRC, 'consensus/armed_map/man
 const { KEY_RE } = require(path.join(SRC, 'consensus/armed_map/canonical'));
 
 // The ACTIVATION_MAP rule the platform's code-structure gate grades with, and
-// the CARRIER_DECL of test/unit/armed_map_fingerprint.test.js, each with a
+// the CARRIER_DECL of test/unit/consensus/armed_map/armed_map_fingerprint.test.js, each with a
 // capture for the name.
 const ACTIVATION_MAP = /\b([A-Z][A-Z0-9_]*_ACTIVATION)\s*=\s*\{/g;
 const CARRIER_DECL = /^\s*(?:const|let|var)\s+([A-Z0-9_]*ACTIVATIONS?[A-Z0-9_]*)\s*=\s*(?:Object\.freeze\()?\{/gm;

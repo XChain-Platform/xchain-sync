@@ -13,7 +13,7 @@
  * The FOLLOWER twin of the escrow arming-block full build.
  *
  * The source twin's gate lives in xchain-indexer/src/stateCommitment.js and is
- * pinned by its own vectors in that repo's test/unit/stateCommitment.test.js. This
+ * pinned by its own vectors in that repo's test/unit/state_commitment/state_commitment.test.js. This
  * file exists because fixing only the source RELOCATES the divergence instead of
  * removing it: the arming replay writes no journal row for a key whose locked total
  * is unchanged, so touched-set application at the arming height misses it, and the

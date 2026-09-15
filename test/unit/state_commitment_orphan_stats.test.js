@@ -11,7 +11,7 @@
  * legal@dankest.llc.
  *
  **********************************************************************
- * test/unit/state_commitment_orphan_stats.test.js
+ * test/unit/state_commitment/state_commitment_orphan_stats.test.js
  *
  * Sync-follower twin of the indexer reportOrphanStats test. Kept IDENTICAL in
  * cases to guard against the two stateCommitment.js copies drifting. Read-only

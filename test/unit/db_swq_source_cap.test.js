@@ -9,7 +9,7 @@
  * General Public License v3.0 or later; see LICENSE.md.
  *
  **********************************************************************
- * test/unit/db_swq_source_cap.test.js
+ * test/unit/db/stakes/db_swq_source_cap.test.js
  *
  * SWQ-TRUNC-1 liveness half on the follower side. The BTC stakes_root the follower
  * recomputes MUST select the SAME source-capped set as the indexer at/after

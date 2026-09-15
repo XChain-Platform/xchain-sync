@@ -18,7 +18,7 @@
  *
  * It embeds canonical INPUTS and computes the expected OUTPUTS with the REAL
  * src/merkle.js, so the committed JSON authentically locks the scheme; the unit
- * test (test/unit/merkle.test.js) reloads the JSON, recomputes from the same
+ * test (test/unit/consensus/merkle.test.js) reloads the JSON, recomputes from the same
  * inputs, and asserts byte-equality. This merkle.js is meant to stay byte-
  * identical to its twin in the indexer, so this golden plus the e2e recompute
  * scenario together form the cross-repo drift guard.

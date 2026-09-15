@@ -14,7 +14,7 @@
  *
  * xchain-sync/src/stateHash.js is the byte-identical copy the follower recomputes
  * with (ClientSync HALTS on mismatch). This mirrors the indexer's
- * test/unit/state_hash_index_map.test.js to lock the follower's copy to the same
+ * test/unit/state_commitment/state_hash_index_map.test.js to lock the follower's copy to the same
  * gating + folding behavior: inert by default (no preimage change), and when armed
  * a divergent id->address pair changes state_hash so the follower halts.
  *
