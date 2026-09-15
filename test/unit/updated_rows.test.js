@@ -88,6 +88,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         let aq = db.calls.find(c => c.sql.indexOf('FROM `attests` WHERE version = 0') !== -1);
         assert.deepStrictEqual(aq.args, [50, 50]);
     });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
 
     it('keys the VOTE poll class on resolved_block OR a fired deferred-callback due block (one scan)', async function(){
         // A binding poll with callback_delay_blocks > 0 finalizes at F (resolved_block = F)
@@ -138,6 +143,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.strictEqual(out.stakes.length, 1);
         assert.strictEqual(out.stakes[0].action_index, 9);
     });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
 
     it('refreshes surviving tokens rows for ticks touched by ledger changes in the window', async function(){
         let db = fakeDb([
@@ -160,6 +170,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(out.tokens && out.tokens.length === 1);
         assert.strictEqual(out.tokens[0].supply, '1000');
     });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
 
     it('carries the stamped ATTEST v5 batch head on the block its completing v6 chunk landed in', async function(){
         // The head is written at the block the batch was opened at, below the window; only
@@ -194,6 +209,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         // Full row, so the follower's upsert refreshes status_id in place.
         assert.ok(hq.sql.indexOf('SELECT ah.*') === 0);
     });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
 
     it('emits the v0 request flip and the v5 batch head as separate attests rows, deduped by action_index', async function(){
         // Both classes write into the same table. The Map keys on action_index, so two
