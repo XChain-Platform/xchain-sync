@@ -64,6 +64,20 @@ describe('ClientApplier strictIgnoreCheck', function(){
         await assert.doesNotReject(() =>
             applier.insertRows('index_statuses', [{ id: 3, status: 'completed' }], { strictIgnoreCheck: true }));
     });
+});
+
+describe('ClientApplier strictIgnoreCheck', function(){
+    let applier, db, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = new Utility();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     it('throws loud on a collision against a DIFFERENT unique key (index_statuses.status)', async function(){
         // This is the exact shape of the production RDOGE defect: id 2 ('closed')
@@ -113,66 +127,66 @@ describe('ClientApplier strictIgnoreCheck', function(){
 // table is never rolled back), so the source's own row could not land by id and the
 // repair pass measured the same short count at every start. Convergence retires the
 // superseded row; a row the source still serves is never touched.
-describe('ClientApplier: natural-key collision on an upsert-only lookup table', function(){
-    let applier, util;
-
-    // A small emulator of one lookup table: the INSERT IGNORE, the warning it raises, the
-    // probes the convergence path makes, and the DELETE it issues.
-    function lookupDb(initialRows){
-        let rows = new Map(initialRows.map(r => [Number(r.id), r.status]));
-        let warnings = [];
-        let log = [];
-        let db = withDbMixins({
-            dbName: 'replica_db',
-            getBlockHashRow: sinon.stub().resolves(null),
-            beginTransaction: sinon.stub().resolves(),
-            commitTransaction: sinon.stub().resolves(),
-            rollbackTransaction: sinon.stub().resolves(),
-            truncateTable: sinon.stub().resolves(),
-            rows,
-            log,
-            doQuery: async (sql, args) => {
-                log.push({ sql, args });
-                if(/^INSERT IGNORE INTO `index_statuses`/.test(sql)){
-                    warnings = [];
-                    let cols = /\(([^)]*)\) VALUES/.exec(sql)[1].split(',').map(s => s.trim().replace(/`/g, ''));
-                    for(let i = 0; i < args.length; i += cols.length){
-                        let row = {};
-                        cols.forEach((c, j) => { row[c] = args[i + j]; });
-                        let id = Number(row.id);
-                        if(rows.has(id)){
-                            warnings.push({ Code: 1062, Message: "Duplicate entry '" + id + "' for key 'PRIMARY'" });
-                            continue;
-                        }
-                        let holder = [...rows.entries()].find(([, s]) => s === row.status);
-                        if(holder){
-                            warnings.push({ Code: 1062, Message: "Duplicate entry '" + row.status + "' for key 'status'" });
-                            continue;
-                        }
-                        rows.set(id, row.status);
+// A small emulator of one lookup table: the INSERT IGNORE, the warning it raises, the
+// probes the convergence path makes, and the DELETE it issues.
+function lookupDb(initialRows){
+    let rows = new Map(initialRows.map(r => [Number(r.id), r.status]));
+    let warnings = [];
+    let log = [];
+    let db = withDbMixins({
+        dbName: 'replica_db',
+        getBlockHashRow: sinon.stub().resolves(null),
+        beginTransaction: sinon.stub().resolves(),
+        commitTransaction: sinon.stub().resolves(),
+        rollbackTransaction: sinon.stub().resolves(),
+        truncateTable: sinon.stub().resolves(),
+        rows,
+        log,
+        doQuery: async (sql, args) => {
+            log.push({ sql, args });
+            if(/^INSERT IGNORE INTO `index_statuses`/.test(sql)){
+                warnings = [];
+                let cols = /\(([^)]*)\) VALUES/.exec(sql)[1].split(',').map(s => s.trim().replace(/`/g, ''));
+                for(let i = 0; i < args.length; i += cols.length){
+                    let row = {};
+                    cols.forEach((c, j) => { row[c] = args[i + j]; });
+                    let id = Number(row.id);
+                    if(rows.has(id)){
+                        warnings.push({ Code: 1062, Message: "Duplicate entry '" + id + "' for key 'PRIMARY'" });
+                        continue;
                     }
-                    return [];
-                }
-                if(sql === 'SHOW WARNINGS') return warnings;
-                if(/information_schema\.statistics/.test(sql)) return [{ column_name: 'status' }];
-                if(/SELECT id FROM `index_statuses` WHERE id = \?/.test(sql))
-                    return rows.has(Number(args[0])) ? [{ id: Number(args[0]) }] : [];
-                if(/SELECT id FROM `index_statuses` WHERE `status` = \?/.test(sql)){
-                    let hit = [...rows.entries()].filter(([, s]) => s === args[0]);
-                    return hit.map(([id]) => ({ id }));
-                }
-                if(/DELETE FROM `index_statuses` WHERE id = \?/.test(sql)){
-                    rows.delete(Number(args[0]));
-                    return [];
+                    let holder = [...rows.entries()].find(([, s]) => s === row.status);
+                    if(holder){
+                        warnings.push({ Code: 1062, Message: "Duplicate entry '" + row.status + "' for key 'status'" });
+                        continue;
+                    }
+                    rows.set(id, row.status);
                 }
                 return [];
             }
-        });
-        return db;
-    }
+            if(sql === 'SHOW WARNINGS') return warnings;
+            if(/information_schema\.statistics/.test(sql)) return [{ column_name: 'status' }];
+            if(/SELECT id FROM `index_statuses` WHERE id = \?/.test(sql))
+                return rows.has(Number(args[0])) ? [{ id: Number(args[0]) }] : [];
+            if(/SELECT id FROM `index_statuses` WHERE `status` = \?/.test(sql)){
+                let hit = [...rows.entries()].filter(([, s]) => s === args[0]);
+                return hit.map(([id]) => ({ id }));
+            }
+            if(/DELETE FROM `index_statuses` WHERE id = \?/.test(sql)){
+                rows.delete(Number(args[0]));
+                return [];
+            }
+            return [];
+        }
+    });
+    return db;
+}
 
-    // The source's three rows, and a replica holding `completed` at a retired id.
-    let sourcePage = [{ id: 1, status: 'open' }, { id: 3, status: 'completed' }, { id: 4, status: 'valid' }];
+// The source's three rows, and a replica holding `completed` at a retired id.
+let sourcePage = [{ id: 1, status: 'open' }, { id: 3, status: 'completed' }, { id: 4, status: 'valid' }];
+
+describe('ClientApplier: natural-key collision on an upsert-only lookup table', function(){
+    let applier, util;
 
     beforeEach(function(){
         util = new Utility();
@@ -214,6 +228,18 @@ describe('ClientApplier: natural-key collision on an upsert-only lookup table', 
             /needs a human to reconcile it/);
         assert.ok(!db.log.some(q => /DELETE FROM `index_statuses`/.test(q.sql)), 'nothing may be retired here');
     });
+});
+
+describe('ClientApplier: natural-key collision on an upsert-only lookup table', function(){
+    let applier, util;
+
+    beforeEach(function(){
+        util = new Utility();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
 
     it('leaves a collision outside the page id window for the throw', async function(){
         // The holder's id sits above this page's window, so another page may still carry
