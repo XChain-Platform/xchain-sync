@@ -70,6 +70,11 @@ const SUB = require('../state_subtree_activation.js');
 const CST = require('../contract_state_subtree.js');
 const ESC = require('../escrow_leaf_subtree.js');
 const { minimalDecimal } = require('../db/balance_helpers.js');
+// The SQL text of the node rows and of the orphan walk's reads, byte twins of
+// the same two files in xchain-indexer so the statements stay lockstep with the
+// blocks below that issue them.
+const NODE_ROWS    = require('../db/subtree/node_store_rows.js');
+const ORPHAN_READS = require('../db/subtree/orphan_stats_reads.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT
 const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
@@ -125,34 +130,26 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 //
 // getNetBalance was already loud by accident (it indexes rows[0]); it is strict
 // now by intent rather than by luck.
-const DB_NODE_PUT_CHUNK = 128;
+//
+// The statements themselves live in db/subtree/node_store_rows.js (a byte twin
+// of xchain-indexer's copy); this class is the only caller and keeps the row
+// semantics, the chunking of a path write, and the strictness contract above.
 
 class DbNodeStore {
     constructor(db){ this.db = db; }
     async get(nodeHashHex){
-        const rows = await this.db.doQueryStrict(
-            'SELECT left_hash, right_hash FROM state_tree_nodes WHERE node_hash=? LIMIT 1', [nodeHashHex]);
+        const rows = await NODE_ROWS.selectNodeRow(this.db, nodeHashHex);
         return rows.length ? rows[0] : null;
     }
     async put(nodeHashHex, leftHex, rightHex){
-        await this.db.doQueryStrict(
-            'INSERT IGNORE INTO state_tree_nodes (node_hash, left_hash, right_hash) VALUES (?, ?, ?)',
-            [nodeHashHex, leftHex, rightHex]);
+        await NODE_ROWS.insertNodeRow(this.db, nodeHashHex, leftHex, rightHex);
     }
-    // Chunked so one statement stays far inside max_allowed_packet: 128 rows is
-    // 384 bound 64-char hex params, ~25KB on the wire against a 16MB default.
-    // Duplicate hashes WITHIN a chunk are safe by the same INSERT IGNORE rule
-    // that makes the single-row form idempotent.
+    // One statement per NODE_PUT_CHUNK rows, so a full 256-row path is two round
+    // trips and every statement stays far inside max_allowed_packet (the sizing
+    // is documented beside the constant).
     async putMany(nodes){
-        for(let i = 0; i < nodes.length; i += DB_NODE_PUT_CHUNK){
-            const chunk  = nodes.slice(i, i + DB_NODE_PUT_CHUNK);
-            const values = new Array(chunk.length).fill('(?, ?, ?)').join(', ');
-            const args   = [];
-            for(const n of chunk) args.push(n.hash, n.left, n.right);
-            await this.db.doQueryStrict(
-                'INSERT IGNORE INTO state_tree_nodes (node_hash, left_hash, right_hash) VALUES ' + values,
-                args);
-        }
+        for(let i = 0; i < nodes.length; i += NODE_ROWS.NODE_PUT_CHUNK)
+            await NODE_ROWS.insertNodeRows(this.db, nodes.slice(i, i + NODE_ROWS.NODE_PUT_CHUNK));
     }
 }
 
@@ -321,15 +318,11 @@ async function reportOrphanStats(query, chain, network, opts){
     // and the server's prepared-statement placeholder ceiling; 1000 CHAR(64) hashes is
     // ~66KB of SQL text and one uq_node_hash range scan.
     const batchSize = opts.batchSize || 1000;
-    const cnt = await query('SELECT COUNT(*) AS c FROM state_tree_nodes', []);
+    const cnt = await ORPHAN_READS.countStateTreeNodes(query);
     const totalNodes = cnt.length ? Number(cnt[0].c) : 0;
     if(totalNodes === 0) return { totalNodes: 0, reachableNodes: 0, orphanCount: 0, reachabilitySkipped: false };
 
-    const rootRows = await query(
-        'SELECT DISTINCT balances_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
-        'UNION SELECT DISTINCT stakes_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
-        'UNION SELECT DISTINCT contract_state_root AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root IS NOT NULL',
-        [chain, network, chain, network, chain, network]);
+    const rootRows = await ORPHAN_READS.selectRetainedRootUnion(query, chain, network);
 
     // `seen` holds every hash queued or resolved and doubles as the dedupe guard, so
     // no hash is queried or expanded twice; reachableNodes counts only hashes the
@@ -349,9 +342,7 @@ async function reportOrphanStats(query, chain, network, opts){
     while(frontier.length){
         if(seen.size > maxNodes){ truncated = true; break; }
         const batch = frontier.splice(0, batchSize);
-        const rows = await query(
-            'SELECT node_hash, left_hash, right_hash FROM state_tree_nodes WHERE node_hash IN (' +
-            batch.map(() => '?').join(',') + ')', batch);
+        const rows = await ORPHAN_READS.selectNodeRowsByHash(query, batch);
         for(const row of rows){
             reachableNodes++;
             for(const child of [row.left_hash, row.right_hash]){
