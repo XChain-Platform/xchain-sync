@@ -40,19 +40,23 @@ function makeDb(){
     return new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
 }
 
-describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
-    let db, captured;
-    beforeEach(function(){
-        sinon.stub(console, 'warn');
-        db = makeDb();
-        sinon.stub(db, 'getStatusId').resolves(1);          // valid_id = 1
-        captured = null;
-        sinon.stub(db, 'doQuery').callsFake(async (query, args) => {
-            captured = { query, args };
-            return [];
-        });
+const STAKE_WEIGHTS_AS_OF_TITLE = 'Database.getStakeWeightsByCapabilityAsOf (#4927)';
+let db, captured;
+function prepareStakeWeightsDb(){
+    sinon.stub(console, 'warn');
+    db = makeDb();
+    sinon.stub(db, 'getStatusId').resolves(1);          // valid_id = 1
+    captured = null;
+    sinon.stub(db, 'doQuery').callsFake(async (query, args) => {
+        captured = { query, args };
+        return [];
     });
-    afterEach(function(){ sinon.restore(); });
+}
+function restoreSinon(){ sinon.restore(); }
+
+describe(STAKE_WEIGHTS_AS_OF_TITLE, function(){
+    beforeEach(prepareStakeWeightsDb);
+    afterEach(restoreSinon);
 
     it('returns [] when the valid status id cannot be resolved (no query run)', async function(){
         db.getStatusId.resolves(null);
@@ -92,6 +96,11 @@ describe('Database.getStakeWeightsByCapabilityAsOf (#4927)', function(){
         assert.strictEqual(placeholders, captured.args.length,
             'every ? must have exactly one bound arg, in order');
     });
+});
+
+describe(STAKE_WEIGHTS_AS_OF_TITLE, function(){
+    beforeEach(prepareStakeWeightsDb);
+    afterEach(restoreSinon);
 
     it('passes minStake through to the HAVING floor as a string', async function(){
         await db.getStakeWeightsByCapabilityAsOf('oracle_publish', 106, 500, 1000);  // numeric in
