@@ -438,7 +438,10 @@ describe('Rollback coverage guard @regression', function(){
     it('_stakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function stakeSql(p){
             const src = fs.readFileSync(p, 'utf8');
-            const m = src.match(/_stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
+            // The indexer spells the method stakeWeightsSql (its code-structure pass dropped
+            // the underscore prefix); this repo still spells it _stakeWeightsSql. The optional
+            // prefix accepts both, and the body comparison below is unchanged.
+            const m = src.match(/_?stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
             assert.ok(m, `_stakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
@@ -464,7 +467,9 @@ describe('Rollback coverage guard @regression', function(){
     it('_cappedStakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function cappedSql(p){
             const src = fs.readFileSync(p, 'utf8');
-            const m = src.match(/_cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
+            // Same optional prefix as stakeSql() above: cappedStakeWeightsSql in the indexer,
+            // _cappedStakeWeightsSql here.
+            const m = src.match(/_?cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
             assert.ok(m, `_cappedStakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }

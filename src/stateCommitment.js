@@ -45,7 +45,7 @@
  *
  * ONE DECLARED DIVERGENCE, and it is the only one: the indexer's PersistentSMT
  * carries a bounded read-through node cache (SMT_NODE_CACHE_MAX, _nodeCache,
- * _cacheGet/_cachePut, wired into _descend's read and _putBatch's write) that this
+ * cacheGet/cachePut, wired into descend's read and putBatch's write) that this
  * copy does not. It is a transport fix on the indexer's own hot path, and it is
  * root-neutral by construction: positive entries only (a store MISS is never
  * cached, so the M-17 fail-loud absence signal still reaches the store every time),
@@ -83,7 +83,7 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 // putMany is optional because stores are DECORATED as well as implemented: the
 // bench harness in bin/ wraps an inner store to instrument put, and the subtree
 // unit tests hand in bare {get, put} fakes. Requiring it would break every one of
-// them at a call site far from the edit. PersistentSMT._putBatch is the single
+// them at a call site far from the edit. PersistentSMT.putBatch is the single
 // place that chooses, and the fallback writes the identical rows in the identical
 // order, so a store without it is slow, never wrong.
 //
@@ -114,7 +114,7 @@ const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
 // _applyStakeWeightCap, and the getStatusId behind the stake readers). The
 // failure shapes:
 //
-//   DbNodeStore.get -> [] is "this subtree is empty", so _descend keeps
+//   DbNodeStore.get -> [] is "this subtree is empty", so descend keeps
 //     building against a truncated tree and emits a root that looks perfectly
 //     valid. This is the worst of the set: nothing downstream can detect it.
 //   DbNodeStore.put -> a swallowed write means the node is missing on a LATER
@@ -179,7 +179,7 @@ class PersistentSMT {
     // (EMPTY[0] hex if absent). Empty subtrees short-circuit: once a node has no
     // row it is an EMPTY constant and every remaining sibling is the EMPTY for
     // that level.
-    async _descend(rootHex, keyBuf){
+    async descend(rootHex, keyBuf){
         const siblings = new Array(M.SMT_DEPTH);
         let cur = rootHex;
         let empty = false;
@@ -199,7 +199,7 @@ class PersistentSMT {
     // is the pre-batching behaviour and exists only for stores that predate
     // putMany (bare {get, put} fakes and the bin/ instrumentation decorator);
     // it writes the same rows in the same order at one round trip each.
-    async _putBatch(nodes){
+    async putBatch(nodes){
         if(typeof this.store.putMany === 'function'){
             await this.store.putMany(nodes);
             return;
@@ -211,12 +211,12 @@ class PersistentSMT {
     // the new root hex. Apply keys sequentially: each call threads the updated root
     // so shared-prefix keys see prior inserts.
     async update(rootHex, keyBuf, newLeafHexOrNull){
-        const { siblings } = await this._descend(rootHex, keyBuf);
+        const { siblings } = await this.descend(rootHex, keyBuf);
         let cur = (newLeafHexOrNull == null) ? EMPTY0_HEX : newLeafHexOrNull;
         // Collect the path's nodes and write them in ONE batch after the climb
         // rather than a round trip per level. Deferring is safe because
         // the climb reads NOTHING: every parent is hashed from `cur` and the
-        // sibling already captured by _descend, so no node written here is read
+        // sibling already captured by descend, so no node written here is read
         // back before the flush. The flush is inside update() and not hoisted to
         // buildFull for exactly that reason in reverse: the NEXT update() descends
         // the root this one returns, so its nodes must be durable by then.
@@ -232,7 +232,7 @@ class PersistentSMT {
                 pending.push({ hash: parent, left, right });
             cur = parent;
         }
-        if(pending.length) await this._putBatch(pending);
+        if(pending.length) await this.putBatch(pending);
         return cur;
     }
 
@@ -248,7 +248,7 @@ class PersistentSMT {
     // Membership / non-membership proof as-of a given root (same shape as
     // merkle.js SparseMerkleTree.prove; verify with M.verifyCompressedSmtProof).
     async prove(rootHex, keyBuf){
-        const { siblings, oldLeaf } = await this._descend(rootHex, keyBuf);
+        const { siblings, oldLeaf } = await this.descend(rootHex, keyBuf);
         const present = (oldLeaf !== EMPTY0_HEX);
         return {
             key:        M.toHex(keyBuf),
