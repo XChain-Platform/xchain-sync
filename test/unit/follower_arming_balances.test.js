@@ -30,7 +30,7 @@
 'use strict';
 
 const assert = require('assert');
-const SC = require('../../src/stateCommitment.js');
+const SC = require('../../src/state_commitment/index.js');
 
 const ARM = 11200;
 const LIVE = [{ address: 'escAddr1', tick: 'XCP', locked_amount: '250.000000000000000000' }];

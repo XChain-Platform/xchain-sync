@@ -29,7 +29,7 @@
 'use strict';
 
 const assert = require('assert');
-const SC = require('../../src/stateCommitment.js');
+const SC = require('../../src/state_commitment/index.js');
 
 const CHAIN = 'LTC', NETWORK = 'mainnet', BLOCK = 500000;
 const BALANCES = [{ address: 'ltc1holder', tick: 'XCP', net: '250.000000000000000000' }];

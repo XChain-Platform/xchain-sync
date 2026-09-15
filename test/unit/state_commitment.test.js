@@ -24,7 +24,7 @@
 
 const assert = require('assert');
 const M  = require('../../src/merkle.js');
-const SC = require('../../src/stateCommitment.js');
+const SC = require('../../src/state_commitment/index.js');
 const act = require('../../src/state_commitment_activation.js');
 
 // Deterministic pseudo-random key + amount derived from an index.

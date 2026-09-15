@@ -33,7 +33,7 @@
  *   4. the hash-assembly tail (block_index / previous_hash / hash_version fold)
  *   5. utility jsonStringify + getDataHash (the shared preimage serializer)
  *   6. reportOrphanStats (documented byte-identical twin; compared RAW, header
- *      comment included; the indexer copy is src/stateCommitment/persistent_smt.js)
+ *      comment included; the indexer copy is src/state_commitment/persistent_smt.js)
  *
  * A one-sided edit to any of these forks every sync validator's recomputed
  * hash on the next real block (durable divergence halt fleet-wide). The
@@ -256,7 +256,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     });
 
     it('stateCommitment reportOrphanStats block is BYTE-identical (documented twin, comments included)', function(){
-        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment/persistent_smt.js');
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/persistent_smt.js');
         if(!pair) return;
         // The twin contract covers the whole block: the "---- Orphan-node
         // observability" header comment THROUGH the end of reportOrphanStats.
@@ -272,8 +272,8 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             return tail.slice(0, tail.indexOf(fn) + fn.length);
         }
         assert.strictEqual(
-            extractTwinBlock(pair.sync, 'xchain-sync/src/stateCommitment.js'),
-            extractTwinBlock(pair.indexer, 'xchain-indexer/src/stateCommitment/persistent_smt.js'),
+            extractTwinBlock(pair.sync, 'xchain-sync/src/state_commitment/index.js'),
+            extractTwinBlock(pair.indexer, 'xchain-indexer/src/state_commitment/persistent_smt.js'),
             'reportOrphanStats block drifted between xchain-sync stateCommitment.js and xchain-indexer persistent_smt.js; ' +
             'the header comment declares it a keep-BYTE-IDENTICAL twin (comments included)');
     });
@@ -290,7 +290,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     // shared, and the shape of the one divergence the header declares.
 
     it('DbNodeStore and MemoryNodeStore are BYTE-identical (node-store twin)', function(){
-        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment/persistent_smt.js');
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/persistent_smt.js');
         if(!pair) return;
         // Raw, comments included: these two stores define what a node row IS on
         // both sides of the recompute, so a one-sided edit is a fork risk even
@@ -302,14 +302,14 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             return src.slice(i, j);
         }
         assert.strictEqual(
-            stores(pair.sync, 'xchain-sync/src/stateCommitment.js'),
-            stores(pair.indexer, 'xchain-indexer/src/stateCommitment/persistent_smt.js'),
+            stores(pair.sync, 'xchain-sync/src/state_commitment/index.js'),
+            stores(pair.indexer, 'xchain-indexer/src/state_commitment/persistent_smt.js'),
             'the DbNodeStore / MemoryNodeStore block drifted between xchain-sync and ' +
             'xchain-indexer persistent_smt.js; the follower header declares it byte-identical');
     });
 
     it('PersistentSMT update / buildFull / prove are BYTE-identical (root-bearing twin)', function(){
-        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment/persistent_smt.js');
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/persistent_smt.js');
         if(!pair) return;
         // These three are the whole root-producing surface of the engine. The
         // declared cache divergence lives entirely in descend's read and
@@ -319,8 +319,8 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                           /async buildFull\(entries\)\{/,
                           /async prove\(rootHex, keyBuf\)\{/]){
             assert.strictEqual(
-                extractFunction(pair.sync, sig, 'xchain-sync/src/stateCommitment.js'),
-                extractFunction(pair.indexer, sig, 'xchain-indexer/src/stateCommitment/persistent_smt.js'),
+                extractFunction(pair.sync, sig, 'xchain-sync/src/state_commitment/index.js'),
+                extractFunction(pair.indexer, sig, 'xchain-indexer/src/state_commitment/persistent_smt.js'),
                 sig + ' drifted between xchain-sync and xchain-indexer PersistentSMT; ' +
                 'this is the root-producing surface and it must stay byte-identical');
         }
@@ -341,7 +341,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
 // this case by silently matching nothing.
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('PersistentSMT divergence is exactly the indexer node cache (declared, not drift)', function(){
-        const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment/persistent_smt.js');
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/persistent_smt.js');
         if(!pair) return;
         function engine(src, from){
             const i = src.indexOf('// ---- Persistent SMT engine');
@@ -349,13 +349,13 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             assert.ok(i !== -1 && j > i, 'SMT engine block markers not found in ' + from);
             return src.slice(i, j);
         }
-        const syncEngine    = engine(pair.sync, 'xchain-sync/src/stateCommitment.js');
-        const indexerEngine = engine(pair.indexer, 'xchain-indexer/src/stateCommitment/persistent_smt.js');
+        const syncEngine    = engine(pair.sync, 'xchain-sync/src/state_commitment/index.js');
+        const indexerEngine = engine(pair.indexer, 'xchain-indexer/src/state_commitment/persistent_smt.js');
         for(const marker of ['SMT_NODE_CACHE_MAX', '_nodeCache', 'cacheGet(', 'cachePut(']){
             assert.ok(indexerEngine.includes(marker),
                 'xchain-indexer persistent_smt.js no longer has ' + marker + '. If the node ' +
                 'cache was removed the engines are byte-identical again: port the change and ' +
-                'rewrite the DECLARED DIVERGENCE paragraph in xchain-sync/src/stateCommitment.js');
+                'rewrite the DECLARED DIVERGENCE paragraph in xchain-sync/src/state_commitment/index.js');
             assert.ok(!syncEngine.includes(marker),
                 'xchain-sync stateCommitment.js now has ' + marker + '. If the cache was ' +
                 'deliberately ported, rewrite the DECLARED DIVERGENCE paragraph in that file ' +
@@ -367,7 +367,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 assert.ok(out.includes(find),
                     'the indexer node cache no longer has the shape this guard subtracts, in ' +
                     from + '. Missing: ' + find + '\nRe-derive the subtraction against ' +
-                    'xchain-indexer/src/stateCommitment/persistent_smt.js before trusting this guard again.');
+                    'xchain-indexer/src/state_commitment/persistent_smt.js before trusting this guard again.');
                 out = out.replace(find, replace);
             }
             return out;
@@ -384,7 +384,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             idxDescend,
             'descend differs between xchain-sync and xchain-indexer by more than the declared ' +
             'node-cache read. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
-            'xchain-sync/src/stateCommitment.js to say what else may differ');
+            'xchain-sync/src/state_commitment/index.js to say what else may differ');
         const idxPutBatch = subtract(
             normalize(extractFunction(pair.indexer, putBatchSig, 'xchain-indexer putBatch')),
             'putBatch',
@@ -395,6 +395,6 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             idxPutBatch,
             'putBatch differs between xchain-sync and xchain-indexer by more than the declared ' +
             'node-cache seeding. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
-            'xchain-sync/src/stateCommitment.js to say what else may differ');
+            'xchain-sync/src/state_commitment/index.js to say what else may differ');
     });
 });

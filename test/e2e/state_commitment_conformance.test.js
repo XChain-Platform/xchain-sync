@@ -33,7 +33,7 @@ const fc      = require('fast-check');
 const mathjs  = require('mathjs');
 const testDb  = require('./helpers/testDb');
 const { splitSqlStatements } = require('../../src/db/sql_util');
-const { getNetBalance } = require('../../src/stateCommitment.js');
+const { getNetBalance } = require('../../src/state_commitment/index.js');
 const M = require('../../src/merkle.js');
 
 const DB_NAME  = 'xchain_e2e_state_commitment_conformance';

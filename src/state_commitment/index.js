@@ -14,7 +14,7 @@
  *
  * Light-client state commitment: FOLLOWER twin (SPV spec sec.4-5).
  *
- * Conformance twin of xchain-indexer/src/stateCommitment.js. The indexer
+ * Conformance twin of xchain-indexer/src/state_commitment/. The indexer
  * (SOURCE) computes + stores the per-block SMT roots inside its block txn,
  * driven by db._smtTouched (the keys its ledger choke point recorded). This
  * follower copy recomputes the roots over the REPLICA inside the apply txn and
@@ -64,12 +64,12 @@
 
 'use strict';
 
-const M = require('./merkle.js');
-const CC = require('./consensus-constants.js');
-const SUB = require('./state_subtree_activation.js');
-const CST = require('./contract_state_subtree.js');
-const ESC = require('./escrow_leaf_subtree.js');
-const { minimalDecimal } = require('./db/balance_helpers.js');
+const M = require('../merkle.js');
+const CC = require('../consensus-constants.js');
+const SUB = require('../state_subtree_activation.js');
+const CST = require('../contract_state_subtree.js');
+const ESC = require('../escrow_leaf_subtree.js');
+const { minimalDecimal } = require('../db/balance_helpers.js');
 
 const EMPTY_ROOT_HEX = M.toHex(M.EMPTY_SMT_ROOT);   // root of an empty depth-256 SMT
 const EMPTY0_HEX     = M.toHex(M.EMPTY[0]);
@@ -656,7 +656,7 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     // cross-twin comparison.
     const escShadow = SUB.isEscrowLockedLeafShadowActive(blockIndex, network, chain);
     // The ARMING BLOCK full-builds too, byte-for-byte with the source twin's gate in
-    // xchain-indexer/src/stateCommitment.js. The incremental branch below
+    // xchain-indexer/src/state_commitment/index.js. The incremental branch below
     // applies escrow leaves from journal rows stamped at THIS height only, while the
     // arming replay deliberately writes no row for a key whose locked total is
     // unchanged. After a §7 shadow window every still-unchanged live lock therefore has

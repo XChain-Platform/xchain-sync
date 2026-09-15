@@ -41,7 +41,7 @@ const ServerPoller   = require('../../src/server/poller');
 const ClientApplier  = require('../../src/client/applier');
 const ClientRollback = require('../../src/client/rollback');
 const SUB = require('../../src/state_subtree_activation');
-const SC  = require('../../src/stateCommitment');
+const SC  = require('../../src/state_commitment');
 
 const CHAIN   = 'litecoin';
 const TICKER  = 'LTC';

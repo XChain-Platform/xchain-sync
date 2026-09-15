@@ -23,7 +23,7 @@
 
 const assert = require('assert');
 const M      = require('../../src/merkle.js');
-const SC     = require('../../src/stateCommitment.js');
+const SC     = require('../../src/state_commitment/index.js');
 
 // The node read is the batched frontier lookup (WHERE node_hash IN (?,...)), so the
 // fake answers it the way uq_node_hash does: only the requested hashes, only the ones

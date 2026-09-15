@@ -47,7 +47,7 @@ const ServerPoller  = require('../../src/server/poller');
 const ClientApplier = require('../../src/client/applier');
 const SUB = require('../../src/state_subtree_activation');
 const CST = require('../../src/contract_state_subtree');
-const SC  = require('../../src/stateCommitment');
+const SC  = require('../../src/state_commitment');
 
 const CHAIN   = 'litecoin';     // full-name form, as the services pass it
 const TICKER  = 'LTC';          // what the activation maps and state_tree_roots key on
