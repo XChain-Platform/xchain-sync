@@ -87,6 +87,34 @@ describe('ClientApplier security', function(){
         it('rejects empty table name', async function(){
             await assertInsertRejectsTable('');
         });
+    });
+});
+
+describe('ClientApplier security', function(){
+
+    let db, util, applier;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = createMockUtil();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    describe('insertRows: table name validation', function(){
+
+        async function assertInsertRejectsTable(table){
+            await assert.rejects(
+                () => applier.insertRows(table, [{ id: 1 }]),
+                /Rejected table name/
+            );
+            assert.strictEqual(db.doQuery.called, false);
+        }
 
         it('rejects table name with SQL comment', async function(){
             await assertInsertRejectsTable('blocks--');
@@ -104,8 +132,25 @@ describe('ClientApplier security', function(){
             await assertInsertRejectsTable('../etc');
         });
     });
+});
 
     // ── insertRows: column name validation ──
+
+describe('ClientApplier security', function(){
+
+    let db, util, applier;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = createMockUtil();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     describe('insertRows: column name validation', function(){
 
@@ -140,8 +185,25 @@ describe('ClientApplier security', function(){
             await assertInsertRejectsColumn('col name');
         });
     });
+});
 
     // ── applyFullSnapshot: table name validation on truncate ──
+
+describe('ClientApplier security', function(){
+
+    let db, util, applier;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = createMockUtil();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     describe('applyFullSnapshot: table name validation', function(){
 
@@ -176,6 +238,26 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.rollbackTransaction.called, true);
             assert.strictEqual(db.commitTransaction.called, false);
         });
+    });
+});
+
+describe('ClientApplier security', function(){
+
+    let db, util, applier;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = createMockUtil();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    describe('applyFullSnapshot: table name validation', function(){
 
         it('rejects a snapshot carrying a path traversal table name (fail closed)', async function(){
             let snapshotData = {
@@ -208,8 +290,25 @@ describe('ClientApplier security', function(){
             assert.strictEqual(db.commitTransaction.called, false);
         });
     });
+});
 
     // ── applyBlock: table name validation in data object ──
+
+describe('ClientApplier security', function(){
+
+    let db, util, applier;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = createMockUtil();
+        applier = new ClientApplier(db, util);
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     describe('applyBlock: data key validation', function(){
 
