@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const axios  = require('axios');
-const { defineRestApiSuite } = require('./rest_api_harness');
+const { defineRestApiSuite } = require('./helpers/rest_api_harness');
 
 function registerTests(state) {
     describe('GET /transparency/:dbType/:chain/:network/proof/:block_index', function() {

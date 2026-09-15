@@ -12,17 +12,17 @@ const sinon    = require('sinon');
 const http     = require('http');
 const express  = require('express');
 const cors     = require('cors');
-const { parseCorsOrigin } = require('../../../src/http/cors_origin');
-const setup    = require('../helpers/setup');
-const testDb   = require('../helpers/testDb');
-const MockHub  = require('../helpers/mockHub');
-const SnapshotBuilder  = require('../../../src/server/snapshot_builder');
-const TransparencyLog  = require('../../../src/server/transparency_log');
+const { parseCorsOrigin } = require('../../../../src/http/cors_origin');
+const setup    = require('../../helpers/setup');
+const testDb   = require('../../helpers/testDb');
+const MockHub  = require('../../helpers/mockHub');
+const SnapshotBuilder  = require('../../../../src/server/snapshot_builder');
+const TransparencyLog  = require('../../../../src/server/transparency_log');
 // Trust-proxy and rate-limiter wiring is imported from the real api.js rather
 // than re-declared here. api.js now guards its startup env check and listen()
 // behind require.main === module (see module.exports at the bottom), so
 // requiring it for these two seams no longer opens a port or starts polling.
-const { trustProxyHops, createRateLimiters } = require('../../../src/api');
+const { trustProxyHops, createRateLimiters } = require('../../../../src/api');
 
 const API_PORT = 19100;
 const HUB_PORT = 19000;

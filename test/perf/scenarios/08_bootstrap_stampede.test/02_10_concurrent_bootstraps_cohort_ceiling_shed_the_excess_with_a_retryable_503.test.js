@@ -11,7 +11,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { defineStampedeSuite } = require('./stampede_harness');
+const { defineStampedeSuite } = require('./helpers/stampede_harness');
 
 function registerTests(harness) {
     const { runStampede, assertLivenessHeld } = harness;

@@ -11,7 +11,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { defineStampedeSuite } = require('./08_bootstrap_stampede.test/stampede_harness');
+const { defineStampedeSuite } = require('./08_bootstrap_stampede.test/helpers/stampede_harness');
 
 function registerTests(harness) {
     const { SnapshotBuilder, poolSizing, POOL_LIMIT } = harness;

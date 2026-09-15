@@ -11,7 +11,7 @@
 const assert   = require('assert');
 const axios    = require('axios');
 const fixtures = require('../helpers/fixtures');
-const { defineRestApiSuite } = require('./rest_api_harness');
+const { defineRestApiSuite } = require('./helpers/rest_api_harness');
 
 function registerTests(state) {
     describe('GET /status/:dbType/:chain/:network', function() {

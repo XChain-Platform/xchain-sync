@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const axios  = require('axios');
-const { defineRestApiSuite } = require('./rest_api_harness');
+const { defineRestApiSuite } = require('./helpers/rest_api_harness');
 
 function bindState(state, target) {
     target.baseUrl = state.baseUrl;

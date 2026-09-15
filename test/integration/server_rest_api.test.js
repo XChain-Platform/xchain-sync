@@ -11,7 +11,7 @@
 const assert   = require('assert');
 const axios    = require('axios');
 const fixtures = require('./helpers/fixtures');
-const { defineRestApiSuite } = require('./server_rest_api.test/rest_api_harness');
+const { defineRestApiSuite } = require('./server_rest_api.test/helpers/rest_api_harness');
 
 function registerTests(state) {
     describe('GET /status', function() {

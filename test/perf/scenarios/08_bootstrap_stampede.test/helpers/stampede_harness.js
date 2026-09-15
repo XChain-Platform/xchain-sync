@@ -46,11 +46,11 @@ const sinon     = require('sinon');
 const axios     = require('axios');
 const WebSocket = require('ws');
 const { bootEnvironment, teardownEnvironment, resetAll,
-        createServer, createGenerator, SERVER_PORT } = require('../../setup/perf-setup');
-const ReportGenerator = require('../../setup/report-generator');
-const SnapshotBuilder = require('../../../../src/server/snapshot_builder');
-const poolSizing      = require('../../../../src/db/pool_sizing');
-const { waitFor }     = require('../../../e2e/helpers/waitFor');
+        createServer, createGenerator, SERVER_PORT } = require('../../../setup/perf-setup');
+const ReportGenerator = require('../../../setup/report-generator');
+const SnapshotBuilder = require('../../../../../src/server/snapshot_builder');
+const poolSizing      = require('../../../../../src/db/pool_sizing');
+const { waitFor }     = require('../../../../e2e/helpers/waitFor');
 
 const reporter = new ReportGenerator();
 const allStats = {};

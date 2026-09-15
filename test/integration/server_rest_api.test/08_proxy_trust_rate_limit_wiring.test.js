@@ -12,7 +12,7 @@ const assert  = require('assert');
 const axios   = require('axios');
 const express = require('express');
 const { trustProxyHops, createRateLimiters } = require('../../../src/api');
-const { defineRestApiSuite } = require('./rest_api_harness');
+const { defineRestApiSuite } = require('./helpers/rest_api_harness');
 
 function registerTests() {
     // Regression coverage for proxy-trust/rate-limit wiring, driven through THIS
