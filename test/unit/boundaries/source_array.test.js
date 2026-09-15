@@ -102,6 +102,16 @@ describe('Boundary: Source Array Parsing', function(){
             assert.strictEqual(cs.sources.length, 0);
         });
     });
+});
+
+describe('Boundary: Source Array Parsing', function(){
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('bootstrapRotateSources rotation (one round, returns boolean)', function(){
         it('does not recurse when only 1 source', async function(){
@@ -144,6 +154,16 @@ describe('Boundary: Source Array Parsing', function(){
             assert.strictEqual(await cs.bootstrapRotateSources(), false);
         });
     });
+});
+
+describe('Boundary: Source Array Parsing', function(){
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('bootstrapFromSnapshot failure propagation', function(){
         // The core single-source defect: a bootstrap that exhausts its sources must
