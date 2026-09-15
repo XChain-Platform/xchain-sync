@@ -44,7 +44,7 @@
 
 const assert = require('assert');
 const M  = require('../../../src/merkle.js');
-const SC = require('../../../src/stateCommitment.js');
+const SC = require('../../../src/state_commitment/index.js');
 
 function keyFor(i){ return M.sha256(Buffer.from('xc1174:' + i, 'utf8')); }
 function leafFor(i){ return M.toHex(M.amountLeaf(String(i * 3 + 1) + '.00000000')); }

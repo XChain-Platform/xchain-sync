@@ -44,7 +44,7 @@
 
 const assert = require('assert');
 const M  = require('../../../src/merkle.js');
-const SC = require('../../../src/stateCommitment.js');
+const SC = require('../../../src/state_commitment/index.js');
 
 // Records what would go to MariaDB without needing one.
 function fakeDb(){
