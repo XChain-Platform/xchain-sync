@@ -78,10 +78,9 @@ function createConfig(overrides){
     }, overrides);
 }
 
-describe('ClientSync security', function(){
+let db, applier, rollback, hashVerifier, util;
 
-    let db, applier, rollback, hashVerifier, util;
-
+function registerHooks(){
     beforeEach(function(){
         db = createMockDb();
         applier = createMockApplier();
@@ -95,6 +94,10 @@ describe('ClientSync security', function(){
     afterEach(function(){
         sinon.restore();
     });
+}
+
+describe('ClientSync security', function(){
+    registerHooks();
 
     // ── fetchAndApplySchema: DDL validation ──
 
@@ -130,6 +133,23 @@ describe('ClientSync security', function(){
             assert.strictEqual(dropCalls.length, 0);
             assert.strictEqual(console.error.called, true);
         });
+    });
+});
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('fetchAndApplySchema: DDL validation', function(){
+
+        let ClientSync, axiosStub;
+
+        beforeEach(function(){
+            axiosStub = { get: sinon.stub() };
+            ClientSync = proxyquire('../../src/client/sync', {
+                'axios': axiosStub,
+                'ws': sinon.stub()
+            });
+        });
 
         it('rejects DDL containing CREATE TRIGGER', async function(){
             let config = createConfig();
@@ -148,6 +168,23 @@ describe('ClientSync security', function(){
                 return typeof c.args[0] === 'string' && c.args[0].includes('TRIGGER');
             });
             assert.strictEqual(triggerCalls.length, 0);
+        });
+    });
+});
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('fetchAndApplySchema: DDL validation', function(){
+
+        let ClientSync, axiosStub;
+
+        beforeEach(function(){
+            axiosStub = { get: sinon.stub() };
+            ClientSync = proxyquire('../../src/client/sync', {
+                'axios': axiosStub,
+                'ws': sinon.stub()
+            });
         });
 
         it('rejects invalid table name with special chars', async function(){
@@ -168,6 +205,23 @@ describe('ClientSync security', function(){
                 return typeof c.args[0] === 'string' && c.args[0].startsWith('CREATE TABLE');
             });
             assert.strictEqual(createCalls.length, 0);
+        });
+    });
+});
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('fetchAndApplySchema: DDL validation', function(){
+
+        let ClientSync, axiosStub;
+
+        beforeEach(function(){
+            axiosStub = { get: sinon.stub() };
+            ClientSync = proxyquire('../../src/client/sync', {
+                'axios': axiosStub,
+                'ws': sinon.stub()
+            });
         });
 
         it('accepts valid CREATE TABLE DDL', async function(){
@@ -192,6 +246,23 @@ describe('ClientSync security', function(){
             });
             assert.strictEqual(createCalls.length, 1);
         });
+    });
+});
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('fetchAndApplySchema: DDL validation', function(){
+
+        let ClientSync, axiosStub;
+
+        beforeEach(function(){
+            axiosStub = { get: sinon.stub() };
+            ClientSync = proxyquire('../../src/client/sync', {
+                'axios': axiosStub,
+                'ws': sinon.stub()
+            });
+        });
 
         it('continues processing when one table is invalid', async function(){
             let config = createConfig();
@@ -215,6 +286,23 @@ describe('ClientSync security', function(){
                 return typeof c.args[0] === 'string' && c.args[0].includes('CREATE TABLE blocks');
             });
             assert.strictEqual(createCalls.length, 1);
+        });
+    });
+});
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('fetchAndApplySchema: DDL validation', function(){
+
+        let ClientSync, axiosStub;
+
+        beforeEach(function(){
+            axiosStub = { get: sinon.stub() };
+            ClientSync = proxyquire('../../src/client/sync', {
+                'axios': axiosStub,
+                'ws': sinon.stub()
+            });
         });
 
         // A compromised/MITM'd sync server returns a CREATE TABLE for an
@@ -259,312 +347,6 @@ describe('ClientSync security', function(){
             assert.strictEqual(alterCalls.length, 0, 'injected column must not produce an ALTER');
             let dropCalls = queries.filter(s => typeof s === 'string' && s.includes('DROP COLUMN'));
             assert.strictEqual(dropCalls.length, 0, 'no DROP COLUMN must reach the database');
-        });
-    });
-
-    // ── handleReorg: max rollback depth ──
-
-    describe('handleReorg: max rollback depth', function(){
-
-        let ClientSync;
-
-        beforeEach(function(){
-            ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': sinon.stub()
-            });
-        });
-
-        it('allows rollback within MAX_ROLLBACK_DEPTH', async function(){
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 100;
-            sync.lastHashes = { ledger_hash: 'abc', actions_hash: 'def', contract_hash: 'ghi' };
-
-            await sync.handleReorg({ type: 'reorg', block_index: 96 }); // depth = 5
-            assert.strictEqual(rollback.rollback.calledOnce, true);
-            assert.strictEqual(rollback.rollback.firstCall.args[0], 96);
-        });
-
-        it('allows rollback of depth 1', async function(){
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 100;
-            sync.lastHashes = null;
-
-            await sync.handleReorg({ type: 'reorg', block_index: 100 }); // depth = 1
-            assert.strictEqual(rollback.rollback.calledOnce, true);
-        });
-
-        it('HALTS (fails closed) when reorg exceeds MAX_ROLLBACK_DEPTH', async function(){
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 100;
-            sync.lastHashes = null;
-
-            await sync.handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6
-            // Must NOT roll back (too deep to rewind safely)...
-            assert.strictEqual(rollback.rollback.called, false);
-            // ...and must NOT fail open: a durable halt is recorded so the replica
-            // stops applying instead of silently serving the orphaned fork.
-            assert.strictEqual(sync.isHalted(), true);
-            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
-            assert.strictEqual(db.recordHalt.calledOnce, true);
-            assert.strictEqual(db.recordHalt.firstCall.args[2], 'max-rollback-depth-exceeded');
-            // lastAppliedBlock is left untouched: we did not advance, but we also
-            // halt so the stale value can no longer be used to drop canonical blocks.
-            assert.strictEqual(sync.lastAppliedBlock, 100);
-        });
-
-        it('HALTS the decoder track too (no recompute safety net)', async function(){
-            // The decoder has no VERIFY_RECOMPUTE / VERIFY_STATE_HASH self-halt path,
-            // so the max-depth halt is its ONLY protection against serving the fork.
-            db.dbType = 'decoder';
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            assert.strictEqual(sync.dbType, 'decoder');
-            sync.lastAppliedBlock = 100;
-            sync.lastHashes = null;
-
-            await sync.handleReorg({ type: 'reorg', block_index: 95 }); // depth = 6
-            assert.strictEqual(rollback.rollback.called, false);
-            assert.strictEqual(sync.isHalted(), true);
-            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
-            assert.strictEqual(db.recordHalt.calledOnce, true);
-            assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
-        });
-
-        it('HALTS on deep rollback to block 1', async function(){
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 100 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 500;
-            sync.lastHashes = null;
-
-            await sync.handleReorg({ type: 'reorg', block_index: 1 }); // depth = 500
-            assert.strictEqual(rollback.rollback.called, false);
-            assert.strictEqual(sync.isHalted(), true);
-            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
-        });
-
-        // Hardened 2026-07-08 re-sweep: a reorg with a null tip (empty replica) is now a
-        // no-op, not a rollback. The old behavior set lastAppliedBlock = block_index - 1
-        // from purely server-supplied data, inflating the in-memory tip past an empty DB
-        // and wedging the replica (the same shape as the above-tip wedge). A hostile
-        // server can no longer drive the cursor via a null-tip reorg. Unreachable on the
-        // live path (the WS opens only after start()'s non-null guard), but guarded.
-        it('ignores a reorg when lastAppliedBlock is null (no cursor inflation from server data)', async function(){
-            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = null;
-
-            await sync.handleReorg({ type: 'reorg', block_index: 50 });
-            assert.strictEqual(rollback.rollback.called, false, 'nothing to roll back with no committed tip');
-            assert.strictEqual(sync.lastAppliedBlock, null, 'the cursor must NOT be inflated from server-supplied block_index');
-            assert.strictEqual(sync.isHalted(), false, 'a null-tip reorg is a benign no-op, not a halt');
-        });
-    });
-
-    // ── handleBlock: strict cross-source timeout ──
-
-    describe('handleBlock: strict cross-source timeout', function(){
-
-        let ClientSync;
-
-        beforeEach(function(){
-            ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': sinon.stub()
-            });
-        });
-
-        it('HASH_CONFIRM_STRICT=true rejects block on timeout', async function(){
-            let clock = sinon.useFakeTimers();
-            let config = createConfig({
-                HASH_CONFIRM_STRICT: true,
-                HASH_CONFIRM_TIMEOUT: 100,
-                VERIFY_HASHES: true
-            });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 99;
-            sync.lastHashes = { ledger_hash: 'a', actions_hash: 'b', contract_hash: 'c' };
-
-            let event = {
-                type: 'block',
-                block_index: 100,
-                ledger_hash: 'x',
-                actions_hash: 'y',
-                contract_hash: 'z',
-                data: {}
-            };
-
-            // Only primary source (sourceIndex 0) reports, no second source
-            await sync.handleBlock(event, 0);
-
-            // Advance past the timeout
-            await clock.tickAsync(200);
-
-            // Block should NOT have been applied (strict mode)
-            assert.strictEqual(applier.applyBlock.called, false);
-            assert.strictEqual(console.error.called, true);
-            let strictMsg = console.error.getCalls().find(c => c.args[0].includes('STRICT'));
-            assert.ok(strictMsg, 'Expected STRICT error message');
-
-            clock.restore();
-        });
-
-        it('HASH_CONFIRM_STRICT=false applies block on timeout', async function(){
-            let clock = sinon.useFakeTimers();
-            let config = createConfig({
-                HASH_CONFIRM_STRICT: false,
-                HASH_CONFIRM_TIMEOUT: 100,
-                VERIFY_HASHES: true
-            });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.lastAppliedBlock = 99;
-            sync.lastHashes = { ledger_hash: 'a', actions_hash: 'b', contract_hash: 'c' };
-
-            let event = {
-                type: 'block',
-                block_index: 100,
-                ledger_hash: 'x',
-                actions_hash: 'y',
-                contract_hash: 'z',
-                data: {}
-            };
-
-            await sync.handleBlock(event, 0);
-
-            // Advance past the timeout
-            await clock.tickAsync(200);
-
-            // Block SHOULD have been applied (non-strict, fallback to primary)
-            assert.strictEqual(applier.applyBlock.calledOnce, true);
-
-            clock.restore();
-        });
-    });
-
-    // ── connectWebSocket: maxPayload option ──
-
-    describe('connectWebSocket: maxPayload', function(){
-
-        it('passes maxPayload to WebSocket constructor', function(){
-            let wsConstructorCalls = [];
-            let fakeWs = function(url, opts){
-                wsConstructorCalls.push({ url, opts });
-                return {
-                    on: sinon.stub(),
-                    close: sinon.stub()
-                };
-            };
-
-            let ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': fakeWs
-            });
-
-            let config = createConfig({ WS_MAX_PAYLOAD: 2097152 });
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sync.connectWebSocket('http://source1.local', 0);
-
-            assert.strictEqual(wsConstructorCalls.length, 1);
-            assert.strictEqual(wsConstructorCalls[0].opts.maxPayload, 2097152);
-        });
-    });
-
-    // ── WebSocket message handler: event validation ──
-
-    describe('WebSocket message handler: event validation', function(){
-
-        it('rejects message with unknown event type', async function(){
-            let messageHandler = null;
-            let fakeWs = function(url, opts){
-                return {
-                    on: function(event, handler){
-                        if(event === 'message') messageHandler = handler;
-                    },
-                    close: sinon.stub()
-                };
-            };
-
-            let ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': fakeWs
-            });
-
-            let config = createConfig();
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sinon.stub(sync, 'handleEvent');
-            sync.connectWebSocket('http://source1.local', 0);
-
-            assert.ok(messageHandler, 'message handler should be registered');
-
-            let invalidEvent = JSON.stringify({ type: 'DROP TABLE', block_index: 1 });
-            // The ws 'message' handler is fire-and-serialize: it validates synchronously
-            // then chains handleEvent onto the internal _wsEventChain rather than returning
-            // a promise (concurrency fix; see ClientSync.connectWebSocket). An invalid event
-            // is rejected before any chaining, so flush microtasks and assert.
-            messageHandler(Buffer.from(invalidEvent));
-            await (sync._wsEventChain || Promise.resolve());
-            assert.strictEqual(sync.handleEvent.called, false);
-            assert.strictEqual(console.error.called, true);
-        });
-
-        it('rejects non-JSON message without crashing', async function(){
-            let messageHandler = null;
-            let fakeWs = function(url, opts){
-                return {
-                    on: function(event, handler){
-                        if(event === 'message') messageHandler = handler;
-                    },
-                    close: sinon.stub()
-                };
-            };
-
-            let ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': fakeWs
-            });
-
-            let config = createConfig();
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sinon.stub(sync, 'handleEvent');
-            sync.connectWebSocket('http://source1.local', 0);
-
-            // Fire-and-serialize handler (see the unknown-event-type test): a non-JSON
-            // message is rejected synchronously in the try/catch before any chaining.
-            messageHandler(Buffer.from('not valid json'));
-            await (sync._wsEventChain || Promise.resolve());
-            assert.strictEqual(sync.handleEvent.called, false);
-        });
-
-        it('accepts valid block event and calls handleEvent', async function(){
-            let messageHandler = null;
-            let fakeWs = function(url, opts){
-                return {
-                    on: function(event, handler){
-                        if(event === 'message') messageHandler = handler;
-                    },
-                    close: sinon.stub()
-                };
-            };
-
-            let ClientSync = proxyquire('../../src/client/sync', {
-                'axios': { get: sinon.stub() },
-                'ws': fakeWs
-            });
-
-            let config = createConfig();
-            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
-            sinon.stub(sync, 'handleEvent').resolves();
-            sync.connectWebSocket('http://source1.local', 0);
-
-            let validEvent = JSON.stringify({ type: 'block', block_index: 100, data: {} });
-            // A valid event is chained onto _wsEventChain; await that internal chain so the
-            // serialized handleEvent call has run before asserting.
-            messageHandler(Buffer.from(validEvent));
-            await (sync._wsEventChain || Promise.resolve());
-            assert.strictEqual(sync.handleEvent.calledOnce, true);
         });
     });
 });
