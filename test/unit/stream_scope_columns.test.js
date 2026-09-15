@@ -123,6 +123,9 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         // the loop above would assert nothing and still pass.
         assert.ok(checked > 80, 'only ' + checked + ' streamed entries were checked; expected the whole registry');
     });
+});
+
+describe('streamScopeColumns: every streamed table owns the column it is scoped by @regression', function(){
 
     it('resolves the block scope column from the registry, defaulting to block_index', function(){
         // The default is what makes the field a no-op for the other block-scoped
@@ -135,6 +138,9 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         assert.strictEqual(lifecycle.blockKey('rollcalls'), 'close_block');
         assert.strictEqual(lifecycle.blockKey('rollcall_absences'), 'close_block');
     });
+});
+
+describe('streamScopeColumns: every streamed table owns the column it is scoped by @regression', function(){
 
     it('reads the two close_block tables by close_block on every forward channel', function(){
         // Source-text guard, in the tableContentParity.test.js style: these three
