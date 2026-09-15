@@ -1070,6 +1070,8 @@ describe('Rollback coverage guard @regression', function(){
         ['contract_state_subtree.js',            'src/consensus/contract_state_subtree.js'],
         ['escrow_leaf_subtree.js',               'src/consensus/escrow_leaf_subtree.js'],
         ['table_lifecycle.js',                   'src/hub/table_lifecycle.js'],
+        ['table_lifecycle/action_tables.js',     'src/hub/table_lifecycle/action_tables.js'],
+        ['table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
         ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js',  'schema/utf8mb4_columns.js'],
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
@@ -1390,6 +1392,8 @@ describe('dispensers convergence wording does not drift back', function(){
         '../../src/schema/replicated_tables.js',
         '../../src/server/snapshot_builder.js',
         '../../src/table_lifecycle.js',
+        '../../src/table_lifecycle/action_tables.js',
+        '../../src/table_lifecycle/block_and_special_tables.js',
         './rollback_coverage.test.js',
     ];
     // Deliberately narrow. A bare /full snapshot only/ scan would false-positive on
