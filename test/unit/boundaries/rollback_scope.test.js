@@ -47,7 +47,17 @@ describe('Boundary: Rollback Scope', function(){
             assert.deepStrictEqual(call.args[1], [10]);
         }
     });
+});
 
+describe('Boundary: Rollback Scope', function(){
+    let rollback, db;
+    beforeEach(function(){
+        db = createMockDb();
+        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
     it('rollback at block 1: deletes everything', async function(){
         db.getFirstActionIndex.resolves(100);
         await rollback.rollback(1);
@@ -97,7 +107,17 @@ describe('Boundary: Rollback Scope', function(){
                 table + ' reorg delete must bind the replica coin and firstActionIndex');
         }
     });
+});
 
+describe('Boundary: Rollback Scope', function(){
+    let rollback, db;
+    beforeEach(function(){
+        db = createMockDb();
+        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
     it('rollback at block 0: deletes all data', async function(){
         db.getFirstActionIndex.resolves(0);
         await rollback.rollback(0);
@@ -126,7 +146,17 @@ describe('Boundary: Rollback Scope', function(){
         assert.strictEqual(blockDeletes.length,
             rollback.blockTables.length + rollback.indexTables.length + 1);
     });
+});
 
+describe('Boundary: Rollback Scope', function(){
+    let rollback, db;
+    beforeEach(function(){
+        db = createMockDb();
+        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
     it('rollback at non-existent block: still runs block deletes', async function(){
         db.getFirstActionIndex.resolves(null);
         await rollback.rollback(9999);
@@ -152,7 +182,17 @@ describe('Boundary: Rollback Scope', function(){
         );
         assert.ok(balanceInsert, 'Should INSERT INTO balances');
     });
+});
 
+describe('Boundary: Rollback Scope', function(){
+    let rollback, db;
+    beforeEach(function(){
+        db = createMockDb();
+        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
     it('deletes sync_meta entries at rollback block', async function(){
         await rollback.rollback(50);
         let syncMetaDelete = db.doQuery.getCalls().find(c =>
