@@ -146,6 +146,26 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire),
                 [{ file: 'hotfix-sends.sql', tables: ['sends'], undated: true }]);
         });
+    });
+});
+
+describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
+
+    describe('the gate detects what it claims to detect', function(){
+
+        let dir;
+        const frontier = { through: '2026-09-11', accounted: ['2026-09-11-already-folded-in.sql'] };
+        const wire = new Set(['sends', 'attests']);
+
+        function write(name, sql){ fs.writeFileSync(path.join(dir, name), sql); }
+
+        beforeEach(function(){
+            dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xchain-sync-migration-gate-'));
+        });
+
+        afterEach(function(){
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
 
         it('does not flag a pure-DML backfill on a replicated table', function(){
             write('2026-09-12-sends-backfill.sql',
@@ -181,6 +201,9 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
                 ['2026-09-11-snuck-in.sql']);
         });
     });
+});
+
+describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
 
     describe('the sibling migration ledgers are level with SCHEMA_VERSION', function(){
 
