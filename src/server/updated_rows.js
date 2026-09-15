@@ -81,101 +81,27 @@
  ********************************************************************/
 
 const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../stateHash');
+const {
+    DEACTIVATION_TABLES, SLASH_SPECS, ROTATION_TABLES, REQUEST_STATUS_TABLES,
+    POLL_FINALIZE_TABLES, COOLDOWN_STATUS_TABLES, ATTEST_BATCH_HEAD_VERSION,
+    ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, BET_STATUS_SPECS
+} = require('./updated_rows/table_specs.js');
 
-// Tables carrying the deactivation_block stamp (value-threshold detection).
-const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];
-
-// SLASH amount reductions: each surviving stake/unstake row whose amount was cut
-// is reachable by joining its action_index to the slash debit log for this window.
-// target_table is the literal the indexer writes (createContractSlashDebit /
-// createCapabilitySlashDebit), matching ClientRollback's restore JOIN.
-const SLASH_SPECS = [
-    { table: 'contract_stakes',   debits: 'contract_slash_debits',  target: 'contract_stakes'   },
-    { table: 'contract_unstakes', debits: 'contract_slash_debits',  target: 'contract_unstakes' },
-    { table: 'stakes',            debits: 'capability_slash_debits', target: 'stakes'            },
-    { table: 'unstakes',          debits: 'capability_slash_debits', target: 'unstakes'          }
-];
-
-// Stake-ledger tables the DELEGATE v1 materialization sweep rewrites signing_pubkey_id on
-// (CONTRACT_DELEGATION_MATERIALIZE). Each rewrite is journaled in contract_delegation_rotations
-// with the table it landed on, exactly as the slash debits are, so both directions (this
-// forward carry and ClientRollback's reverse restore) key the same way.
-const ROTATION_TABLES = ['contract_stakes', 'contract_unstakes'];
-
-// v0 request rows whose request_status went terminal in this window (resolved_block stamp).
-const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
-
-// VOTE polls whose finalization went terminal in this window. The per-block sweep
-// flips a surviving polls row (created at the v0 block, below the window) from
-// 'open' to 'finalized'/'failed_quorum' IN PLACE, stamping resolved_block; the
-// action-scoped stream carries the v2's poll_results rows but not this summary
-// flip. Forward twin of ClientRollback's polls re-open reset (same key). The class
-// carries a SECOND key as well: a DEFERRED binding-callback fire (callback_delay_blocks
-// > 0) stamps callback_execute_action_index IN PLACE at the due block D = F + delay,
-// which is above the finalize window, so keying on resolved_block alone dropped that
-// stamp on every follower (forward twin of ClientRollback's timelock re-fire reset).
-const POLL_FINALIZE_TABLES = ['polls'];
-
-// Surviving unstake rows whose status_id was flipped to 'completed' in place when their
-// cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block (the maturity
-// block), exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
-// credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
-const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
-
-// ATTEST batch rail: a v5 head declares a window and holds slot 0, each v6 continuation
-// holds a later slot, and the continuation that COMPLETES the slot coverage reassembles
-// the body. A failed reassembly (bad CRC, or a batch quorum that does not verify) is the
-// BATCH's fault, so the verdict is stamped IN PLACE on the head, which was written in an
-// earlier block. Byte-identical copies of the indexer's own values
-// (xchain-indexer/src/actions/attest/attest_batch_wire.js for the versions,
-// xchain-indexer/src/actions/attest/index.js for the marker, which
-// xchain-indexer/src/rollback.js already keeps a second copy of); keep all copies in step.
-const ATTEST_BATCH_HEAD_VERSION         = 5;
-const ATTEST_BATCH_CONTINUATION_VERSION = 6;
-const ATTEST_BATCH_COMPLETION_STAMP     = ' (stamped on batch completion)';
-
-// BET in-place flips ( P4): a surviving bet_feeds row is mutated in place by
-// the closed latch (closed_block stamp, end-of-block pass) and by the terminal flip
-// (terminal_block stamp: resolve tx / cancel tx / BET_EXPIRE pass); a surviving bets
-// row is mutated by settlement (settled_block stamp: won/lost/refunded). Each class
-// is keyed by its stamp landing in the window, mirroring (forward) the exact
-// ClientRollback resets and the state_hash bet_feed_status/bet_status classes.
-// status_id is not hashed raw; the follower's upsert resolves it via the replicated
-// index_statuses table.
-const BET_STATUS_SPECS = [
-    { table: 'bet_feeds', stamps: ['closed_block', 'terminal_block'] },
-    { table: 'bets',      stamps: ['settled_block'] }
-];
-
-// Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
-// Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
-// the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
-//
-//   db              the source Database (indexer dbType only; callers must gate)
-//   fromBlock       inclusive lower block bound of the window
-//   toBlock         inclusive upper block bound of the window
-//   activationDelay frozen per-chain ACTIVATION_DELAY_BLOCKS; null skips the
-//                   deactivation_block class (matching ClientRollback's caution
-//                   when no coin is known) rather than scanning with a wrong delay
-//   conn            optional connection (so a snapshot's REPEATABLE READ view reads
-//                   the updated rows at the same height as the rest of the payload)
-async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn){
-    let from = Number(fromBlock);
-    let to   = Number(toBlock);
-
-    // table -> Map(action_index -> row). The Map dedups rows reached by more than
-    // one class (e.g. a stake both deactivated and slashed in the same window) by
-    // their UNIQUE action_index, so each table emits each surviving row once.
-    let acc = {};
-    function add(table, rows){
-        if(!rows || rows.length === 0) return;
-        let m = acc[table] || (acc[table] = new Map());
-        for(let r of rows){
-            if(r && r.action_index !== undefined && r.action_index !== null)
-                m.set(String(r.action_index), r);
-        }
+// table -> Map(action_index -> row). The Map dedups rows reached by more than
+// one class (e.g. a stake both deactivated and slashed in the same window) by
+// their UNIQUE action_index, so each table emits each surviving row once.
+function add(acc, table, rows){
+    if(!rows || rows.length === 0) return;
+    let m = acc[table] || (acc[table] = new Map());
+    for(let r of rows){
+        if(r && r.action_index !== undefined && r.action_index !== null)
+            m.set(String(r.action_index), r);
     }
+}
 
+// Query classes skip missing tables or columns on older source schemas. Other
+// numeric database errors propagate to the caller.
+async function collectDeactivationAndSlashRows(db, from, to, activationDelay, conn, acc){
     // 1. deactivation_block stamps: indexed range scan on each table. A stamp of
     //    value V was written by an action in block V - delay, so a stamp landed in
     //    [from, to] iff V in [from+delay, to+delay]. Skipped when delay is unknown.
@@ -185,11 +111,8 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 let rows = await db.doQuery(
                     "SELECT * FROM `" + table + "` WHERE deactivation_block IS NOT NULL AND deactivation_block BETWEEN ? AND ?",
                     [from + activationDelay, to + activationDelay], conn);
-                add(table, rows);
-            } catch(e){
-                if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-                // Table/column may not exist on older source schemas; skip.
-            }
+                add(acc, table, rows);
+            } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
         }
     }
 
@@ -203,13 +126,12 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 "JOIN `" + spec.debits + "` d ON d.stake_action_index = t.action_index " +
                 "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ?",
                 [spec.target, from, to], conn);
-            add(spec.table, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table may not exist on older source schemas; skip.
-        }
+            add(acc, spec.table, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
+}
 
+async function collectRotationAndRequestRows(db, from, to, conn, acc){
     // 2b. DELEGATE v1 signing-key rotations materialized onto surviving contract_stakes rows.
     //     Same shape as the slash class: the mutated row's action_index is below the window
     //     (the STAKE happened earlier), so only its journal entry pins the change to a block.
@@ -222,11 +144,8 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 "JOIN `contract_delegation_rotations` r ON r.stake_action_index = t.action_index " +
                 "WHERE r.target_table = ? AND r.block_index BETWEEN ? AND ?",
                 [rotTbl, from, to], conn);
-            add(rotTbl, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table may not exist on older source schemas; skip.
-        }
+            add(acc, rotTbl, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
 
     // 3. request_status flips on surviving v0 attest/xcall request rows. Keyed on
@@ -237,13 +156,12 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             let rows = await db.doQuery(
                 "SELECT * FROM `" + table + "` WHERE version = 0 AND resolved_block BETWEEN ? AND ?",
                 [from, to], conn);
-            add(table, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table/column may not exist on older source schemas; skip.
-        }
+            add(acc, table, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
+}
 
+async function collectPollAndCooldownRows(db, from, to, conn, acc){
     // 3b. VOTE poll finalization flip on surviving polls rows. Keyed on
     //     resolved_block (stamped by the finalize sweep), which captures both the
     //     end_block close and the early-decide path, OR on callback_due_block with a
@@ -258,11 +176,8 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 "SELECT * FROM `" + table + "` WHERE resolved_block BETWEEN ? AND ? " +
                 "OR (callback_due_block BETWEEN ? AND ? AND callback_execute_action_index IS NOT NULL)",
                 [from, to, from, to], conn);
-            add(table, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table/column may not exist on older source schemas; skip.
-        }
+            add(acc, table, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
 
     // 4. cooldown-maturity status_id flip on surviving unstakes / contract_unstakes.
@@ -278,13 +193,12 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             let rows = await db.doQuery(
                 "SELECT * FROM `" + table + "` WHERE cooldown_end_block BETWEEN ? AND ?",
                 [from, to], conn);
-            add(table, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table/column may not exist on older source schemas; skip.
-        }
+            add(acc, table, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
+}
 
+async function collectBetStatusRows(db, from, to, conn, acc){
     // 4b. BET status flips on surviving bet_feeds / bets rows, keyed on the stamp
     //     columns landing in [from, to] (a feed can latch AND go terminal in the
     //     same window; the OR plus the Map dedup emits its row once). Carries the
@@ -298,13 +212,12 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             for(let i = 0; i < spec.stamps.length; i++){ args.push(from); args.push(to); }
             let rows = await db.doQuery(
                 "SELECT * FROM `" + spec.table + "` WHERE " + where, args, conn);
-            add(spec.table, rows);
-        } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-            // Table/columns may not exist on older source schemas; skip.
-        }
+            add(acc, spec.table, rows);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
     }
+}
 
+async function collectInvalidArchiveRows(db, from, to, conn, acc){
     // 5. invalid_archive stamp on surviving anchor_actions archive-head parent rows
     //    (v1 legacy, v6 publisher-bearing; ARCHIVE_HEAD_VERSIONS in stateHash.js). When
     //    the final v2 chunk of a chunked archive batch lands and the reassembled blob
@@ -331,12 +244,11 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
             "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
             [from, to], conn);
-        add('anchor_actions', anchorRows);
-    } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-        // Table/columns may not exist on older source schemas; skip.
-    }
+        add(acc, 'anchor_actions', anchorRows);
+    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+}
 
+async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     // 5b. ATTEST batch-head verdict flip, the same shape as class 5 one rail over. When the
     //     v6 continuation that completes a batch's slot coverage lands in this window and the
     //     reassembly or the batch quorum fails, the indexer stamps the FAILURE on the v5 HEAD
@@ -389,12 +301,11 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
             "WHERE ah.version = " + ATTEST_BATCH_HEAD_VERSION + " AND ah.batch_chunk_index = 0 " +
                 "AND ac.block_index BETWEEN ? AND ?",
             ['%' + ATTEST_BATCH_COMPLETION_STAMP, from, to], conn);
-        add('attests', attestHeadRows);
-    } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-        // Table/columns may not exist on older source schemas (pre-batch-rail builds); skip.
-    }
+        add(acc, 'attests', attestHeadRows);
+    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+}
 
+async function collectTokenSupplyRows(db, from, to, conn, acc){
     // 6. tokens.supply refresh on surviving token rows. The indexer materialises
     //    tokens.supply as an in-place UPDATE (db.createToken on DEPLOY/ISSUE/MINT and
     //    db.updateTokens after order/swap/dispense settlement and STAKE rebalances). The
@@ -441,12 +352,33 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
                 "SELECT e.tick_id FROM escrows e JOIN actions a ON a.action_index = e.action_index " +
                     "WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL)",
             [from, to, from, to, from, to], conn);
-        add('tokens', tokenRows);
-    } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
-        // Table/columns may not exist on older source schemas; skip.
-    }
+        add(acc, 'tokens', tokenRows);
+    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+}
 
+// Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
+// Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
+// the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
+//
+//   db              the source Database (indexer dbType only; callers must gate)
+//   fromBlock       inclusive lower block bound of the window
+//   toBlock         inclusive upper block bound of the window
+//   activationDelay frozen per-chain ACTIVATION_DELAY_BLOCKS; null skips the
+//                   deactivation_block class (matching ClientRollback's caution
+//                   when no coin is known) rather than scanning with a wrong delay
+//   conn            optional connection (so a snapshot's REPEATABLE READ view reads
+//                   the updated rows at the same height as the rest of the payload)
+async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn){
+    let from = Number(fromBlock);
+    let to   = Number(toBlock);
+    let acc  = {};
+    await collectDeactivationAndSlashRows(db, from, to, activationDelay, conn, acc);
+    await collectRotationAndRequestRows(db, from, to, conn, acc);
+    await collectPollAndCooldownRows(db, from, to, conn, acc);
+    await collectBetStatusRows(db, from, to, conn, acc);
+    await collectInvalidArchiveRows(db, from, to, conn, acc);
+    await collectAttestBatchHeadRows(db, from, to, conn, acc);
+    await collectTokenSupplyRows(db, from, to, conn, acc);
     let out = {};
     for(let table in acc){
         let arr = Array.from(acc[table].values());
