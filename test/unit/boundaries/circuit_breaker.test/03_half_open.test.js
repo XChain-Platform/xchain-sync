@@ -8,29 +8,28 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
+// Covers half-open recovery. One part of circuit_breaker.test.js.
 const assert = require('assert');
 const sinon  = require('sinon');
-const { createDatabase, registerHooks } = require('./circuit_breaker.test/helpers/circuit_breaker_suite');
+const { createDatabase, registerHooks } = require('./helpers/circuit_breaker_suite');
 
 describe('Boundary: Circuit Breaker', function(){
     let db, pool;
     registerHooks();
 
-    describe('failure threshold (10)', function(){
-        it('9 failures: circuit stays closed', async function(){
+    describe('half-open recovery', function(){
+        it('transitions to half-open after cooldown expires', async function(){
             let conn = { release: sinon.stub() };
-            let callCount = 0;
             pool = {
-                getConnection: sinon.stub().callsFake(async () => {
-                    callCount++;
-                    if(callCount <= 9) throw new Error('fail');
-                    return conn;
-                }),
+                getConnection: sinon.stub().resolves(conn),
                 end: sinon.stub()
             };
             db = createDatabase(pool);
-            // Override sleep to be instant
-            sinon.stub(db.util, 'sleep').resolves();
+
+            // Simulate open circuit with expired cooldown
+            db.circuitState = 'open';
+            db.circuitFailures = 10;
+            db.circuitOpenUntil = Date.now() - 1; // expired
 
             let result = await db.getConnection();
             assert.strictEqual(result, conn);
@@ -38,23 +37,21 @@ describe('Boundary: Circuit Breaker', function(){
             assert.strictEqual(db.circuitFailures, 0);
         });
 
-        it('10 failures: circuit opens and throws', async function(){
+        it('re-opens on failure during half-open', async function(){
             pool = {
-                getConnection: sinon.stub().rejects(new Error('fail')),
+                getConnection: sinon.stub().rejects(new Error('still down')),
                 end: sinon.stub()
             };
             db = createDatabase(pool);
             sinon.stub(db.util, 'sleep').resolves();
 
-            await assert.rejects(
-                () => db.getConnection(),
-                (err) => {
-                    let msg = (err && err.message) ? err.message : String(err);
-                    return msg.includes('Circuit breaker opened');
-                }
-            );
+            // Simulate half-open state
+            db.circuitState = 'open';
+            db.circuitFailures = 9;
+            db.circuitOpenUntil = Date.now() - 1;
+
+            await assert.rejects(() => db.getConnection());
             assert.strictEqual(db.circuitState, 'open');
-            assert.strictEqual(db.circuitFailures, 10);
         });
     });
 });
