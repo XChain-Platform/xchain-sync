@@ -340,3 +340,25 @@ describe('config', function(){
         });
     });
 });
+
+describe('config', function(){
+    // The call-time reader the state-commitment twin uses for its metric cap: it
+    // must answer with the environment as it is at the CALL, never a value taken
+    // at load or on a first read, because suites set the variable mid-run.
+    describe('readEnvNow', function(){
+        const KEY = 'STATE_TREE_METRIC_MAX_NODES';
+        let saved;
+        beforeEach(function(){ saved = process.env[KEY]; });
+        afterEach(function(){
+            if(saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved;
+        });
+        it('reads the current value on every call: set, read, change, read again, unset', function(){
+            process.env[KEY] = '3';
+            assert.strictEqual(config.readEnvNow(KEY), '3');
+            process.env[KEY] = '7';
+            assert.strictEqual(config.readEnvNow(KEY), '7', 'a changed variable must be re-read, not served from a cache');
+            delete process.env[KEY];
+            assert.strictEqual(config.readEnvNow(KEY), undefined, 'an unset variable reads undefined, so the caller applies its default');
+        });
+    });
+});

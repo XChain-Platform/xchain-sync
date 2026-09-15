@@ -133,6 +133,9 @@ module.exports = {
     /** The hub wait ceiling in ms, for a caller whose config object lacks it. */
     maxHubWaitMsFromEnv: () => parseInt(process.env.MAX_HUB_WAIT_MS) || 300000,
 
+    /** process.env[key] as it is NOW, for a read a running process re-takes on every call (the state-tree metric cap, shared with the indexer twin). */
+    readEnvNow: (key) => process.env[key],
+
     /** The raw state-tree metric interval, NaN when unset; the caller applies its default. */
     stateTreeMetricIntervalMsFromEnv: () => parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10),
 
