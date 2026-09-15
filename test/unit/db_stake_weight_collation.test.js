@@ -40,9 +40,10 @@ function dbWithCapturedQueries() {
 
 const INNER = { sql: 'SELECT 1 AS pubkey, 2 AS source, 3 AS weight', args: [] };
 
-afterEach(function () { sinon.restore(); });
+function restoreSinon() { sinon.restore(); }
 
 describe('sync: stake-weight ordering collation gate', function () {
+    afterEach(restoreSinon);
 
     it('an unpinned chain emits no COLLATE', async function () {
         // testnet is the unpinned network now that mainnet arms at genesis.
@@ -81,6 +82,29 @@ describe('sync: stake-weight ordering collation gate', function () {
         assert.match(q, /ROW_NUMBER\(\) OVER \(PARTITION BY b\.source COLLATE utf8_bin ORDER BY b\.pubkey COLLATE utf8_bin\)/);
         assert.match(q, /ORDER BY r\.source COLLATE utf8_bin, r\.pubkey COLLATE utf8_bin/);
     });
+});
+
+describe('sync: stake-weight ordering collation gate', function () {
+    afterEach(restoreSinon);
+
+    // The follower's copy of the map is the same bytes as the source's (twin guard in
+    // rollback-coverage.test.js). Pinned here too so a one-sided edit in this repo,
+    // which is exactly the fork the gate exists to prevent, fails in this repo's suite.
+    it('the gate map is armed at genesis on mainnet and still unpinned on testnet', function () {
+        assert.deepStrictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION, {
+            'BTC:mainnet':  0,
+            'LTC:mainnet':  0,
+            'DOGE:mainnet': 0,
+            'BTC:testnet':  null,
+            'LTC:testnet':  null,
+            'DOGE:testnet': null,
+            regtest: 0,
+        });
+    });
+});
+
+describe('sync: stake-weight ordering collation gate', function () {
+    afterEach(restoreSinon);
 
     describe('fail-closed startup assertion', function () {
 
@@ -130,21 +154,6 @@ describe('sync: stake-weight ordering collation gate', function () {
         it('is a no-op on a decoder replica, which holds no stakes', async function () {
             const db = dbAnswering([{ CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_general_ci' }], 'decoder');
             await db.assertStakeWeightOrderingCollation();
-        });
-    });
-
-    // The follower's copy of the map is the same bytes as the source's (twin guard in
-    // rollback-coverage.test.js). Pinned here too so a one-sided edit in this repo,
-    // which is exactly the fork the gate exists to prevent, fails in this repo's suite.
-    it('the gate map is armed at genesis on mainnet and still unpinned on testnet', function () {
-        assert.deepStrictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION, {
-            'BTC:mainnet':  0,
-            'LTC:mainnet':  0,
-            'DOGE:mainnet': 0,
-            'BTC:testnet':  null,
-            'LTC:testnet':  null,
-            'DOGE:testnet': null,
-            regtest: 0,
         });
     });
 });
