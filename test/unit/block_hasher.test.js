@@ -66,7 +66,9 @@ describe('BlockHasher: independent recompute conformance @regression', function(
         assert.ok(got.ledger_hash && got.actions_hash && got.contract_hash,
             'empty block still yields the three chained hashes');
     });
+});
 
+describe('BlockHasher: independent recompute conformance @regression', function(){
     // state_key collation flag-day (state_key_collation_activation.js twin):
     // the contract-state gather must pin COLLATE utf8_bin exactly when the gate
     // is active, byte-for-byte with the indexer's getBlockHashes, or the
