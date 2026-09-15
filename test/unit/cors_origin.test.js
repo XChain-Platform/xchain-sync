@@ -94,7 +94,9 @@ describe('CORS_ORIGIN allowlist parsing', function(){
             assert.deepStrictEqual(parseCorsOrigin(`${IOS},,${EXPLORER}`), [IOS, EXPLORER]);
         });
     });
+});
 
+describe('CORS_ORIGIN allowlist parsing', function(){
     // The seam that actually ships: config.js must hand cors a parsed value.
     describe('getConfig() resolves CORS_ORIGIN, not the raw env string', function(){
 
@@ -115,16 +117,16 @@ describe('CORS_ORIGIN allowlist parsing', function(){
             }
         });
     });
+});
 
+describe('CORS_ORIGIN allowlist parsing', function(){
     describe('what a caller actually receives', function(){
-
         it('sends no ACAO at all when CORS is disabled, the sync default', async function(){
             const acao = await acaoFor(undefined, [IOS, EXPLORER, HOSTILE]);
             assert.strictEqual(acao[IOS], null);
             assert.strictEqual(acao[EXPLORER], null);
             assert.strictEqual(acao[HOSTILE], null);
         });
-
         it('sends `*` to everyone when CORS_ORIGIN is `*`', async function(){
             const acao = await acaoFor('*', [IOS, EXPLORER, HOSTILE]);
             assert.strictEqual(acao[IOS], '*');
@@ -176,7 +178,9 @@ describe('CORS_ORIGIN allowlist parsing', function(){
                 'a stray `*` in a list must not widen the grant to every origin');
         });
     });
+});
 
+describe('CORS_ORIGIN allowlist parsing', function(){
     // The parser is only reached if config.js actually calls it. Asserting the
     // source keeps a later edit from reverting to the raw env var while the
     // behavioural tests still pass against the helper in isolation.

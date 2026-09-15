@@ -96,17 +96,28 @@ function build(db, chain, required, config){
 
 const block = (i) => ({ block_index: i, block_time: 1, ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
 
+function prepareActivationCase(){
+    const db = createMockDb();
+    // The constructor's VERIFY_RECOMPUTE=false warning fires before the stubs
+    // exist on purpose; only the apply path is measured for noise below.
+    const logStub = sinon.stub(console, 'log');
+    const errStub = sinon.stub(console, 'error');
+    sinon.stub(console, 'warn');
+    return { db, logStub, errStub };
+}
+
+function prepareManifestCase(){
+    const db = createMockDb();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xchain-sync-train-'));
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+    return { db, dir };
+}
+
 describe('ClientSync: platform-train activation halt @regression', function(){
     let db, logStub, errStub;
 
-    beforeEach(function(){
-        db = createMockDb();
-        // The constructor's VERIFY_RECOMPUTE=false warning fires before the stubs
-        // exist on purpose; only the apply path is measured for noise below.
-        logStub = sinon.stub(console, 'log');
-        errStub = sinon.stub(console, 'error');
-        sinon.stub(console, 'warn');
-    });
+    beforeEach(function(){ ({ db, logStub, errStub } = prepareActivationCase()); });
     afterEach(function(){ sinon.restore(); });
 
     it('HALTS at the activation height when the build lacks the required rule set, naming the set and the height', async function(){
@@ -140,6 +151,12 @@ describe('ClientSync: platform-train activation halt @regression', function(){
         assert.match(said, /9\.0\.0/);
         assert.match(said, /970000/);
     });
+});
+
+describe('ClientSync: platform-train activation halt @regression', function(){
+    let db, logStub, errStub;
+    beforeEach(function(){ ({ db, logStub, errStub } = prepareActivationCase()); });
+    afterEach(function(){ sinon.restore(); });
 
     it('does NOT halt, and adds no log noise, when the build implements the required rule set', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('1.0.0', { mainnet: 0 }));
@@ -178,6 +195,12 @@ describe('ClientSync: platform-train activation halt @regression', function(){
         const pendingLines = errStub.getCalls().filter(c => /TRAIN ACTIVATION PENDING/.test(c.args.join(' ')));
         assert.strictEqual(pendingLines.length, 1, 'one announcement per 60 applies, not one per block');
     });
+});
+
+describe('ClientSync: platform-train activation halt @regression', function(){
+    let db, logStub, errStub;
+    beforeEach(function(){ ({ db, logStub, errStub } = prepareActivationCase()); });
+    afterEach(function(){ sinon.restore(); });
 
     it('stays halted across a restart, the same way a divergence halt does', async function(){
         const first = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
@@ -228,6 +251,12 @@ describe('ClientSync: platform-train activation halt @regression', function(){
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.lastAppliedBlock, 969999);
     });
+});
+
+describe('ClientSync: platform-train activation halt @regression', function(){
+    let db, logStub, errStub;
+    beforeEach(function(){ ({ db, logStub, errStub } = prepareActivationCase()); });
+    afterEach(function(){ sinon.restore(); });
 
     it('refuses a full bootstrap snapshot whose tip reaches the boundary', async function(){
         const { sync, applier } = build(db, 'bitcoin', armed('9.0.0', { mainnet: 970000 }));
@@ -264,6 +293,12 @@ describe('ClientSync: platform-train activation halt @regression', function(){
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.trainActivation.status, 'clear');
     });
+});
+
+describe('ClientSync: platform-train activation halt @regression', function(){
+    let db, logStub, errStub;
+    beforeEach(function(){ ({ db, logStub, errStub } = prepareActivationCase()); });
+    afterEach(function(){ sinon.restore(); });
 
     it('halts when the gate itself throws, rather than waving the block through', async function(){
         const { sync, applier } = build(db, 'bitcoin', null);
@@ -291,12 +326,7 @@ describe('ClientSync: platform-train activation halt @regression', function(){
 describe('ClientSync: the release manifest is the source of the train requirement @regression', function(){
     let db, dir;
 
-    beforeEach(function(){
-        db  = createMockDb();
-        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xchain-sync-train-'));
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
+    beforeEach(function(){ ({ db, dir } = prepareManifestCase()); });
     afterEach(function(){
         sinon.restore();
         fs.rmSync(dir, { recursive: true, force: true });
@@ -331,6 +361,15 @@ describe('ClientSync: the release manifest is the source of the train requiremen
         assert.ok(applier.applyBlock.calledOnce);
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.trainActivation.status, 'clear');
+    });
+});
+
+describe('ClientSync: the release manifest is the source of the train requirement @regression', function(){
+    let db, dir;
+    beforeEach(function(){ ({ db, dir } = prepareManifestCase()); });
+    afterEach(function(){
+        sinon.restore();
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 
     it('a manifest that exists but cannot be parsed halts fail-closed', async function(){

@@ -63,12 +63,10 @@ function dbFor(rows) {
     return db;
 }
 
-afterEach(function () { sinon.restore(); });
-
 describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1', function () {
+    afterEach(function () { sinon.restore(); });
 
     describe('live getStakeWeightsByCapability', function () {
-
         it('below activation (BTC:mainnet < 960000) uses the legacy uncapped LIMIT', async function () {
             const db = dbFor([]);
             await db.getStakeWeightsByCapability('oracle_publish', 900000, '500', 1000, 'BTC', 'mainnet');
@@ -78,7 +76,6 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
             assert.doesNotMatch(query, /DENSE_RANK/);
             assert.strictEqual(args[args.length - 1], 1000);
         });
-
         it('at/after activation (BTC:mainnet >= 960000) uses the windowed source-cap', async function () {
             const db = dbFor([]);
             await db.getStakeWeightsByCapability('oracle_publish', 960000, '500', 1000, 'BTC', 'mainnet');
@@ -125,6 +122,10 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
             assert.deepStrictEqual(out.map(r => r.source), ['s-0001']);
         });
     });
+});
+
+describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1', function () {
+    afterEach(function () { sinon.restore(); });
 
     describe('SPV forward-follow getStakeWeightsByCapabilityAsOf', function () {
 

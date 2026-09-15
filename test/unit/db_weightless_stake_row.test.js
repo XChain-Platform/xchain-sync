@@ -88,6 +88,11 @@ describe('weightless stake-weight rows fail closed', function(){
                 /getStakeWeightsByCapabilityAsOf\(oracle_publish\)/);
         });
     });
+});
+
+describe('weightless stake-weight rows fail closed', function(){
+    beforeEach(function(){ sinon.stub(console, 'warn'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('getStakeWeightsByCapability (live)', function(){
 
@@ -112,6 +117,11 @@ describe('weightless stake-weight rows fail closed', function(){
             assert.deepStrictEqual(out.map(r => r.weight), ['50000', '0']);
         });
     });
+});
+
+describe('weightless stake-weight rows fail closed', function(){
+    beforeEach(function(){ sinon.stub(console, 'warn'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('getStakeWeightsByCapabilityAsOf (historical reconstruction)', function(){
 
@@ -128,6 +138,11 @@ describe('weightless stake-weight rows fail closed', function(){
             assert.deepStrictEqual(out.map(r => r.weight), ['50000', '600']);
         });
     });
+});
+
+describe('weightless stake-weight rows fail closed', function(){
+    beforeEach(function(){ sinon.stub(console, 'warn'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('twin parity with the indexer guard', function(){
 

@@ -92,6 +92,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual(makeSync('http://a:3006,http://b:3006,http://c:3006', { SOURCE_QUORUM: 1 }).sync.sourceQuorum, 1);
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('3-source majority applies', function(){
         it('applies the block once 2 of 3 sources agree, without waiting for the 3rd', async function(){
@@ -115,6 +120,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual((sync._sourceStrikes.get(0) || []).length, 0, 'majority sources are not struck');
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('4-source: one Byzantine source is struck then evicted', function(){
         it('evicts the persistent dissenter after SOURCE_EVICT_THRESHOLD strikes, preserving liveness', async function(){
@@ -147,6 +157,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             clock.restore();
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('no-source-quorum halt', function(){
         it('2-source tie (1-1 split, no majority) halts with reason no-source-quorum', async function(){
@@ -178,6 +193,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual(sync.isHalted(), false, 'log-only mode does not halt');
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('backward-compatible 2-source behavior', function(){
         it('applies when both sources agree (unchanged from the pairwise path)', async function(){
@@ -204,6 +224,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             clock.restore();
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('eviction guard (never below 2 active sources)', function(){
         it('does not evict a 3rd source down to a single-source posture', async function(){
@@ -218,6 +243,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual(sync.getActiveSourceCount(), 2);
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('strike sliding window', function(){
         it('prunes strikes older than SOURCE_STRIKE_WINDOW so stale strikes do not evict', function(){
@@ -231,6 +261,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual(sync._evictedSources.has(3), false, 'not evicted on stale strikes');
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('bootstrap quorum cross-check', function(){
         // Drive bootstrapRotateSources with the snapshot fetch/apply stubbed out so the
@@ -283,6 +318,11 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             assert.strictEqual(sync.isHalted(), true);
         });
     });
+});
+
+describe('ClientSync: multi-source Byzantine quorum @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
 
     describe('checkpoint freshness strict', function(){
         const ENVKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_MAINNET';

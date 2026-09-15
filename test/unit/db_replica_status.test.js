@@ -57,9 +57,8 @@ const conn = (name, io, sql, behind) => ({
     Connection_name: name, Slave_IO_Running: io, Slave_SQL_Running: sql, Seconds_Behind_Master: behind
 });
 
-afterEach(function () { sinon.restore(); delete process.env.SYNC_REPLICA_CONNECTION; });
-
 describe('getReplicaStatus on a multi-source replica @regression @tier1', function () {
+    afterEach(function () { sinon.restore(); delete process.env.SYNC_REPLICA_CONNECTION; });
 
     it('SEES a two-connection replica that SHOW REPLICA STATUS reports as empty', async function () {
         // The regression itself. Before the fix this returned isReplica:false and
@@ -109,6 +108,10 @@ describe('getReplicaStatus on a multi-source replica @regression @tier1', functi
         assert.strictEqual(r.isReplica, false);
         assert.strictEqual(r.secondsBehind, null);
     });
+});
+
+describe('getReplicaStatus on a multi-source replica @regression @tier1', function () {
+    afterEach(function () { sinon.restore(); delete process.env.SYNC_REPLICA_CONNECTION; });
 
     it('SYNC_REPLICA_CONNECTION measures only the named stream', async function () {
         process.env.SYNC_REPLICA_CONNECTION = 'xchain';

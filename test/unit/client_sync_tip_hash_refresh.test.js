@@ -107,6 +107,20 @@ describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', 
             'an honest re-delivery of the tip must not log a fork-at-head continuity error');
         assert.strictEqual(catchUp.called, false, 'and must not fire a redundant catch-up');
     });
+});
+
+describe('ClientSync: snapshot catch-up repairs the tip hash pair @regression', function(){
+    let getStub, errorStub;
+
+    beforeEach(function(){
+        getStub = sinon.stub(axios, 'get').callsFake(async () => ({
+            data: Buffer.from(JSON.stringify({ block_height: 101, since_block: 101, data: {} }), 'utf8')
+        }));
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'warn');
+        errorStub = sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
 
     it('still reports a REAL fork at the head (the guard is not disarmed)', async function(){
         // Negative control for the two assertions above: with genuinely different

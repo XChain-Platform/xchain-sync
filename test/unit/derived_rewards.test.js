@@ -69,7 +69,9 @@ describe('collectDerivedAnchorRewards', function(){
         assert.strictEqual(out[0].block_index, 961500, 'block_index stays the earn-block E');
         assert.strictEqual(out[0].derive_block_index, 961700);
     });
+});
 
+describe('collectDerivedAnchorRewards', function(){
     // The archive leg keys round_reference on MATCH_BATCH_SEQ, a dense hub counter a
     // wipe-and-replay rebase reissues, so two genuinely distinct archive rewards can share
     // source_id/signing_pubkey_id/reward_type/round_reference and differ only in

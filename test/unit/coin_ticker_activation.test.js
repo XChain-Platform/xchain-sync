@@ -58,7 +58,9 @@ describe('coinTicker() + per-chain activation lookup', function () {
             assert.strictEqual(coinTicker('quatloo'), 'quatloo');
         });
     });
+});
 
+describe('coinTicker() + per-chain activation lookup', function () {
     describe('the trap this exists to prevent', function () {
         // Armed per-chain heights (state_commitment_activation.js). The bare
         // 'mainnet'/'testnet' keys deliberately do NOT exist, so a full-name lookup

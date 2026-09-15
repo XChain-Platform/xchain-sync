@@ -150,6 +150,23 @@ describe('Database schema self-heal: one startup completes columns then key rebu
         assert.ok(!warned.some(m => /column self-heal must run first|re-run on the next startup|could not be added/.test(m)),
             'a deferral line in any form is what repeated at six consecutive starts');
     });
+});
+
+describe('Database schema self-heal: one startup completes columns then key rebuilds', function () {
+    let db, state, layer;
+
+    beforeEach(function () {
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+        state = deferredReplica();
+        db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+        layer = fakeQueryLayer(state);
+        sinon.stub(db, 'doQuery').callsFake(layer.fake);
+        sinon.stub(db, 'doQueryStrict').callsFake(layer.fake);
+    });
+
+    afterEach(async function () { sinon.restore(); await db.close(); });
 
     it('is idle on the second and third startup', async function () {
         await startup(db);
