@@ -73,6 +73,18 @@ describe('TransparencyLog (read-only replica)', function(){
             assert.strictEqual(db.doQuery.called, false);
         });
     });
+});
+
+describe('TransparencyLog (read-only replica)', function(){
+
+    let db, log;
+
+    beforeEach(function(){
+        db  = withDbMixins({ doQuery: sinon.stub().resolves([]) });
+        log = new TransparencyLog(db, 100, true);
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('read paths still work', function(){
         it('getHighWaterMark still queries and returns the replicated tip', async function(){
@@ -120,6 +132,20 @@ describe('TransparencyLog (read-only replica)', function(){
             db.doQuery.onSecondCall().resolves([{ block_index: 50 }]);
             assert.deepStrictEqual(await log.findGaps(), [50]);
         });
+    });
+});
+
+describe('TransparencyLog (read-only replica)', function(){
+
+    let db, log;
+
+    beforeEach(function(){
+        db  = withDbMixins({ doQuery: sinon.stub().resolves([]) });
+        log = new TransparencyLog(db, 100, true);
+    });
+
+    afterEach(function(){
+        sinon.restore();
     });
 
     describe('a writable log is unaffected', function(){

@@ -14,14 +14,21 @@ const TransparencyLog = require('../../src/server/transparency_log');
 const MerkleTree = require('../../src/server/merkle_tree');
 const { withDbMixins } = require('../helpers/db_mixins.js');
 
+let log, db;
+
+function setUpLog(){
+    db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
+    log = new TransparencyLog(db);
+}
+
+function restoreSinon(){
+    sinon.restore();
+}
+
 describe('TransparencyLog', function(){
 
-    let log, db;
-
-    beforeEach(function(){
-        db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
-        log = new TransparencyLog(db);
-    });
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('recordBlock', function(){
         it('calls doQuery with INSERT IGNORE and correct params', async function(){
@@ -71,6 +78,12 @@ describe('TransparencyLog', function(){
             assert.strictEqual(hwm, null);
         });
     });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('getRecordedHash', function(){
         it('returns the durable recorded ledger_hash for a height', async function(){
@@ -125,6 +138,12 @@ describe('TransparencyLog', function(){
             assert.strictEqual(commit.calledOnceWith(3), true);
         });
     });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('commitEpoch early returns', function(){
         it('returns early when the epoch is already committed', async function(){
@@ -142,6 +161,12 @@ describe('TransparencyLog', function(){
                 'no insert when no epoch blocks');
         });
     });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('getProof', function(){
         function epochRows(blocks){
@@ -194,6 +219,12 @@ describe('TransparencyLog', function(){
             assert.ok(Array.isArray(result.proof));
         });
     });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('getLatestRoot', function(){
         it('returns the most recent committed epoch row', async function(){
@@ -207,8 +238,6 @@ describe('TransparencyLog', function(){
             assert.strictEqual(await log.getLatestRoot(), null);
         });
     });
-
-    afterEach(function(){ sinon.restore(); });
 
     describe('getPage', function(){
         it('returns paginated results', async function(){
@@ -243,6 +272,15 @@ describe('TransparencyLog', function(){
             let result = await log.getPage(0, -5);
             assert.strictEqual(result.limit, 1);
         });
+    });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
+
+    describe('getPage', function(){
 
         it('clamps limit above 1000 to 1000', async function(){
             db.doQuery.onFirstCall().resolves([{ total: 0n }]);
@@ -288,6 +326,15 @@ describe('TransparencyLog', function(){
             assert.ok(db.doQuery.getCalls().some(c =>
                 /DELETE FROM sync_meta WHERE block_index >= /.test(c.args[0]) && c.args[1][0] === 250));
         });
+    });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
+
+    describe('pruneFrom', function(){
 
         it('does not duplicate the audit marker when one is already pending (retry-safe)', async function(){
             db.doQuery.withArgs(sinon.match(/SELECT epoch, start_block/)).resolves([
@@ -321,6 +368,12 @@ describe('TransparencyLog', function(){
             await assert.rejects(() => log.pruneFrom(10), /boom/);
         });
     });
+});
+
+describe('TransparencyLog', function(){
+
+    beforeEach(setUpLog);
+    afterEach(restoreSinon);
 
     describe('commitEpoch reorg-marker backfill', function(){
         it('backfills a pending reorg marker new_root when the epoch re-commits', async function(){

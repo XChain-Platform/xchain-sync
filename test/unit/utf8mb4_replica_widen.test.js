@@ -98,6 +98,23 @@ describe('Database.ensureReplicaUtf8mb4Columns', function(){
         assert.deepStrictEqual(altersIn(calls), [],
             'a converged replica must pay one information_schema read per table and nothing else');
     });
+});
+
+describe('Database.ensureReplicaUtf8mb4Columns', function(){
+
+    let db;
+
+    beforeEach(function(){
+        db = makeDb();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+
+    afterEach(async function(){
+        sinon.restore();
+        await db.close();
+    });
 
     it('skips a table this replica does not carry', async function(){
         const calls = [];
@@ -131,6 +148,23 @@ describe('Database.ensureReplicaUtf8mb4Columns', function(){
         assert.ok(alters[0].includes('MODIFY `quorum`'));
         assert.ok(!alters[0].includes('MODIFY `decide_threshold`'),
             'the ALTER names a column this replica does not have, so the whole statement fails errno 1054');
+    });
+});
+
+describe('Database.ensureReplicaUtf8mb4Columns', function(){
+
+    let db;
+
+    beforeEach(function(){
+        db = makeDb();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+
+    afterEach(async function(){
+        sinon.restore();
+        await db.close();
     });
 
     it('does not run on a decoder replica (none of these tables exist there)', async function(){

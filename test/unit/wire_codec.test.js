@@ -49,6 +49,9 @@ describe('Unit: wireCodec (binary-safe row serialization)', function(){
             assert.strictEqual(encodeRow(undefined), undefined);
         });
     });
+});
+
+describe('Unit: wireCodec (binary-safe row serialization)', function(){
 
     describe('decodeValue', function(){
         it('restores a sentinel to the exact Buffer', function(){
@@ -89,6 +92,9 @@ describe('Unit: wireCodec (binary-safe row serialization)', function(){
             assert.strictEqual(decodeValue(buf), buf);
         });
     });
+});
+
+describe('Unit: wireCodec (binary-safe row serialization)', function(){
 
     describe('round-trip (encode → JSON → parse → decode)', function(){
         it('preserves arbitrary binary bytes including 0x00 and 0xFF', function(){
@@ -112,6 +118,9 @@ describe('Unit: wireCodec (binary-safe row serialization)', function(){
             assert.ok(out.equals(buf));
         });
     });
+});
+
+describe('Unit: wireCodec (binary-safe row serialization)', function(){
 
     describe('encodeTables', function(){
         it('encodes Buffer columns across every row of every table', function(){

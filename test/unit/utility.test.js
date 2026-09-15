@@ -68,6 +68,20 @@ describe('Utility', function(){
             assert.strictEqual(result, '{"a":null}');
         });
     });
+});
+
+describe('Utility', function(){
+
+    let util;
+
+    beforeEach(function(){
+        util = new Utility();
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     describe('getDataHash', function(){
         it('returns a 64-char hex string', function(){
@@ -106,6 +120,20 @@ describe('Utility', function(){
             util.logError('some error', { extra: 'info' });
             assert.strictEqual(console.error.calledOnce, true);
         });
+    });
+});
+
+describe('Utility', function(){
+
+    let util;
+
+    beforeEach(function(){
+        util = new Utility();
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
     });
 
     describe('sleep', function(){

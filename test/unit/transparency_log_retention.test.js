@@ -89,6 +89,11 @@ describe('TransparencyLog sync_meta retention', function(){
             assert.strictEqual(deleteCalls(db).length, 0);
         });
     });
+});
+
+describe('TransparencyLog sync_meta retention', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('armed window', function(){
         it('deletes at the committed epoch boundary below the cutoff', async function(){
@@ -141,6 +146,14 @@ describe('TransparencyLog sync_meta retention', function(){
             assert.strictEqual(result.prunedThrough, null);
             assert.strictEqual(deleteCalls(db).length, 0);
         });
+    });
+});
+
+describe('TransparencyLog sync_meta retention', function(){
+
+    afterEach(function(){ sinon.restore(); });
+
+    describe('armed window', function(){
 
         it('does nothing when the window is wider than the log', async function(){
             let db  = createDb({ hwm: 500, boundary: 400 });
@@ -181,6 +194,11 @@ describe('TransparencyLog sync_meta retention', function(){
             assert.strictEqual(db.doQuery.called, false);
         });
     });
+});
+
+describe('TransparencyLog sync_meta retention', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('recordBlock wiring', function(){
         it('sweeps once per epoch boundary, after the boundary commit', async function(){
@@ -215,6 +233,11 @@ describe('TransparencyLog sync_meta retention', function(){
             assert.match(console.error.firstCall.args[0], /Error pruning sync_meta at epoch 10/);
         });
     });
+});
+
+describe('TransparencyLog sync_meta retention', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('getProof after retention', function(){
         it('reports not-available (null) for an epoch whose leaves were pruned', async function(){
