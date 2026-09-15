@@ -82,6 +82,20 @@ describe('Boundary: Block Index Values', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
     });
+});
+
+describe('Boundary: Block Index Values', function(){
+
+    let db, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = new Utility();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('block_index = 1 (typical first block)', function(){
         it('poller processes block 1 from initial state', async function(){
@@ -105,6 +119,20 @@ describe('Boundary: Block Index Values', function(){
             assert.strictEqual(broadcaster.broadcast.called, false);
         });
     });
+});
+
+describe('Boundary: Block Index Values', function(){
+
+    let db, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = new Utility();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('large block indices', function(){
         it('JS safe integer max (2^53-1) preserved correctly', function(){
@@ -131,6 +159,20 @@ describe('Boundary: Block Index Values', function(){
             // This means two different block_indices would be indistinguishable as Numbers
         });
     });
+});
+
+describe('Boundary: Block Index Values', function(){
+
+    let db, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = new Utility();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('reorg boundary at block 1', function(){
         it('reorg from 10 to 0: reorg event at block_index 1', async function(){
@@ -148,6 +190,20 @@ describe('Boundary: Block Index Values', function(){
             assert.strictEqual(event.block_index, 1); // currentBlock(0) + 1
         });
     });
+});
+
+describe('Boundary: Block Index Values', function(){
+
+    let db, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        util = new Utility();
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('client skip logic', function(){
         it('skips block with index <= lastAppliedBlock', function(){
