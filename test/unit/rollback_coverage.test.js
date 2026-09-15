@@ -1092,6 +1092,8 @@ describe('Rollback coverage guard @regression', function(){
         ['state_subtree_activation.js',          'src/state_subtree_activation.js'],
         ['contract_state_subtree.js',            'src/consensus/contract_state_subtree.js'],
         ['escrow_leaf_subtree.js',               'src/consensus/escrow_leaf_subtree.js'],
+        ['db/subtree/node_store_rows.js',       'src/db/subtree/node_store_rows.js'],
+        ['db/subtree/orphan_stats_reads.js',    'src/db/subtree/orphan_stats_reads.js'],
         ['table_lifecycle.js',                   'src/hub/table_lifecycle.js'],
         ['table_lifecycle/action_tables.js',     'src/hub/table_lifecycle/action_tables.js'],
         ['table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
