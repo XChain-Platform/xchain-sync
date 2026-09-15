@@ -75,6 +75,20 @@ describe('Boundary: INSERT Batch Size (100 rows)', function(){
         assert.strictEqual(db.doQuery.callCount, 1);
         assert.strictEqual(db.doQuery.firstCall.args[1].length, 200); // 2 cols * 100 rows
     });
+});
+
+describe('Boundary: INSERT Batch Size (100 rows)', function(){
+
+    let applier, db;
+
+    beforeEach(function(){
+        db = createMockDb();
+        applier = new ClientApplier(db, new Utility());
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     it('101 rows: two INSERTs: 100 + 1', async function(){
         await applier.insertRows('actions', makeRows(101));
