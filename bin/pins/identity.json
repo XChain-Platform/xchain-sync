@@ -16,6 +16,7 @@
   },
   "armed_map_fingerprint_v2": "457980e8a255c6cdbdedc393c6d7fc04721de2ed3d86adee0a70e2798d0f02aa",
   "armed_map_rows": 39,
+  "carrier_logic_digest": "42c52f1d1946a77cb09cab3c1fb0c68840ed7e28dc81e1a593f9cbccbfddbd27",
   "vendoredCoins": {
     "src/coins/BTC.js": "900d82359d27269ebb775a207e84cac7ac0702f57f07c0239d5406f2a0ec6c90",
     "src/coins/DOGE.js": "a0952d619edec50c09d0cbac90023cba2e8e75f0fa98b650e2ee1f4eadd7540b",

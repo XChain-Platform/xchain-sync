@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "entries": {
+    "archive_rollback_author_scope_activation": {
+      "path": "src/archive_rollback_author_scope_activation.js",
+      "hash": "308b96595f1f9dbb6954e5eb6bdc2df7c5e351dcaed2ad5b6b190352bd5e1cff",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "checkpoint_commitment_activation": {
+      "path": "src/checkpoint_commitment_activation.js",
+      "hash": "b145c3bff9dece6741a8b24a2979a02607c1daf83f98383d4fe29b99170b574c",
+      "twins": [
+        "xchain-hub",
+        "xchain-indexer"
+      ]
+    },
+    "consensus-constants": {
+      "path": "src/consensus-constants.js",
+      "hash": "9c4bf0dcfe728d5856ad94b5908f07f88ce02eda978c067d21a9df6183c47416",
+      "twins": []
+    },
+    "equivocation_header": {
+      "path": "src/equivocation_header.js",
+      "hash": "d14b27eda669b5429c97cc2fc212c0fee5dea8f2bd14797deb3a272be9b3cdc9",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "stake_weight_collation_activation": {
+      "path": "src/stake_weight_collation_activation.js",
+      "hash": "169836edebfe98a9d131e3c8b295669260e2ab5e9d07bc020a0129c720cb5b4b",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "stake_weighted_quorum": {
+      "path": "src/stake_weighted_quorum.js",
+      "hash": "da0af9b4eb48cb18657250bdee8bd86f59108af39a599530a89f6c100c44fd80",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "stateHash": {
+      "path": "src/stateHash.js",
+      "hash": "93ebdd554ab209a63db33a3e8403726d345e1f5e765b29a23a9e80e178a222a8",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "state_commitment_activation": {
+      "path": "src/state_commitment_activation.js",
+      "hash": "7719117296d358be9b3a4e3142b6b4c611f5b7ebf683f40040016fda9e9de643",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "state_key_collation_activation": {
+      "path": "src/state_key_collation_activation.js",
+      "hash": "537ba4b260e00196b546d29cbda6342d0760efc6cb4d143045fb64dcd4c68482",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "state_subtree_activation": {
+      "path": "src/state_subtree_activation.js",
+      "hash": "a33913fec0939990ba9d2550843965d6bfdcbf6bf40354358aa21e4c1fdc185d",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "swq_source_cap_activation": {
+      "path": "src/swq_source_cap_activation.js",
+      "hash": "620854dd7934a2e24de8175dd55efb1c5aa55e712e931b12c9317ffc1cfebc29",
+      "twins": [
+        "xchain-indexer"
+      ]
+    },
+    "train_activation": {
+      "path": "src/train_activation.js",
+      "hash": "ce8c9e40354e772996e6ff052e6601c8a564b0a0e25b9e853aa238d424545450",
+      "twins": [
+        "xchain-indexer"
+      ]
+    }
+  },
+  "repins": [
+    {
+      "id": "archive_rollback_author_scope_activation",
+      "from": null,
+      "to": "308b96595f1f9dbb6954e5eb6bdc2df7c5e351dcaed2ad5b6b190352bd5e1cff",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "checkpoint_commitment_activation",
+      "from": null,
+      "to": "b145c3bff9dece6741a8b24a2979a02607c1daf83f98383d4fe29b99170b574c",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "consensus-constants",
+      "from": null,
+      "to": "9c4bf0dcfe728d5856ad94b5908f07f88ce02eda978c067d21a9df6183c47416",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "equivocation_header",
+      "from": null,
+      "to": "d14b27eda669b5429c97cc2fc212c0fee5dea8f2bd14797deb3a272be9b3cdc9",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "stake_weight_collation_activation",
+      "from": null,
+      "to": "169836edebfe98a9d131e3c8b295669260e2ab5e9d07bc020a0129c720cb5b4b",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "stake_weighted_quorum",
+      "from": null,
+      "to": "da0af9b4eb48cb18657250bdee8bd86f59108af39a599530a89f6c100c44fd80",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "stateHash",
+      "from": null,
+      "to": "93ebdd554ab209a63db33a3e8403726d345e1f5e765b29a23a9e80e178a222a8",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "state_commitment_activation",
+      "from": null,
+      "to": "7719117296d358be9b3a4e3142b6b4c611f5b7ebf683f40040016fda9e9de643",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "state_key_collation_activation",
+      "from": null,
+      "to": "537ba4b260e00196b546d29cbda6342d0760efc6cb4d143045fb64dcd4c68482",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "state_subtree_activation",
+      "from": null,
+      "to": "a33913fec0939990ba9d2550843965d6bfdcbf6bf40354358aa21e4c1fdc185d",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "swq_source_cap_activation",
+      "from": null,
+      "to": "620854dd7934a2e24de8175dd55efb1c5aa55e712e931b12c9317ffc1cfebc29",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    },
+    {
+      "id": "train_activation",
+      "from": null,
+      "to": "ce8c9e40354e772996e6ff052e6601c8a564b0a0e25b9e853aa238d424545450",
+      "reason": "activation-registry row 27: initial carrier logic pin",
+      "date": "2026-09-15"
+    }
+  ]
+}

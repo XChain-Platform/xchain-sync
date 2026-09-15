@@ -24,10 +24,13 @@
  *                   edit, and peers that disagree fork at the flag-day height.
  *   the vendored    src/coins/ is refreshed from the hub by a sync script.
  *   coin registry   A local edit here is drift that reddens every consumer.
+ *   the carrier     bin/pins/carrier-logic.json hashes each carrier's TOKEN
+ *   logic pin       stream, so it moves on a logic change and on nothing else.
  *
  * So the pin records the combined fingerprint, the per-file hash map behind it
  * (a per-file diff names WHICH carrier moved, which the combined hash cannot),
- * the v2 meaning hash with its row count, and the sha256 of each vendored coin file.
+ * the v2 meaning hash with its row count, the carrier logic digest, and the
+ * sha256 of each vendored coin file.
  *
  * USAGE
  *   node bin/pin-identity.js                    human summary
@@ -65,6 +68,7 @@ function buildPin() {
     const { computeArmedMapFingerprint } = require(path.join(REPO_ROOT, 'src/armedMapFingerprint.js'));
     const armed = computeArmedMapFingerprint();
     const v2 = require(path.join(REPO_ROOT, 'src/consensus/armed_map/fingerprint_v2.js')).computeArmedMapFingerprintV2();
+    const logicPin = require(path.join(REPO_ROOT, 'bin/lib/carrier_logic_pin.js'));
     const coins = {};
     for (const rel of COIN_FILES) coins[rel] = sha256(rel);
     return {
@@ -72,6 +76,7 @@ function buildPin() {
         armedMapFiles: armed.files,
         armed_map_fingerprint_v2: v2.hex,
         armed_map_rows: v2.count === undefined ? null : v2.count,
+        carrier_logic_digest: logicPin.digest(logicPin.readPin(REPO_ROOT)),
         vendoredCoins: coins,
     };
 }
@@ -82,7 +87,7 @@ function compare(pin, fresh) {
     if (pin.armedMapFingerprint !== fresh.armedMapFingerprint) {
         differences.push(`armed-map fingerprint ${pin.armedMapFingerprint} became ${fresh.armedMapFingerprint}`);
     }
-    for (const field of ['armed_map_fingerprint_v2', 'armed_map_rows']) {
+    for (const field of ['armed_map_fingerprint_v2', 'armed_map_rows', 'carrier_logic_digest']) {
         if (pin[field] !== fresh[field]) differences.push(`${field} ${pin[field]} became ${fresh[field]}`);
     }
     for (const group of ['armedMapFiles', 'vendoredCoins']) {
@@ -139,6 +144,7 @@ function main() {
     console.log(`armed-map carriers     ${Object.keys(fresh.armedMapFiles).length}`);
     console.log(`armed-map v2           ${fresh.armed_map_fingerprint_v2}`);
     console.log(`armed-map v2 rows      ${fresh.armed_map_rows}`);
+    console.log(`carrier logic digest   ${fresh.carrier_logic_digest}`);
     console.log(`vendored coin files    ${Object.keys(fresh.vendoredCoins).length}`);
     if (opts.out) console.log(`\nwritten to ${path.relative(REPO_ROOT, opts.out)}`);
 }
