@@ -48,10 +48,9 @@ function baseConfig(over){
     }, over || {});
 }
 
-describe('client-mode sync_meta retention', function(){
+let service, clock;
 
-    let service, clock;
-
+function registerRetentionHooks(){
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
@@ -66,6 +65,10 @@ describe('client-mode sync_meta retention', function(){
         if(clock){ clock.restore(); clock = null; }
         sinon.restore();
     });
+}
+
+describe('client-mode sync_meta retention', function(){
+    registerRetentionHooks();
 
     it('starts no timer when the window is 0 (the shipped default)', function(){
         service = new SyncService(baseConfig());
@@ -81,6 +84,10 @@ describe('client-mode sync_meta retention', function(){
         service.startSyncMetaRetention();
         assert.strictEqual(service._syncMetaRetentionTimer, undefined);
     });
+});
+
+describe('client-mode sync_meta retention', function(){
+    registerRetentionHooks();
 
     it('sweeps every indexer DB on the timer, and no decoder DB', async function(){
         clock = sinon.useFakeTimers();
@@ -106,6 +113,10 @@ describe('client-mode sync_meta retention', function(){
         assert.strictEqual(prune.getCall(0).thisValue.retentionBlocks, 500);
         assert.strictEqual(prune.getCall(0).thisValue.readOnly, false);
     });
+});
+
+describe('client-mode sync_meta retention', function(){
+    registerRetentionHooks();
 
     it('honours REPLICA_DB_READONLY: a serve-only replica deletes nothing', async function(){
         clock = sinon.useFakeTimers();

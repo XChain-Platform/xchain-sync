@@ -47,8 +47,10 @@ describe('replication schema version and migration frontier @regression', functi
     it('carries a frontier for exactly the same dbTypes', function(){
         assert.deepStrictEqual(Object.keys(MIGRATION_FRONTIER).sort(), Object.keys(SCHEMA_VERSION).sort());
     });
+});
 
-    for(const dbType of DB_TYPES){
+for(const dbType of DB_TYPES){
+    describe('replication schema version and migration frontier @regression', function(){
 
         it(dbType + ': the frontier date is a well-formed migration date', function(){
             const through = MIGRATION_FRONTIER[dbType].through;
@@ -75,6 +77,9 @@ describe('replication schema version and migration frontier @regression', functi
             }
         });
 
+    });
+
+    describe('replication schema version and migration frontier @regression', function(){
         it(dbType + ': the accounted tail covers every migration dated on the frontier date', function(){
             const dir = MIGRATION_DIRS[dbType];
             if(!fs.existsSync(dir)){
@@ -107,5 +112,5 @@ describe('replication schema version and migration frontier @regression', functi
                 + ' is newer than the newest migration ' + dates[dates.length - 1]
                 + '; a frontier ahead of the ledger silences the gate for every migration up to that date');
         });
-    }
-});
+    });
+}

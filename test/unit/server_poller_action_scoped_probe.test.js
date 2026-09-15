@@ -112,6 +112,22 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
         assert.ok(baselineFetches > 40,
             'baseline really did query the whole registry (' + baselineFetches + ')');
     });
+});
+
+describe('ServerPoller action-scoped non-empty-table probe', function(){
+
+    let db, poller;
+
+    beforeEach(function(){
+        db = createMockDb();
+        poller = createPoller(db);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     it('passes the snapshot connection to the probe and excludes actions/contract_emissions from it', async function(){
         db.getNonEmptyActionScopedTables = sinon.stub().resolves(new Set());
@@ -150,6 +166,22 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
         assert.strictEqual(db.getActionScopedRows.getCalls().length, 0,
             'an empty probe means no per-table fetches at all');
     });
+});
+
+describe('ServerPoller action-scoped non-empty-table probe', function(){
+
+    let db, poller;
+
+    beforeEach(function(){
+        db = createMockDb();
+        poller = createPoller(db);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
 
     it('falls back to querying every table when the probe throws', async function(){
         let baseline = await poller.buildBlockPayload(7);
@@ -180,6 +212,22 @@ describe('ServerPoller action-scoped non-empty-table probe', function(){
 
         assert.strictEqual(JSON.stringify(payload), JSON.stringify(baseline));
         assert.strictEqual(oddDb.getActionScopedRows.getCalls().length, baselineFetches);
+    });
+});
+
+describe('ServerPoller action-scoped non-empty-table probe', function(){
+
+    let db, poller;
+
+    beforeEach(function(){
+        db = createMockDb();
+        poller = createPoller(db);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
     });
 
     it('reports probe_queries in the metric so a silent regression to the N+1 is visible', async function(){

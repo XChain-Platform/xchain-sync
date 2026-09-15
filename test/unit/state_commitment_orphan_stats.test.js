@@ -78,6 +78,9 @@ describe('stateCommitment.reportOrphanStats (sync twin) @regression @tier2', fun
         assert.strictEqual(stats.reachableNodes, sizeB);
         assert.strictEqual(stats.orphanCount, sizeA);
     });
+});
+
+describe('stateCommitment.reportOrphanStats (sync twin) @regression @tier2', function () {
 
     it('keeps historical-root nodes live (proof safety): retaining BOTH roots yields zero orphans', async function () {
         const store = new SC.MemoryNodeStore();
@@ -114,6 +117,9 @@ describe('stateCommitment.reportOrphanStats (sync twin) @regression @tier2', fun
         assert.strictEqual(stats.orphanCount, stats.totalNodes - stats.reachableNodes,
             'orphan stays total - reachable, i.e. the upper bound implied by the lower-bound mark');
     });
+});
+
+describe('stateCommitment.reportOrphanStats (sync twin) @regression @tier2', function () {
 
     it('never materializes the node table: reads only reachable rows, in bounded batches', async function () {
         const store = new SC.MemoryNodeStore();

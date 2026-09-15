@@ -52,6 +52,9 @@ describe('stateCommitment: persistent SMT == in-memory reference @regression', f
             assert.strictEqual(root, ref.rootHex(), 'root diverged after insert ' + i);
         }
     });
+});
+
+describe('stateCommitment: persistent SMT == in-memory reference @regression', function(){
 
     it('matches the reference through updates and deletes (return-to-zero)', async function(){
         const ref = new M.SparseMerkleTree();
@@ -86,6 +89,9 @@ describe('stateCommitment: persistent SMT == in-memory reference @regression', f
         assert.strictEqual(root, SC.EMPTY_ROOT_HEX, 'fully-emptied tree must return to EMPTY_SMT_ROOT');
         assert.strictEqual(root, ref.rootHex());
     });
+});
+
+describe('stateCommitment: persistent SMT == in-memory reference @regression', function(){
 
     it('insert order does not affect the root (content-addressed convergence)', async function(){
         const a = new SC.PersistentSMT(new SC.MemoryNodeStore());

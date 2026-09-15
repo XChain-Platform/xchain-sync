@@ -39,6 +39,11 @@ describe('sqlUtil', function(){
             const sql = "INSERT INTO t VALUES ('-- not a comment');";
             assert.strictEqual(stripSqlLineComments(sql), sql);
         });
+    });
+});
+
+describe('sqlUtil', function(){
+    describe('stripSqlLineComments', function(){
 
         it('preserves content inside double-quoted identifiers', function(){
             const sql = 'SELECT "col -- weird" FROM t;';
@@ -73,7 +78,9 @@ describe('sqlUtil', function(){
             assert.strictEqual(stripSqlLineComments('SELECT 1 - 2;'), 'SELECT 1 - 2;');
         });
     });
+});
 
+describe('sqlUtil', function(){
     describe('splitSqlStatements', function(){
         it('splits multiple statements and trims them', function(){
             assert.deepStrictEqual(

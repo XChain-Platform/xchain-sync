@@ -71,7 +71,9 @@ describe('train_activation', function () {
                 assert.strictEqual(parseRuleSetVersion(bad), null, 'accepted ' + JSON.stringify(bad));
         });
     });
+});
 
+describe('train_activation', function () {
     describe('compareRuleSetVersions', function () {
         it('orders numerically, not lexically', function () {
             assert.strictEqual(compareRuleSetVersions('2.0.0', '10.0.0'), -1);
@@ -95,7 +97,9 @@ describe('train_activation', function () {
             assert.deepStrictEqual(implementedRuleSets(), Object.keys(TRAIN_ACTIVATION).sort(compareRuleSetVersions));
         });
     });
+});
 
+describe('train_activation', function () {
     describe('activationHeightFor', function () {
         it('reads the height a row names', function () {
             assert.strictEqual(activationHeightFor('2.0.0', 'mainnet', TWO_ARM), 970000);
@@ -123,7 +127,9 @@ describe('train_activation', function () {
             assert.strictEqual(asHeight('970000'), 970000);
         });
     });
+});
 
+describe('train_activation', function () {
     describe('resolveRuleSet', function () {
         it('returns the greatest entry at or below the height on that network', function () {
             assert.strictEqual(resolveRuleSet(969999, 'mainnet', TWO_ARM), '1.0.0');
@@ -137,7 +143,9 @@ describe('train_activation', function () {
             assert.strictEqual(resolveRuleSet(100, 'signet', TWO_ARM), null);
         });
     });
+});
 
+describe('train_activation', function () {
     describe('readManifestTrainActivation', function () {
         it('reads a well-formed block into a normalised record', function () {
             const rec = readManifestTrainActivation({
@@ -179,7 +187,9 @@ describe('train_activation', function () {
             }
         });
     });
+});
 
+describe('train_activation', function () {
     describe('evaluateTrainActivation', function () {
 
         it('clears when the manifest requires a rule set this build implements, clock or no clock', function () {
@@ -220,7 +230,11 @@ describe('train_activation', function () {
                 assert.strictEqual(v.requiredAtHeight, 970000);
             }
         });
+    });
+});
 
+describe('train_activation', function () {
+    describe('evaluateTrainActivation', function () {
         it('halts when the manifest names no activation height for this network', function () {
             const v = evaluateTrainActivation({
                 manifest: manifestRequiring('2.0.0', { testnet: 150000 }),
