@@ -22,6 +22,18 @@
 
 const path       = require('path');
 
+function readReplicaStatusRow(row){
+    const io     = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
+    const sql    = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
+    const behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
+    return {
+        name:    row.Connection_name != null ? String(row.Connection_name) : '',
+        running: io === 'Yes' && sql === 'Yes',
+        // NULL here means the SQL thread is not applying at all, never "0 behind".
+        secondsBehind: behind == null ? null : Number(behind)
+    };
+}
+
 module.exports = {
 
     // `opts` is forwarded to doQuery, so a cursor caller that must not mistake an
@@ -72,18 +84,7 @@ module.exports = {
         if(!rows || rows.length === 0)
             return { isReplica: false, running: null, secondsBehind: null };
 
-        const readRow = (row) => {
-            const io     = row.Replica_IO_Running  != null ? row.Replica_IO_Running  : row.Slave_IO_Running;
-            const sql    = row.Replica_SQL_Running != null ? row.Replica_SQL_Running : row.Slave_SQL_Running;
-            const behind = row.Seconds_Behind_Source != null ? row.Seconds_Behind_Source : row.Seconds_Behind_Master;
-            return {
-                name:    row.Connection_name != null ? String(row.Connection_name) : '',
-                running: io === 'Yes' && sql === 'Yes',
-                // NULL here means the SQL thread is not applying at all, never "0 behind".
-                secondsBehind: behind == null ? null : Number(behind)
-            };
-        };
-        let parsed = rows.map(readRow);
+        let parsed = rows.map(readReplicaStatusRow);
 
         // A named-but-absent connection is an assertion that no longer matches the
         // server, not an absence of replication: fail closed rather than silently
