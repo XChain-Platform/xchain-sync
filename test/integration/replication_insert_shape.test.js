@@ -112,124 +112,151 @@ function synthValue(col){
     }
 }
 
-describe('Integration: the applier can write every table it replicates', function() {
+const insertShape = {
+    replicaDb: null,
+    applier: null,
+    schema: new Map(),          // table -> column rows
+    absent: []                  // registry tables with no table in the replica schema
+};
 
-    let replicaDb, applier;
-    let schema = new Map();      // table -> column rows
-    const absent = [];           // registry tables with no table in the replica schema
+async function setupInsertShape() {
+    this.timeout(120000);
+    await setup.globalSetup();
+    insertShape.replicaDb = setup.getReplicaDb();
+    insertShape.applier = new ClientApplier(
+        insertShape.replicaDb, testDb.util, 'litecoin', 'regtest');
 
-    before(async function() {
-        this.timeout(120000);
-        await setup.globalSetup();
-        replicaDb = setup.getReplicaDb();
-        applier   = new ClientApplier(replicaDb, testDb.util, 'litecoin', 'regtest');
+    const cols = await insertShape.replicaDb.doQuery(
+        'SELECT table_name AS t, column_name AS c, data_type AS DATA_TYPE, ' +
+        'column_type AS COLUMN_TYPE, character_maximum_length AS CHARACTER_MAXIMUM_LENGTH, ' +
+        'is_nullable AS n, extra AS e ' +
+        'FROM information_schema.columns WHERE table_schema = DATABASE() ' +
+        'ORDER BY table_name, ordinal_position', []);
+    insertShape.schema.clear();
+    insertShape.absent.length = 0;
+    for(const r of cols){
+        const t = String(r.t);
+        if(!insertShape.schema.has(t)) insertShape.schema.set(t, []);
+        insertShape.schema.get(t).push(r);
+    }
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+}
 
-        const cols = await replicaDb.doQuery(
-            'SELECT table_name AS t, column_name AS c, data_type AS DATA_TYPE, ' +
-            'column_type AS COLUMN_TYPE, character_maximum_length AS CHARACTER_MAXIMUM_LENGTH, ' +
-            'is_nullable AS n, extra AS e ' +
-            'FROM information_schema.columns WHERE table_schema = DATABASE() ' +
-            'ORDER BY table_name, ordinal_position', []);
-        for(const r of cols){
-            const t = String(r.t);
-            if(!schema.has(t)) schema.set(t, []);
-            schema.get(t).push(r);
-        }
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
+async function teardownInsertShape() {
+    this.timeout(60000);
+    sinon.restore();
+    await setup.globalTeardown();
+}
 
-    after(async function() {
-        this.timeout(60000);
-        sinon.restore();
-        await setup.globalTeardown();
-    });
+function replicatedTargets() {
+    return lifecycle.TABLES
+        .filter(e => STREAMED.has(e.replication))
+        .map(e => e.table)
+        .filter(t => {
+            if(insertShape.schema.has(t)) return true;
+            insertShape.absent.push(t);
+            return false;
+        })
+        .sort();
+}
 
-    it('accepts a schema-shaped row for every replicated table, with no applier-class error',
-       async function() {
-        this.timeout(300000);
+async function probeTargets(targets) {
+    const applierBugs = [];
+    const unverified  = [];
+    let verified = 0;
 
-        const targets = lifecycle.TABLES
-            .filter(e => STREAMED.has(e.replication))
-            .map(e => e.table)
-            .filter(t => { if(schema.has(t)) return true; absent.push(t); return false; })
-            .sort();
+    // One transaction for the whole sweep, for two reasons that both matter. It is
+    // the only way SET FOREIGN_KEY_CHECKS applies to the connection the inserts
+    // actually run on (doQuery draws from a pool unless a transaction is open, so the
+    // earlier per-pool SET was luck rather than suppression), and rolling back at the
+    // end leaves the replica exactly as found, with no per-table DELETE to get wrong.
+    await insertShape.replicaDb.beginTransaction();
+    await insertShape.replicaDb.doQuery('SET FOREIGN_KEY_CHECKS = 0', []);
+    try {
 
-        assert.ok(targets.length > 50,
-                  'only ' + targets.length + ' replicated tables found in the replica schema; ' +
-                  'the schema seed or the registry read is broken, and a pass here would ' +
-                  'mean nothing');
+    for(const table of targets){
+        // Every column the SOURCE would ship, generated ones INCLUDED. That is the
+        // condition described above: before the fix, insertRows named them and
+        // MariaDB rejected the statement under STRICT_TRANS_TABLES.
+        const row = {};
+        for(const col of insertShape.schema.get(table)) row[String(col.c)] = synthValue(col);
 
-        const applierBugs = [];
-        const unverified  = [];
-        let verified = 0;
-
-        // One transaction for the whole sweep, for two reasons that both matter. It is
-        // the only way SET FOREIGN_KEY_CHECKS applies to the connection the inserts
-        // actually run on (doQuery draws from a pool unless a transaction is open, so the
-        // earlier per-pool SET was luck rather than suppression), and rolling back at the
-        // end leaves the replica exactly as found, with no per-table DELETE to get wrong.
-        await replicaDb.beginTransaction();
-        await replicaDb.doQuery('SET FOREIGN_KEY_CHECKS = 0', []);
+        // A DELTA, not an absolute count: asserting "> 0" would pass on a table that
+        // already held rows and rejected this one.
+        const before = await insertShape.replicaDb.doQuery(
+            'SELECT COUNT(*) AS c FROM `' + table + '`', []);
         try {
-
-        for(const table of targets){
-            // Every column the SOURCE would ship, generated ones INCLUDED. That is the
-            // condition described above: before the fix, insertRows named them and
-            // MariaDB rejected the statement under STRICT_TRANS_TABLES.
-            const row = {};
-            for(const col of schema.get(table)) row[String(col.c)] = synthValue(col);
-
-            // A DELTA, not an absolute count: asserting "> 0" would pass on a table that
-            // already held rows and rejected this one.
-            const before = await replicaDb.doQuery('SELECT COUNT(*) AS c FROM `' + table + '`', []);
-            try {
-                await applier.insertRows(table, [row]);
-            } catch(e){
-                const errno = e && e.errno;
-                if(APPLIER_ERRNOS.has(errno)){
-                    applierBugs.push(table + ': errno ' + errno + ' (' + APPLIER_ERRNOS.get(errno) + ')');
-                } else {
-                    unverified.push(table + ': ' + (errno || (e && e.code) || 'unknown'));
-                }
-                continue;
+            await insertShape.applier.insertRows(table, [row]);
+        } catch(e){
+            const errno = e && e.errno;
+            if(APPLIER_ERRNOS.has(errno)){
+                applierBugs.push(table + ': errno ' + errno + ' (' + APPLIER_ERRNOS.get(errno) + ')');
+            } else {
+                unverified.push(table + ': ' + (errno || (e && e.code) || 'unknown'));
             }
-            const after = await replicaDb.doQuery('SELECT COUNT(*) AS c FROM `' + table + '`', []);
-            if(Number(after[0].c) > Number(before[0].c)) verified++;
-            else unverified.push(table + ': insert reported success but no row landed');
+            continue;
         }
+        const after = await insertShape.replicaDb.doQuery(
+            'SELECT COUNT(*) AS c FROM `' + table + '`', []);
+        if(Number(after[0].c) > Number(before[0].c)) verified++;
+        else unverified.push(table + ': insert reported success but no row landed');
+    }
 
-        } finally {
-            // Never commit: the sweep is a shape probe, and the replica other suites in
-            // this tier share must come out of it untouched.
-            await replicaDb.rollbackTransaction();
-        }
+    } finally {
+        // Never commit: the sweep is a shape probe, and the replica other suites in
+        // this tier share must come out of it untouched.
+        await insertShape.replicaDb.rollbackTransaction();
+    }
+    return { applierBugs, unverified, verified };
+}
 
-        // Always printed. A guard that reports nothing on success gives no way to notice
-        // it has quietly stopped covering anything, which is how the sibling-skip trap in
-        // generatedColumns.test.js stayed invisible.
-        process.stdout.write('\n      [' + verified + '/' + targets.length +
-                             ' tables round-tripped through the applier' +
-                             (applierBugs.length ? ', ' + applierBugs.length + ' APPLIER BUG' +
-                                                   (applierBugs.length === 1 ? '' : 'S') : '') +
-                             ']\n');
-        // Printed rather than asserted: this is evidence about the synthesizer.
-        if(unverified.length)
-            process.stdout.write('\n      [unverified ' + unverified.length + '/' + targets.length +
-                                 '] ' + unverified.slice(0, 12).join('; ') + '\n');
-        if(absent.length)
-            process.stdout.write('      [registry tables absent from the replica schema: ' +
-                                 absent.length + '] ' + absent.slice(0, 8).join(', ') + '\n');
+function reportProbe(targets, applierBugs, unverified, verified) {
+    // Always printed. A guard that reports nothing on success gives no way to notice
+    // it has quietly stopped covering anything, which is how the sibling-skip trap in
+    // generatedColumns.test.js stayed invisible.
+    process.stdout.write('\n      [' + verified + '/' + targets.length +
+                         ' tables round-tripped through the applier' +
+                         (applierBugs.length ? ', ' + applierBugs.length + ' APPLIER BUG' +
+                                               (applierBugs.length === 1 ? '' : 'S') : '') +
+                         ']\n');
+    // Printed rather than asserted: this is evidence about the synthesizer.
+    if(unverified.length)
+        process.stdout.write('\n      [unverified ' + unverified.length + '/' + targets.length +
+                             '] ' + unverified.slice(0, 12).join('; ') + '\n');
+    if(insertShape.absent.length)
+        process.stdout.write('      [registry tables absent from the replica schema: ' +
+                             insertShape.absent.length + '] ' +
+                             insertShape.absent.slice(0, 8).join(', ') + '\n');
+}
 
-        assert.deepStrictEqual(applierBugs, [],
-            'the applier cannot write these replicated tables. Each is the same shape as the ' +
-            'incident described above: a follower would fail its block apply, roll back, retry ' +
-            'the same block and never advance, on any chain that writes one of these rows.');
+async function assertInsertShape() {
+    this.timeout(300000);
 
-        // A floor, so the suite cannot pass by verifying nothing: most tables must have
-        // genuinely round-tripped through the applier.
-        assert.ok(verified >= Math.floor(targets.length * 0.8),
-            'only ' + verified + ' of ' + targets.length + ' tables round-tripped; the ' +
-            'synthesizer has decayed and this guard is no longer covering what it claims');
-    });
+    const targets = replicatedTargets();
+    assert.ok(targets.length > 50,
+              'only ' + targets.length + ' replicated tables found in the replica schema; ' +
+              'the schema seed or the registry read is broken, and a pass here would ' +
+              'mean nothing');
+
+    const { applierBugs, unverified, verified } = await probeTargets(targets);
+    reportProbe(targets, applierBugs, unverified, verified);
+
+    assert.deepStrictEqual(applierBugs, [],
+        'the applier cannot write these replicated tables. Each is the same shape as the ' +
+        'incident described above: a follower would fail its block apply, roll back, retry ' +
+        'the same block and never advance, on any chain that writes one of these rows.');
+
+    // A floor, so the suite cannot pass by verifying nothing: most tables must have
+    // genuinely round-tripped through the applier.
+    assert.ok(verified >= Math.floor(targets.length * 0.8),
+        'only ' + verified + ' of ' + targets.length + ' tables round-tripped; the ' +
+        'synthesizer has decayed and this guard is no longer covering what it claims');
+}
+
+describe('Integration: the applier can write every table it replicates', function() {
+    before(setupInsertShape);
+    after(teardownInsertShape);
+    it('accepts a schema-shaped row for every replicated table, with no applier-class error',
+       assertInsertShape);
 });
