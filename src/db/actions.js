@@ -26,6 +26,42 @@ const { isStateKeyBinCollationActive } = require('../state_key_collation_activat
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
 
+// CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
+// to their chain-independent role token, byte-for-byte mirror of BlockHasher
+// and the indexer's getBlockHashes. block_merkle_root covers the same ledger
+// rows the flat ledger_hash does, so without this the follower recomputes a
+// raw-address merkle root that diverges from the source's canonicalized root on
+// any special-address block and halts. Ordered AFTER the SQL sort (which keys
+// on the raw stored address) so the leaf sequence matches the source exactly.
+async function getLedgerLeafRows(db, block_index, conn, queries){
+    let ledger = { credits: [], debits: [], escrows: [] };
+    ledger.credits = await db.doQueryStrict(queries.credits, [block_index], conn);
+    ledger.debits = await db.doQueryStrict(queries.debits, [block_index], conn);
+    ledger.escrows = await db.doQueryStrict(queries.escrows, [block_index], conn);
+    for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
+    for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
+    for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
+    return ledger;
+}
+
+async function getContractLeafRows(db, block_index, conn, stateKeyCollate, queries){
+    let contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
+    contracts.contracts = await db.doQueryStrict(queries.contracts, [block_index], conn);
+    // contract state (latest value per key written in this block).
+    // state_key collation is flag-day gated, mirroring BlockHasher and the
+    // indexer's getBlockHashes: legacy folding (utf8_general_ci) below the
+    // activation height, COLLATE utf8_bin pinned at/after it
+    // (see state_key_collation_activation.js).
+    contracts.state = await db.doQueryStrict(queries.statePrefix + stateKeyCollate + queries.stateSuffix + stateKeyCollate + queries.stateOrder,
+                                             [block_index], conn);
+    contracts.executions = await db.doQueryStrict(queries.executions, [block_index], conn);
+    // emissions (join through executions to get block scope)
+    contracts.emissions = await db.doQueryStrict(queries.emissions, [block_index], conn);
+    contracts.deposits = await db.doQueryStrict(queries.deposits, [block_index], conn);
+    contracts.withdrawals = await db.doQueryStrict(queries.withdrawals, [block_index], conn);
+    return contracts;
+}
+
 module.exports = {
 
     // Gather a block's content rows for the block_merkle_root (SPV spec sec.5), in
@@ -51,105 +87,23 @@ module.exports = {
     // is identical to doQuery inside a transaction and inside an explicit conn, and
     // differs only on the path where the difference matters.
     async getBlockLeafRows(block_index, conn, network, coin){
-        let q;
-        let ledger = { credits: [], debits: [], escrows: [] };
-        q = `SELECT c.action_index, a1.address AS address, t1.tick AS tick, c.amount
-             FROM credits c
-                INNER JOIN actions        a  ON (a.action_index=c.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=c.address_id)
-                LEFT  JOIN index_tickers   t1 ON (t1.id=c.tick_id)
-             WHERE a.block_index=?
-             ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
-        ledger.credits = await this.doQueryStrict(q, [block_index], conn);
-        q = `SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount
-             FROM debits d
-                INNER JOIN actions        a  ON (a.action_index=d.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=d.address_id)
-                LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
-             WHERE a.block_index=?
-             ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
-        ledger.debits = await this.doQueryStrict(q, [block_index], conn);
-        q = `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount
-             FROM escrows e
-                INNER JOIN actions        a  ON (a.action_index=e.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=e.address_id)
-                LEFT  JOIN index_tickers   t1 ON (t1.id=e.tick_id)
-             WHERE a.block_index=?
-             ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
-        ledger.escrows = await this.doQueryStrict(q, [block_index], conn);
-        // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
-        // to their chain-independent role token, byte-for-byte mirror of BlockHasher
-        // and the indexer's getBlockHashes. block_merkle_root covers the same ledger
-        // rows the flat ledger_hash does, so without this the follower recomputes a
-        // raw-address merkle root that diverges from the source's canonicalized root on
-        // any special-address block and halts. Ordered AFTER the SQL sort (which keys
-        // on the raw stored address) so the leaf sequence matches the source exactly.
-        for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
-        for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
-        for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-        q = `SELECT a.action_index, a.tx_index, ia.action AS action
-             FROM actions a
-                LEFT JOIN index_actions ia ON (ia.id=a.action_id)
-             WHERE a.block_index=?
-             ORDER BY a.action_index ASC`;
-        let actions = await this.doQueryStrict(q, [block_index], conn);
-        let contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
-        q = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
-             FROM contracts c
-                INNER JOIN actions a ON (a.action_index=c.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=c.source_id)
-                LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
-             WHERE a.block_index=?
-             ORDER BY c.action_index ASC`;
-        contracts.contracts = await this.doQueryStrict(q, [block_index], conn);
-        // contract state (latest value per key written in this block).
-        // state_key collation is flag-day gated, mirroring BlockHasher and the
-        // indexer's getBlockHashes: legacy folding (utf8_general_ci) below the
-        // activation height, COLLATE utf8_bin pinned at/after it
-        // (see state_key_collation_activation.js).
+        let ledger = await getLedgerLeafRows(this, block_index, conn, {
+            credits: `SELECT c.action_index, a1.address AS address, t1.tick AS tick, c.amount FROM credits c INNER JOIN actions a ON (a.action_index=c.action_index) LEFT JOIN index_addresses a1 ON (a1.id=c.address_id) LEFT JOIN index_tickers t1 ON (t1.id=c.tick_id) WHERE a.block_index=? ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`,
+            debits: `SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount FROM debits d INNER JOIN actions a ON (a.action_index=d.action_index) LEFT JOIN index_addresses a1 ON (a1.id=d.address_id) LEFT JOIN index_tickers t1 ON (t1.id=d.tick_id) WHERE a.block_index=? ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`,
+            escrows: `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount FROM escrows e INNER JOIN actions a ON (a.action_index=e.action_index) LEFT JOIN index_addresses a1 ON (a1.id=e.address_id) LEFT JOIN index_tickers t1 ON (t1.id=e.tick_id) WHERE a.block_index=? ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`
+        });
+        let actions = await this.doQueryStrict(`SELECT a.action_index, a.tx_index, ia.action AS action FROM actions a LEFT JOIN index_actions ia ON (ia.id=a.action_id) WHERE a.block_index=? ORDER BY a.action_index ASC`, [block_index], conn);
         let stateKeyCollate = isStateKeyBinCollationActive(block_index, network, coin) ? ' COLLATE utf8_bin' : '';
-        q = `SELECT cs.contract_index, cs.state_key, cs.state_value
-             FROM contract_state cs
-                INNER JOIN (
-                    SELECT MAX(id) as max_id FROM contract_state
-                    WHERE block_index=? GROUP BY contract_index, state_key` + stateKeyCollate + `
-                ) latest ON cs.id = latest.max_id
-             ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
-        contracts.state = await this.doQueryStrict(q, [block_index], conn);
-        q = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
-             FROM contract_executions ce
-                INNER JOIN actions a ON (a.action_index=ce.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=ce.caller_id)
-                LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
-             WHERE a.block_index=?
-             ORDER BY ce.action_index ASC`;
-        contracts.executions = await this.doQueryStrict(q, [block_index], conn);
-        // emissions (join through executions to get block scope)
-        q = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
-             FROM contract_emissions em
-                INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index)
-                INNER JOIN actions a ON (a.action_index=ce.action_index)
-             WHERE a.block_index=?
-             ORDER BY em.execution_index ASC, em.position ASC`;
-        contracts.emissions = await this.doQueryStrict(q, [block_index], conn);
-        q = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
-             FROM deposits d
-                INNER JOIN actions a ON (a.action_index=d.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=d.source_id)
-                LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
-                LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
-             WHERE a.block_index=?
-             ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts.deposits = await this.doQueryStrict(q, [block_index], conn);
-        q = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
-             FROM withdrawals w
-                INNER JOIN actions a ON (a.action_index=w.action_index)
-                LEFT  JOIN index_addresses a1 ON (a1.id=w.source_id)
-                LEFT  JOIN index_tickers   t1 ON (t1.id=w.tick_id)
-                LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
-             WHERE a.block_index=?
-             ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts.withdrawals = await this.doQueryStrict(q, [block_index], conn);
+        let contracts = await getContractLeafRows(this, block_index, conn, stateKeyCollate, {
+            contracts: `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status FROM contracts c INNER JOIN actions a ON (a.action_index=c.action_index) LEFT JOIN index_addresses a1 ON (a1.id=c.source_id) LEFT JOIN index_statuses s1 ON (s1.id=c.status_id) WHERE a.block_index=? ORDER BY c.action_index ASC`,
+            statePrefix: `SELECT cs.contract_index, cs.state_key, cs.state_value FROM contract_state cs INNER JOIN ( SELECT MAX(id) as max_id FROM contract_state WHERE block_index=? GROUP BY contract_index, state_key`,
+            stateSuffix: ` ) latest ON cs.id = latest.max_id ORDER BY cs.contract_index ASC, cs.state_key`,
+            stateOrder: ` ASC`,
+            executions: `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count FROM contract_executions ce INNER JOIN actions a ON (a.action_index=ce.action_index) LEFT JOIN index_addresses a1 ON (a1.id=ce.caller_id) LEFT JOIN index_statuses s1 ON (s1.id=ce.status_id) WHERE a.block_index=? ORDER BY ce.action_index ASC`,
+            emissions: `SELECT em.execution_index, em.emitted_action, em.action_index, em.position FROM contract_emissions em INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index) INNER JOIN actions a ON (a.action_index=ce.action_index) WHERE a.block_index=? ORDER BY em.execution_index ASC, em.position ASC`,
+            deposits: `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status FROM deposits d INNER JOIN actions a ON (a.action_index=d.action_index) LEFT JOIN index_addresses a1 ON (a1.id=d.source_id) LEFT JOIN index_tickers t1 ON (t1.id=d.tick_id) LEFT JOIN index_statuses s1 ON (s1.id=d.status_id) WHERE a.block_index=? ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`,
+            withdrawals: `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status FROM withdrawals w INNER JOIN actions a ON (a.action_index=w.action_index) LEFT JOIN index_addresses a1 ON (a1.id=w.source_id) LEFT JOIN index_tickers t1 ON (t1.id=w.tick_id) LEFT JOIN index_statuses s1 ON (s1.id=w.status_id) WHERE a.block_index=? ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`
+        });
         return { ledger, actions, contracts };
     },
 
