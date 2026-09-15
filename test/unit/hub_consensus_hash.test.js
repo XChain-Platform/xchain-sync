@@ -44,14 +44,19 @@ function driftedHashes(tick, network){
     return out;
 }
 
+function prepareClient(){
+    const errors = [];
+    const client = new HubClient(['http://hub.invalid:10000']);
+    sinon.stub(console, 'error').callsFake((...a) => errors.push(a.join(' ')));
+    return { client, errors };
+}
+
 describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
 
     let client, errors;
 
     beforeEach(function(){
-        client = new HubClient(['http://hub.invalid:10000']);
-        errors = [];
-        sinon.stub(console, 'error').callsFake((...a) => errors.push(a.join(' ')));
+        ({ client, errors } = prepareClient());
     });
 
     afterEach(() => sinon.restore());
@@ -80,6 +85,17 @@ describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
         client.applyConfigResult({ bitcoin: { testnet: { 'xchain-indexer': { DB_NAME: 'x' } } } });
         assert.deepStrictEqual(errors, []);
     });
+});
+
+describe('HubClient hub-vs-bundle consensus-hash cross-check', function(){
+
+    let client, errors;
+
+    beforeEach(function(){
+        ({ client, errors } = prepareClient());
+    });
+
+    afterEach(() => sinon.restore());
 
     it('does not re-log an unchanged mismatch on the next poll', function(){
         const drifted = driftedHashes('LTC', 'regtest');

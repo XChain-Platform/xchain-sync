@@ -76,35 +76,35 @@ describe('missingReplicatedTables', function(){
     });
 });
 
-describe('ClientSync.warnMissingTables', function(){
+function makeSync(dbOverrides, dbType){
+    let db = Object.assign({
+        dbName:            'test_db',
+        dbType:            dbType || 'indexer',
+        getLastBlock:      sinon.stub().resolves(null),
+        getBlockHashRow:   sinon.stub().resolves(null),
+        doQuery:           sinon.stub().resolves([]),
+        getActiveHalt:     sinon.stub().resolves(null),
+        getTableCount:     sinon.stub().resolves(0),
+        listExistingTables: sinon.stub().resolves(new Set(getReplicatedTables(dbType || 'indexer')))
+    }, dbOverrides || {});
+    let applier = { applyBlock: sinon.stub().resolves() };
+    let rb      = { rollback: sinon.stub().resolves() };
+    let config  = {
+        SYNC_SOURCES:           'http://src1:3006',
+        VERIFY_HASHES:          false,
+        CLIENT_RECONNECT_DELAY: 5000,
+        HASH_CONFIRM_TIMEOUT:   5000,
+        SNAPSHOT_MAX_CONTENT:   1024,
+        WS_MAX_PAYLOAD:         1024,
+        MAX_ROLLBACK_DEPTH:     10,
+        GAP_LOG_INTERVAL_MS:    30000
+    };
+    let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rb,
+                              new HashVerifier(), config, new Utility());
+    return { sync, db };
+}
 
-    function makeSync(dbOverrides, dbType){
-        let db = Object.assign({
-            dbName:            'test_db',
-            dbType:            dbType || 'indexer',
-            getLastBlock:      sinon.stub().resolves(null),
-            getBlockHashRow:   sinon.stub().resolves(null),
-            doQuery:           sinon.stub().resolves([]),
-            getActiveHalt:     sinon.stub().resolves(null),
-            getTableCount:     sinon.stub().resolves(0),
-            listExistingTables: sinon.stub().resolves(new Set(getReplicatedTables(dbType || 'indexer')))
-        }, dbOverrides || {});
-        let applier = { applyBlock: sinon.stub().resolves() };
-        let rb      = { rollback: sinon.stub().resolves() };
-        let config  = {
-            SYNC_SOURCES:           'http://src1:3006',
-            VERIFY_HASHES:          false,
-            CLIENT_RECONNECT_DELAY: 5000,
-            HASH_CONFIRM_TIMEOUT:   5000,
-            SNAPSHOT_MAX_CONTENT:   1024,
-            WS_MAX_PAYLOAD:         1024,
-            MAX_ROLLBACK_DEPTH:     10,
-            GAP_LOG_INTERVAL_MS:    30000
-        };
-        let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rb,
-                                  new HashVerifier(), config, new Utility());
-        return { sync, db };
-    }
+describe('ClientSync.warnMissingTables', function(){
 
     let warnStub, errorStub;
     beforeEach(function(){
@@ -146,6 +146,17 @@ describe('ClientSync.warnMissingTables', function(){
         await sync.warnMissingTables();
         assert.deepStrictEqual(sync.getMissingTables(), ['bets']);
     });
+});
+
+describe('ClientSync.warnMissingTables', function(){
+
+    let warnStub, errorStub;
+    beforeEach(function(){
+        warnStub  = sinon.stub(console, 'warn');
+        errorStub = sinon.stub(console, 'error');
+        sinon.stub(console, 'log');
+    });
+    afterEach(function(){ sinon.restore(); });
 
     it('is advisory: a listing failure never throws, and leaves the list unknown (null)', async function(){
         let { sync } = makeSync({
@@ -183,43 +194,43 @@ describe('ClientSync.warnMissingTables', function(){
     });
 });
 
+// api.js reads SYNC_MODE once at require time, so each mode gets its own
+// freshly-loaded copy of the module.
+function loadApi(mode){
+    let prior = process.env.SYNC_MODE;
+    process.env.SYNC_MODE = mode;
+    let api = proxyquire('../../src/api', {});
+    if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
+    return api;
+}
+
+function mockDb(present, dbType){
+    return {
+        dbName:  'replica_db',
+        dbType:  dbType || 'indexer',
+        getLastBlock:    sinon.stub().resolves(100),
+        getBlockHashRow: sinon.stub().resolves({ block_index: 100, block_time: 1, ledger_hash: 'a',
+                                                 actions_hash: 'b', contract_hash: 'c' }),
+        getTableCount:   sinon.stub().resolves(7),
+        listExistingTables: present instanceof Error
+            ? sinon.stub().rejects(present)
+            : sinon.stub().resolves(present)
+    };
+}
+
+// A client-mode SyncService that reports the exact shape the live incident
+// showed: caught up, not halted, nothing wrong.
+function mockClientSyncService(){
+    return {
+        getClientSyncState: () => ({
+            lastKnownServerBlock: 100, sourceHeightStale: false, halted: false, haltInfo: null,
+            truncated: false, bootstrapBase: null, sourceQuorum: 1, sourcesConfigured: 1,
+            sourcesActive: 1, sourcesAgreeing: 1, sourcesEvicted: []
+        })
+    };
+}
+
 describe('/status missing_tables', function(){
-
-    // api.js reads SYNC_MODE once at require time, so each mode gets its own
-    // freshly-loaded copy of the module.
-    function loadApi(mode){
-        let prior = process.env.SYNC_MODE;
-        process.env.SYNC_MODE = mode;
-        let api = proxyquire('../../src/api', {});
-        if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
-        return api;
-    }
-
-    function mockDb(present, dbType){
-        return {
-            dbName:  'replica_db',
-            dbType:  dbType || 'indexer',
-            getLastBlock:    sinon.stub().resolves(100),
-            getBlockHashRow: sinon.stub().resolves({ block_index: 100, block_time: 1, ledger_hash: 'a',
-                                                     actions_hash: 'b', contract_hash: 'c' }),
-            getTableCount:   sinon.stub().resolves(7),
-            listExistingTables: present instanceof Error
-                ? sinon.stub().rejects(present)
-                : sinon.stub().resolves(present)
-        };
-    }
-
-    // A client-mode SyncService that reports the exact shape the live incident
-    // showed: caught up, not halted, nothing wrong.
-    function mockClientSyncService(){
-        return {
-            getClientSyncState: () => ({
-                lastKnownServerBlock: 100, sourceHeightStale: false, halted: false, haltInfo: null,
-                truncated: false, bootstrapBase: null, sourceQuorum: 1, sourcesConfigured: 1,
-                sourcesActive: 1, sourcesAgreeing: 1, sourcesEvicted: []
-            })
-        };
-    }
 
     afterEach(function(){ sinon.restore(); });
 
@@ -254,6 +265,11 @@ describe('/status missing_tables', function(){
                                        'indexer', 'bitcoin', 'mainnet');
         assert.strictEqual(row.missing_tables, null);
     });
+});
+
+describe('/status missing_tables', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     it('scopes to the decoder replicated set on a decoder replica', async function(){
         let { buildStatusRow } = loadApi('client');

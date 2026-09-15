@@ -59,6 +59,15 @@ describe('HashVerifier', function(){
             assert.strictEqual(result.match, true);
         });
     });
+});
+
+describe('HashVerifier', function(){
+
+    let verifier;
+
+    beforeEach(function(){
+        verifier = new HashVerifier();
+    });
 
     describe('verifyChainContinuity', function(){
         it('returns valid when prevBlockIndex is null (bootstrap)', function(){

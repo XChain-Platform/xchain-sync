@@ -81,6 +81,23 @@ describe('poolSizing.resolvePoolSize()', function(){
         process.env.DB_POOL_SIZE_INDEXER = 'lots';
         assert.strictEqual(poolSizing.resolvePoolSize('indexer'), poolSizing.DEFAULT_POOL_SIZE.indexer);
     });
+});
+
+describe('poolSizing.resolvePoolSize()', function(){
+    let saved;
+
+    beforeEach(function(){
+        saved = {};
+        for(let k of POOL_ENV_KEYS) saved[k] = process.env[k];
+        clearPoolEnv();
+    });
+
+    afterEach(function(){
+        for(let k of POOL_ENV_KEYS){
+            if(saved[k] === undefined) delete process.env[k];
+            else process.env[k] = saved[k];
+        }
+    });
 
     it('clamps to [MIN, MAX] so no setting can deadlock the poller or exhaust MariaDB', function(){
         process.env.DB_POOL_SIZE_INDEXER = '1';
@@ -121,26 +138,28 @@ describe('poolSizing.resolvePoolSize()', function(){
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. Database wiring: the pool a chain actually opens
 // ═══════════════════════════════════════════════════════════════════════════
+let createdPools;
+
+function fakeMariadb(){
+    return {
+        createPool: (cfg) => { createdPools.push(cfg); return { end: sinon.stub().resolves() }; },
+        createConnection: sinon.stub().resolves({ query: sinon.stub().resolves([]), end: sinon.stub().resolves() }),
+        '@noCallThru': true
+    };
+}
+
+function makeDb(dbType){
+    let FakeDatabase = proxyquire('../../src/db', { mariadb: fakeMariadb() });
+    return new FakeDatabase('localhost', 3306, 'db_' + dbType, 'u', 'p', {
+        isNull: (v) => v === null || v === undefined,
+        throwError: (m) => { throw new Error(m); },
+        sleep: sinon.stub().resolves(),
+        logError: sinon.stub()
+    }, dbType);
+}
+
 describe('Database pool sizing per dbType', function(){
-    let saved, createdPools;
-
-    function fakeMariadb(){
-        return {
-            createPool: (cfg) => { createdPools.push(cfg); return { end: sinon.stub().resolves() }; },
-            createConnection: sinon.stub().resolves({ query: sinon.stub().resolves([]), end: sinon.stub().resolves() }),
-            '@noCallThru': true
-        };
-    }
-
-    function makeDb(dbType){
-        let FakeDatabase = proxyquire('../../src/db', { mariadb: fakeMariadb() });
-        return new FakeDatabase('localhost', 3306, 'db_' + dbType, 'u', 'p', {
-            isNull: (v) => v === null || v === undefined,
-            throwError: (m) => { throw new Error(m); },
-            sleep: sinon.stub().resolves(),
-            logError: sinon.stub()
-        }, dbType);
-    }
+    let saved;
 
     beforeEach(function(){
         createdPools = [];
@@ -170,6 +189,24 @@ describe('Database pool sizing per dbType', function(){
         makeDb('decoder');
         assert.strictEqual(createdPools.length, 1);
         assert.strictEqual(createdPools[0].connectionLimit, 4);
+    });
+});
+
+describe('Database pool sizing per dbType', function(){
+    let saved;
+
+    beforeEach(function(){
+        createdPools = [];
+        saved = {};
+        for(let k of POOL_ENV_KEYS) saved[k] = process.env[k];
+        clearPoolEnv();
+    });
+
+    afterEach(function(){
+        for(let k of POOL_ENV_KEYS){
+            if(saved[k] === undefined) delete process.env[k];
+            else process.env[k] = saved[k];
+        }
     });
 
     it('still honours the legacy flat DB_POOL_SIZE for operators who set it', function(){

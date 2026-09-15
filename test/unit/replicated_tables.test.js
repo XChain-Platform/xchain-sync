@@ -63,6 +63,9 @@ describe('replicatedTables', function(){
             for(let t of union) assert.ok(tables.includes(t));
         });
     });
+});
+
+describe('replicatedTables', function(){
 
     describe('getReplicatedTables (decoder)', function(){
         it('covers the decoder per-block set', function(){
@@ -120,6 +123,9 @@ describe('replicatedTables', function(){
                 'decoder replicated set changed: update this pin only for a deliberate topology change');
         });
     });
+});
+
+describe('replicatedTables', function(){
 
     describe('getTopology', function(){
         it('defaults unknown dbTypes to the indexer topology', function(){

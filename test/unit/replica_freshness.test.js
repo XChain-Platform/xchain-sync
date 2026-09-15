@@ -26,6 +26,36 @@ function baseRow(){
     return { block_height: 100, source_height: 100, lag_blocks: 0 };
 }
 
+function loadClientApi(){
+    let prior = process.env.SYNC_MODE;
+    process.env.SYNC_MODE = 'client';
+    let api = proxyquire('../../src/api', {});
+    if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
+    return api;
+}
+
+function mockDb(){
+    return {
+        dbName: 'replica_db', dbType: 'indexer',
+        getLastBlock:    sinon.stub().resolves(100),
+        getBlockHashRow: sinon.stub().resolves({ block_index: 100, block_time: 1,
+                                                 ledger_hash: 'a', actions_hash: 'b', contract_hash: 'c' }),
+        getTableCount:   sinon.stub().resolves(0),
+        listExistingTables: sinon.stub().resolves(new Set())
+    };
+}
+
+function mockService(upstreamReplica){
+    return {
+        getClientSyncState: () => ({
+            lastKnownServerBlock: 100, sourceHeightStale: false, upstreamReplica,
+            halted: false, haltInfo: null, truncated: false, bootstrapBase: null,
+            sourceQuorum: 1, sourcesConfigured: 1, sourcesActive: 1,
+            sourcesAgreeing: 1, sourcesEvicted: []
+        })
+    };
+}
+
 describe('/status replication freshness', function(){
 
     it('withholds lag_blocks when the replication engine says the node is stale', function(){
@@ -49,42 +79,28 @@ describe('/status replication freshness', function(){
         assert.strictEqual(row.replica_stale, false, 'no signal is the pre-replica topology default');
     });
 
+    it('SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s', function(){
+        let saved = process.env.SYNC_REPLICA_MAX_LAG_S;
+        try {
+            delete process.env.SYNC_REPLICA_MAX_LAG_S;
+            assert.strictEqual(config.getConfig()['SYNC_REPLICA_MAX_LAG_S'], 120);
+            process.env.SYNC_REPLICA_MAX_LAG_S = '30';
+            assert.strictEqual(config.getConfig()['SYNC_REPLICA_MAX_LAG_S'], 30);
+        } finally {
+            if(saved === undefined) delete process.env.SYNC_REPLICA_MAX_LAG_S;
+            else process.env.SYNC_REPLICA_MAX_LAG_S = saved;
+        }
+    });
+});
+
+describe('/status replication freshness', function(){
+
     // A follower's own lag_blocks is computed against a height its SOURCE published.
     // The source's status event says whether its own database was fit to publish that
     // height; discarding it left the follower certifying an upstream whose SQL replica
     // had stopped applying, because both of the server's heights freeze together and
     // its heartbeats keep source_height_stale false.
     describe('client row carries the upstream verdict', function(){
-        function loadClientApi(){
-            let prior = process.env.SYNC_MODE;
-            process.env.SYNC_MODE = 'client';
-            let api = proxyquire('../../src/api', {});
-            if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
-            return api;
-        }
-
-        function mockDb(){
-            return {
-                dbName: 'replica_db', dbType: 'indexer',
-                getLastBlock:    sinon.stub().resolves(100),
-                getBlockHashRow: sinon.stub().resolves({ block_index: 100, block_time: 1,
-                                                         ledger_hash: 'a', actions_hash: 'b', contract_hash: 'c' }),
-                getTableCount:   sinon.stub().resolves(0),
-                listExistingTables: sinon.stub().resolves(new Set())
-            };
-        }
-
-        function mockService(upstreamReplica){
-            return {
-                getClientSyncState: () => ({
-                    lastKnownServerBlock: 100, sourceHeightStale: false, upstreamReplica,
-                    halted: false, haltInfo: null, truncated: false, bootstrapBase: null,
-                    sourceQuorum: 1, sourcesConfigured: 1, sourcesActive: 1,
-                    sourcesAgreeing: 1, sourcesEvicted: []
-                })
-            };
-        }
-
         afterEach(function(){ sinon.restore(); });
 
         it('publishes the upstream verdict beside a lag_blocks of 0', async function(){
@@ -110,18 +126,5 @@ describe('/status replication freshness', function(){
             assert.strictEqual(row.upstream_replica_seconds_behind, null);
             assert.strictEqual(row.upstream_source_height, null);
         });
-    });
-
-    it('SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s', function(){
-        let saved = process.env.SYNC_REPLICA_MAX_LAG_S;
-        try {
-            delete process.env.SYNC_REPLICA_MAX_LAG_S;
-            assert.strictEqual(config.getConfig()['SYNC_REPLICA_MAX_LAG_S'], 120);
-            process.env.SYNC_REPLICA_MAX_LAG_S = '30';
-            assert.strictEqual(config.getConfig()['SYNC_REPLICA_MAX_LAG_S'], 30);
-        } finally {
-            if(saved === undefined) delete process.env.SYNC_REPLICA_MAX_LAG_S;
-            else process.env.SYNC_REPLICA_MAX_LAG_S = saved;
-        }
     });
 });

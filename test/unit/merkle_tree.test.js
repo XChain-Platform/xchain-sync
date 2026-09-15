@@ -63,6 +63,9 @@ describe('MerkleTree @consensus @regression', function () {
             assert.deepStrictEqual(l, copy);
         });
     });
+});
+
+describe('MerkleTree @consensus @regression', function () {
 
     describe('generateProof() / verifyProof() round-trip', function () {
         // The consensus-critical property: for a tree of N leaves, EVERY leaf

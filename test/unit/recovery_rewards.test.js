@@ -78,6 +78,9 @@ describe('collectRedrivenValidatorRewards', function(){
         await collectRedrivenValidatorRewards(db, 10, 200, fakeConn);
         assert.strictEqual(captured, fakeConn);
     });
+});
+
+describe('collectRedrivenValidatorRewards', function(){
 
     it('maps rows through and dedups by the validator_rewards UNIQUE identity', async function(){
         let db = { doQuery: async () => [
@@ -114,6 +117,9 @@ describe('collectRedrivenValidatorRewards', function(){
             'round_qualifier is part of reward_unique; collapsing on it drops a real reward');
         assert.deepStrictEqual(out.map(r => r.round_qualifier).sort(), [100, 200]);
     });
+});
+
+describe('collectRedrivenValidatorRewards', function(){
 
     it('swallows ONLY a schema gap (1146/1054); a transient fault propagates so the block is retried', async function(){
         // Regression: a bare catch here made both callers' isSchemaGapError gates dead
