@@ -127,6 +127,9 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             expected,
             'sync canonicalCheckpoint drifted from the ACTIVE SPV-root XCHECKPOINT signing string; re-align the vendored twin to the SDK/hub/indexer/explorer copies');
     });
+});
+
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
 
     it('verifies a real Ed25519 quorum-signed checkpoint against its pinned set', function(){
         const s = makeSigner();
@@ -171,6 +174,9 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
         cp.validator_signatures = [{ pubkey: s2.pubkeyHex, sig: '00'.repeat(64) }].concat(cp.validator_signatures);
         assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, true);
     });
+});
+
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
 
     // The cases above sign and verify through sync's OWN copy, so they catch a
     // behaviour divergence only where a golden vector happens to cover it. Two
