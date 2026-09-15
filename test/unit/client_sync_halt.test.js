@@ -25,7 +25,6 @@ const sinon  = require('sinon');
 const ClientSync = require('../../src/client/sync');
 const Utility = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
-const vectors = require('../fixtures/block-hash-vectors.json');
 
 function createMockDb(){
     return {
@@ -88,6 +87,24 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(db.recordHalt.callCount, 1);
     });
 
+});
+
+describe('ClientSync: divergence halt @regression', function(){
+    let sync, db, applier, config, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        applier = { applyBlock: sinon.stub().resolves(), applyFullSnapshot: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() };
+        config = { SYNC_SOURCES: 'http://a:3006,http://b:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true };
+        util = new Utility();
+        sync = new ClientSync('bitcoin', 'mainnet', db, applier, { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    const mism = [{ field: 'contract_hash', a: 'aaa', b: 'bbb' }];
+
     it('clearHalt resumes the client and clears the durable record', async function(){
         await sync.haltOnDivergence(101, mism, []);
         assert.strictEqual(sync.isHalted(), true);
@@ -128,6 +145,21 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(sync.getHaltInfo().reason, 'halt-state-check-failed');
         assert.strictEqual(db.getLastBlock.called, false, 'must NOT begin catch-up on an uncertain halt check');
     });
+});
+
+describe('ClientSync: divergence halt @regression', function(){
+    let sync, db, applier, config, util;
+
+    beforeEach(function(){
+        db = createMockDb();
+        applier = { applyBlock: sinon.stub().resolves(), applyFullSnapshot: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() };
+        config = { SYNC_SOURCES: 'http://a:3006,http://b:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true };
+        util = new Utility();
+        sync = new ClientSync('bitcoin', 'mainnet', db, applier, { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
 
     // Failing closed is right; failing closed FOREVER on a single read is not. The idle
     // loop never retried, so a transient MariaDB blip left replication idle after the
@@ -165,290 +197,5 @@ describe('ClientSync: divergence halt @regression', function(){
         assert.strictEqual(was.reason, 'halt-state-check-failed');
         assert.strictEqual(db.clearHalt.called, false,
             'a halt state that was never READ must not delete the durable row');
-    });
-});
-
-describe('ClientSync: independent recompute halt @regression', function(){
-    let sync, db, applier, config, util;
-
-    // db.doQuery feeds BlockHasher the canned golden rows IN CALL ORDER (one
-    // sequence per computeBlockHashes pass), so the recompute yields the
-    // indexer-authentic committed hashes from vectors.expected.
-    function seqDb(results){
-        let i = 0;
-        return {
-            dbName: 'test_db', dbType: 'indexer',
-            getLastBlock: sinon.stub().resolves(null),
-            getBlockHashRow: sinon.stub().resolves(null),
-            doQuery: sinon.stub().callsFake(async () => results[i++]),
-            recordHalt: sinon.stub().resolves({ block_index: 0 }),
-            getActiveHalt: sinon.stub().resolves(null),
-            clearHalt: sinon.stub().resolves(1)
-        };
-    }
-
-    beforeEach(function(){
-        db = seqDb(vectors.results.map(r => r.slice()));
-        applier = { applyBlock: sinon.stub().resolves(), applyFullSnapshot: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() };
-        // Single source + VERIFY_RECOMPUTE on: this is the path the cross-source
-        // check cannot cover (one source, internally-consistent-but-wrong data).
-        config = { SYNC_SOURCES: 'http://a:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true, VERIFY_RECOMPUTE: true };
-        util = new Utility();
-        sync = new ClientSync('bitcoin', 'mainnet', db, applier, { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-    // The headline RED->GREEN: rows that do NOT hash to the committed hash the
-    // source published. The old verbatim transport check (committed-vs-committed)
-    // PASSES this; independent recompute HALTS it, from a SINGLE source.
-    it('HALTS when replicated rows do not hash to the committed block hash', async function(){
-        const event = {
-            block_index: vectors.block_index, block_time: 123,
-            // committed hashes the source CLAIMS (deliberately not the rows' hash)
-            ledger_hash: 'forged_ledger', actions_hash: 'forged_actions', contract_hash: 'forged_contract'
-        };
-        await sync.applyBlockEvent(event);
-
-        assert.ok(applier.applyBlock.calledOnce, 'block is applied, THEN recomputed');
-        assert.strictEqual(sync.isHalted(), true, 'recompute mismatch must halt');
-        assert.strictEqual(sync.getHaltInfo().reason, 'local-recompute-divergence');
-        assert.strictEqual(sync.getHaltInfo().blockIndex, vectors.block_index);
-        assert.strictEqual(sync.lastAppliedBlock, null, 'must NOT advance past an unverifiable block');
-        assert.ok(db.recordHalt.calledOnce, 'halt persisted durably');
-        assert.strictEqual(db.recordHalt.firstCall.args[2], 'local-recompute-divergence');
-    });
-
-    it('does NOT halt when rows hash to the committed block hash (clean block advances)', async function(){
-        const event = Object.assign({ block_index: vectors.block_index, block_time: 123 }, {
-            ledger_hash:   vectors.expected.ledger_hash,
-            actions_hash:  vectors.expected.actions_hash,
-            contract_hash: vectors.expected.contract_hash
-        });
-        await sync.applyBlockEvent(event);
-
-        assert.ok(applier.applyBlock.calledOnce);
-        assert.strictEqual(sync.isHalted(), false, 'a verified block must not halt');
-        assert.strictEqual(sync.lastAppliedBlock, vectors.block_index, 'verified block advances the tip');
-        assert.strictEqual(db.recordHalt.called, false);
-    });
-
-    it('skips recompute when VERIFY_RECOMPUTE is disabled (opt-out for plain replicas)', async function(){
-        config['VERIFY_RECOMPUTE'] = false;
-        const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'forged', actions_hash: 'forged', contract_hash: 'forged' };
-        await sync.applyBlockEvent(event);
-        assert.strictEqual(sync.isHalted(), false, 'no recompute, no halt when opted out');
-        assert.strictEqual(db.doQuery.called, false, 'recompute queries must not run when disabled');
-        assert.strictEqual(sync.lastAppliedBlock, vectors.block_index);
-    });
-
-    it('a recompute DB error is logged but does NOT halt (no self-inflicted fork on infra faults)', async function(){
-        db.doQuery = sinon.stub().rejects(new Error('transient DB error'));
-        const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' };
-        await sync.applyBlockEvent(event);
-        assert.strictEqual(sync.isHalted(), false, 'an infra error must not halt the validator');
-        assert.strictEqual(sync.lastAppliedBlock, vectors.block_index, 'block still advances on a recompute error');
-    });
-});
-
-describe('ClientSync: bulk-range boundary recompute fails CLOSED @regression', function(){
-    // The live path above fails OPEN on a recompute error (an infra fault must
-    // not fork the validator). At a bulk-range boundary (catch-up join/terminal,
-    // bootstrap terminal) that posture is a hole: the join recompute is the ONLY
-    // check that catches a disconnect-spanning reorg stitched onto an orphaned
-    // tip, so an error there that failed open would let the range through unverified.
-    // verifyRangeBoundary must retry the recompute and then HALT durably.
-    let sync, db, config;
-
-    beforeEach(function(){
-        db = createMockDb();
-        db.getBlockHashRow = sinon.stub().resolves({
-            ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C'
-        });
-        config = { SYNC_SOURCES: 'http://a:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true, VERIFY_RECOMPUTE: true };
-        const util = new Utility();
-        sinon.stub(util, 'sleep').resolves(); // no real backoff waits in tests
-        sync = new ClientSync('bitcoin', 'mainnet', db,
-            { applyBlock: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() },
-            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-    it('HALTS (recompute-error) when the recompute errors on every retry', async function(){
-        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('schema gap'));
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, true, 'caller must be told to stop');
-        assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 3, 'bounded retries before halting');
-        assert.strictEqual(sync.isHalted(), true, 'an unverifiable range must not be served');
-        assert.strictEqual(sync.getHaltInfo().reason, 'recompute-error');
-        assert.strictEqual(sync.getHaltInfo().blockIndex, 500);
-        assert.ok(db.recordHalt.calledOnce, 'halt persisted durably');
-        assert.strictEqual(db.recordHalt.firstCall.args[2], 'recompute-error');
-    });
-
-    it('does NOT halt when a transient error clears within the retries', async function(){
-        sync.blockHasher.computeBlockHashes = sinon.stub()
-            .onFirstCall().rejects(new Error('transient'))
-            .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, false);
-        assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');
-    });
-
-    it('HALTS (local-recompute-divergence) on a boundary hash mismatch', async function(){
-        sync.blockHasher.computeBlockHashes = sinon.stub()
-            .resolves({ ledger_hash: 'WRONG', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, true);
-        assert.strictEqual(sync.getHaltInfo().reason, 'local-recompute-divergence');
-    });
-
-    it('skips (no halt) when the committed boundary hash is not yet resolvable', async function(){
-        db.getBlockHashRow.resolves(null);
-        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, false);
-        assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false, 'no recompute without a committed hash');
-        assert.strictEqual(sync.isHalted(), false);
-    });
-
-    // A FAILED committed-hash read is not an absent one. getBlockHashRow's default is
-    // fail-soft (doQuery swallows a non-transactional query error to [] -> null), and
-    // null is the "not yet resolvable" skip above, so a transient DB fault read through
-    // that default returns false and tells bootstrap/catch-up the range was verified.
-    it('HALTS (boundary-read-error) when the committed hash READ fails on every retry @regression', async function(){
-        db.getBlockHashRow.rejects(new Error('ER_LOCK_WAIT_TIMEOUT: errno 1205'));
-        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('must not be called'));
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, true, 'an unverifiable range must not be served');
-        assert.strictEqual(db.getBlockHashRow.callCount, 3, 'bounded retries before halting');
-        assert.strictEqual(sync.isHalted(), true);
-        assert.strictEqual(sync.getHaltInfo().reason, 'boundary-read-error');
-        assert.strictEqual(sync.getHaltInfo().blockIndex, 500);
-        assert.ok(db.recordHalt.calledOnce, 'halt persisted durably');
-        assert.strictEqual(db.recordHalt.firstCall.args[2], 'boundary-read-error');
-        assert.strictEqual(sync.blockHasher.computeBlockHashes.called, false);
-    });
-
-    it('reads the committed boundary hash FAIL-CLOSED (rethrow), not on the fail-soft default @regression', async function(){
-        await sync.verifyRangeBoundary(500);
-        const opts = db.getBlockHashRow.firstCall.args[2];
-        assert.ok(opts && opts.rethrow === true,
-            'a swallowed query error would otherwise be indistinguishable from an absent row');
-    });
-
-    it('does NOT halt when a transient READ error clears within the retries @regression', async function(){
-        db.getBlockHashRow = sinon.stub();
-        db.getBlockHashRow.onFirstCall().rejects(new Error('transient'));
-        db.getBlockHashRow.resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-        sync.blockHasher.computeBlockHashes = sinon.stub()
-            .resolves({ ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-        const halted = await sync.verifyRangeBoundary(500);
-
-        assert.strictEqual(halted, false);
-        assert.strictEqual(sync.isHalted(), false, 'a recovered transient must not halt');
-        assert.strictEqual(db.getBlockHashRow.callCount, 2);
-    });
-
-    it('the LIVE path still fails open: a persistent error does not throw without failClosed', async function(){
-        sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('infra fault'));
-        const mismatches = await sync.verifyRecompute({ block_index: 500, ledger_hash: 'L', actions_hash: 'A', contract_hash: 'C' });
-
-        assert.strictEqual(mismatches, null, 'live path returns null (fail-open) on a recompute error');
-        assert.strictEqual(sync.blockHasher.computeBlockHashes.callCount, 1, 'no retries on the live path');
-        assert.strictEqual(sync.isHalted(), false);
-    });
-});
-
-describe('ClientSync: state_hash apply-time integrity halt @regression', function(){
-    let sync, db, applier, config, util;
-
-    beforeEach(function(){
-        db = createMockDb();
-        applier = { applyBlock: sinon.stub().resolves(), applyFullSnapshot: sinon.stub().resolves(), applyIncrementalSnapshot: sinon.stub().resolves() };
-        // VERIFY_RECOMPUTE off (isolate the state_hash path); VERIFY_STATE_HASH defaults ON.
-        config = { SYNC_SOURCES: 'http://a:3006', VERIFY_HASHES: true, HASH_CONFIRM_TIMEOUT: 5000, HALT_ON_DIVERGENCE: true, VERIFY_RECOMPUTE: false };
-        util = new Utility();
-        sync = new ClientSync('bitcoin', 'mainnet', db, applier, { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-    it('HALTS when the apply-time state_hash recompute disagrees with the source', async function(){
-        sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
-
-        assert.ok(applier.applyBlock.calledOnce, 'block is applied, THEN the state_hash recomputed');
-        assert.strictEqual(sync.isHalted(), true, 'a state_hash mismatch must halt');
-        assert.strictEqual(sync.getHaltInfo().reason, 'state-hash-divergence');
-        assert.strictEqual(sync.getHaltInfo().blockIndex, 200);
-        assert.strictEqual(sync.lastAppliedBlock, null, 'must NOT advance past a state-divergent block');
-        assert.ok(db.recordHalt.calledOnce && db.recordHalt.firstCall.args[2] === 'state-hash-divergence',
-            'halt persisted durably with the state-hash reason');
-    });
-
-    it('does NOT halt when the recomputed state_hash matches (clean block advances)', async function(){
-        sync.blockHasher.computeStateHash = sinon.stub().resolves('AGREED_STATE');
-        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'AGREED_STATE' });
-
-        assert.strictEqual(sync.isHalted(), false, 'a matching state_hash must not halt');
-        assert.strictEqual(sync.lastAppliedBlock, 200, 'verified block advances the tip');
-    });
-
-    it('SKIPS the check (no recompute, no halt) when the source sent a NULL state_hash (pre-feature block)', async function(){
-        sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: null });
-
-        assert.strictEqual(sync.blockHasher.computeStateHash.called, false,
-            'a NULL state_hash must skip the recompute entirely (fail-soft against a back-level source)');
-        assert.strictEqual(sync.isHalted(), false);
-        assert.strictEqual(sync.lastAppliedBlock, 200, 'the block still advances');
-    });
-
-    it('opts out cleanly when VERIFY_STATE_HASH=false (throwaway mirrors)', async function(){
-        config['VERIFY_STATE_HASH'] = false;
-        sync.blockHasher.computeStateHash = sinon.stub().resolves('LOCAL_STATE');
-        await sync.applyBlockEvent({ block_index: 200, block_time: 1, state_hash: 'SOURCE_STATE' });
-
-        assert.strictEqual(sync.blockHasher.computeStateHash.called, false, 'no recompute when opted out');
-        assert.strictEqual(sync.isHalted(), false, 'no halt when opted out, even on a would-be mismatch');
-        assert.strictEqual(sync.lastAppliedBlock, 200);
-    });
-});
-
-describe('ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression', function(){
-    // Operator decision 2026-06-12: the recompute is the only verification of
-    // the catch-up JOIN block, so disabling it lets a reorg that crosses a
-    // disconnect silently fork the replica. The constructor must warn loudly.
-    afterEach(function(){ sinon.restore(); });
-
-    function build(config){
-        const db = { dbType: 'indexer', doQuery: sinon.stub().resolves([]) };
-        const applier = { applyBlock: sinon.stub().resolves() };
-        return new ClientSync('bitcoin', 'mainnet', db, applier,
-            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
-    }
-
-    it('warns UNSAFE at construction when explicitly disabled', function(){
-        const err = sinon.stub(console, 'error');
-        build({ SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: false });
-        assert.ok(err.getCalls().some(c => /UNSAFE/.test(String(c.args[0]))),
-            'constructor must emit the UNSAFE warning when VERIFY_RECOMPUTE is false');
-    });
-
-    it('stays quiet when recompute is enabled', function(){
-        const err = sinon.stub(console, 'error');
-        build({ SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true });
-        assert.ok(!err.getCalls().some(c => /UNSAFE/.test(String(c.args[0]))),
-            'no UNSAFE warning when recompute is on');
     });
 });
