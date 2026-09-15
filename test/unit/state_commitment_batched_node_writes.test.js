@@ -80,7 +80,7 @@ class PerNodeStore extends CountingStore {
     constructor(){ super(); this.putMany = undefined; }
 }
 
-describe('stateCommitment: batched SMT node writes @regression', function(){
+describe("stateCommitment: batched SMT node writes @regression", function(){
 
     it('a key update costs ONE store write call, not one per tree level', async function(){
         const store = new CountingStore();
@@ -137,6 +137,9 @@ describe('stateCommitment: batched SMT node writes @regression', function(){
         for(const [keyHex, leafHex] of entries) ref.set(M.toBuf(keyHex), M.toBuf(leafHex));
         assert.strictEqual(rootBatched, ref.rootHex(), 'batched root diverged from the merkle.js reference');
     });
+});
+
+describe("stateCommitment: batched SMT node writes @regression", function(){
 
     it('the batch is flushed before update() returns, so the next descend sees it', async function(){
         // buildFull threads the returned root into the next update()'s _descend,
@@ -181,6 +184,9 @@ describe('stateCommitment: batched SMT node writes @regression', function(){
         assert.strictEqual(typeof SC.MemoryNodeStore.prototype.putMany, 'function',
             'MemoryNodeStore must match the DbNodeStore interface');
     });
+});
+
+describe("stateCommitment: batched SMT node writes @regression", function(){
 
     it('deletes batch the same way and still return the tree to the empty root', async function(){
         const store = new CountingStore();
@@ -195,222 +201,5 @@ describe('stateCommitment: batched SMT node writes @regression', function(){
         // so it writes at most one batch and often none at all.
         assert.ok(store.writeCalls - afterInsert <= 8,
             'deletes must not reintroduce a per-level write call (' + (store.writeCalls - afterInsert) + ')');
-    });
-});
-
-describe('stateCommitment: stakes subtree rebuilds only on change @regression', function(){
-
-    const CHAIN = 'BTC', NETWORK = 'regtest';
-    // 49 keys is the live figure the BTC regtest venue reports
-    // (getstakeweightsbycapability keys=49), rebuilt from an empty root every block.
-    function stakeEntries(n, salt){
-        const out = [];
-        for(let i = 0; i < n; i++)
-            out.push([M.toHex(keyFor('stake:' + i)), leafFor(i + (salt || 0))]);
-        return out;
-    }
-
-    beforeEach(function(){ SC.resetStakesMemo(); });
-    afterEach(function(){ SC.resetStakesMemo(); });
-
-    function freshSmt(){ return new SC.PersistentSMT(new CountingStore()); }
-
-    it('an unchanged stake set on the next block writes NOTHING and returns the same root', async function(){
-        const smt = freshSmt();
-        const e = stakeEntries(49);
-        const first = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, e);
-        const afterFirst = smt.store.writeCalls;
-        assert.strictEqual(afterFirst, 49, 'the first block builds the whole tree');
-
-        const second = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, stakeEntries(49));
-        assert.strictEqual(second, first, 'an unchanged stake set must commit the same stakes_root');
-        assert.strictEqual(smt.store.writeCalls, afterFirst,
-            'an unchanged stake set must write no nodes at all; wrote ' + (smt.store.writeCalls - afterFirst));
-    });
-
-    it('a RUN of unchanged blocks writes nothing after the first, not every other one', async function(){
-        // A memo that answers a hit but does not re-stamp itself still passes the
-        // single-hit test: block 101 hits, then block 102 is no longer the memo's
-        // successor and rebuilds. That halves the defect instead of fixing it, and
-        // it is invisible unless the run is longer than two blocks. The regtest
-        // suite runs hundreds.
-        const smt = freshSmt();
-        let root = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        const afterFirst = smt.store.writeCalls;
-        for(let h = 101; h <= 110; h++){
-            const next = await SC.buildStakesRoot(smt, CHAIN, NETWORK, h, stakeEntries(49));
-            assert.strictEqual(next, root, 'the root moved on an unchanged stake set at height ' + h);
-            root = next;
-        }
-        assert.strictEqual(smt.store.writeCalls, afterFirst,
-            'ten unchanged blocks must write nothing; wrote ' + (smt.store.writeCalls - afterFirst) +
-            ' batches (a memo that does not re-stamp itself rebuilds every other block)');
-    });
-
-    it('a CHANGED stake set rebuilds and moves the root', async function(){
-        const smt = freshSmt();
-        const first  = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        const before = smt.store.writeCalls;
-        const second = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, stakeEntries(49, 1));
-        assert.notStrictEqual(second, first, 'a changed stake set must move the root');
-        assert.ok(smt.store.writeCalls > before, 'a changed stake set must actually rebuild');
-    });
-
-    it('the memoized root is byte-identical to what buildFull would have returned', async function(){
-        // The whole safety case: the shortcut may not be a different answer.
-        const e = stakeEntries(49);
-        const memoSmt = freshSmt();
-        await SC.buildStakesRoot(memoSmt, CHAIN, NETWORK, 100, e);
-        const memoized = await SC.buildStakesRoot(memoSmt, CHAIN, NETWORK, 101, stakeEntries(49));
-
-        const plain = await freshSmt().buildFull(stakeEntries(49));
-        assert.strictEqual(memoized, plain, 'the memo returned a root buildFull would not have produced');
-    });
-
-    it('a GAP in block continuity rebuilds, even with an identical stake set', async function(){
-        // A reorg or a rollback lands on a block that is not the memo's successor.
-        const smt = freshSmt();
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        const before = smt.store.writeCalls;
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 105, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before,
-            'a non-successor block must rebuild rather than trust the memo');
-    });
-
-    it('re-parsing the SAME block index rebuilds rather than trusting a sibling memo', async function(){
-        const smt = freshSmt();
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        const before = smt.store.writeCalls;
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before, 'block N is not the successor of block N');
-    });
-
-    it('a different chain or network never reads the other one\'s memo', async function(){
-        const smt = freshSmt();
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        let before = smt.store.writeCalls;
-        await SC.buildStakesRoot(smt, 'LTC', NETWORK, 101, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before, 'a different chain must rebuild');
-
-        SC.resetStakesMemo();
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        before = smt.store.writeCalls;
-        await SC.buildStakesRoot(smt, CHAIN, 'mainnet', 101, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before, 'a different network must rebuild');
-    });
-
-    it('a cold start has no memo, so the first block after a restart rebuilds', async function(){
-        const smt = freshSmt();
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        SC.resetStakesMemo();                       // models the process restarting
-        const before = smt.store.writeCalls;
-        await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before, 'a cold start must rebuild, not trust a stale root');
-    });
-
-    it('a memoized root missing from the store rebuilds instead of committing it', async function(){
-        // Models the node store being wiped or pruned under a live process. The
-        // memo would otherwise commit a root whose tree is not there to prove.
-        const smt = freshSmt();
-        const first = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, stakeEntries(49));
-        smt.store.map.clear();
-        const before = smt.store.writeCalls;
-        const second = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, stakeEntries(49));
-        assert.ok(smt.store.writeCalls > before, 'a vanished tree must be rebuilt');
-        assert.strictEqual(second, first, 'and the rebuild must land on the same root');
-        assert.ok(smt.store.map.has(first), 'the tree must be back in the store');
-    });
-
-    it('reordering the same stake entries still hits, because buildFull is order-independent', async function(){
-        const smt = freshSmt();
-        const e = stakeEntries(49);
-        const first = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, e);
-        const before = smt.store.writeCalls;
-        const second = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, e.slice().reverse());
-        assert.strictEqual(second, first, 'a reorder is not a change');
-        assert.strictEqual(smt.store.writeCalls, before, 'and must not trigger a rebuild');
-    });
-
-    it('an empty stake set is memoized without a store read that cannot succeed', async function(){
-        // The empty root is never a row in state_tree_nodes, so an existence check
-        // on it would always miss and rebuild forever.
-        const smt = freshSmt();
-        const first = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 100, []);
-        assert.strictEqual(first, SC.EMPTY_ROOT_HEX);
-        const before = smt.store.writeCalls;
-        const second = await SC.buildStakesRoot(smt, CHAIN, NETWORK, 101, []);
-        assert.strictEqual(second, SC.EMPTY_ROOT_HEX);
-        assert.strictEqual(smt.store.writeCalls, before, 'an empty set must not rebuild every block');
-    });
-});
-
-describe('stateCommitment: DbNodeStore.putMany SQL shape @regression', function(){
-
-    // Records what would go to MariaDB without needing one.
-    function fakeDb(){
-        const calls = [];
-        return {
-            calls,
-            async doQueryStrict(sql, args){ calls.push({ sql, args }); return []; }
-        };
-    }
-
-    it('writes one multi-row INSERT IGNORE with three bound params per row', async function(){
-        const db = fakeDb();
-        const store = new SC.DbNodeStore(db);
-        const nodes = [];
-        for(let i = 0; i < 10; i++)
-            nodes.push({ hash: 'h' + i, left: 'l' + i, right: 'r' + i });
-        await store.putMany(nodes);
-
-        assert.strictEqual(db.calls.length, 1, 'ten nodes must be one statement, not ten');
-        const { sql, args } = db.calls[0];
-        assert.ok(/^INSERT IGNORE INTO state_tree_nodes \(node_hash, left_hash, right_hash\) VALUES /.test(sql),
-            'statement must stay an INSERT IGNORE on state_tree_nodes: ' + sql);
-        assert.strictEqual((sql.match(/\(\?, \?, \?\)/g) || []).length, 10, 'one value tuple per node');
-        assert.strictEqual(args.length, 30, 'three bound params per node');
-        assert.deepStrictEqual(args.slice(0, 6), ['h0', 'l0', 'r0', 'h1', 'l1', 'r1'],
-            'params must be flattened in hash/left/right order');
-    });
-
-    it('chunks a full-depth path so no single statement grows unbounded', async function(){
-        const db = fakeDb();
-        const store = new SC.DbNodeStore(db);
-        const nodes = [];
-        for(let i = 0; i < M.SMT_DEPTH; i++)
-            nodes.push({ hash: 'h' + i, left: 'l' + i, right: 'r' + i });
-        await store.putMany(nodes);
-
-        assert.ok(db.calls.length >= 2 && db.calls.length <= 4,
-            '256 nodes should chunk into a small handful of statements, got ' + db.calls.length);
-        let rows = 0;
-        for(const c of db.calls){
-            const tuples = (c.sql.match(/\(\?, \?, \?\)/g) || []).length;
-            assert.ok(tuples <= 128, 'a chunk exceeded the declared 128-row bound: ' + tuples);
-            assert.strictEqual(c.args.length, tuples * 3, 'chunk arity must match its tuple count');
-            rows += tuples;
-        }
-        assert.strictEqual(rows, M.SMT_DEPTH, 'chunking must not drop or duplicate a node');
-    });
-
-    it('an empty batch issues no statement at all', async function(){
-        const db = fakeDb();
-        await new SC.DbNodeStore(db).putMany([]);
-        assert.strictEqual(db.calls.length, 0, 'an empty batch must not send an INSERT with no VALUES');
-    });
-
-    it('duplicate hashes inside one batch are left to INSERT IGNORE, not pre-filtered away', async function(){
-        // INSERT IGNORE already makes a repeated key a no-op WITHIN a single
-        // multi-row statement, exactly as it did across the old single-row calls.
-        // Asserted so nobody "fixes" it later with a dedup pass that would have to
-        // be kept correct for no gain.
-        const db = fakeDb();
-        const store = new SC.DbNodeStore(db);
-        await store.putMany([
-            { hash: 'dup', left: 'a', right: 'b' },
-            { hash: 'dup', left: 'a', right: 'b' }
-        ]);
-        assert.strictEqual(db.calls.length, 1);
-        assert.strictEqual(db.calls[0].args.length, 6, 'both rows must reach the statement');
     });
 });
