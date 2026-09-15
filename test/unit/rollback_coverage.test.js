@@ -131,6 +131,29 @@ function requireSibling(ctx, absPath){
     return false;
 }
 
+// The source indexer's rollback is a directory module: the class entry at
+// src/rollback/index.js, the method groups beside it that the entry installs on its
+// prototype, and the statements those methods run under src/db/rollback/. Every guard
+// below that compares the source's SQL or bespoke logic reads it as ONE text in a
+// fixed order (the entry, the parts sorted, the statement files sorted), so a pin
+// holds wherever in the module its statement lives, and a statement that leaves both
+// directories fails here by name instead of passing unseen. The entry path is what
+// requireSibling() checks and what the table-list guards require().
+const INDEXER_ROLLBACK_ENTRY = 'src/rollback/index.js';
+function indexerRollbackSource(){
+    const jsIn = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort() : [])
+        .map((f) => pathMod.join(dir, f));
+    const entry = indexerFile(INDEXER_ROLLBACK_ENTRY);
+    const parts = jsIn(indexerFile('src/rollback')).filter((p) => p !== entry);
+    const statements = jsIn(indexerFile('src/db/rollback'));
+    return [entry].concat(parts, statements).map((p) => fs.readFileSync(p, 'utf8')).join('\n');
+}
+// A guard's source text: the whole indexer rollback module for its entry path, the
+// file itself for anything else (the replica's own client/rollback.js).
+function readSourceText(p){
+    return p === indexerFile(INDEXER_ROLLBACK_ENTRY) ? indexerRollbackSource() : fs.readFileSync(p, 'utf8');
+}
+
 describe('Rollback coverage guard @regression', function(){
     let rollback;
 
@@ -211,7 +234,7 @@ describe('Rollback coverage guard @regression', function(){
         // This guard reads the source's rollback list (xchain-indexer/src/rollback.js)
         // DIRECTLY, so any table added there fails this suite until it is either
         // mirrored into ClientRollback or given a deliberate, reasoned exemption here.
-        const rbPath = indexerFile('src/rollback.js');
+        const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
         const IndexerRollback = require(rbPath);
         // Rollback's constructor only assigns config aliases + the static table
@@ -263,7 +286,7 @@ describe('Rollback coverage guard @regression', function(){
             'ClientRollback.indexTables must roll back index_addresses and index_tickers'
         );
         // Cross-repo drift guard: the source indexer must roll back the same set.
-        const rbPath = indexerFile('src/rollback.js');
+        const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
         const IndexerRollback = require(rbPath);
         const indexer = new IndexerRollback({});
@@ -322,7 +345,7 @@ describe('Rollback coverage guard @regression', function(){
     // whitespace-normalised identical. If you edit one, edit the other.
     it('escrow re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function escrowSql(path){
-            const src = fs.readFileSync(path, 'utf8');
+            const src = readSourceText(path);
             const m = src.match(/\/\/<ESCROW-REDERIVE-SQL>([\s\S]*?)\/\/<\/ESCROW-REDERIVE-SQL>/);
             assert.ok(m, `ESCROW-REDERIVE-SQL markers not found in ${path}`);
             // pull every backtick literal, normalise whitespace
@@ -331,7 +354,7 @@ describe('Rollback coverage guard @regression', function(){
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
         const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
             'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
@@ -347,7 +370,7 @@ describe('Rollback coverage guard @regression', function(){
     // this extracts the backtick literals and asserts whitespace-normalised equality.
     it('COINPay match-status re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function coinpaySql(path){
-            const src = fs.readFileSync(path, 'utf8');
+            const src = readSourceText(path);
             const m = src.match(/\/\/<COINPAY-MATCH-REDERIVE-SQL>([\s\S]*?)\/\/<\/COINPAY-MATCH-REDERIVE-SQL>/);
             assert.ok(m, `COINPAY-MATCH-REDERIVE-SQL markers not found in ${path}`);
             const lits = m[1].match(/`[^`]*`/g) || [];
@@ -355,7 +378,7 @@ describe('Rollback coverage guard @regression', function(){
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
         const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(coinpaySql(syncPath), coinpaySql(indexerPath),
             'COINPay match re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
@@ -387,7 +410,7 @@ describe('Rollback coverage guard @regression', function(){
     // equality. If you edit one, edit the other.
     it('cross-chain mirror reorg delete SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function crossChainSql(path){
-            const src = fs.readFileSync(path, 'utf8');
+            const src = readSourceText(path);
             const m = src.match(/\/\/<CROSS-CHAIN-MIRROR-REORG-DELETE>([\s\S]*?)\/\/<\/CROSS-CHAIN-MIRROR-REORG-DELETE>/);
             assert.ok(m, `CROSS-CHAIN-MIRROR-REORG-DELETE markers not found in ${path}`);
             const lits = m[1].match(/`[^`]*`/g) || [];
@@ -395,7 +418,7 @@ describe('Rollback coverage guard @regression', function(){
             return lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
         }
         const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(crossChainSql(syncPath), crossChainSql(indexerPath),
             'cross-chain mirror reorg delete SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
@@ -412,7 +435,7 @@ describe('Rollback coverage guard @regression', function(){
     // drops out of both) and asserts whitespace-normalised equality.
     it('contract slash-restore SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function slashRestoreSql(path){
-            const src = fs.readFileSync(path, 'utf8');
+            const src = readSourceText(path);
             const m = src.match(/\/\/<CONTRACT-SLASH-RESTORE-SQL>([\s\S]*?)\/\/<\/CONTRACT-SLASH-RESTORE-SQL>/);
             assert.ok(m, `CONTRACT-SLASH-RESTORE-SQL markers not found in ${path}`);
             const lits = m[1].match(/`[^`]*`|"(?:[^"\\]|\\.)*"/g) || [];
@@ -420,7 +443,7 @@ describe('Rollback coverage guard @regression', function(){
             return lits.map(l => l.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const sql = slashRestoreSql(syncPath);
         assert.ok(/CAST\(e\.prev_amount AS DECIMAL\(60,18\)\) > CAST\(d\.prev_amount AS DECIMAL\(60,18\)\)/.test(sql),
@@ -492,7 +515,7 @@ describe('Rollback coverage guard @regression', function(){
     it('cooldown-maturity reversal is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         // Whitespace-normalised fragments that uniquely identify each of the four ops.
         const OPS = [
@@ -506,7 +529,7 @@ describe('Rollback coverage guard @regression', function(){
             // template literals; the replica concatenates double-quoted strings with `+`. Strip
             // quotes/backticks and the string-concat `+`, then collapse whitespace, so both reduce
             // to the same fragment text.
-            const norm = fs.readFileSync(p, 'utf8')
+            const norm = readSourceText(p)
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
                 .replace(/\s+/g, ' ');
@@ -530,7 +553,7 @@ describe('Rollback coverage guard @regression', function(){
     it('registry replica-flagged orphan sweeps are mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
             icons:   /DELETE FROM icons WHERE token_id NOT IN \(SELECT id FROM tokens\)/,
@@ -543,7 +566,7 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
             'SWEEP_RES keys must equal the registry\'s replica-flagged ORPHAN_SWEEPS tables; add/remove the regex alongside the flag');
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const norm = fs.readFileSync(p, 'utf8')
+            const norm = readSourceText(p)
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
                 .replace(/\s+/g, ' ');
@@ -565,7 +588,7 @@ describe('Rollback coverage guard @regression', function(){
     it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const IDX2_OPS = [
             // COALESCE(...,0) on every side: the probe compares a `markets` pair id, where a
@@ -578,7 +601,7 @@ describe('Rollback coverage guard @regression', function(){
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const norm = fs.readFileSync(p, 'utf8')
+            const norm = readSourceText(p)
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
                 .replace(/\s+/g, ' ');
@@ -667,9 +690,9 @@ describe('Rollback coverage guard @regression', function(){
         }
         // The source rollback re-arm must reset applied_block=NULL alongside applied/source_id,
         // or a stale applied_block from a prior reorg misses the next re-delivery.
-        const rbPath = indexerFile('src/rollback.js');
+        const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
-        const rb = norm(fs.readFileSync(rbPath, 'utf8'));
+        const rb = norm(readSourceText(rbPath));
         assert.ok(/SET applied=0, source_id=NULL, applied_block=NULL/.test(rb),
             'rollback.js re-arm must reset applied_block=NULL alongside applied=0 and source_id=NULL');
     });
@@ -729,7 +752,7 @@ describe('Rollback coverage guard @regression', function(){
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const ANCHOR_OPS = [
@@ -752,7 +775,7 @@ describe('Rollback coverage guard @regression', function(){
               re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const src = norm(fs.readFileSync(p, 'utf8'));
+            const src = norm(readSourceText(p));
             for(const op of ANCHOR_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
             }
@@ -769,7 +792,7 @@ describe('Rollback coverage guard @regression', function(){
     it('ATTEST v5 batch-head status restore is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         // Strips quote characters, template-literal splices, the indexer's `abw.` namespace and
         // every `+` so one regex set matches the indexer's template literal and the replica's
@@ -791,7 +814,7 @@ describe('Rollback coverage guard @regression', function(){
               re: /WHERE p\.version = ATTEST_BATCH_HEAD_VERSION AND p\.batch_chunk_index = 0 AND p\.action_index < \?/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const src = norm(fs.readFileSync(p, 'utf8'));
+            const src = norm(readSourceText(p));
             for(const op of ATTEST_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the ATTEST batch-head ${op.name}; source and replica must both reverse the completion stamp on reorg`);
             }
@@ -806,11 +829,11 @@ describe('Rollback coverage guard @regression', function(){
     it('delegations deactivation reset is the threshold form on both sides (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\+/g, ' ').replace(/\s+/g, ' ');
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const src = norm(fs.readFileSync(p, 'utf8'));
+            const src = norm(readSourceText(p));
             assert.ok(/UPDATE delegations SET deactivation_block = NULL WHERE deactivation_block IS NOT NULL AND deactivation_block >= \?/.test(src),
                 `${label} is missing the delegations threshold reset; a post-flag-day revoke leaves the parent stamped`);
             assert.ok(!/UPDATE delegations p JOIN delegations r/.test(src),
@@ -915,7 +938,7 @@ describe('Rollback coverage guard @regression', function(){
     it('VOTE polls re-open reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
-        const indexerPath = indexerFile('src/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         // The FULL re-open column list is pinned, not a prefix: a prefix match let the
@@ -926,7 +949,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'timelock re-fire reset (orphaned due block, surviving finalization)', re: /UPDATE polls SET callback_execute_action_index = NULL WHERE poll_status IN \( finalized , failed_quorum \) AND callback_due_block >= \? AND callback_execute_action_index IS NOT NULL/ },
         ];
         for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
-            const src = norm(fs.readFileSync(p, 'utf8'));
+            const src = norm(readSourceText(p));
             for(const op of POLL_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the polls ${op.name}; source and replica must both re-open finalized polls on reorg`);
             }
