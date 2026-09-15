@@ -68,6 +68,11 @@ describe('deactivation_block sync-mirror', function(){
             for(const c of ['DOGE', 'dogecoin'])           assert.strictEqual(new ClientRollback(createMockDb(), new Utility(), c, 'regtest').activationDelay, 60, c);
         });
     });
+});
+
+describe('deactivation_block sync-mirror', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('rollback emits the four re-NULL resets when a coin is set', function(){
         let db, rollback;
@@ -122,6 +127,11 @@ describe('deactivation_block sync-mirror', function(){
             assert.deepStrictEqual(q.args[1], [106]); // 100 + 6
         });
     });
+});
+
+describe('deactivation_block sync-mirror', function(){
+
+    afterEach(function(){ sinon.restore(); });
 
     describe('without a coin the mirror is skipped (and warns, not silent)', function(){
         it('emits zero resets and warns', async function(){
