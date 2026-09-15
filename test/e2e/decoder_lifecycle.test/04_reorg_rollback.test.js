@@ -37,16 +37,9 @@
  ********************************************************************/
 
 const assert = require('assert');
-const axios  = require('axios');
 
-const decoderFixtures = require('./helpers/decoderFixtures');
-const { waitFor }      = require('./helpers/waitFor');
-const {
-    CHAIN,
-    DecoderLifecycle,
-    NETWORK,
-    SERVER_PORT
-} = require('./decoder_lifecycle.test/helpers/decoder_lifecycle_harness');
+const decoderFixtures = require('../helpers/decoderFixtures');
+const { DecoderLifecycle } = require('./helpers/decoder_lifecycle_harness');
 
 let sourceDb, replicaDb, client;
 const lifecycle = new DecoderLifecycle((state) => {
@@ -55,48 +48,49 @@ const lifecycle = new DecoderLifecycle((state) => {
     client = state.client;
 });
 
-function startServer(overrides){
-    return lifecycle.startServer(overrides);
-}
+function startServer(overrides){ return lifecycle.startServer(overrides); }
+function makeClient(){ return lifecycle.makeClient(); }
 
-function registerRestSurface(){
-    describe('REST surface', function() {
+function registerReorgRollback(){
+    describe('Reorg / rollback', function() {
 
-        it('GET /status/decoder/... returns block_hash (no indexer hashes)', async function() {
-            this.timeout(15000);
-            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 3);
+        it('rolls back blocks + tx-scoped rows and keeps index tables intact', async function() {
+            this.timeout(30000);
+
+            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 10);
             await startServer();
+            client = makeClient();
+            await client.bootstrap();
+            assert.strictEqual(await replicaDb.getLastBlock(), 10);
 
-            await waitFor(async () => {
-                let r = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-                return r.data.block_height === 3;
-            }, 10000);
+            let initialAddrCount = await replicaDb.getTableCount('index_addresses');
 
-            let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-            assert.strictEqual(res.data.dbType, 'decoder');
-            assert.strictEqual(res.data.block_height, 3);
-            assert.ok(res.data.block_hash, 'block_hash should be present');
-            assert.strictEqual(res.data.ledger_hash, undefined,   'decoder status must not expose ledger_hash');
-            assert.strictEqual(res.data.actions_hash, undefined,  'decoder status must not expose actions_hash');
-            assert.strictEqual(res.data.contract_hash, undefined, 'decoder status must not expose contract_hash');
-        });
+            // rollback(8) removes blocks 8, 9, 10, leaving the tip at 7.
+            await client.rollback(8);
 
-        it('GET /transparency/decoder/... returns 400 (indexer-only)', async function() {
-            this.timeout(10000);
-            await startServer();
+            assert.strictEqual(await replicaDb.getLastBlock(), 7);
+            assert.strictEqual(await replicaDb.getTableCount('blocks'),       7);
+            assert.strictEqual(await replicaDb.getTableCount('transactions'), 7);
 
-            try {
-                await axios.get('http://127.0.0.1:' + SERVER_PORT + '/transparency/decoder/' + CHAIN + '/' + NETWORK + '/roots');
-                assert.fail('Expected 400');
-            } catch(e){
-                assert.strictEqual(e.response.status, 400);
-                assert.match(e.response.data.error, /indexer-only/i);
-            }
+            // Tx-scoped: seedDecoderBlocks creates one transaction_output per
+            // block, so post-rollback we should see 7 left (was 10).
+            assert.strictEqual(await replicaDb.getTableCount('transaction_outputs'), 7);
+
+            // Index tables are append-only and should NOT be touched by rollback.
+            assert.strictEqual(
+                await replicaDb.getTableCount('index_addresses'),
+                initialAddrCount,
+                'index_addresses must not change on rollback'
+            );
+
+            let srcHead = await sourceDb.getBlockHashRow(7);
+            let rplHead = await replicaDb.getBlockHashRow(7);
+            assert.strictEqual(rplHead.block_hash, srcHead.block_hash);
         });
     });
 }
 
 describe('E2E: Decoder DB Lifecycle', function() {
     lifecycle.registerHooks();
-    registerRestSurface();
+    registerReorgRollback();
 });

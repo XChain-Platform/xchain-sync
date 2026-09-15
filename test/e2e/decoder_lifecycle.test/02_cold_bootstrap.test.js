@@ -37,16 +37,9 @@
  ********************************************************************/
 
 const assert = require('assert');
-const axios  = require('axios');
 
-const decoderFixtures = require('./helpers/decoderFixtures');
-const { waitFor }      = require('./helpers/waitFor');
-const {
-    CHAIN,
-    DecoderLifecycle,
-    NETWORK,
-    SERVER_PORT
-} = require('./decoder_lifecycle.test/helpers/decoder_lifecycle_harness');
+const decoderFixtures = require('../helpers/decoderFixtures');
+const { DecoderLifecycle } = require('./helpers/decoder_lifecycle_harness');
 
 let sourceDb, replicaDb, client;
 const lifecycle = new DecoderLifecycle((state) => {
@@ -55,48 +48,48 @@ const lifecycle = new DecoderLifecycle((state) => {
     client = state.client;
 });
 
-function startServer(overrides){
-    return lifecycle.startServer(overrides);
-}
+function startServer(overrides){ return lifecycle.startServer(overrides); }
+function makeClient(){ return lifecycle.makeClient(); }
 
-function registerRestSurface(){
-    describe('REST surface', function() {
+function registerColdBootstrap(){
+    describe('Cold bootstrap', function() {
 
-        it('GET /status/decoder/... returns block_hash (no indexer hashes)', async function() {
-            this.timeout(15000);
-            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 3);
+        it('replica bootstraps from a decoder full snapshot', async function() {
+            this.timeout(30000);
+
+            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 10);
             await startServer();
 
-            await waitFor(async () => {
-                let r = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-                return r.data.block_height === 3;
-            }, 10000);
+            client = makeClient();
+            await client.bootstrap();
 
-            let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-            assert.strictEqual(res.data.dbType, 'decoder');
-            assert.strictEqual(res.data.block_height, 3);
-            assert.ok(res.data.block_hash, 'block_hash should be present');
-            assert.strictEqual(res.data.ledger_hash, undefined,   'decoder status must not expose ledger_hash');
-            assert.strictEqual(res.data.actions_hash, undefined,  'decoder status must not expose actions_hash');
-            assert.strictEqual(res.data.contract_hash, undefined, 'decoder status must not expose contract_hash');
-        });
+            let replicaLast = await replicaDb.getLastBlock();
+            assert.strictEqual(replicaLast, 10);
 
-        it('GET /transparency/decoder/... returns 400 (indexer-only)', async function() {
-            this.timeout(10000);
-            await startServer();
-
-            try {
-                await axios.get('http://127.0.0.1:' + SERVER_PORT + '/transparency/decoder/' + CHAIN + '/' + NETWORK + '/roots');
-                assert.fail('Expected 400');
-            } catch(e){
-                assert.strictEqual(e.response.status, 400);
-                assert.match(e.response.data.error, /indexer-only/i);
+            // Row-count parity for all replicated decoder tables.
+            // events: re-dumped in full on every snapshot (INSERT IGNORE on PK),
+            //   so the replica count converges to source at bootstrap.
+            // pubkeys: fetched per-block by address_id; idempotent INSERT IGNORE.
+            // dispensers: intentionally excluded from per-block replication (soft-
+            //   expire/hard-purge mutations don't ride the block stream), but the
+            //   full snapshot dumps current rows, so count should match here too.
+            let tables = ['blocks', 'transactions', 'transaction_outputs',
+                          'index_addresses', 'index_transactions', 'events', 'pubkeys'];
+            for(let t of tables){
+                let s = await sourceDb.getTableCount(t);
+                let r = await replicaDb.getTableCount(t);
+                assert.strictEqual(r, s, t + ' row count mismatch: source=' + s + ' replica=' + r);
             }
+
+            let srcHead = await sourceDb.getBlockHashRow(10);
+            let rplHead = await replicaDb.getBlockHashRow(10);
+            assert.ok(srcHead && rplHead, 'both heads should resolve');
+            assert.strictEqual(rplHead.block_hash, srcHead.block_hash);
         });
     });
 }
 
 describe('E2E: Decoder DB Lifecycle', function() {
     lifecycle.registerHooks();
-    registerRestSurface();
+    registerColdBootstrap();
 });

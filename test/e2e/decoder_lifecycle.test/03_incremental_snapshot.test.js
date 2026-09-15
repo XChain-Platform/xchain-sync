@@ -37,16 +37,9 @@
  ********************************************************************/
 
 const assert = require('assert');
-const axios  = require('axios');
 
-const decoderFixtures = require('./helpers/decoderFixtures');
-const { waitFor }      = require('./helpers/waitFor');
-const {
-    CHAIN,
-    DecoderLifecycle,
-    NETWORK,
-    SERVER_PORT
-} = require('./decoder_lifecycle.test/helpers/decoder_lifecycle_harness');
+const decoderFixtures = require('../helpers/decoderFixtures');
+const { DecoderLifecycle } = require('./helpers/decoder_lifecycle_harness');
 
 let sourceDb, replicaDb, client;
 const lifecycle = new DecoderLifecycle((state) => {
@@ -55,42 +48,38 @@ const lifecycle = new DecoderLifecycle((state) => {
     client = state.client;
 });
 
-function startServer(overrides){
-    return lifecycle.startServer(overrides);
-}
+function startServer(overrides){ return lifecycle.startServer(overrides); }
+function makeClient(){ return lifecycle.makeClient(); }
 
-function registerRestSurface(){
-    describe('REST surface', function() {
+function registerIncrementalSnapshot(){
+    describe('Incremental snapshot', function() {
 
-        it('GET /status/decoder/... returns block_hash (no indexer hashes)', async function() {
-            this.timeout(15000);
-            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 3);
+        it('catches replica up from a since-block, including tx-scoped tables', async function() {
+            this.timeout(30000);
+
+            // No WS connection in this test: the /since/N incremental-snapshot
+            // endpoint is the only path exercised, and it must also carry
+            // transaction_outputs, which is tx-scoped rather than block-scoped
+            // (the failure mode this test guards against).
+            await decoderFixtures.seedDecoderBlocks(sourceDb, 1, 5);
             await startServer();
 
-            await waitFor(async () => {
-                let r = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-                return r.data.block_height === 3;
-            }, 10000);
+            client = makeClient();
+            await client.bootstrap();
+            assert.strictEqual(await replicaDb.getLastBlock(), 5);
 
-            let res = await axios.get('http://127.0.0.1:' + SERVER_PORT + '/status/decoder/' + CHAIN + '/' + NETWORK);
-            assert.strictEqual(res.data.dbType, 'decoder');
-            assert.strictEqual(res.data.block_height, 3);
-            assert.ok(res.data.block_hash, 'block_hash should be present');
-            assert.strictEqual(res.data.ledger_hash, undefined,   'decoder status must not expose ledger_hash');
-            assert.strictEqual(res.data.actions_hash, undefined,  'decoder status must not expose actions_hash');
-            assert.strictEqual(res.data.contract_hash, undefined, 'decoder status must not expose contract_hash');
-        });
+            await decoderFixtures.seedDecoderBlocks(sourceDb, 6, 12);
 
-        it('GET /transparency/decoder/... returns 400 (indexer-only)', async function() {
-            this.timeout(10000);
-            await startServer();
+            await client.incrementalCatchUp(6);
 
-            try {
-                await axios.get('http://127.0.0.1:' + SERVER_PORT + '/transparency/decoder/' + CHAIN + '/' + NETWORK + '/roots');
-                assert.fail('Expected 400');
-            } catch(e){
-                assert.strictEqual(e.response.status, 400);
-                assert.match(e.response.data.error, /indexer-only/i);
+            assert.strictEqual(await replicaDb.getLastBlock(), 12);
+
+            // Same table set and parity rationale as the bootstrap test above.
+            for(let t of ['blocks', 'transactions', 'transaction_outputs',
+                          'index_addresses', 'index_transactions', 'events', 'pubkeys']){
+                let s = await sourceDb.getTableCount(t);
+                let r = await replicaDb.getTableCount(t);
+                assert.strictEqual(r, s, t + ' row count mismatch: source=' + s + ' replica=' + r);
             }
         });
     });
@@ -98,5 +87,5 @@ function registerRestSurface(){
 
 describe('E2E: Decoder DB Lifecycle', function() {
     lifecycle.registerHooks();
-    registerRestSurface();
+    registerIncrementalSnapshot();
 });
