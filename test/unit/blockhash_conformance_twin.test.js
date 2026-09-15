@@ -126,16 +126,15 @@ function sqlLiterals(fnSrc){
 function syncFile(rel){ return path.join(SYNC_ROOT, rel); }
 function indexerFile(rel){ return path.join(INDEXER_ROOT, rel); }
 
+function loadPair(ctx, syncRel, indexerRel){
+    if(!requireSibling(ctx, indexerFile(indexerRel))) return null;
+    return {
+        sync:    fs.readFileSync(syncFile(syncRel), 'utf8'),
+        indexer: fs.readFileSync(indexerFile(indexerRel), 'utf8')
+    };
+}
+
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
-
-    function loadPair(ctx, syncRel, indexerRel){
-        if(!requireSibling(ctx, indexerFile(indexerRel))) return null;
-        return {
-            sync:    fs.readFileSync(syncFile(syncRel), 'utf8'),
-            indexer: fs.readFileSync(indexerFile(indexerRel), 'utf8')
-        };
-    }
-
     it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db/shared.js', function(){
         // The indexer split src/db.js into src/db/index.js plus per-feature mixins. The
         // four cases below therefore read TWO different mixins: the constant is declared
@@ -175,7 +174,8 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'and MUST stay byte-identical (modulo whitespace)');
         }
     });
-
+});
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     // THIRD copy of the same gathering set, and the one nothing pinned. The indexer
     // needs no third copy (its getBlockLeafRows replays the getBlockHashes stash), but
     // this repo hand-maintains one in db.getBlockLeafRows to rebuild block_merkle_root
@@ -229,7 +229,8 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'before hashing; a missing loop leaks the per-chain address encoding into the hash on one side only');
         }
     });
-
+});
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('the hash-assembly tail (chaining + hash_version fold) is identical', function(){
         const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
@@ -276,7 +277,8 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             'reportOrphanStats block drifted between xchain-sync and xchain-indexer stateCommitment.js; ' +
             'the header comment declares it a keep-BYTE-IDENTICAL twin (comments included)');
     });
-
+});
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     // ---- SMT engine twin ----------------------------------------------------
     //
     // The follower header calls the SMT engine byte-identical to the indexer's,
@@ -323,17 +325,24 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'this is the root-producing surface and it must stay byte-identical');
         }
     });
-
+});
+// The follower header names ONE divergence and argues why it is
+// root-neutral. This case is what makes that paragraph binding: it fails
+// if the indexer drops the cache, if the follower gains one, or if the
+// divergence spreads past the two methods it is allowed to touch.
+// Scoped to the engine block: the follower's file header NAMES the cache
+// fields in the paragraph that declares the divergence, and a whole-file
+// search would read that prose as the cache itself.
+// Nothing else may differ. Subtract the cache from the INDEXER's two
+// remaining methods and they must equal the follower's, code-for-code
+// (comments stripped: independently-worded prose is not a fork, and one
+// word of it had already drifted - "pre-batch" vs "pre-batching").
+// Every substitution asserts it FIRED, so a reworded cache cannot pass
+// this case by silently matching nothing.
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('PersistentSMT divergence is exactly the indexer node cache (declared, not drift)', function(){
         const pair = loadPair(this, 'src/stateCommitment.js', 'src/stateCommitment.js');
         if(!pair) return;
-        // The follower header names ONE divergence and argues why it is
-        // root-neutral. This case is what makes that paragraph binding: it fails
-        // if the indexer drops the cache, if the follower gains one, or if the
-        // divergence spreads past the two methods it is allowed to touch.
-        // Scoped to the engine block: the follower's file header NAMES the cache
-        // fields in the paragraph that declares the divergence, and a whole-file
-        // search would read that prose as the cache itself.
         function engine(src, from){
             const i = src.indexOf('// ---- Persistent SMT engine');
             const j = src.indexOf('// Every EMPTY[h] constant, hex.');
@@ -352,13 +361,6 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'deliberately ported, rewrite the DECLARED DIVERGENCE paragraph in that file ' +
                 'and replace this case with a full byte comparison of the engine block');
         }
-
-        // Nothing else may differ. Subtract the cache from the INDEXER's two
-        // remaining methods and they must equal the follower's, code-for-code
-        // (comments stripped: independently-worded prose is not a fork, and one
-        // word of it had already drifted - "pre-batch" vs "pre-batching").
-        // Every substitution asserts it FIRED, so a reworded cache cannot pass
-        // this case by silently matching nothing.
         function subtract(src, from, pairs){
             let out = src;
             for(const [find, replace] of pairs){
@@ -372,7 +374,6 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         }
         const descendSig  = /async _descend\(rootHex, keyBuf\)\{/;
         const putBatchSig = /async _putBatch\(nodes\)\{/;
-
         const idxDescend = subtract(
             normalize(extractFunction(pair.indexer, descendSig, 'xchain-indexer _descend')),
             '_descend',
@@ -384,7 +385,6 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             '_descend differs between xchain-sync and xchain-indexer by more than the declared ' +
             'node-cache read. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
             'xchain-sync/src/stateCommitment.js to say what else may differ');
-
         const idxPutBatch = subtract(
             normalize(extractFunction(pair.indexer, putBatchSig, 'xchain-indexer _putBatch')),
             '_putBatch',
