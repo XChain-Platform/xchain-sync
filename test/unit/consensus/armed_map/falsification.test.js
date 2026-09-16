@@ -108,7 +108,7 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('moves when one committed height changes, and names that row alone', function () {
         const root = tree();
-        edit(root, 'src/consensus/gate_registry.js', '    testnet: 146000,', '    testnet: 146001,');
+        edit(root, 'src/consensus/gate_registry/shared_rows_2.js', '    testnet: 146000,', '    testnet: 146001,');
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
         assert.deepStrictEqual(movedRows(baseline, after), ['checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION']);
@@ -116,7 +116,7 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('moves when NOT-YET-PINNED (null) becomes the UNARMED sentinel', function () {
         const root = tree();
-        edit(root, 'src/consensus/gate_registry.js', "    'BTC:testnet':  null,", "    'BTC:testnet':  9999999999,");
+        edit(root, 'src/consensus/gate_registry/shared_rows_3.js', "    'BTC:testnet':  null,", "    'BTC:testnet':  9999999999,");
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
         assert.deepStrictEqual(movedRows(baseline, after), ['stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION']);
@@ -125,7 +125,7 @@ describe('armed map v2: falsification on temp trees', function () {
     it('holds under a comment, a registry reformat, a carrier rename and a move', function () {
         const root = tree();
         fs.appendFileSync(path.join(root, 'src/stateHash.js'), '\n// a carrier comment\n');
-        edit(root, 'src/consensus/gate_registry.js', '    testnet: 146000,', '    testnet:  146000,');
+        edit(root, 'src/consensus/gate_registry/shared_rows_2.js', '    testnet: 146000,', '    testnet:  146000,');
         fs.renameSync(path.join(root, 'src/train_activation.js'), path.join(root, 'src/rule_set_train.js'));
         fs.mkdirSync(path.join(root, 'src/activations'));
         fs.renameSync(path.join(root, 'src/state_key_collation_activation.js'),
@@ -143,7 +143,7 @@ describe('armed map v2: falsification on temp trees', function () {
         const control = runCompleteness(tree());
         assert.strictEqual(control.status, 0, 'the completeness suite must pass on an unmodified copy first: ' + control.stdout);
         const root = tree();
-        edit(root, 'src/consensus/gate_registry.js',
+        edit(root, 'src/consensus/gate_registry/shared_rows_4.js',
             "addGate('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES', 'constant', 1000);\n", '');
         const failedBoot = boot(root, 'src/swq_source_cap_activation.js');
         assert.notStrictEqual(failedBoot.status, 0, 'the shim booted with its registry row absent');
@@ -156,13 +156,13 @@ describe('armed map v2: falsification on temp trees', function () {
         assert.ok(red.stdout.includes('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES'), red.stdout);
     });
 
-    it('an unexpected registry row reads UNREADABLE and names the row', function () {
+    it('a shared row outside sync membership does not move the sync fingerprint', function () {
         const root = tree();
-        edit(root, 'src/consensus/gate_registry.js', '// SHARED-GATES END',
-            "addGate('unexpected_gate.VALUE', 'constant', 1);\n// SHARED-GATES END");
+        edit(root, 'src/consensus/gate_registry/shared_rows_1.js',
+            "addGate('anchor_reward_activation.ANCHOR_REWARD_AMOUNT', 'constant', '10.00000000');",
+            "addGate('anchor_reward_activation.ANCHOR_REWARD_AMOUNT', 'constant', '10.00000001');");
         const after = readV2(root);
-        assert.strictEqual(after.hex, 'UNREADABLE');
-        assert.ok(after.reason.startsWith('unexpected_gate.VALUE:'), after.reason);
+        assert.strictEqual(after.hex, baseline.hex);
     });
 
     it('reads the same value without node_modules because every registry row is local data', function () {

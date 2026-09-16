@@ -3,14 +3,14 @@
   "entries": {
     "archive_rollback_author_scope_activation": {
       "path": "src/archive_rollback_author_scope_activation.js",
-      "hash": "6ee0a6d55508789bde7242ecf379e7d86ebf2eca0a7c241074ada8e13ead281b",
+      "hash": "9f65819d7885209579a3deee1aaf7bc6363895779d0d599c76191d51e5762d46",
       "twins": [
         "xchain-indexer"
       ]
     },
     "checkpoint_commitment_activation": {
       "path": "src/checkpoint_commitment_activation.js",
-      "hash": "68a74507b688b7267ba0c4b4133a0e5a4ed799d5fc9b0dbcad87252c991b1798",
+      "hash": "bd9b1032d5e1efd65e4af97d80119d178b5c5cb33eb4ea9fc3a4963e6577de30",
       "twins": [
         "xchain-hub",
         "xchain-indexer"
@@ -23,63 +23,63 @@
     },
     "equivocation_header": {
       "path": "src/equivocation_header.js",
-      "hash": "3cd4ac9ca4a08190373d37299780bdcd923d6d9edd396f0c7b0a4f25812f12ae",
+      "hash": "74a151e91bb72581fce3efe097452afa10603417d20eb008e58d1833f4a889f0",
       "twins": [
         "xchain-indexer"
       ]
     },
     "stake_weight_collation_activation": {
       "path": "src/stake_weight_collation_activation.js",
-      "hash": "1be07e9a28699390e23f5788a9229d5e79bc4b8e368cf66d4bf4004d3e187988",
+      "hash": "d651ee809b2004e10497bafbe56446dae2f78d5b94e0826b5a063be4a5cf42d4",
       "twins": [
         "xchain-indexer"
       ]
     },
     "stake_weighted_quorum": {
       "path": "src/stake_weighted_quorum.js",
-      "hash": "f28a3806b0ea337ef91bb091ef6f9e459ba50bfaf1ac0ffdfc097d07771b060b",
+      "hash": "afaee5777e8d909eace7a7106b294797014f74929fc4302c50a2ec31ac77a847",
       "twins": [
         "xchain-indexer"
       ]
     },
     "stateHash": {
       "path": "src/stateHash.js",
-      "hash": "3a351b09d661fc7f64f858097b3427d040a45c4302145361ae162caab76d6d4e",
+      "hash": "b410a31b2888a718982824da33e1fac4ec09cf65bea7e1b50e8b22dc50259c0b",
       "twins": [
         "xchain-indexer"
       ]
     },
     "state_commitment_activation": {
       "path": "src/state_commitment_activation.js",
-      "hash": "7509c66c37662be67535b9aed99635ae60a095238bfe51dd22809c4d9ca9b9c4",
+      "hash": "a0d934c568751b0c5427c5a1934193b77e696092a97f96160ac77a04bdf575cf",
       "twins": [
         "xchain-indexer"
       ]
     },
     "state_key_collation_activation": {
       "path": "src/state_key_collation_activation.js",
-      "hash": "ce0c61c37ab269d8ceb3f89d011cb2ae68b6fddf140642e9dd531581f06cbe7e",
+      "hash": "555630bc80f7f8fb563198859cc5ff328a3d0847f038ce1c88806123264f6bbd",
       "twins": [
         "xchain-indexer"
       ]
     },
     "state_subtree_activation": {
       "path": "src/state_subtree_activation.js",
-      "hash": "611f62a243b7b2202bb8ec7fdd44bcddc21a44a996dba894aee6e26e3f3c4453",
+      "hash": "3a3afec8a2591ababf19f289c9879aa5b0ea299eed8b7aa8723b774e0386c1d1",
       "twins": [
         "xchain-indexer"
       ]
     },
     "swq_source_cap_activation": {
       "path": "src/swq_source_cap_activation.js",
-      "hash": "3833096dedb0a0769af3ee89b85ff34965c92f13207f53937e6d757ef3af2715",
+      "hash": "07148486fb1f8869168eadcc08701cab41a275c90eff873df28b2feac2cfa0ef",
       "twins": [
         "xchain-indexer"
       ]
     },
     "train_activation": {
       "path": "src/train_activation.js",
-      "hash": "255e1e455c8d7b500e3d7d18d8dc030f28b2ad09c1054e24a6a22f3e3849542d",
+      "hash": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
       "twins": [
         "xchain-indexer"
       ]
@@ -173,14 +173,14 @@
     {
       "id": "archive_rollback_author_scope_activation",
       "from": "308b96595f1f9dbb6954e5eb6bdc2df7c5e351dcaed2ad5b6b190352bd5e1cff",
-      "to": "6ee0a6d55508789bde7242ecf379e7d86ebf2eca0a7c241074ada8e13ead281b",
+      "to": "9f65819d7885209579a3deee1aaf7bc6363895779d0d599c76191d51e5762d46",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "checkpoint_commitment_activation",
       "from": "b145c3bff9dece6741a8b24a2979a02607c1daf83f98383d4fe29b99170b574c",
-      "to": "68a74507b688b7267ba0c4b4133a0e5a4ed799d5fc9b0dbcad87252c991b1798",
+      "to": "bd9b1032d5e1efd65e4af97d80119d178b5c5cb33eb4ea9fc3a4963e6577de30",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
@@ -194,63 +194,63 @@
     {
       "id": "equivocation_header",
       "from": "d14b27eda669b5429c97cc2fc212c0fee5dea8f2bd14797deb3a272be9b3cdc9",
-      "to": "3cd4ac9ca4a08190373d37299780bdcd923d6d9edd396f0c7b0a4f25812f12ae",
+      "to": "74a151e91bb72581fce3efe097452afa10603417d20eb008e58d1833f4a889f0",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "stake_weight_collation_activation",
       "from": "169836edebfe98a9d131e3c8b295669260e2ab5e9d07bc020a0129c720cb5b4b",
-      "to": "1be07e9a28699390e23f5788a9229d5e79bc4b8e368cf66d4bf4004d3e187988",
+      "to": "d651ee809b2004e10497bafbe56446dae2f78d5b94e0826b5a063be4a5cf42d4",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "stake_weighted_quorum",
       "from": "da0af9b4eb48cb18657250bdee8bd86f59108af39a599530a89f6c100c44fd80",
-      "to": "f28a3806b0ea337ef91bb091ef6f9e459ba50bfaf1ac0ffdfc097d07771b060b",
+      "to": "afaee5777e8d909eace7a7106b294797014f74929fc4302c50a2ec31ac77a847",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "stateHash",
       "from": "93ebdd554ab209a63db33a3e8403726d345e1f5e765b29a23a9e80e178a222a8",
-      "to": "3a351b09d661fc7f64f858097b3427d040a45c4302145361ae162caab76d6d4e",
+      "to": "b410a31b2888a718982824da33e1fac4ec09cf65bea7e1b50e8b22dc50259c0b",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "state_commitment_activation",
       "from": "7719117296d358be9b3a4e3142b6b4c611f5b7ebf683f40040016fda9e9de643",
-      "to": "7509c66c37662be67535b9aed99635ae60a095238bfe51dd22809c4d9ca9b9c4",
+      "to": "a0d934c568751b0c5427c5a1934193b77e696092a97f96160ac77a04bdf575cf",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "state_key_collation_activation",
       "from": "537ba4b260e00196b546d29cbda6342d0760efc6cb4d143045fb64dcd4c68482",
-      "to": "ce0c61c37ab269d8ceb3f89d011cb2ae68b6fddf140642e9dd531581f06cbe7e",
+      "to": "555630bc80f7f8fb563198859cc5ff328a3d0847f038ce1c88806123264f6bbd",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "state_subtree_activation",
       "from": "a33913fec0939990ba9d2550843965d6bfdcbf6bf40354358aa21e4c1fdc185d",
-      "to": "611f62a243b7b2202bb8ec7fdd44bcddc21a44a996dba894aee6e26e3f3c4453",
+      "to": "3a3afec8a2591ababf19f289c9879aa5b0ea299eed8b7aa8723b774e0386c1d1",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "swq_source_cap_activation",
       "from": "620854dd7934a2e24de8175dd55efb1c5aa55e712e931b12c9317ffc1cfebc29",
-      "to": "3833096dedb0a0769af3ee89b85ff34965c92f13207f53937e6d757ef3af2715",
+      "to": "07148486fb1f8869168eadcc08701cab41a275c90eff873df28b2feac2cfa0ef",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     },
     {
       "id": "train_activation",
       "from": "ce8c9e40354e772996e6ff052e6601c8a564b0a0e25b9e853aa238d424545450",
-      "to": "255e1e455c8d7b500e3d7d18d8dc030f28b2ad09c1054e24a6a22f3e3849542d",
+      "to": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
       "reason": "registry conversion (rows 12, 13, 14)",
       "date": "2026-09-16"
     }

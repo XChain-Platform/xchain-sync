@@ -64,16 +64,11 @@
 
 'use strict';
 
-const { get } = require('./consensus/gate_registry');
+const { get, copy, activeAt } = require('./consensus/gate_registry');
 
-// Per-network activation, interpreted against the block index a rollback targets,
-// on the DOGE scale (see the KEYED ON note above).
-const ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION = get('archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION');
+const ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION = copy('archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION');
 
-// The joins that bind an orphaned chunk to its own head's author. Spliced into
-// the reset UPDATE by both the source indexer and the replica so the two cannot
-// drift; `c` is the orphaned chunk and `p` the surviving head, as named there.
-const ARCHIVE_AUTHOR_SCOPE_JOIN_SQL = get('archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL');
+const ARCHIVE_AUTHOR_SCOPE_JOIN_SQL = copy('archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL');
 
 // Whether the reset is publisher-scoped for a rollback targeting `blockIndex` on
 // `network`. A non-numeric height, an unknown network or an omitted one -> false

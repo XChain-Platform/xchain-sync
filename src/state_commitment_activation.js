@@ -31,19 +31,9 @@
  *
  ********************************************************************/
 
-const { get } = require('./consensus/gate_registry');
+const { get, copy, activeAt } = require('./consensus/gate_registry');
 
-// Per-chain activation height, interpreted as the processing chain's OWN
-// block_index. At/after this height the new roots are committed; below it the
-// state_tree_roots row is absent and the getblockhashes RPC returns null roots.
-// ARMED MID-CHAIN like the stateHash.js class maps, which forces per-chain keys
-// (one shared 'mainnet' height cannot fit BTC ~957k and DOGE ~6.28M at once).
-// Lookup is '<COIN>:<network>' first, then the bare network key (regtest keeps
-// one key; unknown -> inert/off, which is safe: roots simply stay absent).
-// Same heights as the two state-hash gates armed 2026-07-07, so ONE deploy-by
-// date governs all Cohort-C flips; each height precedes the Cohort-B BTC
-// anchor (961000) as the checkpoint-commitment ordering requires.
-const STATE_COMMITMENT_ACTIVATION = get('state_commitment_activation.STATE_COMMITMENT_ACTIVATION');
+const STATE_COMMITMENT_ACTIVATION = copy('state_commitment_activation.STATE_COMMITMENT_ACTIVATION');
 
 // Resolve the per-chain threshold: '<COIN>:<network>' key first, then the bare
 // network key. Production callers on mainnet/testnet MUST pass coin (all real

@@ -54,47 +54,11 @@
  *
  ********************************************************************/
 
-const { get } = require('./consensus/gate_registry');
+const { get, copy, activeAt } = require('./consensus/gate_registry');
 
-// Launch genesis version = 1. Folded into the hash so two preimage schemes can
-// never compare equal. A dev iteration briefly numbered a changed preimage 2;
-// pre-launch that was collapsed back to 1 (mirroring the BLOCK_HASH_VERSION 2->1
-// collapse) because there is no launch-committed state to migrate, only a clean
-// fleet-wide reindex. Bump ONLY on a deliberate preimage change AFTER launch.
-// Independent of BLOCK_HASH_VERSION (the three-hash baseline is untouched by this
-// additive, non-consensus integrity hash).
-const STATE_HASH_VERSION = get('stateHash.STATE_HASH_VERSION');
+const STATE_HASH_VERSION = copy('stateHash.STATE_HASH_VERSION');
 
-// ── Index-map state-hash flag-day (id-determinism P4) ────────────────────────
-// Promotes the index_addresses / index_tickers id->string MAP from the advisory
-// /status checksum (BlockHasher.computeIndexMapChecksum) to an ENFORCED per-block
-// class of this replication-integrity hash: the follower recomputes state_hash and
-// HALTS on mismatch, so an id-map divergence (a wire ^id resolving to a different
-// entity, or a recovered node that built a different map) is caught at the block
-// that introduced it instead of silently forking.
-//
-// This is the ONE place state_hash deliberately hashes the surrogate id (not just
-// the resolved string): the id IS the value under protection. It is sound only
-// because the compaction + F1a work made every id-assignment path deterministic
-// (in-block dense counter + rollback; recovery stages by string and the apply hook
-// assigns the deterministic id) - so a from-genesis node and a recovered node now
-// produce byte-identical (id, address) pairs over the same chain.
-//
-// Per-block DELTA (block_index = B), mirroring the rest of this preimage's per-block
-// shape: the rows whose deterministic id was first assigned at B. A cumulative
-// checksum would chain every block on all history (the credits-chaining trap the
-// header warns about); the delta catches a divergence at its origin block.
-//
-// Gated on the chain's OWN local block_index (like state_commitment_activation, not
-// the BTC-anchored snapshot_block): each chain arms at its own flag-day height.
-// Landed DEFAULT INERT (placeholder 999999999) so shipping the class was a strict
-// no-op on the live fleet - the class is omitted from the preimage below the
-// threshold, leaving state_hash byte-identical to the pre-feature shape. Armed
-// fleet-atomically (real per-chain heights) exactly as WI-2 / state_commitment
-// did; regtest was the last inert key (armed 2026-07-16). No
-// STATE_HASH_VERSION bump: a block is unambiguously pre- or post-activation on a
-// given network, so the two preimage shapes cannot collide.
-const INDEX_MAP_STATE_HASH_ACTIVATION = get('stateHash.INDEX_MAP_STATE_HASH_ACTIVATION');
+const INDEX_MAP_STATE_HASH_ACTIVATION = copy('stateHash.INDEX_MAP_STATE_HASH_ACTIVATION');
 
 // Whether the index-map class is folded into state_hash at `blockIndex` on `network`.
 // Below the threshold / unknown network -> off (safe; the class is omitted and the
@@ -107,26 +71,7 @@ function isIndexMapStateHashActive(blockIndex, network){
     return b >= threshold;
 }
 
-// ── VOTE poll-finalization state-hash flag-day ────────────────────────────────
-// Promotes the polls finalization flip (VOTE v2 mutates a SURVIVING polls row
-// terminal IN PLACE) from an unhashed updated_rows mutation to an ENFORCED
-// per-block class of this replication-integrity hash, closing the one mutation
-// class where a follower silently dropping the flip upsert diverged with no halt
-// (the attests/xcalls v0 flips have had this coverage from the start).
-//
-// Same gating model as INDEX_MAP_STATE_HASH_ACTIVATION above (keyed on the
-// chain's OWN local block_index), but ARMED MID-CHAIN, which forces per-chain
-// keys: unlike the genesis-armed index-map class, one shared 'mainnet' height
-// cannot fit BTC (~957k) and DOGE (~6.28M) simultaneously. Lookup is
-// '<COIN>:<network>' first, then the bare network key (regtest keeps one key;
-// unknown -> inert). ARMED 2026-07-07 at tip + margin per chain: the whole
-// fleet (every indexer + sync process) MUST run this map before the EARLIEST
-// chain crosses its height (see the deploy-by note per line), or followers
-// still on the old map false-halt at the boundary. A missed deadline is
-// recoverable by bumping the not-yet-crossed heights before deploy. No
-// STATE_HASH_VERSION bump: a block is unambiguously pre- or post-activation.
-// Keep byte-identical to the xchain-sync twin.
-const POLL_FINALIZE_STATE_HASH_ACTIVATION = get('stateHash.POLL_FINALIZE_STATE_HASH_ACTIVATION');
+const POLL_FINALIZE_STATE_HASH_ACTIVATION = copy('stateHash.POLL_FINALIZE_STATE_HASH_ACTIVATION');
 
 // Resolve a per-chain activation threshold: '<COIN>:<network>' key first, then
 // the bare network key. A production caller on mainnet/testnet MUST pass coin
@@ -150,16 +95,7 @@ function isPollFinalizeStateHashActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-// ── tokens.supply state-hash flag-day (F-1 closure) ──────────────────────────
-// The hash twin of the updated_rows tokens-supply replication class: supply is
-// mutated IN PLACE on a surviving token row (its action_index stays at the
-// DEPLOY action), so no consensus block hash and no other state_hash class
-// covers it; a follower silently dropping the supply upsert served a stale
-// supply with no halt. Supply changes exactly when a credit/debit/escrow row is
-// written for the tick, so the per-block class hashes (tick, supply) for every
-// tick touched by a ledger row at block B. Same per-chain arming map and
-// deploy-by constraint as POLL_FINALIZE above; the two classes flip together.
-const TOKEN_SUPPLY_STATE_HASH_ACTIVATION = get('stateHash.TOKEN_SUPPLY_STATE_HASH_ACTIVATION');
+const TOKEN_SUPPLY_STATE_HASH_ACTIVATION = copy('stateHash.TOKEN_SUPPLY_STATE_HASH_ACTIVATION');
 
 // Whether the token-supply class is folded into state_hash at `blockIndex` on
 // `network` for `coin`. Same fail-inert semantics as the poll-finalize gate.
@@ -171,20 +107,7 @@ function isTokenSupplyStateHashActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-// ── BET status-flip state-hash flag-day ───────────────────────────────────────
-// The hash twin of the updated_rows BET replication classes. BET carries THREE
-// in-place mutations on surviving rows, all stamped with the block that made
-// them: the closed latch (bet_feeds.closed_block), the feed terminal flip
-// (bet_feeds.terminal_block: resolved/resolved_void/cancelled/expired) and the
-// per-bet settlement flip (bets.settled_block: won/lost/refunded). None of them
-// is visible to the action-scoped ledger hashes once the row's creating action
-// is below the block, so a follower silently dropping one diverged with no halt
-// (the exact class this file's header documents). Although the BET action is
-// genesis-active, the hash class CANNOT be: mainnet/testnet fleets already
-// compare state hashes every block, so an ungated preimage-shape change would
-// halt a mixed-version fleet instantly. Same per-chain arming model as
-// POLL_FINALIZE/TOKEN_SUPPLY above.
-const BET_STATUS_STATE_HASH_ACTIVATION = get('stateHash.BET_STATUS_STATE_HASH_ACTIVATION');
+const BET_STATUS_STATE_HASH_ACTIVATION = copy('stateHash.BET_STATUS_STATE_HASH_ACTIVATION');
 
 // Whether the BET status-flip class is folded into state_hash at `blockIndex`
 // on `network` for `coin`. Same fail-inert semantics as the gates above.
@@ -196,46 +119,10 @@ function isBetStatusStateHashActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-// ── Archive-head anchor versions ──────────────────────────────────────────────
-// The anchor_actions versions that carry an archive HEAD (a signed batch header
-// whose v2 continuation chunks reassemble against it): v1, the publisher-bearing
-// archive anchor, and nothing else. It is a one-member set because the wire
-// families are version-disjoint by construction (bundle {0}, archive head {1},
-// chunk {2}); it stays a SET rather than a scalar so a later archive version joins
-// it without touching the ten splice sites that read the SQL fragment.
-// Every predicate that selects "the archive parent of a v2 chunk" MUST
-// use this set: the invalid_archive stamp, its reorg reset, the forward
-// updated_rows class and the state-hash class below all target the same rows.
-// SINGLE SOURCE OF TRUTH for xchain-indexer rollback.js + this file's class 6,
-// and (via the byte-identical xchain-sync twin) ClientRollback.js +
-// updatedRows.js. db.js/recovery.js carry matching predicates.
-const ARCHIVE_HEAD_VERSIONS = get('stateHash.ARCHIVE_HEAD_VERSIONS');
-// SQL fragment form, spliced as `p.version ` + ARCHIVE_HEAD_VERSIONS_SQL.
-const ARCHIVE_HEAD_VERSIONS_SQL = get('stateHash.ARCHIVE_HEAD_VERSIONS_SQL');
+const ARCHIVE_HEAD_VERSIONS = copy('stateHash.ARCHIVE_HEAD_VERSIONS');
+const ARCHIVE_HEAD_VERSIONS_SQL = copy('stateHash.ARCHIVE_HEAD_VERSIONS_SQL');
 
-// ── invalid_archive archive-head-coverage state-hash flag-day ─────────────────
-// Widens the anchor_invalid state-hash class (class 6 below) from a hard-coded
-// v1 parent to whatever ARCHIVE_HEAD_VERSIONS holds, closing the integrity-hash
-// blind spot where an invalid_archive stamp on a non-v1 archive head was invisible
-// to the follower's recompute (a follower silently dropping that upsert diverged
-// with no halt). With the version set restarted the two predicates coincide (the
-// archive head IS v1 again), so the gate is inert in effect and kept only so the
-// widening stays landed for the next archive version. Changes the class's row
-// selection, hence the hashed preimage, so it
-// is gated exactly like POLL_FINALIZE above (per-chain keys on the chain's OWN
-// local block_index). No STATE_HASH_VERSION bump: a block is unambiguously pre-
-// or post-activation on a given network. Keep byte-identical to the xchain-sync
-// twin; every indexer AND sync process on a network must run this code, since a
-// straggler on the v1-only predicate recomputes a different preimage and halts.
-// TESTNET IS ARMED AT 0 (operator ruling 2026-08-11, applied 2026-08-14): the
-// re-genesised testnet carries no pre-flag blocks, so there is no legacy preimage
-// to stay byte-identical with, and arming at genesis made testnet the network that
-// exercises the widened class first. MAINNET IS ARMED AT 0 by the 2026-09-09
-// ruling: mainnet holds 0 archive chunks (measured 2026-09-09), so the widened
-// predicate and the legacy v1-only one select the same empty class and the
-// genesis-armed preimage is identical to the deployed one; the 56 DOGE ANCHOR
-// actions on record are checked by the from-genesis replay witness.
-const ARCHIVE_INVALID_STATE_HASH_ACTIVATION = get('stateHash.ARCHIVE_INVALID_STATE_HASH_ACTIVATION');
+const ARCHIVE_INVALID_STATE_HASH_ACTIVATION = copy('stateHash.ARCHIVE_INVALID_STATE_HASH_ACTIVATION');
 
 // Whether the anchor_invalid class covers the full archive-head version set at
 // `blockIndex` on `network` for `coin`. Below the threshold / unknown network ->
@@ -248,52 +135,10 @@ function isArchiveInvalidStateHashActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-// ── invalid_archive chunk-height key repair state-hash flag-day ───────────────
-// Class 6 scopes the invalid_archive stamp to the block the COMPLETING v2 chunk
-// landed in. It has always keyed that scope on `c.block_index`, and that column
-// is NEVER populated on a v2 row: `block_index` carries BLOCK_INDEX_CHECKPOINTED
-// (the checkpointed height on the OTHER chain, see anchor_actions.sql), which is
-// assigned only in anchor.js `_parseCheckpoint`; `_parseContinuation` never sets
-// it, and db.js binds the column NULL when the key is absent. `NULL BETWEEN x AND
-// y` is never true, so the class has selected ZERO rows on every node since it
-// landed, on every network. The completing chunk's real height is
-// `block_index_doge` (the DOGE block the ANCHOR action landed in, NOT NULL by
-// schema), the same height the class is being scoped to, and the same distinction
-// anchor.js `_archiveAuthorScope` already draws.
-//
-// Repairing the key CHANGES THE PREIMAGE the moment a stamped batch exists: a
-// node on the repaired predicate hashes the parent row, a node on the broken one
-// hashes nothing, and the fleet halts at that block. So the repair is a flag day
-// like every other class-shape change here, gated per chain on the chain's OWN
-// local block_index, DEFAULT INERT: below the threshold the query keeps the
-// broken `c.block_index` key and the preimage stays byte-identical to what every
-// deployed node computes today.
-//
-// MAINNET IS ARMED AT 0 by the 2026-09-09 ruling. The repair only moves the
-// preimage where a stamped archive batch exists, and mainnet holds 0 archive
-// chunks (measured 2026-09-09), so the repaired key and the broken one select
-// the same empty class: arming at genesis leaves the preimage every deployed
-// mainnet node computes unchanged, and the from-genesis replay witness is the
-// proof of that identity (the 56 DOGE ANCHOR actions on record are covered by it).
-// TESTNET TAKES REAL FUTURE HEIGHTS, not 0: testnet is a public chain that has
-// run since the 2026-08-10 re-genesis, so a height of 0 here would be retroactive
-// rather than a flag day. They are sized from the 2026-09-09 tips (TBTC 151701,
-// TLTC 4883295, TDOGE 67881714) plus about 22 days, so the v0.17.0 train is live
-// on every testnet process before the earliest chain crosses.
-// Deploy order is not free: xchain-sync updatedRows.js carries the SAME broken key
-// on the replication side (fixed there un-gated, since shipping a row is not a
-// preimage) and must be live FIRST, or a follower is asked to hash a stamped
-// parent row it was never sent. regtest is armed at 0 so fresh regtest stacks
-// exercise the repaired class end to end. No STATE_HASH_VERSION bump: a block is
-// unambiguously pre- or post-activation. Keep byte-identical to the
-// xchain-sync twin.
-const ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION = get('stateHash.ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION');
+const ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION = copy('stateHash.ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION');
 
-// The column class 6 scopes the completing v2 chunk by, as a SQL fragment. Broken
-// legacy key below the flag day, repaired key at/after it. Exported so the twin
-// repos and the drift guards can assert on ONE definition rather than a literal.
-const ARCHIVE_CHUNK_HEIGHT_COL = get('stateHash.ARCHIVE_CHUNK_HEIGHT_COL');
-const ARCHIVE_CHUNK_HEIGHT_COL_LEGACY = get('stateHash.ARCHIVE_CHUNK_HEIGHT_COL_LEGACY');
+const ARCHIVE_CHUNK_HEIGHT_COL = copy('stateHash.ARCHIVE_CHUNK_HEIGHT_COL');
+const ARCHIVE_CHUNK_HEIGHT_COL_LEGACY = copy('stateHash.ARCHIVE_CHUNK_HEIGHT_COL_LEGACY');
 
 // Whether class 6 scopes the completing v2 chunk by the repaired
 // `block_index_doge` key at `blockIndex` on `network` for `coin`. Below the
@@ -307,10 +152,10 @@ function isArchiveInvalidHeightKeyActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-const DEACTIVATION_TABLES = get('stateHash.DEACTIVATION_TABLES');
-const SLASH_SPECS = get('stateHash.SLASH_SPECS');
-const REQUEST_STATUS_TABLES = get('stateHash.REQUEST_STATUS_TABLES');
-const COOLDOWN_TABLES = get('stateHash.COOLDOWN_TABLES');
+const DEACTIVATION_TABLES = copy('stateHash.DEACTIVATION_TABLES');
+const SLASH_SPECS = copy('stateHash.SLASH_SPECS');
+const REQUEST_STATUS_TABLES = copy('stateHash.REQUEST_STATUS_TABLES');
+const COOLDOWN_TABLES = copy('stateHash.COOLDOWN_TABLES');
 
 // Build the canonical state-hash preimage object for block B. db must expose
 // doQuery(sql, args) and getStatusId(name) (both xchain-indexer and xchain-sync

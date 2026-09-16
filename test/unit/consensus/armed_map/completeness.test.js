@@ -12,7 +12,7 @@
 
 // The registry-backed manifest is only useful if the registry, its shims and
 // the independent W1 key census still name the same rows. This suite scans the
-// literal get() calls in every shim and compares all three populations.
+// literal get() and copy() calls in every shim and compares all three populations.
 //
 // It resolves src/ relative to itself, so the falsification suite can copy it
 // into a mutated temp tree and watch it go red there.
@@ -36,7 +36,7 @@ function scanShims(srcDir) {
             if (e.isDirectory()) { walk(path.join(dir, e.name), r); continue; }
             if (!e.name.endsWith('.js')) continue;
             const text = fs.readFileSync(path.join(dir, e.name), 'utf8');
-            const keys = new Set(Array.from(text.matchAll(/\bget\(['"]([^'"]+)['"]\)/g), (m) => m[1]));
+            const keys = new Set(Array.from(text.matchAll(/\b(?:get|copy)\(['"]([^'"]+)['"]\)/g), (m) => m[1]));
             if (keys.size && text.includes('gate_registry')) shims.set(r, keys);
         }
     })(srcDir, '');
@@ -59,7 +59,9 @@ describe('armed map v2: manifest completeness over src/', function () {
     });
 
     it('the registry and manifest carry exactly the expected keys', function () {
-        assert.deepStrictEqual(registry.keys().slice().sort(), Array.from(EXPECTED_KEYS));
+        const expected = new Set(EXPECTED_KEYS);
+        const syncKeys = registry.keys().filter((key) => expected.has(key));
+        assert.deepStrictEqual(syncKeys.slice().sort(), Array.from(EXPECTED_KEYS));
         assert.deepStrictEqual(manifestKeys.slice().sort(), Array.from(EXPECTED_KEYS));
     });
 

@@ -44,37 +44,12 @@
  *
  ********************************************************************/
 
-const { get } = require('./consensus/gate_registry');
+const { get, copy, activeAt } = require('./consensus/gate_registry');
 
-// CONSENSUS-CRITICAL caps on the source-keyed stake-weight snapshot. MUST be equal
-// in xchain-indexer + xchain-sync (a drift forks the stakes_root at/after the
-// activation height).
-//   STAKE_WEIGHT_MAX_SOURCES         - cap on DISTINCT staking SOURCES in a weighted
-//                                      snapshot (the consensus unit; Σ weight over
-//                                      distinct sources = S). Over-fetched by one so a
-//                                      genuinely larger federation is flagged truncated
-//                                      and the primitive fails closed (a coordinated
-//                                      cap raise then re-opens liveness).
-//   STAKE_WEIGHT_MAX_KEYS_PER_SOURCE - cap on effective keys returned per source. Bounds
-//                                      only the row/leaf count for a key-spamming source;
-//                                      dropping a source's excess keys does NOT change its
-//                                      weight (weight is per source, counted once) and does
-//                                      NOT set truncated. Generous: no legit source
-//                                      delegates near this many keys.
-const STAKE_WEIGHT_MAX_SOURCES = get('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES');
-const STAKE_WEIGHT_MAX_KEYS_PER_SOURCE = get('swq_source_cap_activation.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE');
+const STAKE_WEIGHT_MAX_SOURCES = copy('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES');
+const STAKE_WEIGHT_MAX_KEYS_PER_SOURCE = copy('swq_source_cap_activation.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE');
 
-// Per-chain activation height, interpreted as the processing chain's OWN block_index
-// (same semantics as STATE_COMMITMENT_ACTIVATION). At/after the height the windowed
-// source-cap is applied; below it the legacy uncapped key-LIMIT path runs.
-//
-// Option B (separate later height): the BTC:mainnet cap arms AFTER STATE_COMMITMENT
-// (958500, ~2026-07-17) and AT/BEFORE STAKE_WEIGHTED_QUORUM arms (961000, ~2026-08-04),
-// so the eviction fix is live when weighted quorum goes live without an 8-day
-// hashed-root fleet-deploy race. For sub-cap honest federations the capped and
-// uncapped stakes_root are byte-identical, so this mid-stream height introduces no
-// real root discontinuity - only the >cap case (the attack) diverges, deterministically.
-const SWQ_SOURCE_CAP_ACTIVATION = get('swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION');
+const SWQ_SOURCE_CAP_ACTIVATION = copy('swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION');
 
 // Resolve the per-chain threshold: '<COIN>:<network>' key first, then the bare
 // network key. Production callers on mainnet/testnet MUST pass coin; a coin-less

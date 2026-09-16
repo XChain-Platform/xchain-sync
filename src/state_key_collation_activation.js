@@ -56,20 +56,9 @@
  *
  ********************************************************************/
 
-const { get } = require('./consensus/gate_registry');
+const { get, copy, activeAt } = require('./consensus/gate_registry');
 
-// Per-chain activation height, interpreted as the processing chain's OWN
-// block_index. At/after the height the binary-collation (utf8_bin) queries
-// run; below it the legacy folding (utf8_general_ci) queries run.
-//
-// *** ARMED 2026-07-10 *** Heights are each processing chain's OWN block_index,
-// sequenced after the other armed cohorts (state_commitment 958500/3143000/
-// 6291000, swq_source_cap 960000, Cohort-B anchor 961000 on BTC) with fleet
-// deploy-by margin; testnets flip late July so they prove the binary path
-// before mainnet. The xchain-sync twin mirrors this file byte-for-byte in the
-// same change. Regtest is armed from genesis so fresh regtest stacks and the
-// e2e conformance scenario exercise the binary path end to end.
-const STATE_KEY_COLLATION_ACTIVATION = get('state_key_collation_activation.STATE_KEY_COLLATION_ACTIVATION');
+const STATE_KEY_COLLATION_ACTIVATION = copy('state_key_collation_activation.STATE_KEY_COLLATION_ACTIVATION');
 
 // Resolve the per-chain threshold: '<COIN>:<network>' key first, then the bare
 // network key (regtest keeps one key). Unknown -> undefined -> inert/off.

@@ -73,7 +73,10 @@ const EXPECTED_KEYS = Object.freeze([
     'train_activation.TRAIN_ACTIVATION',
 ]);
 
-const ENTRIES = Object.freeze(registryRows().map(([key, value]) => [key, () => value]));
+const EXPECTED_KEY_SET = new Set(EXPECTED_KEYS);
+const ENTRIES = Object.freeze(registryRows()
+    .filter(([key]) => EXPECTED_KEY_SET.has(key))
+    .map(([key, value]) => [key, () => value]));
 
 /**
  * Resolve every row. Any failure, a carrier that will not load, a missing
