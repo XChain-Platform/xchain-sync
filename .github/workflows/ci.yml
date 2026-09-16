@@ -183,8 +183,13 @@ jobs:
       # the tree against it and fail on any moved, renamed, missing or
       # unreadable carrier, so a stale pin cannot reach develop or master green
       # through a direct push or a release pull request. bin/ci-full.sh runs the
-      # same command before a push; the tool uses only node builtins, so this
-      # job needs no install.
+      # same command before a push. The tool now loads the carrier logic pin
+      # module, which parses with acorn, so this job needs the production
+      # dependency tree; --omit=dev keeps it to that and no more.
+      - name: Install dependencies
+        working-directory: xchain-sync
+        run: npm ci --omit=dev
+
       - name: Identity pin (armed map, vendored coins)
         working-directory: xchain-sync
         run: node bin/pin-identity.js --compare bin/pins/identity.json
