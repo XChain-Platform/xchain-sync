@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The sync-owned DDL directory resolves to `src/sql/` again after the database class moved into `src/db/`, so the service no longer dies at boot with ENOENT from `verifySyncTables`.
+
 ## [0.19.0] - 2026-09-16
 
 ### Added

@@ -38,6 +38,13 @@ const poolSizing = require('./pool_sizing');
 const stakeWeightCollation = require('../consensus/gates/stake_weight_collation_gate');
 const utf8mb4Columns = require('../schema/utf8mb4_columns');
 const lifecycle = require('../table_lifecycle');
+
+// Resolve the sync-owned DDL directory, src/sql/, one level ABOVE this module.
+// Every reader goes through this helper so the boot path and the unit test
+// that proves the directory exists on disk cannot resolve different paths.
+function sqlDir(){
+    return path.join(__dirname, '..', 'sql');
+}
 const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
 const util = require('node:util');
 const { getLogger } = require('../observability');
@@ -223,7 +230,7 @@ class Database {
     // ClientSync checks and records halts for decoder replicas too, and
     // without the table every decoder client start logged a 1146 probe error.
     async verifySyncTables(){
-        let dir  = path.join(__dirname, 'sql');
+        let dir  = sqlDir();
         let files = fs.readdirSync(dir);
         let db    = await this.getConnection();
         // One summary line instead of a per-table pair; the error path below still
@@ -256,7 +263,7 @@ class Database {
     // Only for sync-service-owned tables such as sync_meta; replicated tables come
     // from the source's own DDL.
     async createTableFromFile(file){
-        let dir     = path.join(__dirname, 'sql');
+        let dir     = sqlDir();
         let data    = fs.readFileSync(dir + '/' + file, "utf8");
         let queries = splitSqlStatements(data);
         for(let query of queries){
@@ -1377,5 +1384,8 @@ for(const file of MIXIN_FILES){
 // Exposed for the unit suite (and the indexer-twin drift check): the weightless-row
 // guard is consensus-relevant, so it is tested directly, not only through a query.
 Database.requireStakeWeight = requireStakeWeight;
+
+// Exposed so the unit suite resolves the SAME directory the boot path reads.
+Database.sqlDir = sqlDir;
 
 module.exports = Database;
