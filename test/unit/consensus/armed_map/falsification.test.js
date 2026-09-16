@@ -124,12 +124,12 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('holds under a comment, a registry reformat, a carrier rename and a move', function () {
         const root = tree();
-        fs.appendFileSync(path.join(root, 'src/stateHash.js'), '\n// a carrier comment\n');
+        fs.appendFileSync(path.join(root, 'src/consensus/state_hash.js'), '\n// a carrier comment\n');
         edit(root, 'src/consensus/gate_registry/shared_rows_2.js', '    testnet: 146000,', '    testnet:  146000,');
-        fs.renameSync(path.join(root, 'src/train_activation.js'), path.join(root, 'src/rule_set_train.js'));
+        fs.renameSync(path.join(root, 'src/consensus/gates/train_gate.js'), path.join(root, 'src/consensus/gates/rule_set_train.js'));
         fs.mkdirSync(path.join(root, 'src/activations'));
-        fs.renameSync(path.join(root, 'src/state_key_collation_activation.js'),
-            path.join(root, 'src/activations/state_key_collation_activation.js'));
+        fs.renameSync(path.join(root, 'src/consensus/gates/swq_source_cap_gate.js'),
+            path.join(root, 'src/activations/swq_source_cap_gate.js'));
         assert.strictEqual(readV2(root).hex, baseline.hex);
     });
 });
@@ -145,7 +145,7 @@ describe('armed map v2: falsification on temp trees', function () {
         const root = tree();
         edit(root, 'src/consensus/gate_registry/shared_rows_4.js',
             "addGate('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES', 'constant', 1000);\n", '');
-        const failedBoot = boot(root, 'src/swq_source_cap_activation.js');
+        const failedBoot = boot(root, 'src/consensus/gates/swq_source_cap_gate.js');
         assert.notStrictEqual(failedBoot.status, 0, 'the shim booted with its registry row absent');
         assert.ok(failedBoot.stderr.includes('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES'), failedBoot.stderr);
         const after = readV2(root);

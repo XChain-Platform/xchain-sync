@@ -26,7 +26,13 @@ const { ENTRIES, EXPECTED_KEYS, collectRows } = require(path.join(SRC, 'consensu
 const { KEY_RE } = require(path.join(SRC, 'consensus/armed_map/canonical'));
 const registry = require(path.join(SRC, 'consensus/gate_registry'));
 
-/** {file: Set(registry keys)} for every shim under srcDir. */
+/**
+ * {file: Set(registry keys)} for every module under srcDir that reads the
+ * registry by a literal key: the get() and copy() calls of the shims, and the
+ * `const <NAME>_KEY = '<key>'` a W5 caller of a retired predicate-only shim
+ * spells beside its activeAt read (checkpoint.js, db/actions.js,
+ * client/block_hasher.js), so the two rows those shims carried stay counted.
+ */
 function scanShims(srcDir) {
     const shims = new Map();
     (function walk(dir, rel) {
@@ -36,7 +42,8 @@ function scanShims(srcDir) {
             if (e.isDirectory()) { walk(path.join(dir, e.name), r); continue; }
             if (!e.name.endsWith('.js')) continue;
             const text = fs.readFileSync(path.join(dir, e.name), 'utf8');
-            const keys = new Set(Array.from(text.matchAll(/\b(?:get|copy)\(['"]([^'"]+)['"]\)/g), (m) => m[1]));
+            const keys = new Set(Array.from(text.matchAll(/\b(?:get|copy)\(['"]([^'"]+)['"]\)/g), (m) => m[1])
+                .concat(Array.from(text.matchAll(/\bconst\s+[A-Z0-9_]+_KEY\s*=\s*['"]([^'"]+)['"]/g), (m) => m[1])));
             if (keys.size && text.includes('gate_registry')) shims.set(r, keys);
         }
     })(srcDir, '');
@@ -50,7 +57,9 @@ const manifestKeys = ENTRIES.map(([key]) => key);
 describe('armed map v2: manifest completeness over src/', function () {
 
     it('the shim scan finds all twelve gate files and all 39 rows', function () {
-        assert.strictEqual(shims.size, 12, 'the shim scan found ' + shims.size + ' files');
+        // 10 shims (6 gates, 3 carriers, consensus-constants) plus the three W5
+        // callers that read a retired predicate-only shim's row by literal key.
+        assert.strictEqual(shims.size, 13, 'the shim scan found ' + shims.size + ' files');
         assert.strictEqual(shimKeys.size, 39, 'the shim scan found ' + shimKeys.size + ' keys');
     });
 
