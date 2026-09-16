@@ -26,9 +26,15 @@
  ********************************************************************/
 
 const crypto = require('crypto');
-const eq     = require('./equivocation_header.js');
-const swq    = require('./stake_weighted_quorum.js');
-const ckpt   = require('./checkpoint_commitment_activation.js');
+const eq     = require('./consensus/equivocation_header.js');
+const swq    = require('./consensus/stake_weighted_quorum.js');
+// The CHECKPOINT_COMMITMENT flag day is a registry row read by its literal key (W5);
+// the predicate is activeAt over the checkpoint's BTC-anchored snapshot_block.
+const { activeAt } = require('./consensus/gate_registry');
+const CHECKPOINT_COMMITMENT_KEY = 'checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION';
+function isCheckpointCommitmentActive(snapshotBlock, network){
+    return activeAt(CHECKPOINT_COMMITMENT_KEY, network, null, snapshotBlock, null);
+}
 
 // ASN.1 DER prefix for Ed25519 SPKI. Mirrors the hub's ValidatorIdentity and
 // the indexer's ed25519.js, so validator signatures verify identically here.
@@ -49,7 +55,7 @@ function canonicalCheckpoint(cp){
     // RAW string BEFORE the EQUIV wrap. The all-four-present guard keeps legacy null-root
     // rows on their original rootless canonical; post-flag-day the hub never signs a
     // rootless checkpoint, so it is always true for real rows.
-    if(ckpt.isCheckpointCommitmentActive(cp.snapshot_block, cp.network) &&
+    if(isCheckpointCommitmentActive(cp.snapshot_block, cp.network) &&
        cp.state_root != null && cp.block_merkle_root != null &&
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
@@ -81,7 +87,7 @@ function verifySignature(payload, sigHex, pubkeyHex){
 // absent, which means the row cannot be verified at all: the canonical it would be
 // checked against is the legacy rootless one, not what a post-flag-day producer signs.
 function commitmentMissing(cp){
-    if(!cp || !ckpt.isCheckpointCommitmentActive(cp.snapshot_block, cp.network)) return false;
+    if(!cp || !isCheckpointCommitmentActive(cp.snapshot_block, cp.network)) return false;
     return cp.state_root === null || cp.state_root === undefined
         || cp.block_merkle_root === null || cp.block_merkle_root === undefined
         || cp.state_root_version === null || cp.state_root_version === undefined

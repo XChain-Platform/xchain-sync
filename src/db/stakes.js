@@ -22,8 +22,8 @@
  ********************************************************************/
 
 const path       = require('path');
-const swqCap = require('../swq_source_cap_activation');
-const stakeWeightCollation = require('../stake_weight_collation_activation');
+const swqCap = require('../consensus/gates/swq_source_cap_gate');
+const stakeWeightCollation = require('../consensus/gates/stake_weight_collation_gate');
 const { requireStakeWeight } = require('./shared.js');
 const { getLogger } = require('../observability');
 const logger = getLogger();

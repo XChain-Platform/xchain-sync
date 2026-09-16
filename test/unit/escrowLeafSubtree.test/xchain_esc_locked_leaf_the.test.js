@@ -25,7 +25,7 @@
 const assert = require('assert');
 const M   = require('../../../src/merkle.js');
 const SC  = require('../../../src/state_commitment/index.js');
-const SUB = require('../../../src/state_subtree_activation.js');
+const SUB = require('../../../src/consensus/gates/state_subtree_gate.js');
 const ESC = require('../../../src/escrow_leaf_subtree.js');
 
 const { FakeDb, CHAIN, NETWORK, ADDR, TICK } = require('./helpers/fake_db');

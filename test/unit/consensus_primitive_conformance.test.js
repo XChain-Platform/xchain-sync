@@ -32,8 +32,8 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const swq   = require('../../src/stake_weighted_quorum.js');
-const equiv = require('../../src/equivocation_header.js');
+const swq   = require('../../src/consensus/stake_weighted_quorum.js');
+const equiv = require('../../src/consensus/equivocation_header.js');
 
 const LOCAL_DIR = path.join(__dirname, '../../src');
 // Resolve the canonical xchain-documentation repo. Prefer an explicit path: GitHub CI
@@ -108,13 +108,16 @@ describe('consensus-primitive conformance: canonical vectors @regression', funct
 describe('consensus-primitive conformance: byte-identity to canonical source @regression', function(){
     before(function(){ if(!CANON_PRESENT){ if(process.env.XCHAIN_REQUIRE_SIBLINGS==='1') throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but canonical reference-impl dir not found at ' + CANON_DIR); this.skip(); } });
 
+    // The two carriers sit under consensus/ on both sides since W5 (the same tail in
+    // every repo), so the compare is a raw byte compare of src/consensus/<f> against
+    // protocol/reference-impl/consensus/<f>.
     ['stake_weighted_quorum.js', 'equivocation_header.js'].forEach(function(f){
         it(f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
-            const local = fs.readFileSync(path.join(LOCAL_DIR, f), 'utf8');
-            const canon = fs.readFileSync(path.join(CANON_DIR, f), 'utf8');
+            const local = fs.readFileSync(path.join(LOCAL_DIR, 'consensus', f), 'utf8');
+            const canon = fs.readFileSync(path.join(CANON_DIR, 'consensus', f), 'utf8');
             assert.strictEqual(local, canon,
-                'this repo\'s ' + f + ' has drifted from the canonical source; ' +
-                'edit xchain-documentation/protocol/reference-impl/' + f + ' and re-vendor all five copies.');
+                'this repo\'s consensus/' + f + ' has drifted from the canonical source; ' +
+                'edit xchain-documentation/protocol/reference-impl/consensus/' + f + ' and re-vendor all five copies.');
         });
     });
 });

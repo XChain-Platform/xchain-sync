@@ -72,11 +72,11 @@ const SIBLINGS = [
       altEnvs: ['XCHAIN_DECODER_SQL_PATH'],
       guards: 'the generated-column parity and the decoder table-classification exhaustiveness against the decoder schema' },
     { repo: 'xchain-sdk', envs: [],
-      marker: path.join('src', 'state_subtree_activation.js'),
-      guards: 'state_subtree_activation.js byte-identity in its client-liveness carrier' },
+      marker: path.join('src', 'consensus', 'gates', 'state_subtree_gate.js'),
+      guards: 'state_subtree_gate.js byte-identity in its client-liveness carrier' },
     { repo: 'xchain-explorer', envs: [],
-      marker: path.join('src', 'state_subtree_activation.js'),
-      guards: 'state_subtree_activation.js byte-identity in its escrow-leaf refusal carrier' },
+      marker: path.join('src', 'consensus', 'gates', 'state_subtree_gate.js'),
+      guards: 'state_subtree_gate.js byte-identity in its escrow-leaf refusal carrier' },
 ];
 
 function resolve(entry) {

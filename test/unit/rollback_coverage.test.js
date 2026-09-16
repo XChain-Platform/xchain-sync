@@ -100,7 +100,7 @@ const lifecycleTwin = require('../../src/table_lifecycle');
 const pathMod = require('path');
 const fs = require('fs');
 const assertLocal = require('assert');
-const sh = require('../../src/stateHash');
+const sh = require('../../src/consensus/state_hash');
 const widenSet = require('../../src/schema/utf8mb4_columns');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
@@ -843,9 +843,9 @@ describe('Rollback coverage guard @regression', function(){
 
     // The publisher-scope flag day is one file, twinned. A per-network height that differs
     // between source and replica is a fleet split at the reorg the gate governs.
-    it('archive_rollback_author_scope_activation.js is byte-identical across xchain-indexer and xchain-sync', function(){
+    it('archive_rollback_author_scope_gate.js is byte-identical across xchain-indexer and xchain-sync', function(){
         const fs = require('fs'), pathMod = require('path');
-        const rel = 'src/archive_rollback_author_scope_activation.js';
+        const rel = 'src/consensus/gates/archive_rollback_author_scope_gate.js';
         const indexerPath = indexerFile(rel);
         if(!requireSibling(this, indexerPath)) return;
         const syncPath = pathMod.resolve(__dirname, '../..', rel);
@@ -859,7 +859,7 @@ describe('Rollback coverage guard @regression', function(){
     // runs the legacy unscoped reset on a fleet whose source indexer runs the scoped one.
     // ClientRollback must refuse to construct at all rather than resolve to that fallback.
     it('demands a known network, because the publisher scope is armed', function(){
-        const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../../src/archive_rollback_author_scope_activation');
+        const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../../src/consensus/gates/archive_rollback_author_scope_gate');
         const INERT = 9999999999;
         const armed = Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION)
             .filter(n => ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION[n] !== INERT);
@@ -884,7 +884,7 @@ describe('Rollback coverage guard @regression', function(){
     // put the whole fleet back on the unscoped reset) fails here rather than in production.
     it('publisher-scope heights are the 2026-09-09 ruling values', function(){
         const { ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION, isArchiveRollbackAuthorScopeActive } =
-            require('../../src/archive_rollback_author_scope_activation');
+            require('../../src/consensus/gates/archive_rollback_author_scope_gate');
         assert.deepStrictEqual(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION,
             { mainnet: 0, testnet: 67915000, regtest: 9999999999 });
         // Mainnet is scoped from genesis; testnet only at its flag day; regtest stays off.
@@ -919,9 +919,9 @@ describe('Rollback coverage guard @regression', function(){
             'ARCHIVE_CHUNK_HEIGHT_COL must be c.block_index_doge (block_index is NULL on v2 chunks)');
         assertLocal.ok(!/AND c\.block_index BETWEEN/.test(ur),
             'updatedRows.js must not regress to the never-populated c.block_index key');
-        // Twin-parity: the indexer stateHash.js copy (when the sibling checkout exists)
+        // Twin-parity: the indexer state_hash.js copy (when the sibling checkout exists)
         // must carry the identical constant, or the two repos disagree on the parent set.
-        const indexerPath = indexerFile('src/stateHash.js');
+        const indexerPath = indexerFile('src/consensus/state_hash.js');
         if(fs.existsSync(indexerPath)){
             const ish = require(indexerPath);
             assertLocal.deepStrictEqual(ish.ARCHIVE_HEAD_VERSIONS, sh.ARCHIVE_HEAD_VERSIONS,
@@ -1017,8 +1017,8 @@ describe('Rollback coverage guard @regression', function(){
     // false-halt generator. Lock them identical (skip if the sibling indexer repo absent).
     it('stateHash.js is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const syncPath    = pathMod.resolve(__dirname, '../../src/stateHash.js');
-        const indexerPath = indexerFile('src/stateHash.js');
+        const syncPath    = pathMod.resolve(__dirname, '../../src/consensus/state_hash.js');
+        const indexerPath = indexerFile('src/consensus/state_hash.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
             'stateHash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
@@ -1053,10 +1053,10 @@ describe('Rollback coverage guard @regression', function(){
     // GENERATES the replicated topology and both rollback table sets; a drifted copy
     // would silently re-open the very source<->replica divergence it exists to close.
     // Lock them byte-identical (skip if the sibling repo absent).
-    // state_key_collation_activation.js gates the state_key COLLATE in the
-    // contract_hash/block_merkle_root preimage on BOTH sides; a drifted copy
-    // forks the recomputed hashes at/after an armed height.
-    // state_subtree_activation.js is the flag-day gate for the RESERVED state_root
+    // The state_key_collation_activation registry row gates the state_key COLLATE
+    // in the contract_hash/block_merkle_root preimage on BOTH sides through the
+    // shared registry parts, which have their own twin guard.
+    // state_subtree_gate.js is the flag-day gate for the RESERVED state_root
     // slots (ownership/tokens/contract_state) and for the balances_root escrow leaf.
     // It is inert today, but it decides on BOTH sides which sub-roots stop being
     // EMPTY at an armed height; a drifted copy forks state_root the moment a slot
@@ -1079,17 +1079,17 @@ describe('Rollback coverage guard @regression', function(){
     // copy means an origin that accepts a 4-byte character and a replica that halts on it
     // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
     // The two sides no longer share one relative path. xchain-sync keeps its twins flat
-    // under src/ except the utf8mb4 map, which sits in src/schema/, while the indexer has
-    // sorted its copies into feature directories, so the indexer tail is spelled out per
+    // under src/ except the utf8mb4 map, which sits in src/schema/, and the W5 gates,
+    // which sit under src/consensus/gates/ on both sides, while the indexer has sorted
+    // its other copies into feature directories, so the indexer tail is spelled out per
     // twin and a third element names the sync path where it is not src/ plus the basename.
     // The pairs below compare exactly the same code the single-tail loop did.
     for(const [twin, indexerRel, syncRel] of [
         ['merkle.js',                            'src/consensus/merkle.js'],
-        ['state_commitment_activation.js',       'src/state_commitment_activation.js'],
-        ['swq_source_cap_activation.js',         'src/swq_source_cap_activation.js'],
-        ['state_key_collation_activation.js',    'src/state_key_collation_activation.js'],
-        ['stake_weight_collation_activation.js', 'src/stake_weight_collation_activation.js'],
-        ['state_subtree_activation.js',          'src/state_subtree_activation.js'],
+        ['state_commitment_gate.js',             'src/consensus/gates/state_commitment_gate.js',       'consensus/gates/state_commitment_gate.js'],
+        ['swq_source_cap_gate.js',               'src/consensus/gates/swq_source_cap_gate.js',         'consensus/gates/swq_source_cap_gate.js'],
+        ['stake_weight_collation_gate.js',       'src/consensus/gates/stake_weight_collation_gate.js', 'consensus/gates/stake_weight_collation_gate.js'],
+        ['state_subtree_gate.js',                'src/consensus/gates/state_subtree_gate.js',          'consensus/gates/state_subtree_gate.js'],
         ['contract_state_subtree.js',            'src/consensus/contract_state_subtree.js'],
         ['escrow_leaf_subtree.js',               'src/consensus/escrow_leaf_subtree.js'],
         ['db/subtree/node_store_rows.js',       'src/db/subtree/node_store_rows.js'],
@@ -1136,17 +1136,17 @@ describe('Rollback coverage guard @regression', function(){
     // is inert (identical state_root to the two-sub-root v1 assembly) and that the
     // slot list matches merkle.STATE_SUBTREES. Both repos must assert the same
     // thing, or one side can land an arming change the other never checked.
-    // state_subtree_activation.js has a THIRD carrier: xchain-sdk ships it as a
+    // state_subtree_gate.js has a THIRD carrier: xchain-sdk ships it as a
     // client-facing consensus constant, because no proof can tell a client whether
     // a slot is live (an armed-but-empty slot and an inert slot commit the same
     // EMPTY_SMT_ROOT). The loop above only pairs sync with the indexer, so the SDK
     // copy is checked here as well; xchain-sdk carries its own copy of this guard
     // plus a golden pin for standalone checkouts.
-    it('state_subtree_activation.js is byte-identical in xchain-sdk too (client liveness export)', function(){
+    it('state_subtree_gate.js is byte-identical in xchain-sdk too (client liveness export)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const sdkPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-sdk/src/state_subtree_activation.js');
+        const sdkPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-sdk/src/consensus/gates/state_subtree_gate.js');
         if(!requireSibling(this, sdkPath)) return;
-        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/state_subtree_activation.js'), 'utf8'),
+        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/consensus/gates/state_subtree_gate.js'), 'utf8'),
                            fs.readFileSync(sdkPath, 'utf8'),
             'the SDK activation copy drifted; a client would read different armed heights than the fleet commits');
     });
@@ -1159,11 +1159,11 @@ describe('Rollback coverage guard @regression', function(){
     // either serves meaningless absence proofs early (the §4 hazard the refusal
     // exists for; the SDK verifier's own copy still protects conforming clients)
     // or refuses real proofs late (an availability gap).
-    it('state_subtree_activation.js is byte-identical in xchain-explorer too (escrow-leaf liveness refusal)', function(){
+    it('state_subtree_gate.js is byte-identical in xchain-explorer too (escrow-leaf liveness refusal)', function(){
         const fs = require('fs'), pathMod = require('path');
-        const expPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-explorer/src/state_subtree_activation.js');
+        const expPath = pathMod.resolve(__dirname, '..', '..', '..', 'xchain-explorer/src/consensus/gates/state_subtree_gate.js');
         if(!requireSibling(this, expPath)) return;
-        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/state_subtree_activation.js'), 'utf8'),
+        assert.strictEqual(fs.readFileSync(pathMod.resolve(__dirname, '../../src/consensus/gates/state_subtree_gate.js'), 'utf8'),
                            fs.readFileSync(expPath, 'utf8'),
             'the explorer activation copy drifted; its escrow-leaf proof refusal boundary would disagree with the fleet');
     });
@@ -1200,9 +1200,9 @@ describe('Rollback coverage guard @regression', function(){
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
     // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
     // block columns, or the integrity hash covers a different row set than it protects.
-    it('stateHash.js selection predicates mirror the replicated mutation classes', function(){
+    it('state_hash.js selection predicates mirror the replicated mutation classes', function(){
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/stateHash.js'), 'utf8')
+        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/consensus/state_hash.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const PREDICATES = [
             { name: 'deactivation_block stamp',  re: /WHERE deactivation_block BETWEEN \? AND \?/ },
@@ -1219,7 +1219,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'token supply refresh',      re: /SELECT tk\.tick AS tick, t\.supply AS supply FROM tokens t/ },
         ];
         for(const p of PREDICATES){
-            assert.ok(p.re.test(src), `stateHash.js is missing the ${p.name} selection; its hash would not cover that replicated mutation class`);
+            assert.ok(p.re.test(src), `state_hash.js is missing the ${p.name} selection; its hash would not cover that replicated mutation class`);
         }
         // The mid-chain-armed classes (poll_finalize / token_supply) are gated by
         // per-chain '<COIN>:<network>' keys, so the follower's recompute MUST
@@ -1306,7 +1306,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     it('F-2: buildStateHashData includes the anchor CRC-failure parent in the anchor_invalid preimage class (value fixture)', async function(){
-        const { buildStateHashData } = require('../../src/stateHash');
+        const { buildStateHashData } = require('../../src/consensus/state_hash');
         let anchor = { action_index: 301, status: 'invalid_archive' };
         let db = {
             doQuery: async (sql) => {
@@ -1325,7 +1325,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     it('F-2: buildStateHashData includes cooldown-maturity refund credit in credits class (maturity fixture)', async function(){
-        const { buildStateHashData } = require('../../src/stateHash');
+        const { buildStateHashData } = require('../../src/consensus/state_hash');
         let credit = { action_index: 77, address: 'bc1qtest', tick: 'GAS', amount: '1000' };
         let db = {
             doQuery: async (sql) => {

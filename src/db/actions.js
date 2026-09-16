@@ -22,7 +22,10 @@
 
 const path       = require('path');
 const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
-const { isStateKeyBinCollationActive } = require('../state_key_collation_activation');
+// The state-key binary collation flag day is a registry row read by literal key (W5),
+// keyed '<COIN>:<network>' so the coin goes with the height.
+const gateRegistry = require('../consensus/gate_registry');
+const STATE_KEY_COLLATION_KEY = 'state_key_collation_activation.STATE_KEY_COLLATION_ACTIVATION';
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
 
@@ -93,7 +96,7 @@ module.exports = {
             escrows: `SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount FROM escrows e INNER JOIN actions a ON (a.action_index=e.action_index) LEFT JOIN index_addresses a1 ON (a1.id=e.address_id) LEFT JOIN index_tickers t1 ON (t1.id=e.tick_id) WHERE a.block_index=? ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`
         });
         let actions = await this.doQueryStrict(`SELECT a.action_index, a.tx_index, ia.action AS action FROM actions a LEFT JOIN index_actions ia ON (ia.id=a.action_id) WHERE a.block_index=? ORDER BY a.action_index ASC`, [block_index], conn);
-        let stateKeyCollate = isStateKeyBinCollationActive(block_index, network, coin) ? ' COLLATE utf8_bin' : '';
+        let stateKeyCollate = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null) ? ' COLLATE utf8_bin' : '';
         let contracts = await getContractLeafRows(this, block_index, conn, stateKeyCollate, {
             contracts: `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status FROM contracts c INNER JOIN actions a ON (a.action_index=c.action_index) LEFT JOIN index_addresses a1 ON (a1.id=c.source_id) LEFT JOIN index_statuses s1 ON (s1.id=c.status_id) WHERE a.block_index=? ORDER BY c.action_index ASC`,
             statePrefix: `SELECT cs.contract_index, cs.state_key, cs.state_value FROM contract_state cs INNER JOIN ( SELECT MAX(id) as max_id FROM contract_state WHERE block_index=? GROUP BY contract_index, state_key`,

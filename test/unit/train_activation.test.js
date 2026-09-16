@@ -34,7 +34,7 @@ const {
     resolveRuleSet,
     readManifestTrainActivation,
     evaluateTrainActivation
-} = require('../../src/train_activation.js');
+} = require('../../src/consensus/gates/train_gate.js');
 
 // The launch floor alone: a build that implements only rule set 1.0.0.
 const FLOOR = { '1.0.0': { mainnet: 0, testnet: 0, regtest: 0 } };
