@@ -54,6 +54,8 @@
  *
  ********************************************************************/
 
+const { get } = require('./consensus/gate_registry');
+
 // Launch genesis version = 1. Folded into the hash so two preimage schemes can
 // never compare equal. A dev iteration briefly numbered a changed preimage 2;
 // pre-launch that was collapsed back to 1 (mirroring the BLOCK_HASH_VERSION 2->1
@@ -61,7 +63,7 @@
 // fleet-wide reindex. Bump ONLY on a deliberate preimage change AFTER launch.
 // Independent of BLOCK_HASH_VERSION (the three-hash baseline is untouched by this
 // additive, non-consensus integrity hash).
-const STATE_HASH_VERSION = 1;
+const STATE_HASH_VERSION = get('stateHash.STATE_HASH_VERSION');
 
 // ── Index-map state-hash flag-day (id-determinism P4) ────────────────────────
 // Promotes the index_addresses / index_tickers id->string MAP from the advisory
@@ -92,17 +94,7 @@ const STATE_HASH_VERSION = 1;
 // did; regtest was the last inert key (armed 2026-07-16). No
 // STATE_HASH_VERSION bump: a block is unambiguously pre- or post-activation on a
 // given network, so the two preimage shapes cannot collide.
-const INDEX_MAP_STATE_HASH_ACTIVATION = {
-    // Heights are the chain's OWN local block_index at/after which the index-map
-    // folds into state_hash. One-way door: once a chain crosses its height, any
-    // process still on a different height computes a divergent state_hash and a
-    // follower HALTS, so every indexer + sync process must run this exact map
-    // BEFORE the chain reaches the height. Keep this map byte-identical to the
-    // xchain-{indexer,sync}/src/stateHash.js twin.
-    mainnet: 0,           // ARMED at the genesis launch reindex (folds from genesis, no mid-chain flag-day)
-    testnet: 0,           // ARMED at the genesis launch reindex (clean reseed accompanies it)
-    regtest: 0,           // ARMED from genesis 2026-07-16: fresh stacks exercise the class end to end; pre-existing regtest venues need a clean reseed
-};
+const INDEX_MAP_STATE_HASH_ACTIVATION = get('stateHash.INDEX_MAP_STATE_HASH_ACTIVATION');
 
 // Whether the index-map class is folded into state_hash at `blockIndex` on `network`.
 // Below the threshold / unknown network -> off (safe; the class is omitted and the
@@ -134,15 +126,7 @@ function isIndexMapStateHashActive(blockIndex, network){
 // recoverable by bumping the not-yet-crossed heights before deploy. No
 // STATE_HASH_VERSION bump: a block is unambiguously pre- or post-activation.
 // Keep byte-identical to the xchain-sync twin.
-const POLL_FINALIZE_STATE_HASH_ACTIVATION = {
-    'BTC:mainnet':  958500,     // armed 2026-07-07 at tip 957062; ~10 days of margin
-    'LTC:mainnet':  3143000,    // armed 2026-07-07 at tip 3138154; ~8 days
-    'DOGE:mainnet': 6291000,    // armed 2026-07-07 at tip 6280094; ~7.5 days
-    'BTC:testnet':  145000,     // armed 2026-07-07 at tip 143299
-    'LTC:testnet':  4805000,    // armed 2026-07-07 at tip 4797675
-    'DOGE:testnet': 67000000,   // armed 2026-07-07 at tip 66498605 (fast chain, wide margin)
-    regtest: 0,                 // armed from genesis: fresh regtest stacks exercise the class end to end
-};
+const POLL_FINALIZE_STATE_HASH_ACTIVATION = get('stateHash.POLL_FINALIZE_STATE_HASH_ACTIVATION');
 
 // Resolve a per-chain activation threshold: '<COIN>:<network>' key first, then
 // the bare network key. A production caller on mainnet/testnet MUST pass coin
@@ -175,15 +159,7 @@ function isPollFinalizeStateHashActive(blockIndex, network, coin){
 // written for the tick, so the per-block class hashes (tick, supply) for every
 // tick touched by a ledger row at block B. Same per-chain arming map and
 // deploy-by constraint as POLL_FINALIZE above; the two classes flip together.
-const TOKEN_SUPPLY_STATE_HASH_ACTIVATION = {
-    'BTC:mainnet':  958500,     // armed 2026-07-07, same heights as POLL_FINALIZE
-    'LTC:mainnet':  3143000,
-    'DOGE:mainnet': 6291000,
-    'BTC:testnet':  145000,
-    'LTC:testnet':  4805000,
-    'DOGE:testnet': 67000000,
-    regtest: 0,
-};
+const TOKEN_SUPPLY_STATE_HASH_ACTIVATION = get('stateHash.TOKEN_SUPPLY_STATE_HASH_ACTIVATION');
 
 // Whether the token-supply class is folded into state_hash at `blockIndex` on
 // `network` for `coin`. Same fail-inert semantics as the poll-finalize gate.
@@ -208,26 +184,7 @@ function isTokenSupplyStateHashActive(blockIndex, network, coin){
 // compare state hashes every block, so an ungated preimage-shape change would
 // halt a mixed-version fleet instantly. Same per-chain arming model as
 // POLL_FINALIZE/TOKEN_SUPPLY above.
-const BET_STATUS_STATE_HASH_ACTIVATION = {
-    // Heights pinned via roundUp1000(tip + 21 days x nominal blocks/day), never
-    // lowered once set: a height that falls in the past is not a flag day at all,
-    // since a node replaying from genesis applies the rule from it while a
-    // long-running node never did, and the two diverge at the first hash
-    // comparison (caught once on LTC:testnet, whose first pinned height the chain
-    // had already passed). Re-verify these against live tips before each deploy.
-    'BTC:mainnet':  963000,   // tip 959,853 (2026-07-27) + 21d @144/day = 962,877
-    'LTC:mainnet':  3162000,   // tip 3,149,481 + 21d @576/day = 3,161,577
-    'DOGE:mainnet': 6338000,   // tip 6,307,307 + 21d @1440/day = 6,337,547
-    // Testnet is genesis-active as of the 2026-08-10 fresh testnet genesis: the
-    // chain restarts at firstBlock (BTC 147500 / LTC 4855000 / DOGE 67815000) with
-    // no pre-rule history, so there is nothing for a mid-chain boundary to protect.
-    // Kept value-equal to CARET_REF_STRICT_ACTIVATION and
-    // LIST_EDIT_RESOLUTION_ACTIVATION, which CI asserts.
-    'BTC:testnet':  0,
-    'LTC:testnet':  0,
-    'DOGE:testnet': 0,
-    regtest: 0,                 // armed from genesis: fresh regtest stacks exercise the class end to end
-};
+const BET_STATUS_STATE_HASH_ACTIVATION = get('stateHash.BET_STATUS_STATE_HASH_ACTIVATION');
 
 // Whether the BET status-flip class is folded into state_hash at `blockIndex`
 // on `network` for `coin`. Same fail-inert semantics as the gates above.
@@ -252,9 +209,9 @@ function isBetStatusStateHashActive(blockIndex, network, coin){
 // SINGLE SOURCE OF TRUTH for xchain-indexer rollback.js + this file's class 6,
 // and (via the byte-identical xchain-sync twin) ClientRollback.js +
 // updatedRows.js. db.js/recovery.js carry matching predicates.
-const ARCHIVE_HEAD_VERSIONS = [1];
+const ARCHIVE_HEAD_VERSIONS = get('stateHash.ARCHIVE_HEAD_VERSIONS');
 // SQL fragment form, spliced as `p.version ` + ARCHIVE_HEAD_VERSIONS_SQL.
-const ARCHIVE_HEAD_VERSIONS_SQL = 'IN (' + ARCHIVE_HEAD_VERSIONS.join(', ') + ')';
+const ARCHIVE_HEAD_VERSIONS_SQL = get('stateHash.ARCHIVE_HEAD_VERSIONS_SQL');
 
 // ── invalid_archive archive-head-coverage state-hash flag-day ─────────────────
 // Widens the anchor_invalid state-hash class (class 6 below) from a hard-coded
@@ -278,15 +235,7 @@ const ARCHIVE_HEAD_VERSIONS_SQL = 'IN (' + ARCHIVE_HEAD_VERSIONS.join(', ') + ')
 // predicate and the legacy v1-only one select the same empty class and the
 // genesis-armed preimage is identical to the deployed one; the 56 DOGE ANCHOR
 // actions on record are checked by the from-genesis replay witness.
-const ARCHIVE_INVALID_STATE_HASH_ACTIVATION = {
-    'BTC:mainnet':  0,          // ARMED at genesis by the 2026-09-09 ruling: identity on the indexed mainnet history (0 archive chunks, measured 2026-09-09)
-    'LTC:mainnet':  0,
-    'DOGE:mainnet': 0,
-    'BTC:testnet':  0,          // armed from genesis 2026-08-11 ruling
-    'LTC:testnet':  0,          // armed from genesis 2026-08-11 ruling
-    'DOGE:testnet': 0,          // armed from genesis 2026-08-11 ruling
-    regtest: 0,                 // armed from genesis: fresh regtest stacks exercise the widened class end to end
-};
+const ARCHIVE_INVALID_STATE_HASH_ACTIVATION = get('stateHash.ARCHIVE_INVALID_STATE_HASH_ACTIVATION');
 
 // Whether the anchor_invalid class covers the full archive-head version set at
 // `blockIndex` on `network` for `coin`. Below the threshold / unknown network ->
@@ -338,21 +287,13 @@ function isArchiveInvalidStateHashActive(blockIndex, network, coin){
 // exercise the repaired class end to end. No STATE_HASH_VERSION bump: a block is
 // unambiguously pre- or post-activation. Keep byte-identical to the
 // xchain-sync twin.
-const ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION = {
-    'BTC:mainnet':  0,          // ARMED at genesis by the 2026-09-09 ruling: identity on the indexed mainnet history (0 archive chunks, measured 2026-09-09)
-    'LTC:mainnet':  0,
-    'DOGE:mainnet': 0,          // DOGE is the anchor chain, and the 56 mainnet ANCHORs there carry no archive chunk
-    'BTC:testnet':  155000,     // tip 151701 (2026-09-09) + 3299 blocks @144/day = ~23 days
-    'LTC:testnet':  4896000,    // tip 4883295 + 12705 blocks @576/day = ~22 days
-    'DOGE:testnet': 67915000,   // tip 67881714 + 33286 blocks @1440/day = ~23 days
-    regtest: 0,                 // armed from genesis: fresh regtest stacks exercise the repaired class end to end
-};
+const ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION = get('stateHash.ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION');
 
 // The column class 6 scopes the completing v2 chunk by, as a SQL fragment. Broken
 // legacy key below the flag day, repaired key at/after it. Exported so the twin
 // repos and the drift guards can assert on ONE definition rather than a literal.
-const ARCHIVE_CHUNK_HEIGHT_COL        = 'c.block_index_doge';
-const ARCHIVE_CHUNK_HEIGHT_COL_LEGACY = 'c.block_index';
+const ARCHIVE_CHUNK_HEIGHT_COL = get('stateHash.ARCHIVE_CHUNK_HEIGHT_COL');
+const ARCHIVE_CHUNK_HEIGHT_COL_LEGACY = get('stateHash.ARCHIVE_CHUNK_HEIGHT_COL_LEGACY');
 
 // Whether class 6 scopes the completing v2 chunk by the repaired
 // `block_index_doge` key at `blockIndex` on `network` for `coin`. Below the
@@ -366,15 +307,10 @@ function isArchiveInvalidHeightKeyActive(blockIndex, network, coin){
     return b >= threshold;
 }
 
-const DEACTIVATION_TABLES = ['stakes', 'delegations', 'contract_stakes', 'contract_delegations'];
-const SLASH_SPECS = [
-    { table: 'stakes',            debits: 'capability_slash_debits', target: 'stakes'            },
-    { table: 'unstakes',          debits: 'capability_slash_debits', target: 'unstakes'          },
-    { table: 'contract_stakes',   debits: 'contract_slash_debits',   target: 'contract_stakes'   },
-    { table: 'contract_unstakes', debits: 'contract_slash_debits',   target: 'contract_unstakes' }
-];
-const REQUEST_STATUS_TABLES = ['attests', 'xcalls'];
-const COOLDOWN_TABLES = ['unstakes', 'contract_unstakes'];
+const DEACTIVATION_TABLES = get('stateHash.DEACTIVATION_TABLES');
+const SLASH_SPECS = get('stateHash.SLASH_SPECS');
+const REQUEST_STATUS_TABLES = get('stateHash.REQUEST_STATUS_TABLES');
+const COOLDOWN_TABLES = get('stateHash.COOLDOWN_TABLES');
 
 // Build the canonical state-hash preimage object for block B. db must expose
 // doQuery(sql, args) and getStatusId(name) (both xchain-indexer and xchain-sync

@@ -61,12 +61,14 @@
  *
  ********************************************************************/
 
+const { get } = require('./consensus/gate_registry');
+
 // The collation the consensus ordering is pinned to once the rule is live.
 // FROZEN: this string is the emitted SQL of a consensus query, so changing it
 // after any chain arms re-orders the cap survivors on a replay, which is a
 // fork. utf8_bin is the collation the sibling consensus reads already pin, and
 // it is charset-compatible with the utf8/utf8mb3 columns involved.
-const STAKE_WEIGHT_COLLATION = 'utf8_bin';
+const STAKE_WEIGHT_COLLATION = get('stake_weight_collation_activation.STAKE_WEIGHT_COLLATION');
 
 // Per-chain activation heights, interpreted against the chain's own block_index.
 // `null` = NOT YET PINNED = inert (legacy unpinned ordering, byte-identical
@@ -79,15 +81,7 @@ const STAKE_WEIGHT_COLLATION = 'utf8_bin';
 // here. Testnet stays unpinned: it carries live stakes, so its height is pinned
 // at flag-day assembly above the tip recorded then, in ONE coordinated deploy of
 // BOTH fleets (a height armed while one fleet is behind halts the follower).
-const STAKE_WEIGHT_COLLATION_ACTIVATION = {
-    'BTC:mainnet':  0,      // ARMED at genesis by the 2026-09-09 ruling: identity on the indexed mainnet history (0 stakes, measured 2026-09-09)
-    'LTC:mainnet':  0,
-    'DOGE:mainnet': 0,
-    'BTC:testnet':  null,
-    'LTC:testnet':  null,
-    'DOGE:testnet': null,
-    regtest: 0,
-};
+const STAKE_WEIGHT_COLLATION_ACTIVATION = get('stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION');
 
 // Per-chain threshold with a network-wide fallback, byte-for-byte the lookup
 // state_key_collation_activation.js uses. A coin-less caller (unit fixtures,
@@ -137,10 +131,7 @@ function stakeWeightCollate(active){
 
 // Columns whose charset/collation the consensus ordering depends on, and the
 // charset/collation src/sql declares for each.
-const STAKE_WEIGHT_ORDERING_COLUMNS = [
-    { table: 'index_addresses', column: 'address', charset: 'utf8', collation: 'utf8_general_ci' },
-    { table: 'index_pubkeys',   column: 'pubkey',  charset: 'utf8', collation: 'utf8_general_ci' },
-];
+const STAKE_WEIGHT_ORDERING_COLUMNS = get('stake_weight_collation_activation.STAKE_WEIGHT_ORDERING_COLUMNS');
 
 // Fold the utf8 / utf8mb3 spelling of a charset or collation name onto one
 // token so a correct schema on any server version compares equal.

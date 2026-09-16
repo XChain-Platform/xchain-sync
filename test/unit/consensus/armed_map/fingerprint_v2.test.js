@@ -10,7 +10,7 @@
 // license (without AGPL source-disclosure terms) is available -
 // contact legal@dankest.llc.
 
-// v2 is published beside v1 on /health and recorded by the identity pin. The
+// v2 is published as the armed-map identity on /health and in the identity pin. The
 // value is only useful if every surface carries the SAME computation, so this
 // suite checks the module against the canonicaliser directly, then boots the
 // real /health route in a child process and reads both bodies it can return.
@@ -22,11 +22,11 @@ const path   = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '../../../..');
-const { computeArmedMapFingerprintV2, armedMapFingerprintFields } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
+const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
 const { ENTRIES, collectRows } = require(path.join(ROOT, 'src/consensus/armed_map/manifest'));
 const { canonicalValue, fingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/canonical'));
-const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/armedMapFingerprint'));
 const { buildPin, compare } = require(path.join(ROOT, 'bin/pin-identity.js'));
+const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));
 
 // Boots startApi() with the service, the coin-pin check and the listener
 // stubbed, so no database, hub or fixed port is involved, then reads /health
@@ -101,17 +101,18 @@ describe('armed map v2: fingerprint module and publication', function () {
         }
     });
 
-    it('publishes v1 unchanged and v2 after it, in that order', function () {
-        const fields = armedMapFingerprintFields();
-        assert.deepStrictEqual(Object.keys(fields), ['armed_map_fingerprint', 'armed_map_fingerprint_v2']);
-        assert.strictEqual(fields.armed_map_fingerprint, computeArmedMapFingerprint().fingerprint);
-        assert.strictEqual(fields.armed_map_fingerprint_v2, computeArmedMapFingerprintV2().hex);
+    it('uses v2 for the legacy field and records version 2 plus the logic digest', function () {
+        const pin = buildPin();
+        assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
+        assert.strictEqual(pin.armed_map_fingerprint_v2, pin.armed_map_fingerprint);
+        assert.strictEqual(pin.armed_map_fingerprint_version, 2);
+        assert.strictEqual(pin.carrier_logic_digest, logicPin.digest(logicPin.readPin(ROOT)));
     });
 });
 
 describe('armed map v2: fingerprint module and publication', function () {
 
-    it('both /health bodies, 503 starting and 200 ready, carry v1 and v2', function () {
+    it('both /health bodies carry v2, version 2 and the carrier logic digest', function () {
         this.timeout(30000);
         const res = spawnSync(process.execPath, ['-e', HEALTH_DRIVE, require.resolve('proxyquire'), path.join(ROOT, 'src/api.js')], {
             cwd: ROOT, encoding: 'utf8',
@@ -120,23 +121,29 @@ describe('armed map v2: fingerprint module and publication', function () {
         assert.strictEqual(res.status, 0, res.stderr);
         // startApi() logs its listening line to stdout ahead of the readings.
         const { starting, healthy } = JSON.parse(res.stdout.slice(res.stdout.indexOf('{"starting"')));
-        const fields = armedMapFingerprintFields();
+        const hex = computeArmedMapFingerprintV2().hex;
+        const logicDigest = logicPin.digest(logicPin.readPin(ROOT));
         assert.strictEqual(starting.status, 503);
         assert.strictEqual(starting.body.status, 'starting');
         assert.strictEqual(healthy.status, 200);
         for (const reading of [starting, healthy]) {
-            assert.strictEqual(reading.body.armed_map_fingerprint, fields.armed_map_fingerprint);
-            assert.strictEqual(reading.body.armed_map_fingerprint_v2, fields.armed_map_fingerprint_v2);
+            assert.strictEqual(reading.body.armed_map_fingerprint, hex);
+            assert.strictEqual(reading.body.armed_map_fingerprint_v2, hex);
+            assert.strictEqual(reading.body.armed_map_fingerprint_version, 2);
+            assert.strictEqual(reading.body.carrier_logic_digest, logicDigest);
             assert.strictEqual(reading.keys.indexOf('armed_map_fingerprint_v2'), reading.keys.indexOf('armed_map_fingerprint') + 1);
         }
     });
 
     describe('identity pin', function () {
-        it('records v2 and its row count beside v1', function () {
+        it('records v2, its row hashes and count with no v1 fields', function () {
             const pin = buildPin();
+            assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
             assert.strictEqual(pin.armed_map_fingerprint_v2, computeArmedMapFingerprintV2().hex);
             assert.strictEqual(pin.armed_map_rows, ENTRIES.length);
-            assert.strictEqual(pin.armedMapFingerprint, computeArmedMapFingerprint().fingerprint);
+            assert.deepStrictEqual(pin.armedMapRows, computeArmedMapFingerprintV2().rows);
+            assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armedMapFingerprint'));
+            assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armedMapFiles'));
         });
 
         it('reports a moved v2 and a changed row count, and nothing for an identical tree', function () {

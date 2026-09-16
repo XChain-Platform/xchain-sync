@@ -70,6 +70,8 @@
 
 'use strict';
 
+const { get } = require('./consensus/gate_registry');
+
 // Keyed by platform version, then network, to a BTC block height. Only MAJOR
 // trains and consensus-classified hotfixes get a row; a MINOR or PATCH train adds
 // none, and resolveRuleSet then keeps the fleet on the previous entry with no
@@ -78,12 +80,7 @@
 // migration. Mainnet is armed ABOVE the tip at cut time on purpose: the fleet runs
 // the new binary under the OLD rules until that height, which is the rolling-upgrade
 // window. Nothing here is edited outside a train cut.
-const TRAIN_ACTIVATION = {
-    // The launch rule set and the floor. Zero on every network because there is no
-    // earlier rule set to migrate from: the launch binary IS the first rule set, and
-    // a floor above genesis would leave the pre-floor range resolving to nothing.
-    '1.0.0': { mainnet: 0, testnet: 0, regtest: 0 },
-};
+const TRAIN_ACTIVATION = get('train_activation.TRAIN_ACTIVATION');
 
 // X.Y.Z -> [major, minor, patch], or null for anything that is not a bare
 // three-part version. Nothing here accepts a prerelease or build suffix: a

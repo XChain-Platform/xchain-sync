@@ -44,6 +44,8 @@
  *
  ********************************************************************/
 
+const { get } = require('./consensus/gate_registry');
+
 // CONSENSUS-CRITICAL caps on the source-keyed stake-weight snapshot. MUST be equal
 // in xchain-indexer + xchain-sync (a drift forks the stakes_root at/after the
 // activation height).
@@ -59,8 +61,8 @@
 //                                      weight (weight is per source, counted once) and does
 //                                      NOT set truncated. Generous: no legit source
 //                                      delegates near this many keys.
-const STAKE_WEIGHT_MAX_SOURCES         = 1000;
-const STAKE_WEIGHT_MAX_KEYS_PER_SOURCE = 64;
+const STAKE_WEIGHT_MAX_SOURCES = get('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES');
+const STAKE_WEIGHT_MAX_KEYS_PER_SOURCE = get('swq_source_cap_activation.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE');
 
 // Per-chain activation height, interpreted as the processing chain's OWN block_index
 // (same semantics as STATE_COMMITMENT_ACTIVATION). At/after the height the windowed
@@ -72,15 +74,7 @@ const STAKE_WEIGHT_MAX_KEYS_PER_SOURCE = 64;
 // hashed-root fleet-deploy race. For sub-cap honest federations the capped and
 // uncapped stakes_root are byte-identical, so this mid-stream height introduces no
 // real root discontinuity - only the >cap case (the attack) diverges, deterministically.
-const SWQ_SOURCE_CAP_ACTIVATION = {
-    'BTC:mainnet':  960000,     // Option B: after STATE_COMMITMENT (958500), before STAKE_WEIGHTED_QUORUM (961000)
-    'LTC:mainnet':  3143000,    // inert (LTC commits the EMPTY stakes_root; capability staking is BTC-only) - pinned == STATE_COMMITMENT for parity
-    'DOGE:mainnet': 6291000,    // inert (DOGE stakes_root empty) - pinned == STATE_COMMITMENT for parity
-    'BTC:testnet':  0,          // capped from genesis; STATE_COMMITMENT testnet (145000) > 0, so testnet only ever commits capped roots (no discontinuity)
-    'LTC:testnet':  0,
-    'DOGE:testnet': 0,
-    regtest: 0,                 // armed from genesis: fresh regtest stacks exercise the capped path end to end
-};
+const SWQ_SOURCE_CAP_ACTIVATION = get('swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION');
 
 // Resolve the per-chain threshold: '<COIN>:<network>' key first, then the bare
 // network key. Production callers on mainnet/testnet MUST pass coin; a coin-less

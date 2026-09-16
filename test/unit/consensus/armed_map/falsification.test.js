@@ -13,10 +13,9 @@
 // The claims v2 makes, each tested by breaking a copy of src/ and reading the
 // value a fresh process computes there (design section 7, P4):
 //   moves     when a committed height changes, or NOT-YET-PINNED becomes UNARMED
-//   holds     under a comment, a reformat, a rename and a move with the manifest repointed
-//   poisons   to UNREADABLE when an export vanishes, a value is refused, or
-//             node_modules is missing, and never to a plausible hex
-//   is caught by the completeness suite when a manifest row is deleted
+//   holds     under a comment, a reformat, a rename and a move
+//   poisons   to UNREADABLE when a registry row vanishes
+//   is caught by the completeness suite when a registry row is deleted
 // Each case edits text that must exist, so a drifted anchor fails loudly
 // instead of silently testing an unmodified tree.
 
@@ -66,6 +65,11 @@ function readV2(root, env) {
     return JSON.parse(res.stdout);
 }
 
+function boot(root, rel) {
+    return spawnSync(process.execPath, ['-e', 'require(process.argv[1])', path.join(root, rel)],
+        { cwd: root, encoding: 'utf8', env: cleanEnv() });
+}
+
 function runCompleteness(root) {
     return spawnSync(process.execPath, [require.resolve('mocha/bin/mocha.js'), '--no-config', '--timeout', '30000', COMPLETENESS],
         { cwd: root, encoding: 'utf8', env: cleanEnv() });
@@ -104,31 +108,28 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('moves when one committed height changes, and names that row alone', function () {
         const root = tree();
-        edit(root, 'src/state_commitment_activation.js', "'BTC:testnet':  145000,", "'BTC:testnet':  145001,");
+        edit(root, 'src/consensus/gate_registry.js', '    testnet: 146000,', '    testnet: 146001,');
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
-        assert.deepStrictEqual(movedRows(baseline, after), ['state_commitment_activation.STATE_COMMITMENT_ACTIVATION']);
+        assert.deepStrictEqual(movedRows(baseline, after), ['checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION']);
     });
 
     it('moves when NOT-YET-PINNED (null) becomes the UNARMED sentinel', function () {
         const root = tree();
-        edit(root, 'src/stake_weight_collation_activation.js', "'BTC:testnet':  null,", "'BTC:testnet':  9999999999,");
+        edit(root, 'src/consensus/gate_registry.js', "    'BTC:testnet':  null,", "    'BTC:testnet':  9999999999,");
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
         assert.deepStrictEqual(movedRows(baseline, after), ['stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION']);
     });
 
-    it('holds under a comment, a reformat, a rename and a move with only the manifest repointed', function () {
+    it('holds under a comment, a registry reformat, a carrier rename and a move', function () {
         const root = tree();
-        fs.appendFileSync(path.join(root, 'src/stateHash.js'), '\n// a comment v1 would have hashed\n');
-        edit(root, 'src/state_commitment_activation.js', "'BTC:mainnet':  958500,", "'BTC:mainnet':958500,");
+        fs.appendFileSync(path.join(root, 'src/stateHash.js'), '\n// a carrier comment\n');
+        edit(root, 'src/consensus/gate_registry.js', '    testnet: 146000,', '    testnet:  146000,');
         fs.renameSync(path.join(root, 'src/train_activation.js'), path.join(root, 'src/rule_set_train.js'));
         fs.mkdirSync(path.join(root, 'src/activations'));
         fs.renameSync(path.join(root, 'src/state_key_collation_activation.js'),
             path.join(root, 'src/activations/state_key_collation_activation.js'));
-        edit(root, 'src/consensus/armed_map/manifest.js', "require('../../train_activation')", "require('../../rule_set_train')");
-        edit(root, 'src/consensus/armed_map/manifest.js', "require('../../state_key_collation_activation')",
-            "require('../../activations/state_key_collation_activation')");
         assert.strictEqual(readV2(root).hex, baseline.hex);
     });
 });
@@ -138,38 +139,33 @@ describe('armed map v2: falsification on temp trees', function () {
     before(readBaseline);
     after(removeTrees);
 
-    it('a deleted manifest row moves v2 and turns the completeness suite red', function () {
+    it('a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red', function () {
         const control = runCompleteness(tree());
         assert.strictEqual(control.status, 0, 'the completeness suite must pass on an unmodified copy first: ' + control.stdout);
         const root = tree();
-        edit(root, 'src/consensus/armed_map/manifest.js', "        'STAKE_WEIGHT_MAX_SOURCES',\n", '');
+        edit(root, 'src/consensus/gate_registry.js',
+            "addGate('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES', 'constant', 1000);\n", '');
+        const failedBoot = boot(root, 'src/swq_source_cap_activation.js');
+        assert.notStrictEqual(failedBoot.status, 0, 'the shim booted with its registry row absent');
+        assert.ok(failedBoot.stderr.includes('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES'), failedBoot.stderr);
         const after = readV2(root);
-        assert.notStrictEqual(after.hex, baseline.hex);
-        assert.strictEqual(after.count, baseline.count - 1);
+        assert.strictEqual(after.hex, 'UNREADABLE');
+        assert.ok(after.reason.includes('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES'), after.reason);
         const red = runCompleteness(root);
         assert.notStrictEqual(red.status, 0, 'completeness stayed green with a row deleted');
         assert.ok(red.stdout.includes('swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES'), red.stdout);
     });
 
-    it('an export that vanishes from a carrier reads UNREADABLE and names the row', function () {
+    it('an unexpected registry row reads UNREADABLE and names the row', function () {
         const root = tree();
-        edit(root, 'src/train_activation.js', 'module.exports = {\n    TRAIN_ACTIVATION,\n', 'module.exports = {\n');
+        edit(root, 'src/consensus/gate_registry.js', '// SHARED-GATES END',
+            "addGate('unexpected_gate.VALUE', 'constant', 1);\n// SHARED-GATES END");
         const after = readV2(root);
         assert.strictEqual(after.hex, 'UNREADABLE');
-        assert.ok(after.reason.startsWith('train_activation.TRAIN_ACTIVATION:'), after.reason);
+        assert.ok(after.reason.startsWith('unexpected_gate.VALUE:'), after.reason);
     });
 
-    it('a value the canonicaliser refuses reads UNREADABLE', function () {
-        const root = tree();
-        edit(root, 'src/consensus-constants.js', "const GAS_TICK = 'XCHAIN';", 'const GAS_TICK = new Map();');
-        const after = readV2(root);
-        assert.strictEqual(after.hex, 'UNREADABLE');
-        assert.ok(after.reason.startsWith('consensus-constants.GAS_TICK:'), after.reason);
-    });
-
-    it('without node_modules reads UNREADABLE, never a plausible hex', function () {
-        const after = readV2(tree({ nodeModules: false }));
-        assert.strictEqual(after.hex, 'UNREADABLE');
-        assert.strictEqual(after.count, undefined);
+    it('reads the same value without node_modules because every registry row is local data', function () {
+        assert.strictEqual(readV2(tree({ nodeModules: false })).hex, baseline.hex);
     });
 });

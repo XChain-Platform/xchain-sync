@@ -18,22 +18,21 @@
  * exactly the kind of change that can move those without failing a test. Two
  * populations carry that risk here:
  *
- *   the armed map   computeArmedMapFingerprint() hashes every top-level
- *                   *_activation.js by NAME and BYTES, plus whichever fixed
- *                   gate carriers exist in src/. A rename is as fatal as an
- *                   edit, and peers that disagree fork at the flag-day height.
+ *   the armed map   fingerprint v2 hashes every registry row by key and
+ *                   resolved value. Carrier moves and formatting do not move
+ *                   it, while a changed consensus value does.
  *   the vendored    src/coins/ is refreshed from the hub by a sync script.
  *   coin registry   A local edit here is drift that reddens every consumer.
  *   the carrier     bin/pins/carrier-logic.json hashes each carrier's TOKEN
  *   logic pin       stream, so it moves on a logic change and on nothing else.
  *
- * So the pin records the combined fingerprint, the per-file hash map behind it
- * (a per-file diff names WHICH carrier moved, which the combined hash cannot),
- * the v2 meaning hash with its row count, the carrier logic digest, and the
- * sha256 of each vendored coin file.
+ * So the pin records the v2 meaning hash, the per-row hashes behind it, the
+ * row count, the carrier logic digest, and the sha256 of each vendored coin
+ * file.
  *
  * USAGE
  *   node bin/pin-identity.js                    human summary
+ *   node bin/pin-identity.js --json             print the pin as JSON
  *   node bin/pin-identity.js --out <file>       write the pin as JSON
  *   node bin/pin-identity.js --compare <pin>    re-read the tree against a pin,
  *                                               exit 1 on any difference
@@ -65,16 +64,15 @@ function sha256(rel) {
 
 /** The whole identity of this build, as the pin stores it. */
 function buildPin() {
-    const { computeArmedMapFingerprint } = require(path.join(REPO_ROOT, 'src/armedMapFingerprint.js'));
-    const armed = computeArmedMapFingerprint();
     const v2 = require(path.join(REPO_ROOT, 'src/consensus/armed_map/fingerprint_v2.js')).computeArmedMapFingerprintV2();
     const logicPin = require(path.join(REPO_ROOT, 'bin/lib/carrier_logic_pin.js'));
     const coins = {};
     for (const rel of COIN_FILES) coins[rel] = sha256(rel);
     return {
-        armedMapFingerprint: armed.fingerprint,
-        armedMapFiles: armed.files,
+        armed_map_fingerprint: v2.hex,
         armed_map_fingerprint_v2: v2.hex,
+        armed_map_fingerprint_version: 2,
+        armedMapRows: v2.rows || null,
         armed_map_rows: v2.count === undefined ? null : v2.count,
         carrier_logic_digest: logicPin.digest(logicPin.readPin(REPO_ROOT)),
         vendoredCoins: coins,
@@ -84,13 +82,11 @@ function buildPin() {
 /** Pin against tree, field by field, so a failure names the file that moved. */
 function compare(pin, fresh) {
     const differences = [];
-    if (pin.armedMapFingerprint !== fresh.armedMapFingerprint) {
-        differences.push(`armed-map fingerprint ${pin.armedMapFingerprint} became ${fresh.armedMapFingerprint}`);
-    }
-    for (const field of ['armed_map_fingerprint_v2', 'armed_map_rows', 'carrier_logic_digest']) {
+    for (const field of ['armed_map_fingerprint', 'armed_map_fingerprint_v2',
+        'armed_map_fingerprint_version', 'armed_map_rows', 'carrier_logic_digest']) {
         if (pin[field] !== fresh[field]) differences.push(`${field} ${pin[field]} became ${fresh[field]}`);
     }
-    for (const group of ['armedMapFiles', 'vendoredCoins']) {
+    for (const group of ['armedMapRows', 'vendoredCoins']) {
         const names = Array.from(new Set(Object.keys(pin[group] || {}).concat(Object.keys(fresh[group] || {})))).sort();
         for (const name of names) {
             const before = (pin[group] || {})[name];
@@ -109,6 +105,7 @@ function parseArgs(argv) {
     for (let i = 0; i < argv.length; i += 1) {
         if (argv[i] === '--out') { opts.out = path.resolve(argv[i + 1]); i += 1; }
         else if (argv[i] === '--compare') { opts.compare = path.resolve(argv[i + 1]); i += 1; }
+        else if (argv[i] === '--json') opts.json = true;
         else if (argv[i] === '--help' || argv[i] === '-h') opts.help = true;
     }
     return opts;
@@ -140,8 +137,12 @@ function main() {
         fs.mkdirSync(path.dirname(opts.out), { recursive: true });
         fs.writeFileSync(opts.out, text);
     }
-    console.log(`armed-map fingerprint  ${fresh.armedMapFingerprint}`);
-    console.log(`armed-map carriers     ${Object.keys(fresh.armedMapFiles).length}`);
+    if (opts.json) {
+        console.log(text.trimEnd());
+        return;
+    }
+    console.log(`armed-map fingerprint  ${fresh.armed_map_fingerprint}`);
+    console.log(`armed-map version      ${fresh.armed_map_fingerprint_version}`);
     console.log(`armed-map v2           ${fresh.armed_map_fingerprint_v2}`);
     console.log(`armed-map v2 rows      ${fresh.armed_map_rows}`);
     console.log(`carrier logic digest   ${fresh.carrier_logic_digest}`);

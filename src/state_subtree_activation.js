@@ -84,10 +84,12 @@
 
 'use strict';
 
+const { get } = require('./consensus/gate_registry');
+
 // The reserved slots, in merkle.STATE_SUBTREES order. Order matters: it IS the
 // leaf order of the top-level fixed Merkle tree. The conformance test asserts
 // this equals STATE_SUBTREES minus the two v1 slots, so the two lists cannot drift.
-const RESERVED_SUBTREES = ['ownership_root', 'tokens_root', 'contract_state_root'];
+const RESERVED_SUBTREES = get('state_subtree_activation.RESERVED_SUBTREES');
 
 // Per-slot, per-chain activation height, interpreted as the processing chain's
 // OWN block_index. At/after the height the slot MAY carry a real sub-root; below
@@ -152,16 +154,7 @@ const RESERVED_SUBTREES = ['ownership_root', 'tokens_root', 'contract_state_root
 // Arming order is fixed by the design doc: contract_state_root first (Stage A,
 // and never below that chain's state_key_collation_activation height, or the SMT
 // is built over a collation-FOLDED key set and forks), ownership/tokens later.
-const STATE_SUBTREE_ACTIVATION = {
-    ownership_root:      {},
-    tokens_root:         {},
-    contract_state_root: {
-        'BTC:regtest':  10000,
-        'BTC:testnet':  0,
-        'LTC:testnet':  0,
-        'DOGE:testnet': 0,
-    },
-};
+const STATE_SUBTREE_ACTIVATION = get('state_subtree_activation.STATE_SUBTREE_ACTIVATION');
 
 // SHADOW-COMPUTE WINDOW (spec §7 step 1). INERT: every map empty.
 //
@@ -185,11 +178,7 @@ const STATE_SUBTREE_ACTIVATION = {
 // A chain may be shadowing and armed at once; ARMED WINS, so the boundary is
 // clean: at and above the armed height the value is committed and written to the
 // real column, below it the value is shadow-only. Nothing computes twice.
-const STATE_SUBTREE_SHADOW = {
-    ownership_root:      {},
-    tokens_root:         {},
-    contract_state_root: {},
-};
+const STATE_SUBTREE_SHADOW = get('state_subtree_activation.STATE_SUBTREE_SHADOW');
 
 // Locked-balance leaf inside balances_root (SPV sub-tree spec §3 Stage B,
 // ). ARMED ON BTC:regtest AT BLOCK 11200 (2026-07-30), and nowhere else.
@@ -223,12 +212,7 @@ const STATE_SUBTREE_SHADOW = {
 // The derivation carries no coin gate (see escrowLeafSubtree.js and escrowJournalWriter.js),
 // so the three chains arm together. Mainnet stays unarmed because live light clients depend
 // on balances_root there, which is the whole reason this is staged at all.
-const ESCROW_LOCKED_LEAF_ACTIVATION = {
-    'BTC:regtest':  11200,
-    'BTC:testnet':  0,
-    'LTC:testnet':  0,
-    'DOGE:testnet': 0,
-};
+const ESCROW_LOCKED_LEAF_ACTIVATION = get('state_subtree_activation.ESCROW_LOCKED_LEAF_ACTIVATION');
 
 // SHADOW-COMPUTE WINDOW for the escrow leaf (spec §7 step 1, Stage B). INERT.
 //
@@ -273,7 +257,7 @@ const ESCROW_LOCKED_LEAF_ACTIVATION = {
 // still read as though the leaf were unarmed there. A shadow height below its
 // own chain's arming height is unreachable by construction, so leaving it in
 // place taught the next reader something false about what testnet commits.
-const ESCROW_LOCKED_LEAF_SHADOW = {};
+const ESCROW_LOCKED_LEAF_SHADOW = get('state_subtree_activation.ESCROW_LOCKED_LEAF_SHADOW');
 
 // Resolve a per-chain threshold out of one map. '<COIN>:<network>' is the ONLY
 // key shape (no bare-network fallback, see header). Unknown -> undefined ->
