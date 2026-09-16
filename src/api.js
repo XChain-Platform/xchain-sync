@@ -33,7 +33,7 @@ const WebSocket   = require('ws');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
 const { computeArmedMapFingerprintV2 } = require('./consensus/armed_map/fingerprint_v2');
-const carrierLogicPin = require('../bin/lib/carrier_logic_pin');
+const { carrierLogicDigest } = require('./health/carrier_logic');
 const SyncService = require('./SyncService');
 const Utility     = require('./util');
 const BlockHasher = require('./client/block_hasher');
@@ -47,7 +47,7 @@ const coins       = require('./coins');
 // instance is safe. See BlockHasher.computeIndexMapChecksum (NON-consensus).
 const statusUtil = new Utility();
 
-function consensusIdentityFields(){ const armedMapV2 = computeArmedMapFingerprintV2().hex; return { armed_map_fingerprint: armedMapV2, armed_map_fingerprint_v2: armedMapV2, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicPin.digest(carrierLogicPin.readPin(carrierLogicPin.REPO_ROOT)) }; }
+function consensusIdentityFields(){ const armedMapV2 = computeArmedMapFingerprintV2().hex; return { armed_map_fingerprint: armedMapV2, armed_map_fingerprint_v2: armedMapV2, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
 
 dotenv.config();
 

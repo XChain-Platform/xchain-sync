@@ -12,6 +12,9 @@ WORKDIR /XChainIndexerSync
 RUN npm ci --omit=dev
 
 COPY ./src /XChainIndexerSync/src
+# The committed carrier logic pin is what /health publishes as carrier_logic_digest
+# (src/health/carrier_logic.js reads it; without it the field is UNREADABLE).
+COPY ./bin/pins/carrier-logic.json /XChainIndexerSync/bin/pins/carrier-logic.json
 # No .env is baked in: configuration reaches the container as environment
 # (xchain-node at `docker run`, a standalone run via `--env-file .env`). An
 # optional `COPY ./.en[v]` glob here builds only under BuildKit.
