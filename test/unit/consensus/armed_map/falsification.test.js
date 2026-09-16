@@ -59,7 +59,7 @@ function edit(root, rel, from, to) {
 }
 
 function readV2(root, env) {
-    const res = spawnSync(process.execPath, ['-e', READ_V2, path.join(root, 'src/consensus/armed_map/fingerprint_v2.js')],
+    const res = spawnSync(process.execPath, ['-e', READ_V2, path.join(root, 'src/consensus/armed_map/fingerprint.js')],
         { cwd: root, encoding: 'utf8', env: cleanEnv(env) });
     assert.strictEqual(res.status, 0, res.stderr);
     return JSON.parse(res.stdout);
@@ -98,7 +98,7 @@ describe('armed map v2: falsification on temp trees', function () {
     after(removeTrees);
 
     it('a copied tree reads the same v2 as this checkout, so the harness measures the real thing', function () {
-        const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
+        const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
         assert.strictEqual(baseline.hex, computeArmedMapFingerprintV2().hex);
     });
 

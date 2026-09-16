@@ -1,6 +1,5 @@
 {
   "armed_map_fingerprint": "457980e8a255c6cdbdedc393c6d7fc04721de2ed3d86adee0a70e2798d0f02aa",
-  "armed_map_fingerprint_v2": "457980e8a255c6cdbdedc393c6d7fc04721de2ed3d86adee0a70e2798d0f02aa",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
