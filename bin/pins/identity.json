@@ -1,6 +1,5 @@
 {
   "armed_map_fingerprint": "69934f9b966c1c491fb0e737a41730488c729e3c209f1eda44b3ec7f6d2d6193",
-  "armed_map_fingerprint_v2": "69934f9b966c1c491fb0e737a41730488c729e3c209f1eda44b3ec7f6d2d6193",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -44,7 +43,7 @@
     "train_activation.TRAIN_ACTIVATION": "8f740a4fe0949e295750bdf03de698c1914c5d584f617c179ca93910ab43d26e"
   },
   "armed_map_rows": 39,
-  "carrier_logic_digest": "cad8451409684926fbd52dfad60324c9e933adb794e468eb3e93f16704e75953",
+  "carrier_logic_digest": "f142db83339b2a74577e6e79d49cffc45c45ac642bcd57609b554f98a2f2e068",
   "vendoredCoins": {
     "src/coins/BTC.js": "900d82359d27269ebb775a207e84cac7ac0702f57f07c0239d5406f2a0ec6c90",
     "src/coins/DOGE.js": "a0952d619edec50c09d0cbac90023cba2e8e75f0fa98b650e2ee1f4eadd7540b",
