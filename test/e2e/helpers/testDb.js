@@ -11,9 +11,9 @@
 const path = require('path');
 const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
-const Utility = require('../../../src/utility');
-const { splitSqlStatements } = require('../../../src/sqlUtil');
-const validation = require('../../../src/validation');
+const Utility = require('../../../src/util');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
+const validation = require('../../../src/util/validation');
 
 const TEST_DB_HOST = process.env.E2E_DB_HOST || '127.0.0.1';
 const TEST_DB_PORT = parseInt(process.env.E2E_DB_PORT) || 23306;
@@ -129,7 +129,7 @@ class TestDatabase {
 
     async getBlockHashRow(block_index, conn) {
         // Mirror src/db.js: the fourth (replication-integrity) state_hash is
-        // surfaced via the state_hash_id join so ServerPoller._buildBlockPayload can
+        // surfaced via the state_hash_id join so ServerPoller.buildBlockPayload can
         // ship it and a follower with VERIFY_STATE_HASH can recompute + compare.
         // NULL for blocks that never stored one (the common fixture case), which the
         // follower skips exactly as it does for pre-feature blocks.
@@ -364,6 +364,13 @@ class TestDatabase {
 const RealDatabase = require('../../../src/db');
 TestDatabase.prototype.getBlockScopedRows = RealDatabase.prototype.getBlockScopedRows;
 
+// Every other real query method too, for the same reason: the services read the
+// database through named mixin methods, so a wrapper without them throws on the
+// first query a poller, snapshot builder or transparency log issues. A method this
+// wrapper already defines is kept.
+const { withDbMixins } = require('../../helpers/db_mixins.js');
+withDbMixins(TestDatabase.prototype);
+
 async function createDb(dbName, host, port, user, pass) {
     let mariadb = await getMariadb();
     let pool = mariadb.createPool({
@@ -418,11 +425,11 @@ async function createDatabase(dbName, host, port, user, pass) {
 }
 
 // The schema-seed SQL may live on a shared network filesystem, which
-// intermittently blips ENOENT on an existing file/dir between calls. A bare
-// readdirSync/readFileSync here would crash a whole chaos/e2e suite's
-// `before all` hook and cascade-fail every test under it. Retry the read a
-// few times on ENOENT only; any other error (or a genuinely missing path
-// after retries) still throws.
+// intermittently blips ENOENT on an existing file/dir between calls (see the
+// project's parallels-fs-enoent-race note). A bare readdirSync/readFileSync here
+// would crash a whole chaos/e2e suite's `before all` hook and cascade-fail every
+// test under it. Retry the read a few times on ENOENT only; any other error (or a
+// genuinely missing path after retries) still throws.
 async function _fsReadRetry(fn) {
     let lastErr;
     for (let attempt = 0; attempt < 5; attempt++) {

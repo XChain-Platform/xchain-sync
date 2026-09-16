@@ -23,13 +23,12 @@
  *
  ********************************************************************/
 
+const { get } = require('./consensus/gate_registry');
 const coins = require('./coins');
 
 // STAKING.ACTIVATION_DELAY_BLOCKS per coin (network-independent). Used by
 // ClientRollback to mirror the source indexer's reorg deactivation_block resets.
-const ACTIVATION_DELAY_BLOCKS_BY_COIN = {};
-for(const tick of coins.ALLOWED_COINS)
-    ACTIVATION_DELAY_BLOCKS_BY_COIN[tick] = coins.getCoinConfig(tick, 'mainnet').STAKING.ACTIVATION_DELAY_BLOCKS;
+const ACTIVATION_DELAY_BLOCKS_BY_COIN = get('consensus-constants.ACTIVATION_DELAY_BLOCKS_BY_COIN');
 
 // The sync layer identifies a chain by `cfg.coin`, which may arrive as a ticker
 // ('BTC') or a full name ('bitcoin'), in any case. Normalize to the ticker key.
@@ -66,24 +65,19 @@ function coinTicker(coin){
 // GAS token TICK: the genesis gas-asset symbol (xchain-indexer/src/config.js:
 // `gas = 'XCHAIN'`). Network- and coin-independent (one symbol across all chains),
 // so it is a platform constant, not a per-coin field. Never hub-polled.
-const GAS_TICK = 'XCHAIN';
+const GAS_TICK = get('consensus-constants.GAS_TICK');
 function gasTickSymbol(){ return GAS_TICK; }
 
 // VALIDATOR_QUERY_LIMIT: CONSENSUS-CRITICAL cap on validator-set queries. Same
 // value across coins; sourced from canonical BTC. The light-client stakes_root
 // build must select the identical capped set as the indexer or the root forks.
-const VALIDATOR_QUERY_LIMIT = coins.getCoinConfig('BTC', 'mainnet').VALIDATOR_QUERY_LIMIT;
+const VALIDATOR_QUERY_LIMIT = get('consensus-constants.VALIDATOR_QUERY_LIMIT');
 
 // BTC STAKING.CAPABILITIES MIN_STAKE floors, sourced from canonical BTC. The
 // BTC-only stakes_root commits one leaf per (pubkey, capability) whose aggregate
 // active stake >= MIN_STAKE; the follower must use the SAME floors as the indexer
 // or the stakes_root diverges. Derived so it can never drift from the coin file.
-const BTC_STAKE_CAPABILITIES = {};
-{
-    const caps = coins.getCoinConfig('BTC', 'mainnet').STAKING.CAPABILITIES;
-    for(const cap of Object.keys(caps))
-        BTC_STAKE_CAPABILITIES[cap] = caps[cap].MIN_STAKE;
-}
+const BTC_STAKE_CAPABILITIES = get('consensus-constants.BTC_STAKE_CAPABILITIES');
 function btcStakeCapabilities(){ return BTC_STAKE_CAPABILITIES; }
 
 module.exports = {

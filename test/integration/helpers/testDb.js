@@ -11,8 +11,8 @@
 const path = require('path');
 const fs   = require('fs');
 const { getMariadb } = require('./mariadbLoader');
-const Utility = require('../../../src/utility');
-const { splitSqlStatements } = require('../../../src/sqlUtil');
+const Utility = require('../../../src/util');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
 
 // These suites connect to a REAL MariaDB; credentials come from the
 // environment only. No fallback value: a committed default is a published
@@ -113,12 +113,14 @@ class TestDatabase {
             WHERE tx.block_index = ?`, [block_index]);
     }
 
-    // Mirror of src/db.js getNonEmptyActionScopedTables(): a UNION-ALL probe naming
-    // which action-scoped tables carry rows in this block, so ServerPoller queries
-    // content instead of the whole registry. The existence predicate must match this
-    // class's getActionScopedRows predicate exactly, or "probe says empty" would stop
-    // meaning "fetch returns []" and the payload would silently drift from production.
-    // Missing tables are filtered out first since one absent table fails the whole UNION.
+    // Mirror of src/db/index.js getNonEmptyActionScopedTables(): one UNION-ALL round-trip
+    // naming the action-scoped tables that carry rows in this block, so ServerPoller's
+    // payload build queries content rather than the whole registry. The existence
+    // predicate must stay THIS class's getActionScopedRows predicate verbatim (the
+    // harness still block-scopes through the transactions join, which production moved
+    // off), because "probe says empty" has to mean "that fetch returns []" for the
+    // payload to come out byte-identical. Missing tables are filtered out first: one
+    // absent table would fail the whole UNION.
     async getNonEmptyActionScopedTables(tables, block_index) {
         const present = new Set(await getTables(this));
         const candidates = tables.filter(t => /^[A-Za-z0-9_]+$/.test(t) && present.has(t));
@@ -254,19 +256,31 @@ class TestDatabase {
     }
 }
 
-// Adopt selected REAL Database methods by reference instead of reimplementing them:
-// each is pure SQL over this.doQuery/getStatusId (which this wrapper already
-// provides), so borrowing them means the harness can't drift from the queries
-// production actually runs. These three back the state-commitment path (prior
-// block roots, block_merkle_root, and stakes_root) plus the private helpers they compose.
+// Adopt selected REAL Database methods by reference rather than reimplementing
+// them here. Each one below is pure SQL over this.doQuery, so it works unchanged on
+// this wrapper, and borrowing it means the harness cannot drift from the query the
+// services actually run. A hand-copied second implementation is how a test tier ends
+// up green about SQL production does not execute.
+// The three below are what the state-commitment path reads (getStateRootsRow for the
+// prior block's roots, getBlockLeafRows for block_merkle_root, and the stake-weight
+// family for stakes_root), plus the private helpers those compose. All of them reach
+// the database only through this.doQuery / this.getStatusId, both of which this
+// wrapper already provides.
 const RealDatabase = require('../../../src/db');
 for (const method of ['getStateRootsRow', 'getBlockLeafRows',
                       'getStakeWeightsByCapability', '_stakeWeightsSql',
-                      '_applyStakeWeightCap', '_cappedStakeWeightsSql',
+                      'applyStakeWeightCap', '_cappedStakeWeightsSql',
                       // getBlockScopedRows keys by lifecycle.blockKey(table), never
                       // a fixed block_index (rollcalls scope by close_block).
                       'getBlockScopedRows'])
     TestDatabase.prototype[method] = RealDatabase.prototype[method];
+
+// Every other real query method too, for the same reason: the services read the
+// database through named mixin methods, so a wrapper without them throws on the
+// first query a poller, snapshot builder or transparency log issues. A method this
+// wrapper already defines is kept.
+const { withDbMixins } = require('../../helpers/db_mixins.js');
+withDbMixins(TestDatabase.prototype);
 
 // Create a TestDatabase for a given db name
 async function createDb(dbName) {
@@ -328,6 +342,7 @@ async function seedSchema(db) {
     }
 }
 
+// Get list of all tables in a database
 async function getTables(db) {
     let rows = await db.doQuery(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -336,6 +351,7 @@ async function getTables(db) {
     return rows.map(r => r.table_name || r.TABLE_NAME);
 }
 
+// Truncate all tables in a database
 async function truncateAll(db) {
     let tables = await getTables(db);
     await db.doQuery("SET FOREIGN_KEY_CHECKS = 0");
@@ -345,11 +361,13 @@ async function truncateAll(db) {
     await db.doQuery("SET FOREIGN_KEY_CHECKS = 1");
 }
 
+// Get row count for a table
 async function getRowCount(db, table) {
     let rows = await db.doQuery("SELECT COUNT(*) as cnt FROM `" + table + "`");
     return Number(rows[0].cnt);
 }
 
+// Drop a database
 async function dropDatabase(dbName) {
     let mariadb = await getMariadb();
     try {

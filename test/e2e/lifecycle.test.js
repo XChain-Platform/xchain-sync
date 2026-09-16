@@ -67,7 +67,8 @@ describe('E2E: Full Lifecycle', function() {
 
             await assertHashesMatch(sourceDb, replicaDb, 50);
 
-            // Full parity oracle: byte-identical tables + recompute conformance.
+            // Verify credits synced
+            // Full parity oracle: byte-identical tables + recompute conformance
             await assertReplicaByteIdentical(sourceDb, replicaDb);
         });
     });

@@ -1,0 +1,250 @@
+{
+  "note": "The declared test-file splits, read by bin/suite-title-map.js --split-map against bin/pins/at1-suite-titles.json. splits maps each pinned test file that became several files to the full list of files its tests now live in, keyed by the path the compare sees after the rename map is applied. For every npm test script that pinned the old file, the titles those files collect together must equal the old file's titles exactly: none lost, none added, none carried by two parts, and none moved into a file the list does not name. A part may keep the old path; a single destination is a rename and belongs in the rename map. A split that also renames a symbol a title quotes declares it in the name map, which is applied to the old file's titles before the union is graded, so a difference that is not declared is a regression rather than a restructure.",
+  "date": "2026-09-14",
+  "pin": "bin/pins/at1-suite-titles.json",
+  "pin_before_sha256": "e98c59c8a3cd7eb035adc526ad0c03fb3e335101c303b334a46507be29bd15ef",
+  "compare": "node bin/suite-title-map.js --compare bin/pins/at1-suite-titles.json --rename-map bin/pins/suite-title-renames.json --name-map bin/pins/m2-name-delta.json --split-map bin/pins/suite-title-splits.json",
+  "example": {
+    "test/unit/big_suite.test.js": [
+      "test/unit/big_suite/reads.test.js",
+      "test/unit/big_suite/writes.test.js"
+    ]
+  },
+  "splits": {
+    "test/unit/contractStateSubtree.test/contract_state_root_arming_boundary.test.js": [
+      "test/unit/contractStateSubtree.test/contract_state_root_arming_boundary.test.js",
+      "test/unit/contractStateSubtree.test/contract_state_root_orphan_and_snapshot.test.js"
+    ],
+    "test/unit/contractStateSubtree.test/contract_state_root_incremental_equals.test.js": [
+      "test/unit/contractStateSubtree.test/contract_state_root_incremental_equals.test.js",
+      "test/unit/contractStateSubtree.test/contract_state_root_shadow_derivation.test.js"
+    ],
+    "test/unit/contractStateSubtree.test/contract_state_root_strict_reads.test.js": [
+      "test/unit/contractStateSubtree.test/contract_state_root_strict_reads.test.js",
+      "test/unit/contractStateSubtree.test/contract_state_root_strict_read_faults.test.js"
+    ],
+    "test/unit/escrowLeafSubtree.test/xchain_esc_locked_leaf_the.test.js": [
+      "test/unit/escrowLeafSubtree.test/xchain_esc_locked_leaf_the.test.js",
+      "test/unit/escrowLeafSubtree.test/xchain_esc_locked_leaf_shadow_thread.test.js"
+    ],
+    "test/unit/stateSubtreeActivation.test/state_root_reserved_sub_trees.test.js": [
+      "test/unit/stateSubtreeActivation.test/state_root_reserved_sub_trees.test.js",
+      "test/unit/stateSubtreeActivation.test/state_root_reserved_sub_trees_armed_set.test.js"
+    ],
+    "test/e2e/decoder_lifecycle.test.js": [
+      "test/e2e/decoder_lifecycle.test.js",
+      "test/e2e/decoder_lifecycle.test/01_proxy_trust_rate_limit_wiring.test.js",
+      "test/e2e/decoder_lifecycle.test/02_cold_bootstrap.test.js",
+      "test/e2e/decoder_lifecycle.test/03_incremental_snapshot.test.js",
+      "test/e2e/decoder_lifecycle.test/04_reorg_rollback.test.js",
+      "test/e2e/decoder_lifecycle.test/05_live_websocket_sync.test.js"
+    ],
+    "test/e2e/resume_parity.test.js": [
+      "test/e2e/resume_parity.test.js",
+      "test/e2e/resume_parity.test/01_10_2_reorg_while_disconnected_june_2026_production_scenario.test.js",
+      "test/e2e/resume_parity.test/02_10_3_torn_bootstrap_state.test.js",
+      "test/e2e/resume_parity.test/03_10_4_divergence_halt_enforcement.test.js",
+      "test/e2e/resume_parity.test/04_10_5_schema_drift_while_disconnected_self_heal.test.js",
+      "test/e2e/resume_parity.test/05_10_6_connection_flapping.test.js"
+    ],
+    "test/integration/server_rest_api.test.js": [
+      "test/integration/server_rest_api.test.js",
+      "test/integration/server_rest_api.test/01_get_status_db_type_chain_network.test.js",
+      "test/integration/server_rest_api.test/02_get_schema_db_type_chain_network.test.js",
+      "test/integration/server_rest_api.test/03_get_snapshot_db_type_chain_network.test.js",
+      "test/integration/server_rest_api.test/04_get_snapshot_db_type_chain_network_since_block_height.test.js",
+      "test/integration/server_rest_api.test/05_get_transparency_db_type_chain_network_roots.test.js",
+      "test/integration/server_rest_api.test/06_get_transparency_db_type_chain_network_proof_block_index.test.js",
+      "test/integration/server_rest_api.test/07_get_transparency_db_type_chain_network_root_latest.test.js",
+      "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js"
+    ],
+    "test/perf/scenarios/08_bootstrap_stampede.test.js": [
+      "test/perf/scenarios/08_bootstrap_stampede.test.js",
+      "test/perf/scenarios/08_bootstrap_stampede.test/01_5_concurrent_bootstraps_cohort_floor_are_all_served_poller_unaffected.test.js",
+      "test/perf/scenarios/08_bootstrap_stampede.test/02_10_concurrent_bootstraps_cohort_ceiling_shed_the_excess_with_a_retryable_503.test.js",
+      "test/perf/scenarios/08_bootstrap_stampede.test/03_a_25_validator_flag_day_cohort_cannot_pin_the_pool.test.js"
+    ],
+    "test/security/client_sync_security.test.js": [
+      "test/security/client_sync_security.test.js",
+      "test/security/client_sync_security.test/01_handle_reorg_max_rollback_depth.test.js",
+      "test/security/client_sync_security.test/02_handle_block_strict_cross_source_timeout.test.js",
+      "test/security/client_sync_security.test/03_connect_web_socket_max_payload.test.js",
+      "test/security/client_sync_security.test/04_web_socket_message_handler_event_validation.test.js"
+    ],
+    "test/security/validation.test.js": [
+      "test/security/validation.test.js",
+      "test/security/validation.test/01_validate_ddl.test.js",
+      "test/security/validation.test/02_validate_ws_event.test.js",
+      "test/security/validation.test/03_extract_column_names.test.js",
+      "test/security/validation.test/04_extract_column_definition.test.js"
+    ],
+    "test/unit/block_broadcaster.test.js": [
+      "test/unit/block_broadcaster.test.js",
+      "test/unit/block_broadcaster.test/01_remove_subscription.test.js",
+      "test/unit/block_broadcaster.test/02_broadcast.test.js",
+      "test/unit/block_broadcaster.test/03_broadcast_status.test.js",
+      "test/unit/block_broadcaster.test/04_get_status_freshness_expiry.test.js",
+      "test/unit/block_broadcaster.test/05_send.test.js",
+      "test/unit/block_broadcaster.test/06_applied_block_tracking.test.js",
+      "test/unit/block_broadcaster.test/07_get_subscriber_count.test.js",
+      "test/unit/block_broadcaster.test/08_get_validator_heartbeats.test.js",
+      "test/unit/block_broadcaster.test/09_get_validator_heartbeats_with_an_expected_validator_roster.test.js",
+      "test/unit/block_broadcaster.test/10_evict_stale_validators.test.js"
+    ],
+    "test/unit/client_sync_checkpoint_quorum.test.js": [
+      "test/unit/client_sync_checkpoint_quorum.test.js",
+      "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js"
+    ],
+    "test/unit/client_sync_io.test.js": [
+      "test/unit/client_sync_io.test.js",
+      "test/unit/client_sync_io.test/01_bootstrap_size_wall.test.js",
+      "test/unit/client_sync_io.test/02_bootstrap_from_height.test.js",
+      "test/unit/client_sync_io.test/03_sync_lookup_tables_paged.test.js",
+      "test/unit/client_sync_io.test/04_truncated_catch_up.test.js",
+      "test/unit/client_sync_io.test/05_oversized_catch_up_fallback_routes_by_truncation.test.js",
+      "test/unit/client_sync_io.test/06_decoder_completeness_check_on_a_truncated_replica.test.js",
+      "test/unit/client_sync_io.test/07_indexer_head_fork_re_delivery.test.js",
+      "test/unit/client_sync_io.test/08_verify_recompute_join_block_skip.test.js",
+      "test/unit/client_sync_io.test/09_run_incremental_catch_up.test.js",
+      "test/unit/client_sync_io.test/10_incremental_catch_up_coalescing.test.js",
+      "test/unit/client_sync_io.test/11_strict_cross_source_gate_survives_catch_up_m_22.test.js",
+      "test/unit/client_sync_io.test/12_verify_against_source.test.js",
+      "test/unit/client_sync_io.test/13_verify_decoder_completeness_catch.test.js",
+      "test/unit/client_sync_io.test/14_stop.test.js",
+      "test/unit/client_sync_io.test/15_heartbeat.test.js",
+      "test/unit/client_sync_io.test/16_connect_web_socket.test.js",
+      "test/unit/client_sync_io.test/17_handle_event_last_known_server_block_branches.test.js",
+      "test/unit/client_sync_io.test/18_misc_branch_coverage.test.js",
+      "test/unit/client_sync_io.test/19_small_branches.test.js",
+      "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js"
+    ],
+    "test/unit/client_sync.test.js": [
+      "test/unit/client_sync.test.js",
+      "test/unit/client_sync.test/01_warn_trust_posture.test.js",
+      "test/unit/client_sync.test/02_is_source_height_stale.test.js",
+      "test/unit/client_sync.test/03_log_gap_throttling.test.js",
+      "test/unit/client_sync.test/04_start.test.js",
+      "test/unit/client_sync.test/05_bootstrap_failure_gating_empty_replica_defect.test.js",
+      "test/unit/client_sync.test/06_handle_event.test.js",
+      "test/unit/client_sync.test/07_maybe_verify_completeness.test.js",
+      "test/unit/client_sync.test/08_persistent_replica_gaps.test.js",
+      "test/unit/client_sync.test/09_handle_block.test.js",
+      "test/unit/client_sync.test/10_apply_block_event.test.js",
+      "test/unit/client_sync.test/11_heal_schema_if_stale.test.js",
+      "test/unit/client_sync.test/12_run_incremental_catch_up_schema_self_heal.test.js",
+      "test/unit/client_sync.test/13_handle_reorg.test.js",
+      "test/unit/client_sync.test/14_constructor_sync_mode_chain_infra_only_vs_the_halting_verification_gates.test.js",
+      "test/unit/client_sync.test/15_stop.test.js",
+      "test/unit/client_sync.test/16_verify_table_counts_replica_completeness.test.js",
+      "test/unit/client_sync.test/17_decoder_bootstrap_completeness.test.js",
+      "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js"
+    ],
+    "test/unit/db_schema_evolution.test.js": [
+      "test/unit/db_schema_evolution.test.js",
+      "test/unit/db_schema_evolution.test/01_database_add_missing_columns_auto_increment_key_clause.test.js",
+      "test/unit/db_schema_evolution.test/02_database_ensure_replicated_columns_nullability_relaxation.test.js"
+    ],
+    "test/unit/db.test.js": [
+      "test/unit/db.test.js",
+      "test/unit/db.test/01_database_do_query.test.js",
+      "test/unit/db.test/02_database_commit_transaction.test.js",
+      "test/unit/db.test/03_database_verify_sync_tables.test.js",
+      "test/unit/db.test/04_database_add_missing_columns_edge_branches.test.js",
+      "test/unit/db.test/05_database_get_emission_rows_for_block.test.js",
+      "test/unit/db.test/06_database_halt_methods.test.js",
+      "test/unit/db.test/07_database_replicate_schema.test.js",
+      "test/unit/db.test/08_database_ensure_replica_secondary_indexes_votes_append_only_migration.test.js",
+      "test/unit/db.test/09_database_ensure_replica_secondary_indexes_validator_rewards_reward_unique_qualifier_key.test.js"
+    ],
+    "test/unit/hub_client.test.js": [
+      "test/unit/hub_client.test.js",
+      "test/unit/hub_client.test/01_get_indexer_configs.test.js",
+      "test/unit/hub_client.test/02_get_decoder_configs.test.js",
+      "test/unit/hub_client.test/03_constructor_array_form.test.js",
+      "test/unit/hub_client.test/04_call_multi_endpoint_fallback.test.js",
+      "test/unit/hub_client.test/05_getallconfigs_cursor_watermark_handling.test.js",
+      "test/unit/hub_client.test/06_getallconfigs_watermark_regression.test.js",
+      "test/unit/hub_client.test/07_hub_config_regressed.test.js",
+      "test/unit/hub_client.test/08_parse_port.test.js",
+      "test/unit/hub_client.test/09_parse_endpoints.test.js",
+      "test/unit/hub_client.test/10_credential_tier.test.js"
+    ],
+    "test/unit/server_poller.test.js": [
+      "test/unit/server_poller.test.js",
+      "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js",
+      "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js",
+      "test/unit/server_poller.test/03_backfill_gaps_regression.test.js",
+      "test/unit/server_poller.test/04_build_block_payload.test.js",
+      "test/unit/server_poller.test/05_build_block_payload_2.test.js",
+      "test/unit/server_poller.test/06_update_status.test.js",
+      "test/unit/server_poller.test/07_stop.test.js",
+      "test/unit/server_poller.test/08_poll_snapshot_pinning_h_p2.test.js"
+    ],
+    "test/unit/snapshot_builder.test.js": [
+      "test/unit/snapshot_builder.test.js",
+      "test/unit/snapshot_builder.test/01_stream_full_snapshot.test.js",
+      "test/unit/snapshot_builder.test/02_stream_incremental_snapshot.test.js",
+      "test/unit/snapshot_builder.test/03_stream_table_rows_by_id.test.js",
+      "test/unit/snapshot_builder.test/04_stream_dispensers.test.js",
+      "test/unit/snapshot_builder.test/05_transactional_boundary.test.js",
+      "test/unit/snapshot_builder.test/06_branch_coverage.test.js",
+      "test/unit/snapshot_builder.test/07_paging_stream_client_abort.test.js",
+      "test/unit/snapshot_builder.test/08_snapshot_stream_writer_backpressure_client_abort.test.js",
+      "test/unit/snapshot_builder.test/09_stream_full_snapshot_client_abort.test.js",
+      "test/unit/snapshot_builder.test/10_stream_incremental_snapshot_lookup_paging.test.js",
+      "test/unit/snapshot_builder.test/11_stream_incremental_snapshot_snapshot_replication_tables.test.js",
+      "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js"
+    ],
+    "test/unit/state_commitment_batched_node_writes.test.js": [
+      "test/unit/state_commitment_batched_node_writes.test.js",
+      "test/unit/state_commitment_batched_node_writes.test/01_stakes_subtree_rebuilds_only_on_change.test.js",
+      "test/unit/state_commitment_batched_node_writes.test/02_db_node_store_put_many_sql_shape.test.js"
+    ],
+    "test/unit/sync_service.test.js": [
+      "test/unit/sync_service.test.js",
+      "test/unit/sync_service.test/01_discover_chains.test.js",
+      "test/unit/sync_service.test/02_start_server_mode.test.js",
+      "test/unit/sync_service.test/03_start_client_mode.test.js",
+      "test/unit/sync_service.test/04_start_client_sync_for_chain.test.js",
+      "test/unit/sync_service.test/05_start_poller_for_chain.test.js",
+      "test/unit/sync_service.test/06_schedule_hub_repoll.test.js",
+      "test/unit/sync_service.test/07_wait_for_hub_timeout.test.js",
+      "test/unit/sync_service.test/08_get_hub_config_age_seconds.test.js",
+      "test/unit/sync_service.test/09_get_client_sync_state.test.js",
+      "test/unit/sync_service.test/10_get_client_sync.test.js",
+      "test/unit/sync_service.test/11_mode_branching_in_start.test.js",
+      "test/unit/sync_service.test/12_startup_readiness_is_ready.test.js"
+    ],
+    "test/unit/client_applier.test.js": [
+      "test/unit/client_applier.test.js",
+      "test/unit/client_applier.test/01_apply_full_snapshot.test.js",
+      "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js",
+      "test/unit/client_applier.test/03_insert_rows.test.js",
+      "test/unit/client_applier.test/04_apply_dispensers_replace.test.js",
+      "test/unit/client_applier.test/05_anchor_actions_bundle_sections.test.js"
+    ],
+    "test/unit/client_rollback.test.js": [
+      "test/unit/client_rollback.test.js",
+      "test/unit/client_rollback.test/01_rollback.test.js",
+      "test/unit/client_rollback.test/02_rollback.test.js",
+      "test/unit/client_rollback.test/03_rollback.test.js",
+      "test/unit/client_rollback.test/04_pair_scoped_markets_rollback_idx_2_mirror.test.js",
+      "test/unit/client_rollback.test/05_balance_rebuild_error_handling.test.js",
+      "test/unit/client_rollback.test/06_rollback_decoder.test.js"
+    ],
+    "test/unit/client_sync_halt.test.js": [
+      "test/unit/client_sync_halt.test.js",
+      "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js",
+      "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js",
+      "test/unit/client_sync_halt.test/03_state_hash_apply_time_integrity_halt.test.js",
+      "test/unit/client_sync_halt.test/04_verify_recompute_false_is_declared_unsafe.test.js"
+    ],
+    "test/unit/table_content_parity.test.js": [
+      "test/unit/table_content_parity.test.js",
+      "test/unit/table_content_parity.test/01_content_digest.test.js",
+      "test/unit/table_content_parity.test/02_compute_table_content_checksums.test.js",
+      "test/unit/table_content_parity.test/03_compare_table_content.test.js",
+      "test/unit/table_content_parity.test/04_wiring.test.js"
+    ]
+  }
+}

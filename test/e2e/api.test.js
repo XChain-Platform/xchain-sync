@@ -20,30 +20,73 @@ const ServerProcess = require('./helpers/serverProcess');
 const { waitFor }   = require('./helpers/waitFor');
 
 const SERVER_PORT = 29900;
+let sourceDb, replicaDb, server;
+
+async function setupApi() {
+    await setup.globalSetup();
+    sourceDb  = setup.getSourceDb();
+    replicaDb = setup.getReplicaDb();
+
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+}
+
+async function teardownApi() {
+    sinon.restore();
+    if (server) await server.stop();
+    server = null;
+    await setup.globalTeardown();
+}
+
+async function resetApi() {
+    if (server) { await server.stop(); server = null; }
+    await setup.resetDatabases();
+}
+
+async function openBlockObserver() {
+    await fixtures.seedBlocks(sourceDb, 1, 5);
+
+    server = new ServerProcess(sourceDb, SERVER_PORT);
+    await server.start();
+
+    // Wait for initial polling
+    await waitFor(async () => {
+        let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
+        return res.data.block_height >= 5;
+    }, 10000);
+
+    let messages = [];
+    let ws = new WebSocket(server.getWsUrl() + '/subscribe/indexer/bitcoin/mainnet');
+    ws.on('message', (data) => {
+        messages.push(JSON.parse(data.toString()));
+    });
+
+    // Poll the socket to OPEN. Each block is broadcast exactly once, so a
+    // subscription still handshaking when the poll fires misses the events.
+    await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
+
+    // Add 5 blocks
+    await fixtures.seedBlocks(sourceDb, 6, 10);
+
+    // Wait for blocks to be polled and broadcast
+    for (let i = 0; i < 20; i++) {
+        await server.poll();
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    await waitFor(() => {
+        let blockMessages = messages.filter(m => m.type === 'block');
+        return blockMessages.length >= 5;
+    }, 10000);
+
+    return { messages, ws };
+}
 
 describe('E2E: API Correctness', function() {
 
-    let sourceDb, replicaDb, server;
-
-    before(async function() {
-        await setup.globalSetup();
-        sourceDb  = setup.getSourceDb();
-        replicaDb = setup.getReplicaDb();
-
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-
-    after(async function() {
-        sinon.restore();
-        if (server) await server.stop();
-        await setup.globalTeardown();
-    });
-
-    beforeEach(async function() {
-        if (server) { await server.stop(); server = null; }
-        await setup.resetDatabases();
-    });
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
 
     describe('9.1 Status endpoint reflects live state', function() {
         it('returns current block height after new blocks', async function() {
@@ -54,11 +97,13 @@ describe('E2E: API Correctness', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
+            // Wait for poller to catch up
             await waitFor(async () => {
                 let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 50;
             }, 10000);
 
+            // Add block 51
             await fixtures.seedBlocks(sourceDb, 51, 51);
             await server.poll();
 
@@ -69,10 +114,19 @@ describe('E2E: API Correctness', function() {
             assert.ok(res.data.contract_hash, 'Should have contract_hash');
             assert.ok(res.data.block_time, 'Should have block_time');
 
+            // Verify hashes match source
             let sourceHash = await sourceDb.getBlockHashRow(51);
             assert.strictEqual(res.data.ledger_hash, sourceHash.ledger_hash);
         });
     });
+
+});
+
+describe('E2E: API Correctness', function() {
+
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
 
     describe('9.2 Schema endpoint returns complete DDL', function() {
         it('returns CREATE TABLE statements for all tables', async function() {
@@ -93,6 +147,7 @@ describe('E2E: API Correctness', function() {
             let tableNames = Object.keys(res.data.tables);
             assert.ok(tableNames.length >= 10, 'Should have at least 10 tables, got ' + tableNames.length);
 
+            // Verify key tables exist
             assert.ok(res.data.tables.blocks, 'Should have blocks DDL');
             assert.ok(res.data.tables.transactions, 'Should have transactions DDL');
             assert.ok(res.data.tables.actions, 'Should have actions DDL');
@@ -100,6 +155,7 @@ describe('E2E: API Correctness', function() {
             assert.ok(res.data.tables.index_transactions, 'Should have index_transactions DDL');
             assert.ok(res.data.tables.sync_meta, 'Should have sync_meta DDL');
 
+            // Each DDL should be a valid CREATE TABLE statement
             for (let table of tableNames) {
                 let ddl = res.data.tables[table];
                 assert.ok(ddl.includes('CREATE TABLE'), 'DDL for ' + table + ' should contain CREATE TABLE');
@@ -107,50 +163,31 @@ describe('E2E: API Correctness', function() {
         });
     });
 
+});
+
+describe('E2E: API Correctness', function() {
+
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
+
     describe('9.3 WebSocket observer receives blocks', function() {
         it('receives block events in order', async function() {
             this.timeout(15000);
 
-            await fixtures.seedBlocks(sourceDb, 1, 5);
+            const { messages, ws } = await openBlockObserver();
 
-            server = new ServerProcess(sourceDb, SERVER_PORT);
-            await server.start();
-
-            await waitFor(async () => {
-                let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
-                return res.data.block_height >= 5;
-            }, 10000);
-
-            let messages = [];
-            let ws = new WebSocket(server.getWsUrl() + '/subscribe/indexer/bitcoin/mainnet');
-            ws.on('message', (data) => {
-                messages.push(JSON.parse(data.toString()));
-            });
-
-            // Poll the socket to OPEN. Each block is broadcast exactly once, so a
-            // subscription still handshaking when the poll fires misses the events.
-            await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
-
-            await fixtures.seedBlocks(sourceDb, 6, 10);
-
-            for (let i = 0; i < 20; i++) {
-                await server.poll();
-                await new Promise(r => setTimeout(r, 200));
-            }
-
-            await waitFor(() => {
-                let blockMessages = messages.filter(m => m.type === 'block');
-                return blockMessages.length >= 5;
-            }, 10000);
-
+            // Verify block events
             let blockMessages = messages.filter(m => m.type === 'block');
             assert.ok(blockMessages.length >= 5, 'Should have received 5 block events, got ' + blockMessages.length);
 
+            // Verify ordering
             for (let i = 0; i < blockMessages.length - 1; i++) {
                 assert.ok(blockMessages[i].block_index < blockMessages[i + 1].block_index,
                     'Block events should be in order');
             }
 
+            // Verify block structure
             let firstBlock = blockMessages[0];
             assert.strictEqual(firstBlock.type, 'block');
             assert.ok(firstBlock.block_index, 'Block should have block_index');
@@ -161,6 +198,14 @@ describe('E2E: API Correctness', function() {
         });
     });
 
+});
+
+describe('E2E: API Correctness', function() {
+
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
+
     describe('9.4 WebSocket observer receives reorg', function() {
         it('receives reorg event when blocks are removed', async function() {
             this.timeout(15000);
@@ -170,6 +215,7 @@ describe('E2E: API Correctness', function() {
             server = new ServerProcess(sourceDb, SERVER_PORT);
             await server.start();
 
+            // Wait for initial polling
             await waitFor(async () => {
                 let res = await axios.get(server.getUrl() + '/status/indexer/bitcoin/mainnet', { timeout: 3000 });
                 return res.data.block_height >= 10;
@@ -184,6 +230,7 @@ describe('E2E: API Correctness', function() {
             // subscription still handshaking when the poll fires misses it.
             await waitFor(() => ws.readyState === WebSocket.OPEN, 10000);
 
+            // Trigger reorg
             await fixtures.deleteBlocksFrom(sourceDb, 8);
             await server.poll();
 
@@ -200,6 +247,14 @@ describe('E2E: API Correctness', function() {
             ws.close();
         });
     });
+
+});
+
+describe('E2E: API Correctness', function() {
+
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
 
     describe('9.5 Status endpoint with no data', function() {
         it('returns null block_height when DB is empty', async function() {
@@ -235,11 +290,20 @@ describe('E2E: API Correctness', function() {
             assert.ok(snapshot.tables, 'Should have tables');
 
             // Inclusive range 15-20, so 6 rows, not 5.
+            // Should contain only blocks 15-20 (6 blocks)
             if (snapshot.tables.blocks) {
                 assert.strictEqual(snapshot.tables.blocks.length, 6);
             }
         });
     });
+
+});
+
+describe('E2E: API Correctness', function() {
+
+    before(setupApi);
+    after(teardownApi);
+    beforeEach(resetApi);
 
     describe('9.7 Unknown chain returns 404', function() {
         it('returns 404 for unknown chain/network', async function() {

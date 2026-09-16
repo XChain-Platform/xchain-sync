@@ -5,12 +5,12 @@
     "@stryker-mutator/mocha-runner"
   ],
   "mutate": [
-    "src/ClientApplier.js",
-    "src/HashVerifier.js",
-    "src/validation.js",
-    "src/ServerPoller.js",
-    "src/ClientRollback.js",
-    "src/TransparencyLog.js"
+    "src/client/applier.js",
+    "src/client/hash_verifier.js",
+    "src/util/validation.js",
+    "src/server/poller.js",
+    "src/client/rollback.js",
+    "src/server/transparency_log.js"
   ],
   "coverageAnalysis": "perTest",
   "mochaOptions": {
@@ -18,7 +18,7 @@
       "test/unit/**/*.test.js"
     ],
     "ignore": [
-      "test/unit/rollback-coverage.test.js"
+      "test/unit/rollback_coverage.test.js"
     ]
   },
   "reporters": [

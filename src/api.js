@@ -32,19 +32,22 @@ const http        = require('http');
 const WebSocket   = require('ws');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
-const { computeArmedMapFingerprint } = require('./armedMapFingerprint');
+const { computeArmedMapFingerprintV2 } = require('./consensus/armed_map/fingerprint_v2');
+const { carrierLogicDigest } = require('./health/carrier_logic');
 const SyncService = require('./SyncService');
-const Utility     = require('./utility');
-const BlockHasher = require('./BlockHasher');
-const { createApiKeyMiddleware, safeEqual } = require('./middleware');
-const { createShutdown, createSyncDrain } = require('./shutdown');
-const { getReplicatedTables, missingReplicatedTables } = require('./replicatedTables');
+const Utility     = require('./util');
+const BlockHasher = require('./client/block_hasher');
+const { createApiKeyMiddleware, safeEqual } = require('./http/middleware');
+const { createShutdown, createSyncDrain } = require('./http/shutdown');
+const { getReplicatedTables, missingReplicatedTables } = require('./schema/replicated_tables');
 const coins       = require('./coins');
 
 // Stateless helper for the advisory index-map parity checksum published on
 // /status (server mode). getDataHash holds no per-call state, so one shared
 // instance is safe. See BlockHasher.computeIndexMapChecksum (NON-consensus).
 const statusUtil = new Utility();
+
+function consensusIdentityFields(){ const armedMapV2 = computeArmedMapFingerprintV2().hex; return { armed_map_fingerprint: armedMapV2, armed_map_fingerprint_v2: armedMapV2, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
 
 dotenv.config();
 
@@ -175,6 +178,52 @@ function applyReplicaFreshness(row, pollerStatus){
     return row;
 }
 
+// One /health databases[] row for a chain, and the verdict it implies.
+//
+// Module-scope and exported for the same reason buildStatusRow is: this is the
+// shape the Docker probe judges the container on, so it has to be checkable
+// without binding a port.
+//
+// The circuit breaker only opens after circuitThreshold (10) consecutive
+// acquisition failures (db.js), so a dead origin DB would otherwise read
+// 'healthy' for up to 10 BLOCK_POLL_INTERVAL cycles while every snapshot request
+// is already 500ing. ServerPoller's pollErrorCount resets to 0 on the next
+// successful poll, so a non-zero count means the poller is currently in a failing
+// streak: the earliest reliable outage signal.
+//
+// A halted CLIENT applies no blocks at all, and neither of those signals can see
+// it: getPoller is server-mode only, so pollErrorCount is a constant 0 on a
+// client, and a durable halt leaves the database perfectly healthy with its
+// circuit closed. So this route, the one ModuleService points the sync
+// container's probe at, answered 200 'healthy' for a replica that had stopped
+// replicating and stayed stopped across reboots. Read the halt through
+// getClientSyncState, the accessor /status already trusts. Degrading on an
+// INTENTIONAL halt is safe too: the sync healthcheck entry carries no autoheal
+// flag, so an unhealthy verdict marks the container and never restarts it out
+// from under the operator investigating the divergence.
+function buildHealthEntry(syncService, mode, db, coin, network, dbType){
+    let poller = syncService.getPoller(coin, network, dbType);
+    let entry = {
+        chain: coin, network: network, dbType: dbType,
+        circuit: (db && db.circuitState) || null,
+        poll_error_count: poller ? poller.pollErrorCount : 0
+    };
+    if(mode !== 'server' && typeof syncService.getClientSyncState === 'function'){
+        let clientState = syncService.getClientSyncState(coin, network, dbType);
+        let halted = !!(clientState && clientState.halted);
+        entry.halted      = halted;
+        entry.halt_reason = (halted && clientState.haltInfo) ? clientState.haltInfo.reason : null;
+        entry.halt_block  = (halted && clientState.haltInfo) ? clientState.haltInfo.blockIndex : null;
+    }
+    return entry;
+}
+
+// Degraded verdict for one /health row. Kept beside the builder so the probe's
+// contract is one readable predicate rather than a condition spread over a loop.
+function healthEntryDegraded(entry){
+    return entry.circuit === 'open' || entry.poll_error_count > 0 || entry.halted === true;
+}
+
 // Build the status row for one (db, dbType, chain, network) tuple.
 //
 // Module-scope (not a closure inside startApi) and exported so the row shape is
@@ -187,15 +236,16 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // (how far the poller has actually broadcast), not the source DB tip.
         // Using the source DB tip here hides poller lag: if the poller is wedged
         // or catching up, block_height would show a climbing source tip with no
-        // lag signal. The WS _updateStatus path (ServerPoller) correctly separates
+        // lag signal. The WS updateStatus path (ServerPoller) correctly separates
         // lastPolledBlock from the source tip; REST now matches those semantics.
         let broadcaster = syncService.getBroadcaster();
-        let statusData = broadcaster ? broadcaster.statusData : null;
-        // statusData is keyed by "chain:network:dbType" inside BlockBroadcaster.
-        // The status object stored by ServerPoller._updateStatus has block_height
+        // Read through getStatus, never statusData directly: it is the one accessor
+        // that expires a measurement's freshness verdict, so a status cached before the
+        // poller stopped measuring cannot certify this row (SYNC_STATUS_MAX_AGE_MS).
+        // The status object stored by ServerPoller.updateStatus has block_height
         // (polled position) and source_block_height (DB tip) already separated.
-        let key = chain + ':' + network + ':' + (dbType || 'indexer');
-        let pollerStatus = (statusData && statusData.get) ? statusData.get(key) : null;
+        let pollerStatus = (broadcaster && typeof broadcaster.getStatus === 'function')
+            ? broadcaster.getStatus(chain, network, dbType || 'indexer') : null;
 
         let polledBlock = (pollerStatus && pollerStatus.block_height != null)
             ? pollerStatus.block_height : null;
@@ -341,6 +391,12 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         // peers see a forked/Byzantine validator immediately.
         row.halted = clientState.halted || false;
         if(clientState.halted) row.halt = clientState.haltInfo;
+        // Platform-train activation verdict for the next apply (clear / pending /
+        // halt). `pending` is the announcement that this build lacks a rule set the
+        // signed manifest requires and names the height it will halt at, so a
+        // monitor can alert before the boundary rather than at it. Null until the
+        // follower has evaluated once (or on a caller that predates the field).
+        row.train_activation = clientState.trainActivation || null;
         // Truncated-replica visibility: lets an explorer or operator know
         // this replica cannot answer pre-base history queries.
         row.truncated      = clientState.truncated || false;
@@ -382,7 +438,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
     // entire tables still agrees on every hash. The hashes describe the
     // source's blockchain computation, not what actually landed downstream.
     // Publishing row counts gives followers an independent completeness
-    // signal: ClientSync._verifyAgainstSource compares these against its own
+    // signal: ClientSync.verifyAgainstSource compares these against its own
     // counts and flags any table the source has rows in but the follower does
     // not. Scoped to the per-block replicated set (see replicatedTables.js) so
     // legitimately-divergent snapshot-only / operator-local tables don't raise
@@ -479,7 +535,7 @@ async function startApi(){
                 mode:         cfg['SYNC_MODE'],
                 databases:    [],
                 hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-                armed_map_fingerprint:  computeArmedMapFingerprint().fingerprint,
+                ...consensusIdentityFields(),
                 last_updated: new Date().toISOString()
             });
         }
@@ -489,18 +545,9 @@ async function startApi(){
         for(let { coin, network, dbType } of chains){
             let db = syncService.getDatabase(coin, network, dbType);
             if(!db) continue;
-            let circuit = db.circuitState || null;
-            // The circuit breaker only opens after circuitThreshold (10)
-            // consecutive acquisition failures (db.js), so a dead origin DB would
-            // otherwise read 'healthy' for up to 10 BLOCK_POLL_INTERVAL cycles
-            // while every snapshot request is already 500ing. ServerPoller's
-            // pollErrorCount resets to 0 on the next successful poll, so a
-            // non-zero count means the poller is currently in a failing streak:
-            // the earliest reliable outage signal. Flip to 503 degraded on it.
-            let poller = syncService.getPoller(coin, network, dbType);
-            let pollErrorCount = poller ? poller.pollErrorCount : 0;
-            if(circuit === 'open' || pollErrorCount > 0) degraded = true;
-            databases.push({ chain: coin, network: network, dbType: dbType, circuit: circuit, poll_error_count: pollErrorCount });
+            let entry = buildHealthEntry(syncService, cfg['SYNC_MODE'], db, coin, network, dbType);
+            if(healthEntryDegraded(entry)) degraded = true;
+            databases.push(entry);
         }
         if(degraded) res.status(503);
         res.json({
@@ -511,11 +558,7 @@ async function startApi(){
             // Sync rediscovers chains from hub config on a timer; a climbing age here while
             // status stays healthy means the hub is unreachable and the chain set is stale.
             hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-            // Consensus-gate build fingerprint: one string per process so a
-            // fleet sweep can confirm every deployed sync runs the same armed map
-            // before a flag-day height (twin module in xchain-indexer exposes the
-            // same field on the indexer health method).
-            armed_map_fingerprint: computeArmedMapFingerprint().fingerprint,
+            ...consensusIdentityFields(),
             last_updated: new Date().toISOString()
         });
     });
@@ -589,9 +632,6 @@ async function startApi(){
             validator_signatures: r.validator_signatures
         };
     }
-    const CHECKPOINT_COLS = 'chain, network, block_index, block_hash, ledger_hash, actions_hash, ' +
-        'contract_hash, checkpoint_seq, snapshot_block, state_root, state_root_version, ' +
-        'block_merkle_root, block_merkle_version, validator_signatures';
 
     app.get('/checkpoint/:dbType/:chain/:network/latest', incrSnapshotLimiter, async (req, res) => {
         let dbType = validateDbType(req.params.dbType);
@@ -601,8 +641,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints ORDER BY block_index DESC, checkpoint_seq DESC LIMIT 1');
+            let rows = await db.getLatestCheckpoint();
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
@@ -637,12 +676,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints sc ' +
-                'WHERE block_index >= ? AND block_index <= ? ' +
-                'AND checkpoint_seq = (SELECT MAX(s2.checkpoint_seq) FROM state_checkpoints s2 WHERE s2.block_index = sc.block_index) ' +
-                'ORDER BY block_index ASC LIMIT ?',
-                [from, to, CHECKPOINT_RANGE_LIMIT]);
+            let rows = await db.findCheckpointsInRange(from, to, CHECKPOINT_RANGE_LIMIT);
             res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
         } catch(e){
             console.error('[API error] /checkpoint/.../range:', e);
@@ -660,9 +694,7 @@ async function startApi(){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.doQuery(
-                'SELECT ' + CHECKPOINT_COLS + ' FROM state_checkpoints WHERE block_index=? ORDER BY checkpoint_seq DESC LIMIT 1',
-                [h]);
+            let rows = await db.getCheckpointAtHeight(h);
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
@@ -729,10 +761,7 @@ async function startApi(){
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
 
         try {
-            let tables = await db.doQuery(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
-                [db.dbName]
-            );
+            let tables = await db.findBaseTableNames();
             let schema = {};
             for(let row of tables){
                 let tableName = row.table_name || row.TABLE_NAME;
@@ -847,7 +876,7 @@ async function startApi(){
     // reconcile. dispensers rides neither the block stream nor the id-cursor lookup
     // paging (no monotonic id; the decoder soft-expires/hard-purges rows), so the
     // client periodically re-dumps the full table and swaps it in atomically; see
-    // SnapshotBuilder.streamDispensers + ClientSync._reconcileDispensers. Decoder-only;
+    // SnapshotBuilder.streamDispensers + ClientSync.reconcileDispensers. Decoder-only;
     // rate-limited as an incremental fetch.
     app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
@@ -1184,7 +1213,7 @@ async function startApi(){
     // SIGTERM to this process; before this handler existed the default action
     // killed the poll/apply loops wherever they stood, which on a replica means an
     // aborted apply transaction on every routine restart. The handler is bounded by
-    // its own hard-exit timer (src/shutdown.js): installing it removes node's
+    // its own hard-exit timer (src/http/shutdown.js): installing it removes node's
     // default terminate, so a hung drain must still end the process.
     const shutdown = createShutdown({
         drain: createSyncDrain({
@@ -1222,4 +1251,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, buildStatusRow, startApi };
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness,
+                   buildHealthEntry, healthEntryDegraded, buildStatusRow, startApi };

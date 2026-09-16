@@ -21,19 +21,25 @@
  ********************************************************************/
 
 const Database        = require('./db');
-const HubClient       = require('./HubClient');
-const ServerPoller    = require('./ServerPoller');
-const BlockBroadcaster = require('./BlockBroadcaster');
-const SnapshotBuilder = require('./SnapshotBuilder');
-const TransparencyLog = require('./TransparencyLog');
-const ClientSync      = require('./ClientSync');
-const ClientApplier   = require('./ClientApplier');
-const ClientRollback  = require('./ClientRollback');
-const HashVerifier    = require('./HashVerifier');
-const stateCommitment = require('./stateCommitment');
+const HubClient       = require('./hub/client');
+const ServerPoller    = require('./server/poller');
+const BlockBroadcaster = require('./server/block_broadcaster');
+const SnapshotBuilder = require('./server/snapshot_builder');
+const TransparencyLog = require('./server/transparency_log');
+const ClientSync      = require('./client/sync');
+const ClientApplier   = require('./client/applier');
+const ClientRollback  = require('./client/rollback');
+const HashVerifier    = require('./client/hash_verifier');
+const stateCommitment = require('./state_commitment');
 const { assertBootstrapDepthChains } = require('./config');
-const { assertPinnedEnvOverrides }   = require('./pinnedValidators');
-const Utility         = require('./utility');
+const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
+const Utility         = require('./util');
+// Resolved at each call site rather than bound once: the shim is installed by the
+// entry file after this module is required, and getLogger() hands back a lazy
+// façade that reaches the real sink once that has happened.
+const { getLogger }   = require('./observability');
+const util = require('node:util');
+const envConfig = require('./config');
 
 class SyncService {
 
@@ -57,7 +63,7 @@ class SyncService {
 
         // Startup readiness, false until start() has discovered chains and begun
         // polling. api.js listens BEFORE start() runs and start() can sit in
-        // _waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
+        // waitForHub for MAX_HUB_WAIT_MS (default 5 minutes), during which
         // getChains() is empty and /health's per-chain loop finds nothing to
         // degrade on, so the probe read healthy while nothing was syncing.
         this.ready = false;
@@ -71,34 +77,35 @@ class SyncService {
     }
 
     async start(){
-        console.log('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
+        getLogger().info('Starting SyncService in ' + this.config['SYNC_MODE'] + ' mode...');
 
-        await this._waitForHub();
+        await this.waitForHub();
 
-        // Server-mode shared components must exist BEFORE discovery: _discoverChains()
+        // Server-mode shared components must exist BEFORE discovery: discoverChains()
         // starts a ServerPoller per chain, and each poller captures this.broadcaster at
-        // construction. Creating them later (in _startServerMode, after discovery) left
-        // every poller with a null broadcaster and crashed on the first _updateStatus
+        // construction. Creating them later (in startServerMode, after discovery) left
+        // every poller with a null broadcaster and crashed on the first updateStatus
         // (TypeError: Cannot read properties of null (reading 'getSubscriberCount')).
         if(this.config['SYNC_MODE'] === 'server'){
             this.broadcaster     = new BlockBroadcaster(this.config);
             this.snapshotBuilder = new SnapshotBuilder(this.util);
         }
 
-        await this._discoverChains();
+        await this.discoverChains();
 
         if(this.databases.size === 0){
-            console.log('No indexer/decoder databases found. Waiting for hub config...');
+            getLogger().info('No indexer/decoder databases found. Waiting for hub config...');
         }
 
         if(this.config['SYNC_MODE'] === 'server'){
-            await this._startServerMode();
+            await this.startServerMode();
         } else {
-            await this._startClientMode();
+            await this.startClientMode();
         }
 
-        this._scheduleHubRepoll();
-        this._startStateTreeMetric();
+        this.scheduleHubRepoll();
+        this.startStateTreeMetric();
+        this.startSyncMetaRetention();
 
         // Last statement in start(): everything a /health caller is entitled to
         // assume is running is running by here.
@@ -106,7 +113,7 @@ class SyncService {
     }
 
     // Stop every background loop this service owns and release its DB pools.
-    // Called from the process SIGTERM/SIGINT drain (src/shutdown.js): start()
+    // Called from the process SIGTERM/SIGINT drain (src/http/shutdown.js): start()
     // fans work out into pollers, client syncs and two intervals, none of which
     // the entry point can reach, so the fan-in belongs here beside the fan-out.
     //
@@ -123,12 +130,12 @@ class SyncService {
 
         for(let poller of this.pollers.values()){
             try { if(typeof poller.stop === 'function') poller.stop(); }
-            catch(e){ console.warn('SyncService.stop: poller stop failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: poller stop failed:', e && e.message ? e.message : e)); }
         }
 
         for(let sync of this.clientSyncs.values()){
             try { if(typeof sync.stop === 'function') sync.stop(); }
-            catch(e){ console.warn('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e)); }
         }
 
         // Both are unref'd, so they cannot hold the loop open on their own, but a
@@ -136,6 +143,7 @@ class SyncService {
         // behind the close below.
         if(this._hubRepollTimer){ clearInterval(this._hubRepollTimer); this._hubRepollTimer = null; }
         if(this._stateTreeMetricTimer){ clearInterval(this._stateTreeMetricTimer); this._stateTreeMetricTimer = null; }
+        if(this._syncMetaRetentionTimer){ clearInterval(this._syncMetaRetentionTimer); this._syncMetaRetentionTimer = null; }
 
         // Pools close LAST: a poller mid-iteration above still needs its connection
         // to finish or roll back the statement it is on.
@@ -144,32 +152,32 @@ class SyncService {
             if(!db || typeof db.close !== 'function' || closed.has(db)) continue;
             closed.add(db);
             try { await db.close(); }
-            catch(e){ console.warn('SyncService.stop: database close failed:', e && e.message ? e.message : e); }
+            catch(e){ getLogger().warn(util.format('SyncService.stop: database close failed:', e && e.message ? e.message : e)); }
         }
 
-        console.log('SyncService stopped (' + this.pollers.size + ' poller(s), '
+        getLogger().info('SyncService stopped (' + this.pollers.size + ' poller(s), '
             + this.clientSyncs.size + ' client sync(s), ' + closed.size + ' pool(s) closed).');
     }
 
-    async _waitForHub(){
+    async waitForHub(){
         let maxWaitMs = this.config['MAX_HUB_WAIT_MS'];
         if(maxWaitMs === undefined || maxWaitMs === null)
-            maxWaitMs = parseInt(process.env.MAX_HUB_WAIT_MS) || 300000;
+            maxWaitMs = envConfig.maxHubWaitMsFromEnv();
         let startedAt = Date.now();
         let attempts = 0;
         while(true){
             if(Date.now() - startedAt >= maxWaitMs){
-                console.error('Hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+                getLogger().error('Hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
                     + ' was unreachable after ' + Math.round(maxWaitMs / 1000) + 's (MAX_HUB_WAIT_MS); exiting.');
                 process.exit(1);
             }
             let alive = await this.hubClient.ping();
             if(alive){
-                console.log('Hub is reachable');
+                getLogger().info('Hub is reachable');
                 return;
             }
             attempts++;
-            console.log('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
+            getLogger().info('Waiting for hub at ' + this.config['HUB_API_HOST'] + ':' + this.config['HUB_PORT']
                 + '... (attempt ' + attempts + ')');
             await this.util.sleep(3000);
         }
@@ -180,7 +188,7 @@ class SyncService {
     // as indexer DBs but skip the transparency log (decoder content is
     // deterministic from the coin node; no synthetic chain-of-state hash
     // needed).
-    async _discoverChains(){
+    async discoverChains(){
         let indexerConfigs = await this.hubClient.getIndexerConfigs();
         let decoderConfigs = await this.hubClient.getDecoderConfigs();
         let allConfigs = indexerConfigs.concat(decoderConfigs);
@@ -195,11 +203,11 @@ class SyncService {
             // Skipped before any DB pool / ClientSync is created, so an excluded
             // chain can never crash-loop the process.
             if(this.config['SYNC_EXCLUDE'] && this.config['SYNC_EXCLUDE'].includes(key)){
-                console.log('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
+                getLogger().info('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
                 continue;
             }
 
-            console.log('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
+            getLogger().info('Discovered ' + cfg.dbType + ': ' + cfg.coin + '/' + cfg.network + ' -> ' + cfg.db_name);
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
@@ -233,11 +241,11 @@ class SyncService {
                     // it must not be filed under the reachability message. Say so loudly and
                     // let ClientSync's schema apply record the durable halt.
                     if(e && e.columnFailures){
-                        console.error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
+                        getLogger().error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
                             ' left columns missing on the replica: ' + e.message);
                     } else {
                         // Source DB not reachable; schema will be fetched from server via /schema endpoint
-                        console.log('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
+                        getLogger().info('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
                     }
                 } finally {
                     // Close in finally: a thrown replicateSchema used to leak the source
@@ -282,7 +290,7 @@ class SyncService {
                 // halts on a root it computed wrong. Runs AFTER the schema self-heal
                 // above, so a replica that was going to be repaired is judged on its
                 // repaired state. Twin of xchain-indexer's
-                // _assertStakeWeightOrderingCollation.
+                // assertStakeWeightOrderingCollation.
                 await db.assertStakeWeightOrderingCollation();
             } else {
                 // Server mode: connect to the DB this server polls + serves.
@@ -318,7 +326,7 @@ class SyncService {
             assertBootstrapDepthChains(this.config, this.getChains());
             // REFUSE a present-but-invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value on
             // the same pass, and for the same reason: it is not inert either. It resolves to
-            // the null an ABSENT override resolves to, so _verifyCheckpointQuorum skips the
+            // the null an ABSENT override resolves to, so verifyCheckpointQuorum skips the
             // anchor on a replica whose operator armed VERIFY_CHECKPOINT_QUORUM. Client mode
             // only (a server reads no pinned set) and before any ClientSync is constructed.
             assertPinnedEnvOverrides();
@@ -327,9 +335,9 @@ class SyncService {
         if(newChains.length > 0){
             for(let { key, db, config: cfg } of newChains){
                 if(this.config['SYNC_MODE'] === 'server'){
-                    this._startPollerForChain(key, db, cfg);
+                    this.startPollerForChain(key, db, cfg);
                 } else {
-                    this._startClientSyncForChain(key, db, cfg);
+                    this.startClientSyncForChain(key, db, cfg);
                 }
             }
         }
@@ -337,8 +345,8 @@ class SyncService {
         return newChains;
     }
 
-    async _startServerMode(){
-        // Idempotent: these are normally created in start() before _discoverChains()
+    async startServerMode(){
+        // Idempotent: these are normally created in start() before discoverChains()
         // so pollers can capture a live broadcaster. Guard so a direct call (or future
         // refactor) still works without clobbering the instance the pollers already hold.
         if(!this.broadcaster)     this.broadcaster     = new BlockBroadcaster(this.config);
@@ -348,17 +356,17 @@ class SyncService {
         // ServerPoller reads dbType from db.dbType and switches table lists +
         // payload structure accordingly.
         for(let [key, { db, config: cfg }] of this.databases){
-            this._startPollerForChain(key, db, cfg);
+            this.startPollerForChain(key, db, cfg);
         }
 
-        console.log('Server mode started with ' + this.databases.size + ' poller(s)' +
+        getLogger().info('Server mode started with ' + this.databases.size + ' poller(s)' +
             (this.config['REPLICA_DB_READONLY'] ? ' (READ-ONLY replica: transparency log is serve-only)' : ''));
     }
 
     // Start a poller for a single chain/network/dbType.
     // TransparencyLog is created only for indexer DBs. Decoder content is
     // deterministic from the coin node and doesn't need a synthetic hash chain.
-    _startPollerForChain(key, db, cfg){
+    startPollerForChain(key, db, cfg){
         if(this.pollers.has(key)) return;
 
         let log    = (cfg.dbType === 'indexer')
@@ -368,25 +376,26 @@ class SyncService {
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
 
-        // Fire and forget: a throw here means this chain's poller is permanently dead,
-        // which /status cannot show (stale block_height under a live timestamp), so log
-        // the full error and exit and let the container restart policy surface it.
+        // Start polling in background (fire and forget; runs indefinitely).
+        // A throw here means this chain's poller is permanently dead, which is
+        // invisible at the /status endpoint (stale block_height, live timestamp).
+        // Log the full error and exit so the container restart policy surfaces it.
         poller.start().catch(e => {
-            console.error('Poller crashed for ' + key + '; exiting for restart:', e);
+            getLogger().error(util.format('Poller crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });
     }
 
-    async _startClientMode(){
+    async startClientMode(){
         // ClientSync reads dbType from db.dbType and threads it through URLs +
         // skips three-hash verification for decoder DBs.
         for(let [key, { db, config: cfg }] of this.databases){
-            this._startClientSyncForChain(key, db, cfg);
+            this.startClientSyncForChain(key, db, cfg);
         }
-        console.log('Client mode started with ' + this.databases.size + ' sync(s)');
+        getLogger().info('Client mode started with ' + this.databases.size + ' sync(s)');
     }
 
-    _startClientSyncForChain(key, db, cfg){
+    startClientSyncForChain(key, db, cfg){
         if(this.clientSyncs.has(key)) return;
 
         let applier  = new ClientApplier(db, this.util, cfg.coin, cfg.network);
@@ -398,22 +407,22 @@ class SyncService {
         // sync is permanently dead while the process still appears healthy.
         // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
-            console.error('ClientSync crashed for ' + key + '; exiting for restart:', e);
+            getLogger().error(util.format('ClientSync crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });
     }
 
-    _scheduleHubRepoll(){
+    scheduleHubRepoll(){
         if(this._hubRepollTimer) return;
         // Handle retained so stop() can clear it: a re-poll that fires during the
         // drain discovers chains and builds fresh DB pools behind the close.
         this._hubRepollTimer = setInterval(async () => {
             try {
-                let newChains = await this._discoverChains();
+                let newChains = await this.discoverChains();
                 if(newChains.length > 0)
-                    console.log('Discovered ' + newChains.length + ' new chain(s) from hub');
+                    getLogger().info('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){
-                console.error('Hub re-poll error:', e);
+                getLogger().error(util.format('Hub re-poll error:', e));
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
         if(this._hubRepollTimer.unref) this._hubRepollTimer.unref();
@@ -425,9 +434,9 @@ class SyncService {
     // self-overlap guarded, reads on a POOLED connection (db.pool, NOT the apply transaction).
     // No deletion: see stateCommitment.reportOrphanStats. STATE_TREE_METRIC_INTERVAL_MS (default
     // 4h; 0 disables). Decoder DBs are skipped (no state_tree_* tables).
-    _startStateTreeMetric(){
+    startStateTreeMetric(){
         if(this._stateTreeMetricTimer) return;
-        const raw = parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10);
+        const raw = envConfig.stateTreeMetricIntervalMsFromEnv();
         const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
         if(intervalMs === 0) return;   // explicitly disabled
         this._stateTreeMetricRunning = false;
@@ -446,7 +455,7 @@ class SyncService {
                     try {
                         const stats = await stateCommitment.reportOrphanStats(query, cfg.coin, cfg.network);
                         if(stats.totalNodes === 0) continue;
-                        console.log('[METRIC] ' + JSON.stringify({
+                        getLogger().info('[METRIC] ' + JSON.stringify({
                             metric: 'state_tree_orphan_nodes', component: 'sync', key: key,
                             chain: cfg.coin, network: cfg.network,
                             total_nodes: stats.totalNodes, reachable_nodes: stats.reachableNodes,
@@ -457,7 +466,7 @@ class SyncService {
                             ts: Date.now()
                         }));
                     } catch(err) {
-                        console.warn('SyncService: state_tree orphan-metric failed for ' + key + ':', err.message || err);
+                        getLogger().warn(util.format('SyncService: state_tree orphan-metric failed for ' + key + ':', err.message || err));
                     }
                 }
             } finally {
@@ -465,7 +474,61 @@ class SyncService {
             }
         }, intervalMs);
         if(this._stateTreeMetricTimer.unref) this._stateTreeMetricTimer.unref();
-        console.log('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
+        getLogger().info('SyncService: state_tree orphan-metric started (interval ' + intervalMs + 'ms)');
+    }
+
+    // Make SYNC_META_RETENTION_BLOCKS real in CLIENT mode. On the server the window is
+    // driven by TransparencyLog.recordBlock at epoch boundaries; a client never builds a
+    // TransparencyLog at all, only INSERT-IGNOREs sync_meta rows, and the source's own
+    // pruning DELETEs are not carried over replication, so a configured window was inert
+    // and the replica's sync_meta grew forever.
+    //
+    // A periodic timer rather than a per-block hook: bulk snapshot catch-up applies many
+    // blocks at once and would skip epoch-boundary events, whereas pruneSyncMeta recomputes
+    // its own cutoff from the current tip and is an idempotent range delete, so calling it
+    // on a clock is both sufficient and safe. Modelled on startStateTreeMetric: one unref'd
+    // interval, self-overlap guarded, try/catch per DB, cleared in stop().
+    //
+    // Server mode is deliberately untouched: it already prunes, and a second driver there
+    // would add concurrent DELETE load to a path that works.
+    startSyncMetaRetention(){
+        if(this._syncMetaRetentionTimer) return;
+        if(this.config['SYNC_MODE'] === 'server') return;
+        const keep = parseInt(this.config['SYNC_META_RETENTION_BLOCKS'], 10);
+        if(!Number.isFinite(keep) || keep <= 0) return;   // default 0: retention is off, no timer
+        // Honours REPLICA_DB_READONLY: pruneSyncMeta short-circuits on it, so a
+        // serve-only deployment still deletes nothing.
+        const readOnly = this.config['REPLICA_DB_READONLY'];
+        // config.js already resolves this key from the environment and applies the
+        // 1-hour default, so the interval is read from config and nowhere else. The
+        // fallback below covers a config object assembled without the key (a test
+        // fixture), not an unset environment variable.
+        const raw = parseInt(this.config['SYNC_META_RETENTION_INTERVAL_MS'], 10);
+        const intervalMs = (Number.isFinite(raw) && raw > 0) ? raw : (60 * 60 * 1000);
+
+        this._syncMetaRetentionRunning = false;
+        this._syncMetaRetentionTimer = setInterval(async () => {
+            if(this._syncMetaRetentionRunning) return;
+            this._syncMetaRetentionRunning = true;
+            try {
+                for(const [key, { db, dbType }] of this.databases){
+                    if(dbType !== 'indexer') continue;   // sync_meta lives only in indexer DBs
+                    try {
+                        const log = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], readOnly, keep);
+                        await log.pruneSyncMeta();
+                    } catch(err){
+                        getLogger().warn('SyncService: sync_meta retention failed for ' + key + ': ' +
+                                         (err && err.message ? err.message : err));
+                    }
+                }
+            } finally {
+                this._syncMetaRetentionRunning = false;
+            }
+        }, intervalMs);
+        if(this._syncMetaRetentionTimer.unref) this._syncMetaRetentionTimer.unref();
+        getLogger().info('SyncService: client sync_meta retention started (window ' + keep +
+                    ' blocks, interval ' + intervalMs + 'ms); inclusion proofs below the window ' +
+                    'stop being serveable from this replica');
     }
 
     getBroadcaster(){
@@ -476,7 +539,8 @@ class SyncService {
         return this.snapshotBuilder;
     }
 
-    // dbType defaults to 'indexer' for callers that are not yet dbType-aware.
+    // Get the database for a chain/network/dbType (used by api.js for status/snapshot endpoints).
+    // dbType defaults to 'indexer' for callers that haven't been updated to be dbType-aware yet.
     getDatabase(chain, network, dbType){
         let type = dbType || 'indexer';
         let key = chain + ':' + network + ':' + type;
@@ -500,7 +564,8 @@ class SyncService {
         return chains;
     }
 
-    // Client mode only; fields not yet observed come back null rather than absent.
+    // Get client sync state for a chain/network/dbType (client mode only).
+    // Returns an object with null values for fields not yet observed.
     getClientSyncState(chain, network, dbType){
         let type = dbType || 'indexer';
         let key  = chain + ':' + network + ':' + type;
@@ -515,6 +580,8 @@ class SyncService {
                 : { stale: null, secondsBehind: null, sourceHeight: null },
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
+            trainActivation: (sync && typeof sync.getTrainActivation === 'function')
+                ? sync.getTrainActivation() : null,
             truncated:     sync ? sync.isTruncated() : false,
             bootstrapBase: sync ? sync.getBootstrapBase() : null,
             // Multi-source Byzantine quorum surface.
@@ -546,7 +613,12 @@ class SyncService {
         if(!entry) return null;
         let poller = this.pollers.get(key);
         if(poller) return poller.transparencyLog;
-        return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE']);
+        // readOnly and the retention window are passed, not dropped. Client mode always
+        // takes this fallback (this.pollers is empty there), so omitting them silently
+        // handed every caller a log that believed it was writable and unwindowed.
+        return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE'],
+                                   this.config['REPLICA_DB_READONLY'],
+                                   this.config['SYNC_META_RETENTION_BLOCKS']);
     }
 }
 

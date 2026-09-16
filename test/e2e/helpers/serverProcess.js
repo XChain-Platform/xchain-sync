@@ -11,12 +11,12 @@
 const http    = require('http');
 const express = require('express');
 const cors    = require('cors');
-const { parseCorsOrigin } = require('../../../src/corsOrigin');
+const { parseCorsOrigin } = require('../../../src/http/cors_origin');
 const WebSocket = require('ws');
-const ServerPoller     = require('../../../src/ServerPoller');
-const BlockBroadcaster = require('../../../src/BlockBroadcaster');
-const TransparencyLog  = require('../../../src/TransparencyLog');
-const SnapshotBuilder  = require('../../../src/SnapshotBuilder');
+const ServerPoller     = require('../../../src/server/poller');
+const BlockBroadcaster = require('../../../src/server/block_broadcaster');
+const TransparencyLog  = require('../../../src/server/transparency_log');
+const SnapshotBuilder  = require('../../../src/server/snapshot_builder');
 const testDb           = require('./testDb');
 // Trust-proxy and rate-limiter wiring is imported from the real api.js rather
 // than re-declared here. api.js now guards its startup env check and listen()
@@ -281,7 +281,7 @@ class ServerProcess {
         // that rolls back then readvances to an equal-or-higher tip is missed
         // entirely and the replica is left with stale orphaned blocks.
         this.poller.lastPolledBlockHash = (this.poller.lastPolledBlock !== null)
-            ? await this.poller._sourceBlockHash(this.poller.lastPolledBlock) : null;
+            ? await this.poller.sourceBlockHash(this.poller.lastPolledBlock) : null;
         // Pre-populate recentBroadcastHashes for the blocks already present at start,
         // mirroring a production poller that has been running and streamed them. The
         // net-forward reorg walk-back reads these PRE-reorg hashes to descend to the
@@ -293,18 +293,18 @@ class ServerProcess {
         if(this.poller.lastPolledBlock !== null){
             let floor = Math.max(1, this.poller.lastPolledBlock - 255);
             for(let bi = floor; bi <= this.poller.lastPolledBlock; bi++){
-                let h = await this.poller._sourceBlockHash(bi);
+                let h = await this.poller.sourceBlockHash(bi);
                 if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);
             }
         }
-        await this.poller._updateStatus();
+        await this.poller.updateStatus();
 
         // Start polling loop
         // Serialize poll cycles. Production's ServerPoller.start() is a
-        // sequential while-loop; one _poll() can never overlap the next. A
+        // sequential while-loop; one poll() can never overlap the next. A
         // bare setInterval breaks that invariant whenever a cycle runs longer
         // than the interval (easy against a remote/loaded MariaDB): two
-        // concurrent _poll()s race the cursor and broadcast blocks out of
+        // concurrent poll()s race the cursor and broadcast blocks out of
         // order. Skip the tick if the previous cycle is still in flight, and
         // remember the in-flight promise so stop() can drain it. An
         // un-awaited zombie poll outliving stop() kept writing to the shared
@@ -312,7 +312,7 @@ class ServerProcess {
         this.pollInterval = setInterval(() => {
             if (this._pollInFlight) return;
             this._pollInFlight = (async () => {
-                try { await this.poller._poll(); } catch (e) { this.pollFailures++; }
+                try { await this.poller.poll(); } catch (e) { this.pollFailures++; }
                 finally { this.pollCycles++; this._pollInFlight = null; }
             })();
         }, this.config.BLOCK_POLL_INTERVAL);
@@ -359,7 +359,7 @@ class ServerProcess {
         this._pollInFlight = (async () => {
             // Counted like a background cycle, but the error still propagates: a
             // manual poll is a test's own step and must fail it, not be swallowed.
-            try { await this.poller._poll(); } catch (e) { this.pollFailures++; throw e; }
+            try { await this.poller.poll(); } catch (e) { this.pollFailures++; throw e; }
             finally { this.pollCycles++; this._pollInFlight = null; }
         })();
         await this._pollInFlight;
@@ -368,7 +368,7 @@ class ServerProcess {
     // Drain poll cycles until the poller has processed (hashed + recorded)
     // through `height`. Seeding the source DB does not make blocks servable:
     // /snapshot serves only what the poller has recorded into sync_meta, and
-    // each _poll() cycle is capped at 100 blocks, so a test that seeds and
+    // each poll() cycle is capped at 100 blocks, so a test that seeds and
     // immediately snapshots/catches-up races the 200ms background loop.
     async pollUntil(height, maxCycles = 50) {
         for (let i = 0; i < maxCycles; i++) {

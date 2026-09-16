@@ -15,7 +15,7 @@
 // text, default-off wiring (no route, no timer, no socket without env), and a
 // log shim that redacts credentials and never throws at a dead collector.
 //
-// Ported from the canonical suite at xchain-hub/test/unit/observability.test.js.
+// Ported from the canonical suite at xchain-hub/test/unit/observability/observability.test.js.
 // src/observability/ here is a verbatim vendored copy, vendored and verified by
 // xchain-hub/bin/sync-observability.sh. Parity is gated in the HUB, not here:
 // the hub's pre-push gate (bin/ci-full.sh) and the drift-guards job of its

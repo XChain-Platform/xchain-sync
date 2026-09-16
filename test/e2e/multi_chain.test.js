@@ -1,0 +1,249 @@
+// Copyright © 2025–2026 Dankest, LLC
+// Based on XChain Platform by Dankest, LLC – https://dankest.llc
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This file is part of XChain Platform. Licensed under the GNU Affero
+// General Public License v3.0 or later; see LICENSE.md. A commercial
+// license (without AGPL source-disclosure terms) is available -
+// contact legal@dankest.llc.
+
+const assert        = require('assert');
+const sinon         = require('sinon');
+const http          = require('http');
+const express       = require('express');
+const cors          = require('cors');
+const { parseCorsOrigin } = require('../../src/http/cors_origin');
+const WebSocket     = require('ws');
+const setup         = require('./helpers/setup');
+const testDb        = require('./helpers/testDb');
+const fixtures      = require('./helpers/fixtures');
+const ServerPoller     = require('../../src/server/poller');
+const BlockBroadcaster = require('../../src/server/block_broadcaster');
+const TransparencyLog  = require('../../src/server/transparency_log');
+const SnapshotBuilder  = require('../../src/server/snapshot_builder');
+const ClientProcess = require('./helpers/clientProcess');
+const { waitFor, waitForReplicaBlock } = require('./helpers/waitFor');
+const { assertBlockExists } = require('./helpers/assertions');
+
+const SERVER_PORT = 29700;
+
+describe('E2E: Multi-Chain Synchronization', function() {
+
+    let sourceDb, replicaDb, httpServer, wss, broadcaster;
+    let btcPoller, ltcPoller, btcLog, ltcLog;
+    let client;
+
+    before(async function() {
+        await setup.globalSetup();
+        sourceDb  = setup.getSourceDb();
+        replicaDb = setup.getReplicaDb();
+
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    after(async function() {
+        sinon.restore();
+        if (client) client.stop();
+        if (httpServer) await new Promise(r => httpServer.close(r));
+        await setup.globalTeardown();
+    });
+
+    beforeEach(async function() {
+        if (client) { client.stop(); client = null; }
+        if (httpServer) { await new Promise(r => httpServer.close(r)); httpServer = null; }
+        await setup.resetDatabases();
+    });
+
+    // Multi-chain server: serves two chains from the same source DB
+    // (using different block ranges to simulate independent chains)
+    function startMultiChainServer() {
+        let config = {
+            WS_MAX_PER_IP: 20,
+            WS_BACKPRESSURE_LIMIT: 50,
+            BLOCK_POLL_INTERVAL: 200,
+            WS_STATUS_INTERVAL: 500,
+            WS_PING_INTERVAL: 30000
+        };
+
+        broadcaster = new BlockBroadcaster(config);
+        let snapshotBuilder = new SnapshotBuilder(testDb.util);
+        btcLog = new TransparencyLog(sourceDb);
+        ltcLog = new TransparencyLog(sourceDb);
+        btcPoller = new ServerPoller('bitcoin', 'mainnet', sourceDb, broadcaster, btcLog, config, testDb.util);
+        ltcPoller = new ServerPoller('litecoin', 'mainnet', sourceDb, broadcaster, ltcLog, config, testDb.util);
+
+        let app = express();
+        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
+
+        // Routes mirror src/api.js, namespaced by :dbType.
+        app.get('/status/:dbType/:chain/:network', async (req, res) => {
+            let lastBlock = await sourceDb.getLastBlock();
+            let hashRow = lastBlock !== null ? await sourceDb.getBlockHashRow(lastBlock) : null;
+            res.json({
+                chain:   req.params.chain,
+                network: req.params.network,
+                dbType:  req.params.dbType,
+                block_height: hashRow ? Number(hashRow.block_index) : null,
+                block_time:   hashRow ? Number(hashRow.block_time)  : null,
+                ledger_hash:  hashRow ? hashRow.ledger_hash         : null,
+                actions_hash: hashRow ? hashRow.actions_hash        : null,
+                contract_hash:hashRow ? hashRow.contract_hash       : null
+            });
+        });
+
+        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
+            let tables = await sourceDb.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
+                [sourceDb.dbName]
+            );
+            let schema = {};
+            for (let row of tables) {
+                let tn = row.table_name || row.TABLE_NAME;
+                let ddl = await sourceDb.doQuery("SHOW CREATE TABLE `" + tn + "`");
+                if (ddl.length > 0) schema[tn] = ddl[0]['Create Table'];
+            }
+            res.json({ tables: schema });
+        });
+
+        app.get('/snapshot/:dbType/:chain/:network', async (req, res) => {
+            await snapshotBuilder.streamFullSnapshot(sourceDb, res);
+        });
+
+        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', async (req, res) => {
+            let sinceBlock = parseInt(req.params.blockHeight);
+            await snapshotBuilder.streamIncrementalSnapshot(sourceDb, sinceBlock, res);
+        });
+
+        httpServer = http.createServer(app);
+        wss = new WebSocket.Server({ noServer: true });
+
+        httpServer.on('upgrade', (request, socket, head) => {
+            let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
+            if (!match) { socket.destroy(); return; }
+            let [, dbType, chain, network] = match;
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                broadcaster.addSubscription(ws, request, chain, network, 'full', dbType);
+            });
+        });
+
+        return new Promise(resolve => httpServer.listen(SERVER_PORT, async () => {
+            btcPoller.lastPolledBlock = await sourceDb.getLastBlock();
+            ltcPoller.lastPolledBlock = await sourceDb.getLastBlock();
+            await btcPoller.updateStatus();
+            await ltcPoller.updateStatus();
+            resolve();
+        }));
+    }
+
+    describe('7.1 Two chains bootstrap independently', function() {
+        it('bootstraps from shared source for both chains', async function() {
+            this.timeout(30000);
+
+            await fixtures.seedBlocks(sourceDb, 1, 20);
+
+            await startMultiChainServer();
+
+            let serverUrl = 'http://127.0.0.1:' + SERVER_PORT;
+
+            let btcClient = new ClientProcess(replicaDb, serverUrl, 'bitcoin', 'mainnet');
+            await btcClient.bootstrap();
+
+            assert.strictEqual(await replicaDb.getLastBlock(), 20);
+            assert.strictEqual(await testDb.getRowCount(replicaDb, 'blocks'), 20);
+
+            btcClient.stop();
+        });
+    });
+
+    describe('7.2 WebSocket subscriptions are chain-isolated', function() {
+        it('receives events only for subscribed chain', async function() {
+            this.timeout(15000);
+
+            await fixtures.seedBlocks(sourceDb, 1, 5);
+            await startMultiChainServer();
+
+            let wsUrl = 'ws://127.0.0.1:' + SERVER_PORT;
+
+            let btcMessages = [];
+            let btcWs = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
+            btcWs.on('message', (data) => {
+                btcMessages.push(JSON.parse(data.toString()));
+            });
+
+            let ltcMessages = [];
+            let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
+            ltcWs.on('message', (data) => {
+                ltcMessages.push(JSON.parse(data.toString()));
+            });
+
+            // Poll both sockets to OPEN: the poll below broadcasts each block once,
+            // so a subscription still handshaking misses the events outright.
+            await waitFor(() => btcWs.readyState === WebSocket.OPEN && ltcWs.readyState === WebSocket.OPEN, 10000);
+
+            await fixtures.seedBlocks(sourceDb, 6, 8);
+            btcPoller.lastPolledBlock = 5;
+            await btcPoller.poll();
+
+            // Wait on the delivery this test is about, not on a fixed window.
+            await waitFor(() => btcMessages.filter(m => m.type === 'block').length >= 3, 10000);
+
+            let btcBlockEvents = btcMessages.filter(m => m.type === 'block');
+            assert.ok(btcBlockEvents.length >= 3, 'Bitcoin should have received 3 block events, got ' + btcBlockEvents.length);
+
+            let ltcBlockEvents = ltcMessages.filter(m => m.type === 'block');
+            assert.strictEqual(ltcBlockEvents.length, 0, 'Litecoin should not receive bitcoin block events');
+
+            btcWs.close();
+            ltcWs.close();
+        });
+    });
+
+    describe('7.3 Reorg on one chain does not affect the other', function() {
+        it('bitcoin reorg does not impact litecoin subscribers', async function() {
+            this.timeout(15000);
+
+            await fixtures.seedBlocks(sourceDb, 1, 10);
+            await startMultiChainServer();
+
+            let wsUrl = 'ws://127.0.0.1:' + SERVER_PORT;
+
+            // Subscribe bitcoin too. The reorg it DOES receive is the positive
+            // counterpart that dates the isolation check: both sockets are fed
+            // from the same broadcast pass, so once bitcoin has the reorg event
+            // any leak to litecoin would already have been written. That turns
+            // the "litecoin got nothing" claim into an observation rather than a
+            // one-second guess, and fails loudly if the reorg never broadcast at
+            // all (which is how the fixed sleep could pass vacuously). Same
+            // shape as 7.2 above.
+            let btcMessages = [];
+            let btcWs = new WebSocket(wsUrl + '/subscribe/indexer/bitcoin/mainnet');
+            btcWs.on('message', (data) => {
+                btcMessages.push(JSON.parse(data.toString()));
+            });
+
+            let ltcMessages = [];
+            let ltcWs = new WebSocket(wsUrl + '/subscribe/indexer/litecoin/mainnet');
+            ltcWs.on('message', (data) => {
+                ltcMessages.push(JSON.parse(data.toString()));
+            });
+
+            // Poll the sockets to OPEN, so the isolation check below cannot pass
+            // merely because litecoin was not subscribed yet.
+            await waitFor(() => btcWs.readyState === WebSocket.OPEN && ltcWs.readyState === WebSocket.OPEN, 10000);
+
+            await fixtures.deleteBlocksFrom(sourceDb, 8);
+            btcPoller.lastPolledBlock = 10;
+            await btcPoller.poll();
+
+            await waitFor(() => btcMessages.filter(m => m.type === 'reorg').length >= 1, 10000);
+
+            let ltcReorgEvents = ltcMessages.filter(m => m.type === 'reorg');
+            assert.strictEqual(ltcReorgEvents.length, 0, 'Litecoin should not receive bitcoin reorg');
+
+            btcWs.close();
+            ltcWs.close();
+        });
+    });
+});

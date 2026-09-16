@@ -11,36 +11,38 @@
 const assert = require('assert');
 const config = require('../../src/config');
 
-describe('config', function(){
+const ENV_KEYS = [
+    'SYNC_MODE', 'SYNC_API_PORT', 'HUB_API_HOST', 'HUB_PORT',
+    'CORS_ORIGIN', 'BLOCK_POLL_INTERVAL', 'WS_MAX_PER_IP',
+    'SNAPSHOT_RATE_FULL', 'SNAPSHOT_RATE_INCR', 'SYNC_SOURCES',
+    'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
+    'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'REPLICA_DB_READONLY', 'SYNC_EXCLUDE',
+    'SYNC_META_RETENTION_BLOCKS',
+    'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
+    'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET',
+    'SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET'
+];
+let savedEnv = {};
 
-    const ENV_KEYS = [
-        'SYNC_MODE', 'SYNC_API_PORT', 'HUB_API_HOST', 'HUB_PORT',
-        'CORS_ORIGIN', 'BLOCK_POLL_INTERVAL', 'WS_MAX_PER_IP',
-        'SNAPSHOT_RATE_FULL', 'SNAPSHOT_RATE_INCR', 'SYNC_SOURCES',
-        'VERIFY_HASHES', 'REPLICA_DB_HOST', 'REPLICA_DB_PORT',
-        'REPLICA_DB_USER', 'REPLICA_DB_PASS', 'REPLICA_DB_READONLY', 'SYNC_EXCLUDE',
-        'SYNC_META_RETENTION_BLOCKS',
-        'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_BTC_MAINNET',
-        'SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_LTC_TESTNET',
-        'SYNC_BOOTSTRAP_DEPTH_DOGECOIN_TESTNET', 'SYNC_BOOTSTRAP_DEPTH_NOTACOIN_TESTNET'
-    ];
-    let savedEnv = {};
+function clearConfigEnv(){
+    for(let key of ENV_KEYS){
+        savedEnv[key] = process.env[key];
+        delete process.env[key];
+    }
+}
 
-    beforeEach(function(){
-        for(let key of ENV_KEYS){
-            savedEnv[key] = process.env[key];
+function restoreConfigEnv(){
+    for(let key of ENV_KEYS){
+        if(savedEnv[key] !== undefined)
+            process.env[key] = savedEnv[key];
+        else
             delete process.env[key];
-        }
-    });
+    }
+}
 
-    afterEach(function(){
-        for(let key of ENV_KEYS){
-            if(savedEnv[key] !== undefined)
-                process.env[key] = savedEnv[key];
-            else
-                delete process.env[key];
-        }
-    });
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     describe('defaults', function(){
         it('returns correct defaults when no env vars set', function(){
@@ -77,6 +79,11 @@ describe('config', function(){
             assert.strictEqual(config.getConfig().SYNC_API_PORT, 3006);
         });
     });
+});
+
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     describe('VERIFY_HASHES boolean', function(){
         it('returns false when set to "false"', function(){
@@ -110,6 +117,11 @@ describe('config', function(){
             assert.strictEqual(config.getConfig().SYNC_MODE, 'client');
         });
     });
+});
+
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     describe('hardcoded values', function(){
         it('includes HUB_REPOLL_INTERVAL', function(){
@@ -150,6 +162,11 @@ describe('config', function(){
             assert.strictEqual(config.getConfig().REPLICA_DB_HOST, 'dbhost');
         });
     });
+});
+
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     describe('SYNC_EXCLUDE', function(){
         it('defaults to an empty array', function(){
@@ -165,6 +182,11 @@ describe('config', function(){
             assert.deepStrictEqual(config.getConfig().SYNC_EXCLUDE, ['DOGE:testnet:indexer']);
         });
     });
+});
+
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     describe('SYNC_BOOTSTRAP_DEPTH', function(){
         it('defaults to an empty map', function(){
@@ -207,10 +229,15 @@ describe('config', function(){
                 ['SYNC_BOOTSTRAP_DEPTH_BADKEY', 'SYNC_BOOTSTRAP_DEPTH_DOGE_TESTNET']);
         });
     });
+});
 
-    // An unmatched depth key is NOT inert. The lookup falls through to 0, which is
-    // the full-history snapshot branch, so a key that names no discovered chain
-    // silently starts the unbounded bootstrap it was set to prevent.
+// An unmatched depth key is NOT inert. The lookup falls through to 0, which is
+// the full-history snapshot branch, so a key that names no discovered chain
+// silently starts the unbounded bootstrap it was set to prevent.
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
+
     describe('assertBootstrapDepthChains', function(){
         const CHAINS = [
             { coin: 'dogecoin', network: 'testnet', dbType: 'indexer' },
@@ -265,6 +292,11 @@ describe('config', function(){
             );
         });
     });
+});
+
+describe('config', function(){
+    beforeEach(function(){ clearConfigEnv(); });
+    afterEach(function(){ restoreConfigEnv(); });
 
     // Opt-in only: a tier that can write must never be silently downgraded to
     // serve-only by a stray value, and a read_only replica must not be flipped
@@ -305,6 +337,28 @@ describe('config', function(){
                 process.env.SYNC_META_RETENTION_BLOCKS = value;
                 assert.strictEqual(config.getConfig().SYNC_META_RETENTION_BLOCKS, 0, 'value: ' + value);
             }
+        });
+    });
+});
+
+describe('config', function(){
+    // The call-time reader the state-commitment twin uses for its metric cap: it
+    // must answer with the environment as it is at the CALL, never a value taken
+    // at load or on a first read, because suites set the variable mid-run.
+    describe('readEnvNow', function(){
+        const KEY = 'STATE_TREE_METRIC_MAX_NODES';
+        let saved;
+        beforeEach(function(){ saved = process.env[KEY]; });
+        afterEach(function(){
+            if(saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved;
+        });
+        it('reads the current value on every call: set, read, change, read again, unset', function(){
+            process.env[KEY] = '3';
+            assert.strictEqual(config.readEnvNow(KEY), '3');
+            process.env[KEY] = '7';
+            assert.strictEqual(config.readEnvNow(KEY), '7', 'a changed variable must be re-read, not served from a cache');
+            delete process.env[KEY];
+            assert.strictEqual(config.readEnvNow(KEY), undefined, 'an unset variable reads undefined, so the caller applies its default');
         });
     });
 });

@@ -33,6 +33,7 @@ const fixtures      = require('../../e2e/helpers/fixtures');
 const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
 
+// Connection constants: proxied ports from docker-compose.chaos.yml
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
 const SOURCE_PROXY_PORT  = parseInt(process.env.SOURCE_PROXY_PORT  || '33060', 10);
 const REPLICA_PROXY_PORT = parseInt(process.env.REPLICA_PROXY_PORT || '33061', 10);
@@ -108,17 +109,26 @@ function createClient(serverUrl, opts = {}) {
     );
 }
 
-// Use seedSourceBlocks when the source proxy is enabled (normal case);
-// use seedSourceDirect when it's disabled, e.g. during CE-SRC-05, CE-SYNC-04.
+/**
+ * Seed blocks into the source DB through the proxied connection.
+ * Use this when the source proxy is enabled (normal case).
+ */
 async function seedSourceBlocks(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDb, startBlock, endBlock, opts);
 }
 
+/**
+ * Seed blocks into the source DB through the direct connection.
+ * Use this when the source proxy is disabled.
+ */
 async function seedSourceDirect(startBlock, endBlock, opts) {
     return fixtures.seedBlocks(sourceDbDirect, startBlock, endBlock, opts);
 }
 
-// Simulates a chain reorg on the source side.
+/**
+ * Delete blocks from a given height in the source DB.
+ * Simulates a chain reorganization on the source side.
+ */
 async function deleteSourceBlocksFrom(blockIndex) {
     return fixtures.deleteBlocksFrom(sourceDb, blockIndex);
 }
@@ -143,7 +153,10 @@ function httpGet(urlPath, opts = {}) {
     });
 }
 
-// Returns true if the server responds with any HTTP status, false on ECONNREFUSED.
+/**
+ * Check if the server process is alive by hitting its status endpoint.
+ * Returns true if the server responds (any HTTP status), false on ECONNREFUSED.
+ */
 async function isServerAlive(serverUrl) {
     try {
         const res = await httpGet('/status', { baseUrl: serverUrl, timeout: 5000 });
@@ -153,7 +166,10 @@ async function isServerAlive(serverUrl) {
     }
 }
 
-// Returns elapsed ms once the replica DB reaches expectedBlock, or -1 on timeout.
+/**
+ * Wait until the replica DB reaches a given block height.
+ * Returns elapsed ms, or -1 if timeout expires.
+ */
 async function waitForSyncRecovery(expectedBlock, timeoutMs = 60000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -195,8 +211,10 @@ async function waitForSyncRecoveryDirect(expectedBlock, timeoutMs = 60000) {
     }
 }
 
-// Polls replica block height at an interval, pushing results to the provided
-// array, and returns a stop function.
+/**
+ * Poll replica block height at an interval and collect results.
+ * Returns a stop function. Results are pushed to the provided array.
+ */
 function startReplicaPoller(results, intervalMs = 500) {
     const poll = async () => {
         try {

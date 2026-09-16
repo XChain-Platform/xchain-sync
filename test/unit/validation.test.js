@@ -17,7 +17,7 @@ const {
     extractColumnDefinition,
     isAutoIncrementDefinition,
     extractKeyForColumn
-} = require('../../src/validation');
+} = require('../../src/util/validation');
 
 describe('validation', function(){
 
@@ -57,6 +57,9 @@ describe('validation', function(){
             assert.match(r.reason, /invalid characters/);
         });
     });
+});
+
+describe('validation', function(){
 
     describe('validateDdl', function(){
         it('accepts a simple CREATE TABLE', function(){
@@ -104,6 +107,9 @@ describe('validation', function(){
             assert.match(validateDdl('CREATE VIEW v AS SELECT 1').reason, /does not start with CREATE TABLE/);
         });
     });
+});
+
+describe('validation', function(){
 
     describe('extractColumnNames', function(){
         const ddl = [
@@ -129,6 +135,9 @@ describe('validation', function(){
             assert.deepStrictEqual(extractColumnNames('`broken'), []);
         });
     });
+});
+
+describe('validation', function(){
 
     describe('extractColumnDefinition', function(){
         const ddl = [
@@ -187,6 +196,9 @@ describe('validation', function(){
             assert.strictEqual(extractColumnDefinition(d, 'c'), "`c` varchar(10) DEFAULT 'a''(''b'");
         });
     });
+});
+
+describe('validation', function(){
 
     describe('isAutoIncrementDefinition', function(){
         it('detects an AUTO_INCREMENT column definition', function(){
@@ -206,6 +218,9 @@ describe('validation', function(){
             assert.strictEqual(isAutoIncrementDefinition(null), false);
         });
     });
+});
+
+describe('validation', function(){
 
     describe('extractKeyForColumn', function(){
         const ddl = [
@@ -263,6 +278,9 @@ describe('validation', function(){
             assert.strictEqual(extractKeyForColumn(ddl, 42), null);
         });
     });
+});
+
+describe('validation', function(){
 
     describe('validateWsEvent', function(){
         it('accepts a block event with a non-negative integer index', function(){

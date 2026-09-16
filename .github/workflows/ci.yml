@@ -89,7 +89,7 @@ jobs:
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      # The cross-repo consensus drift guards (rollback-coverage.test.js) compare
+      # The cross-repo consensus drift guards (rollback_coverage.test.js) compare
       # this repo's rollback/SQL/byte-identical twins against the source indexer.
       # They live in the unit tier but the shared `ci` job never checks out the
       # sibling, so they silently skip there (#4631). Run them HERE, where the
@@ -108,7 +108,7 @@ jobs:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback-coverage.test.js test/unit/blockhash-conformance-twin.test.js test/unit/protocolAddressRoles.twin.test.js test/unit/stakesValidatorSetParity.test.js test/unit/generatedColumns.test.js test/unit/decoderTableClassification.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback_coverage.test.js test/unit/blockhash_conformance_twin.test.js test/unit/protocol_address_roles_twin.test.js test/unit/stakes_validator_set_parity.test.js test/unit/generated_columns.test.js test/unit/decoder_table_classification.test.js
 
       - name: Run the e2e tier
         env:
@@ -177,6 +177,22 @@ jobs:
             }
             console.log("consensus pin conformance OK (testnet, regtest)");
           '
+
+      # Identity pin: bin/pins/identity.json records the armed-map fingerprint,
+      # the files behind it, and the sha256 of each vendored coin file. Re-hash
+      # the tree against it and fail on any moved, renamed, missing or
+      # unreadable carrier, so a stale pin cannot reach develop or master green
+      # through a direct push or a release pull request. bin/ci-full.sh runs the
+      # same command before a push. The tool now loads the carrier logic pin
+      # module, which parses with acorn, so this job needs the production
+      # dependency tree; --omit=dev keeps it to that and no more.
+      - name: Install dependencies
+        working-directory: xchain-sync
+        run: npm ci --omit=dev
+
+      - name: Identity pin (armed map, vendored coins)
+        working-directory: xchain-sync
+        run: node bin/pin-identity.js --compare bin/pins/identity.json
 
   # Coverage ratchet: re-run the unit suite under c8 and fail if line or
   # branch coverage drops below this repo's floor in bin/coverage-thresholds.json

@@ -17,7 +17,8 @@
  */
 
 const sinon = require('sinon');
-const Utility = require('../../../src/utility');
+const Utility = require('../../../src/util');
+const { withDbMixins } = require('../../helpers/db_mixins.js');
 
 const NUM_RUNS = parseInt(process.env.FUZZ_RUNS || '1000');
 
@@ -25,13 +26,13 @@ const NUM_RUNS = parseInt(process.env.FUZZ_RUNS || '1000');
  * Create a mock Database with stubs for every method used across all target modules.
  */
 function createMockDb() {
-    return {
+    return withDbMixins({
         dbName: 'test_db',
         doQuery: sinon.stub().resolves([]),
         getBlockHashRow: sinon.stub().resolves(null),
         getLastBlock: sinon.stub().resolves(null),
         getFirstActionIndex: sinon.stub().resolves(null),
-        // ClientRollback._rollbackIndexer resolves the 'completed'/'valid' status ids
+        // ClientRollback.rollbackIndexer resolves the 'completed'/'valid' status ids
         // (for cooldown-credit + status-scoped rebuilds) via getStatusId; a stable
         // integer is enough here since the follow-on doQuery results are stubbed.
         getStatusId: sinon.stub().resolves(1),
@@ -45,7 +46,7 @@ function createMockDb() {
         truncateTable: sinon.stub().resolves(),
         streamTableRows: sinon.stub().callsFake(() => require('stream').Readable.from([])),
         getTableCount: sinon.stub().resolves(0),
-    };
+    });
 }
 
 /**

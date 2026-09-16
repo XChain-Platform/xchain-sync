@@ -1,0 +1,318 @@
+// Copyright © 2025–2026 Dankest, LLC
+// Based on XChain Platform by Dankest, LLC – https://dankest.llc
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This file is part of XChain Platform. Licensed under the GNU Affero
+// General Public License v3.0 or later; see LICENSE.md. A commercial
+// license (without AGPL source-disclosure terms) is available -
+// contact legal@dankest.llc.
+//
+// Coverage for the in-place "updated rows" channel that closes the forward
+// in-place-mutation replication gap (no UPDATE path on the replica). Mirrors,
+// in the forward direction, the reorg-reset predicates ClientRollback runs.
+
+const assert = require('assert');
+const sinon  = require('sinon');
+const { collectUpdatedRows } = require('../../src/server/updated_rows');
+const ClientApplier = require('../../src/client/applier');
+const ClientRollback = require('../../src/client/rollback');
+const Utility = require('../../src/util');
+const { withDbMixins } = require('../helpers/db_mixins.js');
+
+// A doQuery stub that branches on a substring of the SQL so each in-place class
+// can be given canned rows independently. Records every (sql, args) pair.
+function fakeDb(routes){
+    let calls = [];
+    return withDbMixins({
+        calls,
+        dbType: 'indexer',
+        doQuery: sinon.stub().callsFake(async (sql, args) => {
+            calls.push({ sql, args });
+            for(let r of routes || []){
+                if(sql.indexOf(r.match) !== -1) return r.rows;
+            }
+            return [];
+        }),
+        beginTransaction: sinon.stub().resolves(),
+        commitTransaction: sinon.stub().resolves(),
+        rollbackTransaction: sinon.stub().resolves(),
+        getBlockHashRow: sinon.stub().resolves(null)
+    });
+}
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('skips the deactivation_block class entirely when activationDelay is null', async function(){
+        let db = fakeDb([]);
+        await collectUpdatedRows(db, 100, 100, null);
+        // No query should reference deactivation_block (delay unknown, so skip).
+        let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
+        assert.strictEqual(hitDeactivation, false);
+        // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
+        // + bet-status + anchor_invalid + attest-batch-head + tokens-supply classes still run,
+        // none of which depend on the activation delay (4 slash + 2 rotation + 2 request
+        // + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor + 1 attest batch head
+        // + 1 tokens = 16).
+        assert.strictEqual(db.calls.length, 16);
+        // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
+        let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
+        assert.strictEqual(hitCooldown, true);
+    });
+
+    it('detects deactivation stamps by value-threshold [from+delay, to+delay]', async function(){
+        let db = fakeDb([
+            { match: 'FROM `stakes` WHERE deactivation_block', rows: [{ action_index: 7, deactivation_block: 106 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 100, 100, 6); // BTC delay = 6
+        // stakes deactivation query must use 106..106 (100+6).
+        let q = db.calls.find(c => c.sql.indexOf('FROM `stakes` WHERE deactivation_block') !== -1);
+        assert.deepStrictEqual(q.args, [106, 106]);
+        assert.ok(out.stakes && out.stakes.length === 1);
+        assert.strictEqual(out.stakes[0].action_index, 7);
+    });
+
+    it('detects SLASH amount cuts via the debit log join and v0 request_status flips', async function(){
+        let db = fakeDb([
+            { match: 'JOIN `contract_slash_debits`',  rows: [{ action_index: 11, amount: '5' }] },
+            { match: 'FROM `attests` WHERE version = 0', rows: [{ action_index: 21, version: 0, request_status: 'fulfilled' }] },
+            { match: 'FROM `xcalls` WHERE version = 0',  rows: [{ action_index: 22, version: 0, request_status: 'completed' }] }
+        ]);
+        let out = await collectUpdatedRows(db, 50, 50, 6);
+        assert.ok(out.contract_stakes && out.contract_stakes[0].action_index === 11);
+        assert.ok(out.attests && out.attests[0].request_status === 'fulfilled');
+        assert.ok(out.xcalls && out.xcalls[0].request_status === 'completed');
+        // request_status keyed on resolved_block window (50..50).
+        let aq = db.calls.find(c => c.sql.indexOf('FROM `attests` WHERE version = 0') !== -1);
+        assert.deepStrictEqual(aq.args, [50, 50]);
+    });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('keys the VOTE poll class on resolved_block OR a fired deferred-callback due block (one scan)', async function(){
+        // A binding poll with callback_delay_blocks > 0 finalizes at F (resolved_block = F)
+        // and fires at D = F + delay, where the sweep UPDATEs callback_execute_action_index
+        // IN PLACE on the surviving row. At block D resolved_block is below the window, so
+        // keying on resolved_block alone never carried the fire stamp (#5606).
+        let db = fakeDb([
+            { match: 'FROM `polls` WHERE', rows: [{ action_index: 41, resolved_block: 60, callback_due_block: 70, callback_execute_action_index: 905 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 70, 70, 6);
+        assert.ok(out.polls && out.polls.length === 1);
+        assert.strictEqual(out.polls[0].callback_execute_action_index, 905);
+        let pq = db.calls.filter(c => c.sql.indexOf('FROM `polls` WHERE') !== -1);
+        assert.strictEqual(pq.length, 1, 'both keys ride ONE polls scan');
+        assert.match(pq[0].sql, /WHERE resolved_block BETWEEN \? AND \? OR \(callback_due_block BETWEEN \? AND \? AND callback_execute_action_index IS NOT NULL\)/);
+        assert.deepStrictEqual(pq[0].args, [70, 70, 70, 70]);
+    });
+
+    it('carries a DELEGATE v1 signing-key rotation on surviving stake AND cooldown rows', async function(){
+        // The rotated row's action_index is below the window (the STAKE happened earlier), so
+        // only its contract_delegation_rotations entry pins the change to this block. Without
+        // this class the follower keeps the pre-rotation key and hands contracts a different
+        // staker set than the source, and its Pass-2 slash lookup misses the cooldown-locked
+        // tokens the source can still debit (#4366).
+        let db = fakeDb([
+            { match: 'JOIN `contract_delegation_rotations`', rows: [{ action_index: 31, signing_pubkey_id: 77 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 60, 60, 6);
+        assert.ok(out.contract_stakes && out.contract_stakes.length === 1);
+        assert.strictEqual(out.contract_stakes[0].signing_pubkey_id, 77);
+        assert.ok(out.contract_unstakes && out.contract_unstakes.length === 1);
+        let queries = db.calls.filter(c => c.sql.indexOf('JOIN `contract_delegation_rotations`') !== -1);
+        assert.strictEqual(queries.length, 2, 'one per rotated stake-ledger table');
+        assert.deepStrictEqual(queries.map(q => q.args), [
+            ['contract_stakes', 60, 60],
+            ['contract_unstakes', 60, 60]
+        ], 'scoped by target_table and keyed on the journal row block window');
+    });
+
+    it('dedups a row reached by two classes (deactivated AND slashed) by action_index', async function(){
+        let db = fakeDb([
+            { match: 'FROM `stakes` WHERE deactivation_block', rows: [{ action_index: 9, deactivation_block: 106 }] },
+            { match: 'JOIN `capability_slash_debits`',          rows: [{ action_index: 9, amount: '3' }] }
+        ]);
+        let out = await collectUpdatedRows(db, 100, 100, 6);
+        // stakes appears in both the deactivation and capability-slash paths but
+        // must be emitted once (same UNIQUE action_index).
+        assert.strictEqual(out.stakes.length, 1);
+        assert.strictEqual(out.stakes[0].action_index, 9);
+    });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('refreshes surviving tokens rows for ticks touched by ledger changes in the window', async function(){
+        let db = fakeDb([
+            { match: 'FROM `tokens` t WHERE t.tick_id IN', rows: [{ id: 5, tick_id: 42, action_index: 100, last_action_index: 100, supply: '1000' }] }
+        ]);
+        let out = await collectUpdatedRows(db, 200, 200, 6);
+        // The tokens refresh query joins credits/debits/escrows to actions on the
+        // [from, to] block window (200..200) and carries the full current row. Each
+        // ledger table is its own UNION branch (so the block-range predicate pushes
+        // down per table instead of materialising a UNION ALL derived table), so the
+        // [from, to] pair is bound once per branch -> three (200, 200) pairs.
+        let tq = db.calls.find(c => c.sql.indexOf('FROM `tokens` t WHERE t.tick_id IN') !== -1);
+        assert.ok(tq, 'expected the tokens-supply refresh query');
+        assert.deepStrictEqual(tq.args, [200, 200, 200, 200, 200, 200]);
+        assert.ok(tq.sql.indexOf('FROM credits') !== -1);
+        assert.ok(tq.sql.indexOf('FROM debits') !== -1);
+        assert.ok(tq.sql.indexOf('FROM escrows') !== -1);
+        // SELECT t.* carries the source `id` so the follower's upsert lands on the PK.
+        assert.ok(tq.sql.indexOf('SELECT t.*') !== -1);
+        assert.ok(out.tokens && out.tokens.length === 1);
+        assert.strictEqual(out.tokens[0].supply, '1000');
+    });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('carries the stamped ATTEST v5 batch head on the block its completing v6 chunk landed in', async function(){
+        // The head is written at the block the batch was opened at, below the window; only
+        // the completing continuation pins the verdict flip to a block. Without this class
+        // the replica keeps the head's pre-flip 'valid' verdict forever and serves a batch
+        // the source condemned, with no hash class to halt on.
+        let db = fakeDb([
+            { match: 'JOIN attests ac ON ac.request_id = ah.request_id',
+              rows: [{ action_index: 500, version: 5, request_id: 'ab12', batch_chunk_index: 0, status_id: 9 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.ok(out.attests && out.attests.length === 1, 'the stamped head must ride the forward channel');
+        assert.strictEqual(out.attests[0].action_index, 500);
+        assert.strictEqual(out.attests[0].version, 5);
+
+        let hq = db.calls.find(c => c.sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1);
+        // Marker-scoped (an after-the-fact stamp, not a head that was terminal when written)
+        // and keyed on the completing chunk's block window.
+        assert.deepStrictEqual(hq.args, ['% (stamped on batch completion)', 300, 300]);
+        // The window key is the COMPLETING CHUNK's height, never the head's own block or
+        // action_index: the head is always below the window, so either of those emits nothing.
+        assert.ok(hq.sql.indexOf('ac.block_index BETWEEN ? AND ?') !== -1);
+        assert.ok(hq.sql.indexOf('ah.block_index BETWEEN') === -1);
+        // Head/continuation versions and the head's slot 0.
+        assert.ok(hq.sql.indexOf('ah.version = 5') !== -1);
+        assert.ok(hq.sql.indexOf('ac.version = 6') !== -1);
+        assert.ok(hq.sql.indexOf('ah.batch_chunk_index = 0') !== -1);
+        // Only a VALID continuation completes a batch, and both rows must share an author:
+        // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
+        assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
+        assert.ok(hq.sql.indexOf('aca.source_id = aha.source_id') !== -1);
+        // Full row, so the follower's upsert refreshes status_id in place.
+        assert.ok(hq.sql.indexOf('SELECT ah.*') === 0);
+    });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('emits the v0 request flip and the v5 batch head as separate attests rows, deduped by action_index', async function(){
+        // Both classes write into the same table. The Map keys on action_index, so two
+        // different rows both survive and one row reached twice is emitted once.
+        let db = fakeDb([
+            { match: 'FROM `attests` WHERE version = 0',
+              rows: [{ action_index: 21, version: 0, request_status: 'fulfilled' }] },
+            { match: 'JOIN attests ac ON ac.request_id = ah.request_id',
+              rows: [{ action_index: 500, version: 5, batch_chunk_index: 0 },
+                     { action_index: 500, version: 5, batch_chunk_index: 0 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.strictEqual(out.attests.length, 2);
+        assert.deepStrictEqual(out.attests.map(r => r.action_index).sort((a, b) => a - b), [21, 500]);
+    });
+
+    it('skips the attest batch-head class on a pre-batch-rail schema instead of throwing', async function(){
+        let db = fakeDb([]);
+        db.doQuery = sinon.stub().callsFake(async (sql) => {
+            if(sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1){
+                let e = new Error("Unknown column 'ah.batch_chunk_index'");
+                e.errno = 1054;
+                throw e;
+            }
+            return [];
+        });
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.strictEqual(out.attests, undefined);
+    });
+
+    it('rethrows a non-schema error from the attest batch-head class (never a silent drop)', async function(){
+        let db = fakeDb([]);
+        db.doQuery = sinon.stub().callsFake(async (sql) => {
+            if(sql.indexOf('JOIN attests ac ON ac.request_id = ah.request_id') !== -1){
+                let e = new Error('Lock wait timeout exceeded');
+                e.errno = 1205;
+                throw e;
+            }
+            return [];
+        });
+        await assert.rejects(() => collectUpdatedRows(db, 300, 300, 6), /Lock wait timeout/);
+    });
+
+    it('uses target_table to separate contract_stakes vs contract_unstakes', async function(){
+        let db = fakeDb([]);
+        await collectUpdatedRows(db, 1, 1, 6);
+        let csCall = db.calls.find(c => c.sql.indexOf('FROM `contract_stakes` t') !== -1);
+        let cuCall = db.calls.find(c => c.sql.indexOf('FROM `contract_unstakes` t') !== -1);
+        assert.strictEqual(csCall.args[0], 'contract_stakes');
+        assert.strictEqual(cuCall.args[0], 'contract_unstakes');
+    });
+});
+
+describe('ClientApplier in-place updated-rows apply', function(){
+
+    let db, applier;
+    beforeEach(function(){
+        db = fakeDb([]);
+        applier = new ClientApplier(db, new Utility());
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(() => sinon.restore());
+
+    it('upsertRows emits INSERT ... ON DUPLICATE KEY UPDATE writing every column', async function(){
+        await applier.upsertRows('stakes', [{ action_index: 3, deactivation_block: 50 }]);
+        let q = db.calls.find(c => c.sql.indexOf('ON DUPLICATE KEY UPDATE') !== -1);
+        assert.ok(q, 'expected an upsert query');
+        assert.ok(q.sql.indexOf('INSERT INTO `stakes`') === 0);
+        assert.ok(q.sql.indexOf('`deactivation_block` = VALUES(`deactivation_block`)') !== -1);
+        assert.ok(q.sql.indexOf('`action_index` = VALUES(`action_index`)') !== -1);
+    });
+
+    it('upsertRows throws on an invalid table identifier without querying (fail closed)', async function(){
+        await assert.rejects(() => applier.upsertRows('stakes; DROP TABLE x', [{ action_index: 1 }]), /Rejected table name/);
+        assert.strictEqual(db.calls.length, 0);
+    });
+
+    it('applyBlock UPSERTs payload.updated_rows for surviving rows', async function(){
+        let payload = {
+            block_index: 9,
+            data: { blocks: [{ block_index: 9 }] },
+            updated_rows: { stakes: [{ action_index: 4, deactivation_block: 80 }] }
+        };
+        await applier.applyBlock(payload);
+        let upsert = db.calls.find(c => c.sql.indexOf('ON DUPLICATE KEY UPDATE') !== -1 && c.sql.indexOf('`stakes`') !== -1);
+        assert.ok(upsert, 'surviving stakes row should be UPSERTed');
+        assert.strictEqual(db.commitTransaction.calledOnce, true);
+    });
+
+    it('maybeRederiveEscrow runs the escrow re-derive only when an escrow-relevant table is present', async function(){
+        // The re-derive's first query is the affected-tickers SELECT (escrow_action_index
+        // IS NOT NULL ...). Observe it directly rather than stubbing the captured fn ref.
+        let isEscrowQuery = (c) => c.sql.indexOf('escrow_action_index IS NOT NULL') !== -1;
+
+        await applier.maybeRederiveEscrow({ sends: [{}] });          // not escrow-relevant
+        assert.strictEqual(db.calls.some(isEscrowQuery), false);
+
+        await applier.maybeRederiveEscrow({ order_statuses: [{}] }); // escrow-relevant
+        assert.strictEqual(db.calls.some(isEscrowQuery), true);
+    });
+});

@@ -1,5 +1,6 @@
-// Unit coverage for src/checkpoint_commitment_activation.js. This is a byte-identical twin of
-// the hub/indexer/sdk/explorer copies; it gates the SIGNED checkpoint preimage on
+//  doctrine test-coverage program: unit coverage for
+// src/checkpoint_commitment_activation.js. This is a byte-identical twin of the
+// hub/indexer/sdk/explorer copies; it gates the SIGNED checkpoint preimage on
 // the BTC-anchored snapshot_block, so the threshold map and the gate function
 // must stay pinned or federation quorum verification forks.
 

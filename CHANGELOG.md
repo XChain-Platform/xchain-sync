@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-16
+
+### Added
+- The follower halts at a platform-train boundary whose rule set this build lacks, before writing the boundary block, and announces the pending verdict on `/status`.
+- The bridge lifecycle table and its rollback twin are mirrored, and the replicated schema version moves to indexer schema 11.
+- Consensus: the `TRAIN_ACTIVATION` 0.19.0 row, byte-identical to the indexer's registry part, with the identity pin re-derived to match.
+
+### Changed
+- The four schema-fetch call sites are named by function instead of line numbers that had drifted.
+- Audited transitive packages move to their patched releases (lockfile only).
+- Restructured under the platform code-structure standard (feature directories, snake_case files, split test suites, restored comments); consensus identity byte-identical and pinned.
+
+### Fixed
+- The replica key rebuilds add the columns they name (`anchor_actions.section_index`, `validator_rewards.round_qualifier`), so one startup finishes both steps instead of deferring to a next start forever.
+- A lookup-table repair retires a superseded local row whose natural key blocks the source's row, converging a replica that could never apply it, and still fails loudly when the colliding row is one the source serves.
+
 ## [0.18.0] - 2026-09-11
 
 ### Added

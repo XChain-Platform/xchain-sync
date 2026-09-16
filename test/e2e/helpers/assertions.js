@@ -10,18 +10,22 @@
 
 const assert = require('assert');
 const crypto = require('crypto');
-const { getReplicatedTables } = require('../../../src/replicatedTables');
-const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/tableLifecycle');
-const BlockHasher = require('../../../src/BlockHasher');
+const { getReplicatedTables } = require('../../../src/schema/replicated_tables');
+const { CONTENT_PARITY_EXCLUDED_COLUMNS } = require('../../../src/table_lifecycle');
+const BlockHasher = require('../../../src/client/block_hasher');
 const testDbModule = require('./testDb');
 
-// Columns excluded from the byte comparison because each side legitimately
-// writes its own value: sync_meta.id/logged_at are AUTO_INCREMENT plus a
-// local write timestamp, and balances.id differs because the follower
-// rebuilds that table (DELETE + re-INSERT) rather than copying source ids.
-// Excluding id there also avoids path-dependence: a fresh bootstrap DOES
-// copy source ids verbatim, so comparing them would make the oracle's
-// verdict depend on which sync path populated the table.
+// Columns excluded from the byte comparison: local-machine artifacts that are
+// NOT replicated data (each side writes its own value by design).
+//   - sync_meta id/logged_at: AUTO_INCREMENT + local write timestamp.
+//   - balances id: the follower REBUILDS this aggregate
+//     (DELETE + re-INSERT), so its AUTO_INCREMENT ids legitimately differ
+//     from the source's; the (address, tick, amount) content is the
+//     replicated contract. (A full-snapshot bootstrap copies source ids
+//     verbatim, so id equality WOULD hold right after bootstrap (comparing
+//     it would make the oracle pass or fail depending on which path
+//     populated the table, which is exactly the kind of path-dependence the
+//     oracle exists to reject.)
 //
 // The rest is NOT restated here. src/tableLifecycle.js already declares which
 // columns the two sides may legitimately disagree on, and this oracle drifted
@@ -48,7 +52,7 @@ for (let [table, cols] of Object.entries(HARNESS_EXCLUSIONS)) {
 // rows. sync_meta rows land shortly after the block they describe, so a
 // catch-up snapshot built in that window can miss the newest ones with
 // nothing to re-deliver them later; production treats this as a count-based
-// health signal, not an error (ClientSync._verifyTableCounts). The index_*
+// health signal, not an error (ClientSync.verifyTableCounts). The index_*
 // dedup tables are append-only and never pruned on rollback, so after a
 // reorg the source can retain residue rows from orphaned blocks that a
 // replica which never saw those blocks correctly never receives; any later
@@ -62,11 +66,12 @@ const SUBSET_TABLES = new Set([
     'index_tickers', 'index_transactions',
 ]);
 
-// Derived aggregates the follower rebuilds rather than receives over the
-// wire. They still need content-identical verification because the rebuild
-// SQL must render amounts exactly as the source indexer does; that
-// contract has broken in production before (DOUBLE-promotion corruption
-// and trailing-zero format drift).
+// Derived aggregates the follower REBUILDS rather than receives. They are not
+// in the per-block replicated set, but a complete replica must still hold
+// content-identical rows (the rebuild SQL is required to render amounts
+// exactly the way the source indexer writes them (that contract broke in
+// production twice: DOUBLE-promotion corruption and trailing-zero format
+// drift).
 const DERIVED_AGGREGATES = { indexer: ['balances'], decoder: [] };
 
 // Canonicalize one row for comparison: stable key order, Buffers as hex,
@@ -204,9 +209,11 @@ async function assertBlockNotExists(db, block_index) {
     assert.strictEqual(txRows.length, 0, 'Block ' + block_index + ' should have no transactions');
 }
 
+// Assert that balances table is consistent with credits/debits
 async function assertBalancesConsistent(db) {
     // Committed-state reads (see tableContent): must not observe a half-applied block.
     let q = db.doQueryCommitted ? db.doQueryCommitted.bind(db) : db.doQuery.bind(db);
+    // Compute expected balances from credits/debits
     let computed = await q(`
         SELECT address_id, tick_id,
             CAST(COALESCE(SUM(CASE WHEN t.type = 'credit' THEN CAST(t.amount AS DECIMAL(65,0)) ELSE -CAST(t.amount AS DECIMAL(65,0)) END), 0) AS CHAR) as expected_amount
@@ -230,6 +237,7 @@ async function assertBalancesConsistent(db) {
     assert.strictEqual(actual.length, computed.length,
         'Balances count mismatch: actual=' + actual.length + ' expected=' + computed.length);
 
+    // Build lookup map for comparison
     let expectedMap = {};
     for (let row of computed) {
         expectedMap[row.address_id + ':' + row.tick_id] = row.expected_amount;
@@ -243,6 +251,7 @@ async function assertBalancesConsistent(db) {
     }
 }
 
+// Assert block hashes match between source and replica
 async function assertHashesMatch(sourceDb, replicaDb, block_index) {
     let sourceHash = await sourceDb.getBlockHashRow(block_index);
     let replicaHash = await replicaDb.getBlockHashRow(block_index);

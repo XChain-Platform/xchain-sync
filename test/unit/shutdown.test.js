@@ -14,7 +14,7 @@
 // they stand, which on a replica is an aborted apply transaction.
 
 const assert = require('assert');
-const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/shutdown');
+const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/http/shutdown');
 const SyncService = require('../../src/SyncService');
 const { waitFor } = require('../e2e/helpers/waitFor');
 
@@ -83,6 +83,11 @@ describe('graceful shutdown', function(){
             assert.strictEqual(calls, 1);
             assert.deepStrictEqual(codes, [0]);
         });
+    });
+});
+
+describe('graceful shutdown', function(){
+    describe('createShutdown', function(){
 
         // The reason the handler is safe to install at all: registering one REMOVES
         // node's default terminate, so without this bound a hung drain turns every
@@ -119,7 +124,9 @@ describe('graceful shutdown', function(){
             assert.deepStrictEqual(codes, [1]);
         });
     });
+});
 
+describe('graceful shutdown', function(){
     describe('resolveTimeoutMs', function(){
         it('prefers an explicit budget, then the env var, then the default', function(){
             assert.strictEqual(resolveTimeoutMs(1234, {}), 1234);
@@ -145,7 +152,9 @@ describe('graceful shutdown', function(){
             await closeServer({});
         });
     });
+});
 
+describe('graceful shutdown', function(){
     describe('SyncService.stop', function(){
 
         it('marks the service not-ready before anything else', async function(){
@@ -183,6 +192,11 @@ describe('graceful shutdown', function(){
                     name + ' must close after the client syncs were stopped');
             }
         });
+    });
+});
+
+describe('graceful shutdown', function(){
+    describe('SyncService.stop', function(){
 
         it('closes a shared db handle exactly once', async function(){
             const order = [];
@@ -220,7 +234,9 @@ describe('graceful shutdown', function(){
             assert.strictEqual(svc.ready, false);
         });
     });
+});
 
+describe('graceful shutdown', function(){
     describe('createSyncDrain', function(){
 
         it('clears entry-point timers, closes sockets, drains the server, then stops the service', async function(){

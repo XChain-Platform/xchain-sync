@@ -19,7 +19,9 @@
  ********************************************************************/
 
 const { coinTicker } = require('./consensus-constants');
-const { parseCorsOrigin } = require('./corsOrigin');
+const { parseCorsOrigin } = require('./http/cors_origin');
+const { getLogger } = require('./observability');
+const logger = getLogger();
 
 // Parse an integer from an env var, returning defaultVal when the value is
 // absent, empty, or non-numeric.  Unlike `parseInt(x) || default`, this
@@ -38,6 +40,11 @@ function parseIntMin0(val, defaultVal){
 // Parse a positive integer (>= 1).
 function parseIntMin1(val, defaultVal){
     return Math.max(1, parseIntSafe(val, defaultVal));
+}
+
+// A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
+function parseCsvSet(val){
+    return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
 }
 
 const BOOTSTRAP_DEPTH_PREFIX = 'SYNC_BOOTSTRAP_DEPTH_';
@@ -118,6 +125,41 @@ function assertBootstrapDepthChains(config, chains){
 
 module.exports = {
 
+    // Environment reads that happen at CALL time, kept here so this file stays the
+    // one place every variable the service reads is named. Each is a function, not
+    // a value set in getConfig, because its caller reads the environment when it
+    // runs rather than at boot, and several suites set the variable mid-run.
+
+    /** The hub wait ceiling in ms, for a caller whose config object lacks it. */
+    maxHubWaitMsFromEnv: () => parseInt(process.env.MAX_HUB_WAIT_MS) || 300000,
+
+    /** process.env[key] as it is NOW, for a read a running process re-takes on every call (the state-tree metric cap, shared with the indexer twin). */
+    readEnvNow: (key) => process.env[key],
+
+    /** The raw state-tree metric interval, NaN when unset; the caller applies its default. */
+    stateTreeMetricIntervalMsFromEnv: () => parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10),
+
+    /** The raw action-scoped query metric interval, NaN when unset; the caller applies its default. */
+    syncQueryMetricIntervalMsFromEnv: () => parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10),
+
+    /** The raw concurrent-snapshot cap, NaN when unset; the caller derives one from the pool. */
+    maxConcurrentSnapshotsFromEnv: () => parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS),
+
+    /** The key a hub call carries: the config-secrets key when set, else the bulk key. */
+    hubApiKeyFromEnv: () => process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY,
+
+    /** The operator-set validator id, undefined when unset. */
+    validatorIdFromEnv: () => process.env.VALIDATOR_ID,
+
+    /** The replication connection to measure replica lag on, empty when unset. */
+    replicaConnectionFromEnv: () => process.env.SYNC_REPLICA_CONNECTION,
+
+    /** One variable whose NAME the caller computes (SYNC_MODE_<CHAIN>, a pinned-validator override). */
+    envValueByName: (name) => process.env[name],
+
+    /** The live environment, for a caller that also accepts an injected one in tests. */
+    envSource: () => process.env,
+
     bootstrapDepthKey,
     bootstrapDepthEnvKey,
     unmatchedBootstrapDepthKeys,
@@ -162,17 +204,12 @@ module.exports = {
         // Per-chain replication exclude (client mode). Comma-separated list of
         // `coin:network:dbType` keys (e.g. `DOGE:testnet:indexer`) that the client
         // must NOT replicate. A discovered chain whose key is listed is skipped in
-        // _discoverChains, so no ClientSync is started for it and it can never
-        // crash-loop the process. Used to drop a chain that cannot full-snapshot
-        // bootstrap (fast chains with tens of millions of blocks) until the
-        // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is deployed.
+        // discoverChains, so no ClientSync is started for it and it can never
+        // crash-loop the process. It drops a chain that cannot full-snapshot
+        // bootstrap (fast chains with tens of millions of blocks) wherever the
+        // start-from-recent-height bootstrap (SYNC_BOOTSTRAP_DEPTH_*) is not in place.
         // Trimmed + deduplicated; empty/unset -> [] (no chain excluded).
-        config['SYNC_EXCLUDE'] = [...new Set(
-            (process.env.SYNC_EXCLUDE || '')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0)
-        )];
+        config['SYNC_EXCLUDE'] = parseCsvSet(process.env.SYNC_EXCLUDE);
 
         // Per-chain start-from-recent-height bootstrap (client mode). Opt-in via
         // SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>=N (e.g.
@@ -234,12 +271,25 @@ module.exports = {
         // value lets TransparencyLog.pruneSyncMeta drop sync_meta rows older than the
         // window at epoch boundaries, trading old proofs for bounded table growth.
         // Committed Merkle roots (merkle_epochs) are kept either way.
+        //
+        // Applies in BOTH modes. Server mode prunes at epoch boundaries from
+        // TransparencyLog.recordBlock; client mode prunes on the timer below, because a
+        // client builds no transparency log and the source's DELETEs are not carried over
+        // replication. On a client the window also means this replica can no longer serve
+        // inclusion proofs below it, and its sync_meta row count legitimately falls short
+        // of the source's (ClientSync excludes that one table from the count check while
+        // the window is armed).
         config['SYNC_META_RETENTION_BLOCKS'] = parseIntMin0(process.env.SYNC_META_RETENTION_BLOCKS, 0);
+
+        // How often client mode runs that sweep, in ms (default 1 hour). A clock rather
+        // than a per-block hook: bulk snapshot catch-up applies many blocks at once and
+        // would skip epoch-boundary events. No timer at all when the window is 0.
+        config['SYNC_META_RETENTION_INTERVAL_MS'] = parseInt(process.env.SYNC_META_RETENTION_INTERVAL_MS) || (60 * 60 * 1000);
 
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure: a replica is dropped only when its send buffer
+        // WebSocket backpressure (item 5410): a replica is dropped only when its send buffer
         // is genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory (a peer
         // accumulating past this is not draining); STALL_MS is how long the buffer may go
         // without making downward progress before the peer is dropped. This replaces the old
@@ -248,7 +298,7 @@ module.exports = {
         config['WS_BACKPRESSURE_MAX_BYTES'] = parseIntMin1(process.env.WS_BACKPRESSURE_MAX_BYTES, 16777216); // 16 MiB
         config['WS_BACKPRESSURE_STALL_MS']  = parseIntMin1(process.env.WS_BACKPRESSURE_STALL_MS, 30000);     // 30 s
         if(process.env.WS_BACKPRESSURE_LIMIT !== undefined)
-            console.log('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead.');
+            logger.info('config: WS_BACKPRESSURE_LIMIT is retired and ignored; tune WS_BACKPRESSURE_MAX_BYTES / WS_BACKPRESSURE_STALL_MS instead.');
 
         // WebSocket status broadcast interval (default 60 seconds; override via WS_STATUS_INTERVAL)
         config['WS_STATUS_INTERVAL'] = parseIntMin0(process.env.WS_STATUS_INTERVAL, 60000);
@@ -369,7 +419,7 @@ module.exports = {
         // and the row-count check structurally cannot see (equal count, different
         // content). Read on BOTH sides: a server (SYNC_MODE=server) publishes the
         // deterministic-subset checksum on /status; a client recomputes + compares in
-        // _verifyAgainstSource. OFF by default because computing it scans the
+        // verifyAgainstSource. OFF by default because computing it scans the
         // deterministic subset of index_addresses (an index on block_index is advisable
         // before enabling on a high-volume chain).
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
@@ -417,7 +467,7 @@ module.exports = {
         // launch validator set must flip this default to ON in the same change (an operator
         // who has a trust root available and does not use it is still trusting the source);
         // an explicit VERIFY_CHECKPOINT_QUORUM=false remains the opt-out for throwaway
-        // mirrors. test/unit/checkpointQuorumFlagDay.test.js enforces both halves, and the
+        // mirrors. test/unit/checkpoint_quorum_flag_day.test.js enforces both halves, and the
         // launch activation runbook carries the deploy-side ordering (the federation must
         // be serving signed checkpoints first).
         config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
@@ -472,6 +522,19 @@ module.exports = {
         // above this reads stale. Needs the REPLICATION CLIENT grant to be readable.
         config['SYNC_REPLICA_MAX_LAG_S'] = parseIntMin1(process.env.SYNC_REPLICA_MAX_LAG_S, 120);
 
+        // Measurement-freshness window for a cached status object (server mode).
+        // ServerPoller.updateStatus overwrites BlockBroadcaster.statusData only on a
+        // SUCCESSFUL database read and its callers swallow the rejection, so a throw, a
+        // hung query or a stopped poller leaves the last HEALTHY status in the cache and
+        // every reader keeps re-serving it: the 60s status broadcast, the new-subscriber
+        // snapshot, the validator-lag view and REST /status alike. Transport liveness
+        // looks perfect throughout, because the events keep flowing, so the consumer's
+        // own 180s silence timer never fires either. Past this age the measurement is no
+        // longer evidence of anything, so its FRESHNESS verdict expires (the heights are
+        // kept: an operator diagnosing the outage needs them). Default 180s, the same
+        // 3-missed-heartbeat budget CLIENT_SOURCE_STALE_MS uses on the other side.
+        config['SYNC_STATUS_MAX_AGE_MS'] = parseIntMin1(process.env.SYNC_STATUS_MAX_AGE_MS, 180000);
+
         // Bootstrap retry-with-backoff (client mode). A full snapshot bootstrap that
         // exhausts every configured source must NOT fall through to live-follow on an
         // empty replica; instead it retries the whole source rotation with bounded
@@ -503,12 +566,7 @@ module.exports = {
         // node network-partitioned before it ever POSTed. Empty/unset -> [] (the
         // service runs exactly as before, with no roster anchor). Deduplicated and
         // trimmed so the denominator is accurate.
-        config['EXPECTED_VALIDATORS'] = [...new Set(
-            (process.env.EXPECTED_VALIDATORS || '')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0)
-        )];
+        config['EXPECTED_VALIDATORS'] = parseCsvSet(process.env.EXPECTED_VALIDATORS);
 
         return config;
     }
