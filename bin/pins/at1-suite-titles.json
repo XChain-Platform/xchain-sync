@@ -19,6 +19,17 @@
       "Advisory table-content parity wiring runs only at the source's published height, behind the flag",
       "Advisory table-content parity wiring the /status producer publishes the payload for both dbTypes, default null"
     ],
+    "01a0e95347ac133b": [
+      "Integration: ClientRollback balance recalculation excludes zero-balance entries",
+      "Integration: ClientRollback balance recalculation rebuilds balances from remaining credits/debits",
+      "Integration: ClientRollback rollback deletes correct rows removes actions with action_index >= firstActionIndex",
+      "Integration: ClientRollback rollback deletes correct rows removes blocks at and after rollback point",
+      "Integration: ClientRollback rollback deletes correct rows removes credits with action_index >= firstActionIndex",
+      "Integration: ClientRollback rollback deletes correct rows removes sync_meta entries at and after rollback point",
+      "Integration: ClientRollback rollback deletes correct rows removes transactions at and after rollback point",
+      "Integration: ClientRollback rollback then re-sync allows new data to be applied after rollback",
+      "Integration: ClientRollback rollback with no actions handles block with no actions cleanly"
+    ],
     "01f9d7edc3706d8a": [
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 101 available",
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 200 available",
@@ -414,6 +425,12 @@
       "ClientApplier security insertRows: table name validation rejects table name with semicolon",
       "ClientApplier security insertRows: table name validation rejects table name with space"
     ],
+    "20ed0b54513008c0": [
+      "Integration: SPV sub-tree shadow columns, cross-twin replication timing leaves both shadow maps exactly as it found them",
+      "Integration: SPV sub-tree shadow columns, cross-twin replication timing the block payload carries both sub-tree tables, which is the whole timing premise",
+      "Integration: SPV sub-tree shadow columns, cross-twin replication timing the follower computes both shadow values from rows that arrived in the same block",
+      "Integration: SPV sub-tree shadow columns, cross-twin replication timing withholding the journal rows changes the escrow shadow, so a replication lag is detectable"
+    ],
     "22f878636d1e21f6": [
       "ClientSync security connectWebSocket: maxPayload passes maxPayload to WebSocket constructor"
     ],
@@ -519,6 +536,14 @@
     "2c00f2c184ea8958": [
       "ClientSync: handleEvent lastKnownServerBlock branches does not update lastKnownServerBlock on block event when incoming <= current",
       "ClientSync: handleEvent lastKnownServerBlock branches does not update lastKnownServerBlock on status event when incoming <= current"
+    ],
+    "2c414fbb86440ec6": [
+      "Integration: WebSocket Broadcasting initial status on connect sends status message when status data exists",
+      "Integration: WebSocket Broadcasting invalid subscribe path destroys socket for unrecognized path",
+      "Integration: WebSocket Broadcasting multiple chains only delivers events to matching chain subscribers",
+      "Integration: WebSocket Broadcasting per-IP connection limit closes connection when limit exceeded",
+      "Integration: WebSocket Broadcasting subscribe and receive block receives block event after new block is polled",
+      "Integration: WebSocket Broadcasting subscribe and receive block receives reorg event"
     ],
     "2d5af37f72b7535a": [
       "M-17: state-commitment input reads fail closed outside a transaction CONTROL: plain doQuery still swallows the same failure and answers []",
@@ -634,6 +659,14 @@
       "state_hash index-map class (id-determinism P4) - follower twin @regression gate: regtest armed from genesis, arms at/after the per-chain height",
       "state_hash index-map class (id-determinism P4) - follower twin @regression inert: follower preimage is byte-identical to the pre-feature shape"
     ],
+    "350a60ae36012e8e": [
+      "Smoke: Client Mode ClientApplier applies a block without error",
+      "Smoke: Client Mode full bootstrap populates replica",
+      "Smoke: Client Mode replica DB connection succeeds",
+      "Smoke: Client Mode replica has indexer tables",
+      "Smoke: Client Mode snapshot is downloadable and parseable",
+      "Smoke: Client Mode sync_meta table exists in replica"
+    ],
     "35f586531a7008e6": [
       "Database.beginTransaction() acquires a connection and calls beginTransaction on it",
       "Database.beginTransaction() if transactionConnection already exists: releases it first, then opens new one",
@@ -712,6 +745,9 @@
       "Advisory table-content parity content digest the node-local contract_emissions.id column is excluded, so it cannot false-alarm",
       "Advisory table-content parity content digest the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm"
     ],
+    "37bc72a0a6979a91": [
+      "Integration: contract_emissions reorg-safe streaming (emissions fix) @regression getEmissionRowsForBlock includes NULL-action_index (SLASH) emissions the action-scoped path drops"
+    ],
     "39c89678ecd7b9af": [
       "Advisory table-content parity compareTableContent a table present on one side only is skipped with its own reason",
       "Advisory table-content parity compareTableContent case 2: identical maps match",
@@ -737,6 +773,13 @@
       "missingReplicatedTables returns an empty array when the schema carries every replicated table",
       "missingReplicatedTables returns null (unknown), never [], when the table listing is unavailable",
       "missingReplicatedTables scopes to the dbType (decoder set, not indexer set)"
+    ],
+    "3c190d07814f2bdb": [
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/root/latest returns 400 for decoder dbType",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/root/latest returns 403 in client mode",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/root/latest returns 404 for unknown chain/network",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/root/latest returns latest Merkle root after an epoch is committed",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/root/latest returns null epoch and merkle_root when log is empty"
     ],
     "3c56690bfa37c105": [
       "Boundary: Block Index Values block_index = 0 continuity check: 0 \u2192 1 is valid",
@@ -1083,6 +1126,10 @@
       "ClientSync: multi-source Byzantine quorum @regression no-source-quorum halt log-only mode (HALT_ON_DIVERGENCE=false) refuses to apply but does not halt",
       "ClientSync: multi-source Byzantine quorum @regression strike sliding window prunes strikes older than SOURCE_STRIKE_WINDOW so stale strikes do not evict"
     ],
+    "4d60233a4d0d52f7": [
+      "Integration: REST API GET /status returns null values when no blocks",
+      "Integration: REST API GET /status returns status for all chains"
+    ],
     "4ee867ce8010316d": [
       "ClientSync decoder bootstrap completeness bootstrapFromSnapshot wiring does not run the decoder check in single-source mode",
       "ClientSync decoder bootstrap completeness bootstrapFromSnapshot wiring runs the decoder completeness check even when VERIFY_HASHES is false",
@@ -1128,6 +1175,13 @@
       "Tier 1 - HashVerifier @tier1 verifyChainContinuity valid is false when there is a block gap",
       "Tier 1 - HashVerifier @tier1 verifyChainContinuity valid is true for exactly sequential blocks",
       "Tier 1 - HashVerifier @tier1 verifyChainContinuity valid is true when prevBlockIndex is null"
+    ],
+    "5229b20ad602f73b": [
+      "Integration: token supply recompute is idempotent: a second recompute leaves every supply unchanged",
+      "Integration: token supply recompute recomputes each token supply byte-identically to (credits - debits) + escrows"
+    ],
+    "52c69be5fa7605f0": [
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/roots returns paginated transparency log"
     ],
     "52fd8b56df0fa3ee": [
       "HubClient parseEndpoints defaults host/port/proto when nothing is configured",
@@ -1277,6 +1331,12 @@
       "config readEnvNow reads the current value on every call: set, read, change, read again, unset",
       "config string passthrough passes HUB_API_HOST",
       "config string passthrough passes REPLICA_DB_HOST"
+    ],
+    "5b17637c84d5cb70": [
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/proof/:block_index returns 400 for decoder dbType",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/proof/:block_index returns 403 in client mode",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/proof/:block_index returns 404 for unknown chain/network",
+      "Integration: REST API GET /transparency/:dbType/:chain/:network/proof/:block_index returns Merkle inclusion proof for a committed block"
     ],
     "5bb658138a2834df": [
       "E2E: Disconnect/Resume Parity 10.1 Resume parity vs a control replica a resumed replica converges byte-identically to one that never disconnected",
@@ -1482,6 +1542,10 @@
       "HubClient ping returns falsy when result is null",
       "HubClient ping returns true on successful response",
       "HubClient ping sends correct JSON-RPC payload"
+    ],
+    "68f10a273308ebbe": [
+      "Integration: REST API Proxy-trust rate-limit wiring collapses every caller onto the socket address when TRUST_PROXY is off",
+      "Integration: REST API Proxy-trust rate-limit wiring gives independent snapshot buckets to distinct forwarded clients when TRUST_PROXY is on"
     ],
     "6aba3ac215f51b2b": [
       "ClientSync.oraclePublishSetAt uses the as-of reconstruction (#4927) calls getStakeWeightsByCapabilityAsOf, not the live getStakeWeightsByCapability",
@@ -1740,6 +1804,10 @@
       "HubClient constructor: array form honors https via the legacy port arg",
       "HubClient constructor: array form uses an explicit endpoint array verbatim"
     ],
+    "7e0925801ccae7f1": [
+      "Integration: REST API GET /snapshot/:dbType/:chain/:network returns 404 when no blocks",
+      "Integration: REST API GET /snapshot/:dbType/:chain/:network returns gzip-compressed full snapshot"
+    ],
     "7e7da713c509ab55": [
       "E2E: Full Lifecycle 1.1 Cold bootstrap from snapshot bootstraps replica from server snapshot with correct data",
       "E2E: Full Lifecycle 1.2 Live sync after bootstrap receives new blocks via WebSocket after bootstrap",
@@ -1793,6 +1861,9 @@
     "82ad4278d662f2a2": [
       "contract_state_root: arming boundary and reorg @regression a snapshot bootstrap at an armed height agrees with a from-genesis node",
       "contract_state_root: arming boundary and reorg @regression an orphaned write reverts without any rollback-repair pass"
+    ],
+    "82de2fae4693c94d": [
+      "Integration: the applier can write every table it replicates accepts a schema-shaped row for every replicated table, with no applier-class error"
     ],
     "8340f62c3bf4e723": [
       "contract_state_root: frozen row-to-leaf mapping @regression MAX(id) runs over tombstones too: a deleted key stays deleted (the ordering trap)",
@@ -2034,6 +2105,14 @@
     "8e78b69ca3426aa3": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression the activation maps hold EXACTLY the armed set (arming is a code change, not config)"
     ],
+    "8ea1c406c845cec1": [
+      "Integration: TestDatabase.getBlockScopedRows reads the lifecycle key scopes a close_block-keyed table (rollcalls) by close_block, not block_index",
+      "Integration: TestDatabase.getBlockScopedRows reads the lifecycle key still scopes an ordinary block_index-keyed table (transactions) by block_index"
+    ],
+    "8f25bc9eed65018d": [
+      "Integration: REST API GET /snapshot/:dbType/:chain/:network/since/:blockHeight returns 400 for invalid blockHeight",
+      "Integration: REST API GET /snapshot/:dbType/:chain/:network/since/:blockHeight returns incremental snapshot"
+    ],
     "90829ca9a8a00309": [
       "SnapshotBuilder SnapshotStreamWriter (backpressure + client-abort) blocks until drain when the buffer is full (write() returns false)",
       "SnapshotBuilder SnapshotStreamWriter (backpressure + client-abort) finish() detaches the disconnect handler and ends the stream",
@@ -2100,6 +2179,17 @@
       "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcall_absences",
       "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcalls",
       "ClientApplier insertRows uses INSERT for non-index tables"
+    ],
+    "971aa02f9a73a797": [
+      "Integration: TransparencyLog getPage includes logged_at timestamp",
+      "Integration: TransparencyLog getPage paginates correctly with offset",
+      "Integration: TransparencyLog getPage returns empty results for page beyond data",
+      "Integration: TransparencyLog getPage returns paginated results with correct total",
+      "Integration: TransparencyLog getPage returns results ordered by block_index DESC",
+      "Integration: TransparencyLog recordBlock ignores duplicate block_index (INSERT IGNORE)",
+      "Integration: TransparencyLog recordBlock inserts a row into sync_meta",
+      "Integration: TransparencyLog recordBlock records multiple blocks",
+      "Integration: TransparencyLog rollback cleanup preserves entries before rollback point after manual delete"
     ],
     "9743546a34b05c9f": [
       "ClientRollback pair-scoped markets rollback (IDX-2 mirror) aborts (fail-closed) on a transient error in the pair-scoped sweep",
@@ -2238,6 +2328,13 @@
       "collectDerivedAnchorRewards selects by the derive_block_index window with the backdated-only guard",
       "collectDerivedAnchorRewards swallows ONLY a schema gap (1054/1146); a transient fault propagates so the block is retried"
     ],
+    "a1c61939d5e79b8d": [
+      "Integration: Client Bootstrap full bootstrap from snapshot preserves exact data values (no type coercion)",
+      "Integration: Client Bootstrap full bootstrap from snapshot replicates all block data to replica",
+      "Integration: Client Bootstrap full bootstrap from snapshot replicates index tables correctly",
+      "Integration: Client Bootstrap incremental catch-up applies only new blocks",
+      "Integration: Client Bootstrap startup catch-up (start) resumes a pre-populated replica without re-inserting applied rows"
+    ],
     "a2343508ab4cdd95": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression MAINNET IS UNARMED for every slot, at every height (the launch guard)",
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression all three testnet chains arm contract_state_root from GENESIS",
@@ -2367,6 +2464,13 @@
     "b03d7c4fb1f16f36": [
       "E2E: Disconnect/Resume Parity 10.5 Schema drift while disconnected (self-heal) a replica missing a replicated table re-applies the source schema and converges"
     ],
+    "b0d1b3c568451adf": [
+      "Integration: armed source handshake (server-tier rollout rehearsal) REST: a client carrying the upstream key reads a snapshot from an armed source",
+      "Integration: armed source handshake (server-tier rollout rehearsal) REST: the inbound guard key is NOT accepted upstream, so the two are truly separate",
+      "Integration: armed source handshake (server-tier rollout rehearsal) REST: the same read WITHOUT the upstream key is refused, which is the rollout order",
+      "Integration: armed source handshake (server-tier rollout rehearsal) WS: the upgrade is refused without it, so streaming sync stops too, not just bootstrap",
+      "Integration: armed source handshake (server-tier rollout rehearsal) WS: the upgrade succeeds only when the client carries the upstream key"
+    ],
     "b12d9fe0288ee479": [
       "API rate-limit proxy trust security TRUST_PROXY=false does not let a spoofed header split one caller into separate buckets",
       "API rate-limit proxy trust security TRUST_PROXY=false keys on the socket address and ignores a spoofed X-Forwarded-For",
@@ -2404,6 +2508,11 @@
       "balance-helpers @money @regression recomputeTokenSupplies() @money @regression renders supply in the source minimal-decimal format for divisible tokens",
       "balance-helpers @money @regression recomputeTokenSupplies() @money @regression runs one UPDATE per distinct token precision, keyed by decimals",
       "balance-helpers @money @regression recomputeTokenSupplies() @money @regression sums (credits - debits) + escrows at the EXACT scale and rounds ONCE at the token scale"
+    ],
+    "b270a2265a5c716a": [
+      "Integration: binary column replication (F2) full snapshot round-trips a blob byte-for-byte",
+      "Integration: binary column replication (F2) live block broadcast round-trips a blob byte-for-byte",
+      "Integration: binary column replication (F2) source stores true binary (sanity check: seed not corrupted by the helper)"
     ],
     "b2c127c405cfa5f5": [
       "ClientApplier applyFullSnapshot aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error",
@@ -2613,6 +2722,9 @@
       "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set stakes reset joins unstakes and matches the EXACT stamped value (precise, not blanket)",
       "deactivation_block sync-mirror without a coin the mirror is skipped (and warns, not silent) emits zero resets and warns"
     ],
+    "be9bdba4e50a9357": [
+      "Integration: Full Lifecycle bootstrap \u2192 live sync \u2192 reorg \u2192 recovery completes full lifecycle correctly"
+    ],
     "c01052b400b95da9": [
       "ClientSync logGap throttling logs the first occurrence immediately",
       "ClientSync logGap throttling resets the suppressed count after emitting a summary",
@@ -2741,6 +2853,15 @@
       "Database.streamTableRows() runs ONE un-paged ordered query on the given snapshot connection",
       "Database.truncateTable() calls doQuery with TRUNCATE TABLE"
     ],
+    "c99af0a2bafdfce4": [
+      "Integration: REST API GET /status/:dbType/:chain/:network returns 404 for unknown chain",
+      "Integration: REST API GET /status/:dbType/:chain/:network returns status for specific chain"
+    ],
+    "c99ff09c7317dddf": [
+      "Integration: index-map parity over HTTP (e2e) divergence: equal-count swapped identity fires advisory mismatch, no halt",
+      "Integration: index-map parity over HTTP (e2e) faithful replica: /status checksum matches, no mismatch, no counter",
+      "Integration: index-map parity over HTTP (e2e) recovery: faithful again raises no new mismatch (counter steady)"
+    ],
     "ca3ce40121d57267": [
       "BlockBroadcaster send clears the backpressure stall window when the buffer drains (item 5410)",
       "BlockBroadcaster send closes ws when the send buffer exceeds the byte ceiling (item 5410)",
@@ -2821,6 +2942,10 @@
       "observability/patchConsole resolves printf format strings and keeps an Error stack, via util.format",
       "observability/patchConsole routes console.* through the shim, mapping log to info"
     ],
+    "cad1d26d53c24f5a": [
+      "read-snapshot connection isolation (#3732) @integration a held read snapshot survives a concurrent writer transaction",
+      "read-snapshot connection isolation (#3732) @integration two concurrent read snapshots use independent connections"
+    ],
     "cc72fad7b0a4aab2": [
       "BlockBroadcaster security getIp: TRUST_PROXY=false ignores x-forwarded-for when TRUST_PROXY is false",
       "BlockBroadcaster security getIp: TRUST_PROXY=false returns unknown when no socket address and no forwarded header",
@@ -2893,6 +3018,23 @@
       "state_root reserved sub-trees: gateSubRoots @regression the block paths hand assembleStateRoot only gateSubRoots output (the gate is the only permitted writer)",
       "state_root reserved sub-trees: gateSubRoots @regression throws on an unknown slot name rather than dropping it silently"
     ],
+    "d1d68be89e493fba": [
+      "Smoke: Server Mode GET /schema returns tables",
+      "Smoke: Server Mode GET /snapshot returns decompressible data",
+      "Smoke: Server Mode GET /status returns 200 with block data",
+      "Smoke: Server Mode WebSocket connection accepted and receives status",
+      "Smoke: Server Mode config loads with valid defaults",
+      "Smoke: Server Mode getBlockHashRow returns hash fields",
+      "Smoke: Server Mode getLastBlock returns a value",
+      "Smoke: Server Mode hub is reachable",
+      "Smoke: Server Mode hub returns indexer configs",
+      "Smoke: Server Mode poll cycle completes without error",
+      "Smoke: Server Mode source DB connection succeeds"
+    ],
+    "d22ec38d3512da31": [
+      "Integration: scoped balance rebuilds balances ClientApplier.applyBlock drives the scoped rebuild end-to-end",
+      "Integration: scoped balance rebuilds balances a scoped rebuild leaves the table exactly as a full rebuild would"
+    ],
     "d2fffeabd095588e": [
       "SyncService getClientSyncState omits halt info for a healthy sync",
       "SyncService getClientSyncState reports a live sync, including halt info when halted",
@@ -2947,6 +3089,13 @@
       "ServerPoller action-scoped non-empty-table probe passes the snapshot connection to the probe and excludes actions/contract_emissions from it",
       "ServerPoller action-scoped non-empty-table probe reports probe_queries in the metric so a silent regression to the N+1 is visible",
       "ServerPoller action-scoped non-empty-table probe still streams contract_emissions when the probe reports nothing"
+    ],
+    "d81e2076ef5e60ee": [
+      "Integration: index-map parity (advisory, NON-consensus) case 1: faithful replica matches the source (NULL-block source row excluded)",
+      "Integration: index-map parity (advisory, NON-consensus) case 2: equal row count + swapped identity diverges (the INSERT IGNORE bug)",
+      "Integration: index-map parity (advisory, NON-consensus) case 3: a NULL-block replica row the source lacks raises no false alarm",
+      "Integration: index-map parity (advisory, NON-consensus) case 4: advisory mismatch counter persists + increments (real sync_state)",
+      "Integration: index-map parity (advisory, NON-consensus) case 5: the bound is honored (rows above uptoBlock are excluded)"
     ],
     "d87bf948f96ea270": [
       "HubClient getDecoderConfigs extracts xchain-decoder entries",
@@ -3155,6 +3304,27 @@
       "stateCommitment: DbNodeStore.putMany SQL shape @regression duplicate hashes inside one batch are left to INSERT IGNORE, not pre-filtered away",
       "stateCommitment: DbNodeStore.putMany SQL shape @regression writes one multi-row INSERT IGNORE with three bound params per row"
     ],
+    "e9198b686f505dd5": [
+      "Integration: ServerPoller buildBlockPayload action-scoped probe agrees with the real fetch on which tables are empty",
+      "Integration: ServerPoller buildBlockPayload action-scoped probe cuts the per-table round-trips to the tables that actually have rows",
+      "Integration: ServerPoller buildBlockPayload action-scoped probe emits a byte-identical payload on a block that has rows",
+      "Integration: ServerPoller buildBlockPayload action-scoped probe emits a byte-identical payload on a block with no action-scoped rows",
+      "Integration: ServerPoller buildBlockPayload builds payload with correct structure from real DB",
+      "Integration: ServerPoller buildBlockPayload includes action-scoped rows (credits)",
+      "Integration: ServerPoller buildBlockPayload includes block-scoped table rows",
+      "Integration: ServerPoller buildBlockPayload includes index_addresses referenced by transactions",
+      "Integration: ServerPoller buildBlockPayload includes index_transactions referenced by block",
+      "Integration: ServerPoller buildBlockPayload includes transactions",
+      "Integration: ServerPoller buildBlockPayload returns null for non-existent block",
+      "Integration: ServerPoller poll detects and processes new blocks",
+      "Integration: ServerPoller poll detects reorg when block count decreases",
+      "Integration: ServerPoller poll does nothing when no new blocks",
+      "Integration: ServerPoller poll initializes lastPolledBlock on first poll",
+      "Integration: ServerPoller poll processes multiple sequential blocks",
+      "Integration: ServerPoller poll records each block in transparency log",
+      "Integration: ServerPoller poll returns early when no blocks in DB",
+      "Integration: ServerPoller updateStatus updates broadcaster status with real block data"
+    ],
     "e962afbc1dd6ade5": [
       "ClientSync handleEvent runs the completeness sweep against the source that sent the status tick @regression"
     ],
@@ -3186,6 +3356,11 @@
       "Boundary: INSERT Batch Size (100 rows) null rows: no INSERT executed",
       "Boundary: INSERT Batch Size (100 rows) uses INSERT IGNORE for index tables at any batch size",
       "Boundary: INSERT Batch Size (100 rows) uses INSERT for non-index tables at any batch size"
+    ],
+    "ec77114beed6a450": [
+      "Integration: Client Live Sync duplicate block handling skips already-applied block without error",
+      "Integration: Client Live Sync live block applied via WebSocket applies a single block received via WS to replica",
+      "Integration: Client Live Sync live block applied via WebSocket applies multiple sequential blocks"
     ],
     "ece551d681b05cc7": [
       "E2E: Reorg Propagation 3.1 Simple reorg (3 blocks) propagates reorg and new blocks correctly",
@@ -3240,6 +3415,9 @@
       "HashVerifier verifyChainContinuity returns valid when prevBlockIndex is null (bootstrap)",
       "HashVerifier verifyChainContinuity returns valid when prevHashes is null"
     ],
+    "f1150c948244069d": [
+      "Integration: REST API GET /schema/:dbType/:chain/:network returns table DDLs"
+    ],
     "f15a3c001afd798e": [
       "decoder table classification (schema exhaustiveness) @regression classifies every xchain-decoder/src/sql table as replicated or excluded",
       "decoder table classification (schema exhaustiveness) @regression declares no decoder table that the schema no longer defines",
@@ -3268,6 +3446,14 @@
       "sync-owned table classification (registry exhaustiveness) classifies sync_state (created ad hoc by db.js, no .sql file)",
       "sync-owned table classification (registry exhaustiveness) keeps merkle_reorgs out of the streamed set but in the clearable set",
       "sync-owned table classification (registry exhaustiveness) never puts a table in both snapshot-builder sets (contradictory clear semantics)"
+    ],
+    "f4f95d87d6f86904": [
+      "Integration: the follower at an armed height, and a reorg across it a reorg across the armed height reverts it, and re-advancing reproduces it exactly",
+      "Integration: the follower at an armed height, and a reorg across it a snapshot bootstrap AT the armed height commits the same roots as threading across it",
+      "Integration: the follower at an armed height, and a reorg across it commits the locked leaf inside balances_root at the armed height",
+      "Integration: the follower at an armed height, and a reorg across it commits the slot at the armed height, and the stored state_root reassembles from it",
+      "Integration: the follower at an armed height, and a reorg across it leaves both activation maps exactly as it found them",
+      "Integration: the follower at an armed height, and a reorg across it reports version 2 at the armed height and 1 immediately below it"
     ],
     "f5a2f59de279c2b5": [
       "E2E: Disconnect/Resume Parity 10.2 Reorg while disconnected (June 2026 production scenario) a replica holding orphaned blocks must not silently follow the new chain; a re-seed converges it"
@@ -3739,13 +3925,76 @@
       }
     },
     "test:integration": {
-      "error": "unparseable mocha json (exit 1): \n Exception during run: Error: TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed suites\n    at Object.<anonymous> (/Users/jdog/Sites/XChain-Platform/tmp/lanes/areg/w5/platform/xchain-sync/test/integration/helpers/testDb.js:25:11)\n    at Module._compile (node:internal/modules/cjs/loader:1781:14)\n    at Object..js (node:internal/modules/cjs/loader:1913:10)\n    at "
+      "fileCount": 28,
+      "titleCount": 109,
+      "files": {
+        "test/integration/armed_source_handshake.test.js": "b0d1b3c568451adf",
+        "test/integration/balance_rebuild_scoped.test.js": "d22ec38d3512da31",
+        "test/integration/binary_replication.test.js": "b270a2265a5c716a",
+        "test/integration/client_bootstrap.test.js": "a1c61939d5e79b8d",
+        "test/integration/client_live_sync.test.js": "ec77114beed6a450",
+        "test/integration/client_rollback.test.js": "01a0e95347ac133b",
+        "test/integration/emissions_parity.test.js": "37bc72a0a6979a91",
+        "test/integration/get_block_scoped_rows_lifecycle.test.js": "8ea1c406c845cec1",
+        "test/integration/index_map_parity.test.js": "d81e2076ef5e60ee",
+        "test/integration/index_map_parity_http.test.js": "c99ff09c7317dddf",
+        "test/integration/lifecycle.test.js": "be9bdba4e50a9357",
+        "test/integration/replication_insert_shape.test.js": "82de2fae4693c94d",
+        "test/integration/server_polling.test.js": "e9198b686f505dd5",
+        "test/integration/server_rest_api.test.js": "4d60233a4d0d52f7",
+        "test/integration/server_rest_api.test/01_get_status_db_type_chain_network.test.js": "c99af0a2bafdfce4",
+        "test/integration/server_rest_api.test/02_get_schema_db_type_chain_network.test.js": "f1150c948244069d",
+        "test/integration/server_rest_api.test/03_get_snapshot_db_type_chain_network.test.js": "7e0925801ccae7f1",
+        "test/integration/server_rest_api.test/04_get_snapshot_db_type_chain_network_since_block_height.test.js": "8f25bc9eed65018d",
+        "test/integration/server_rest_api.test/05_get_transparency_db_type_chain_network_roots.test.js": "52c69be5fa7605f0",
+        "test/integration/server_rest_api.test/06_get_transparency_db_type_chain_network_proof_block_index.test.js": "5b17637c84d5cb70",
+        "test/integration/server_rest_api.test/07_get_transparency_db_type_chain_network_root_latest.test.js": "3c190d07814f2bdb",
+        "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
+        "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
+        "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
+        "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
+        "test/integration/token_supply_recompute.test.js": "5229b20ad602f73b",
+        "test/integration/transparency_log.test.js": "971aa02f9a73a797"
+      }
     },
     "test:integration:ci": {
-      "error": "unparseable mocha json (exit 1): \n Exception during run: Error: TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed suites\n    at Object.<anonymous> (/Users/jdog/Sites/XChain-Platform/tmp/lanes/areg/w5/platform/xchain-sync/test/integration/helpers/testDb.js:25:11)\n    at Module._compile (node:internal/modules/cjs/loader:1781:14)\n    at Object..js (node:internal/modules/cjs/loader:1913:10)\n    at "
+      "fileCount": 24,
+      "titleCount": 99,
+      "files": {
+        "test/integration/armed_source_handshake.test.js": "b0d1b3c568451adf",
+        "test/integration/balance_rebuild_scoped.test.js": "d22ec38d3512da31",
+        "test/integration/binary_replication.test.js": "b270a2265a5c716a",
+        "test/integration/client_rollback.test.js": "01a0e95347ac133b",
+        "test/integration/get_block_scoped_rows_lifecycle.test.js": "8ea1c406c845cec1",
+        "test/integration/index_map_parity.test.js": "d81e2076ef5e60ee",
+        "test/integration/index_map_parity_http.test.js": "c99ff09c7317dddf",
+        "test/integration/replication_insert_shape.test.js": "82de2fae4693c94d",
+        "test/integration/server_polling.test.js": "e9198b686f505dd5",
+        "test/integration/server_rest_api.test.js": "4d60233a4d0d52f7",
+        "test/integration/server_rest_api.test/01_get_status_db_type_chain_network.test.js": "c99af0a2bafdfce4",
+        "test/integration/server_rest_api.test/02_get_schema_db_type_chain_network.test.js": "f1150c948244069d",
+        "test/integration/server_rest_api.test/03_get_snapshot_db_type_chain_network.test.js": "7e0925801ccae7f1",
+        "test/integration/server_rest_api.test/04_get_snapshot_db_type_chain_network_since_block_height.test.js": "8f25bc9eed65018d",
+        "test/integration/server_rest_api.test/05_get_transparency_db_type_chain_network_roots.test.js": "52c69be5fa7605f0",
+        "test/integration/server_rest_api.test/06_get_transparency_db_type_chain_network_proof_block_index.test.js": "5b17637c84d5cb70",
+        "test/integration/server_rest_api.test/07_get_transparency_db_type_chain_network_root_latest.test.js": "3c190d07814f2bdb",
+        "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
+        "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
+        "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
+        "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
+        "test/integration/token_supply_recompute.test.js": "5229b20ad602f73b",
+        "test/integration/transparency_log.test.js": "971aa02f9a73a797"
+      }
     },
     "test:integration:parity": {
-      "error": "unparseable mocha json (exit 1): \n Exception during run: Error: TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed suites\n    at Object.<anonymous> (/Users/jdog/Sites/XChain-Platform/tmp/lanes/areg/w5/platform/xchain-sync/test/integration/helpers/testDb.js:25:11)\n    at Module._compile (node:internal/modules/cjs/loader:1781:14)\n    at Object..js (node:internal/modules/cjs/loader:1913:10)\n    at "
+      "fileCount": 2,
+      "titleCount": 8,
+      "files": {
+        "test/integration/index_map_parity.test.js": "d81e2076ef5e60ee",
+        "test/integration/index_map_parity_http.test.js": "c99ff09c7317dddf"
+      }
     },
     "test:mutate": {
       "skipped": "not a mocha command (runs npx)"
@@ -3891,7 +4140,12 @@
       }
     },
     "test:smoke": {
-      "error": "unparseable mocha json (exit 1): \n Exception during run: Error: TEST_DB_PASS must be set (plus TEST_DB_HOST/PORT/USER as needed) to run the DB-backed suites\n    at Object.<anonymous> (/Users/jdog/Sites/XChain-Platform/tmp/lanes/areg/w5/platform/xchain-sync/test/integration/helpers/testDb.js:25:11)\n    at Module._compile (node:internal/modules/cjs/loader:1781:14)\n    at Object..js (node:internal/modules/cjs/loader:1913:10)\n    at "
+      "fileCount": 2,
+      "titleCount": 17,
+      "files": {
+        "test/smoke/client_smoke.test.js": "350a60ae36012e8e",
+        "test/smoke/server_smoke.test.js": "d1d68be89e493fba"
+      }
     }
   }
 }
