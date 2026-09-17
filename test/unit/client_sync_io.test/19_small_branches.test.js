@@ -29,7 +29,7 @@ function createMockApplier(){
         applyIncrementalSnapshot: sinon.stub().resolves() };
 }
 function createMockRollback(){ return { rollback: sinon.stub().resolves() }; }
-function makeSync(configOverrides, dbOverrides){
+function makeSync(configOverrides, dbOverrides, identity){
     let db = createMockDb(dbOverrides), applier = createMockApplier(), rb = createMockRollback();
     let hv = new HashVerifier(), util = new Utility();
     let config = Object.assign({
@@ -37,7 +37,8 @@ function makeSync(configOverrides, dbOverrides){
         HASH_CONFIRM_TIMEOUT: 5000, SNAPSHOT_MAX_CONTENT: 200 * 1024 * 1024,
         WS_MAX_PAYLOAD: 50 * 1024 * 1024, MAX_ROLLBACK_DEPTH: 10, GAP_LOG_INTERVAL_MS: 30000
     }, configOverrides || {});
-    let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
+    identity = identity || { chain: 'bitcoin', network: 'mainnet' };
+    let sync = new ClientSync(identity.chain, identity.network, withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
 
@@ -200,6 +201,31 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
     });
+});
+
+describe('ClientSync: litecoin testnet reorg depth', function(){
+    beforeEach(setupSmallBranchTest);
+    afterEach(function(){ sinon.restore(); });
+
+    it('rolls back a 134-block litecoin testnet reorg under the network default', async function(){
+        let rb;
+        ({ sync, rb } = makeSync(
+            { MAX_ROLLBACK_DEPTH: 100, MAX_ROLLBACK_DEPTH_EXPLICIT: false },
+            { dbType: 'decoder' },
+            { chain: 'litecoin', network: 'testnet' }));
+        sync.lastAppliedBlock = 1000;
+
+        await sync.handleReorg({ type: 'reorg', block_index: 867 });
+
+        assert.strictEqual(sync.maxRollbackDepth, 5000);
+        assert.strictEqual(rb.rollback.calledOnceWith(867), true);
+        assert.strictEqual(sync.isHalted(), false);
+    });
+});
+
+describe('ClientSync: small branches', function(){
+    beforeEach(setupSmallBranchTest);
+    afterEach(function(){ sinon.restore(); });
 
     // Stress-sweep 2026-07-08: a reorg ABOVE the tip must be a no-op, never a cursor
     // advance. depth = tip - block_index + 1 goes <= 0 above the tip, so it never trips

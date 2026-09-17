@@ -181,6 +181,26 @@ function applyReplicaFreshness(row, pollerStatus){
     return row;
 }
 
+async function applyProtocolHaltFreshness(row, db, dbType){
+    if(!db || typeof db.getActiveHalt !== 'function'){
+        row.replica_halted = null;
+        return row;
+    }
+    try {
+        row.replica_halted = !!(await db.getActiveHalt(dbType));
+    } catch(e){
+        row.replica_halted = null;
+        row.replica_stale = true;
+        row.lag_blocks = null;
+        return row;
+    }
+    if(row.replica_halted){
+        row.replica_stale = true;
+        row.lag_blocks = null;
+    }
+    return row;
+}
+
 // One /health databases[] row for a chain, and the verdict it implies.
 //
 // Module-scope and exported for the same reason buildStatusRow is: this is the
@@ -266,6 +286,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                                ? pollerStatus.poll_error_count : 0
         };
         applyReplicaFreshness(row, pollerStatus);
+        await applyProtocolHaltFreshness(row, db, dbType);
         if(dbType === 'decoder'){
             row.block_hash = hashRow ? hashRow.block_hash : null;
         } else {
@@ -1254,5 +1275,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness,
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
                    buildHealthEntry, healthEntryDegraded, buildStatusRow, startApi };

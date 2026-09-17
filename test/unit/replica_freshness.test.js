@@ -93,6 +93,19 @@ describe('/status replication freshness', function(){
     });
 });
 
+describe('per-chain rollback depth', function(){
+    it('raises only litecoin testnet to the public-testnet rollback window', function(){
+        assert.strictEqual(config.resolveMaxRollbackDepth('litecoin', 'testnet', 100, false), 5000);
+        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'mainnet', 100, false), 100);
+        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'regtest', 100, false), 100);
+        assert.strictEqual(config.resolveMaxRollbackDepth('bitcoin', 'testnet', 100, false), 100);
+    });
+
+    it('preserves an explicit operator override', function(){
+        assert.strictEqual(config.resolveMaxRollbackDepth('litecoin', 'testnet', 250, true), 250);
+    });
+});
+
 describe('/status replication freshness', function(){
 
     // A follower's own lag_blocks is computed against a height its SOURCE published.
@@ -126,5 +139,31 @@ describe('/status replication freshness', function(){
             assert.strictEqual(row.upstream_replica_seconds_behind, null);
             assert.strictEqual(row.upstream_source_height, null);
         });
+    });
+});
+
+describe('/status server row carries a protocol-client halt', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    it('marks a durable halt stale even when native SQL replication is fresh', async function(){
+            let prior = process.env.SYNC_MODE;
+            process.env.SYNC_MODE = 'server';
+            let { buildStatusRow } = proxyquire('../../src/api', {});
+            if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
+            let db = mockDb();
+            db.getActiveHalt = sinon.stub().resolves({ block_index: 99, reason: 'rollback-depth-exceeded' });
+            let service = {
+                getBroadcaster: () => ({
+                    getStatus: () => ({ block_height: 100, source_block_height: 100,
+                        replica_stale: false, replica_seconds_behind: 0 }),
+                    getSubscribers: () => []
+                }),
+                getSnapshotBuilder: () => null
+            };
+
+            let row = await buildStatusRow(service, db, 'decoder', 'litecoin', 'testnet');
+            assert.strictEqual(row.replica_halted, true);
+            assert.strictEqual(row.replica_stale, true);
+            assert.strictEqual(row.lag_blocks, null);
     });
 });

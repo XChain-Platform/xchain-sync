@@ -69,6 +69,15 @@ function bootstrapDepthKey(chain, network){
     return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
 }
 
+function resolveMaxRollbackDepth(chain, network, configuredDepth, explicitOverride){
+    const configured = parseIntMin1(configuredDepth, 100)
+    if(explicitOverride === true) return configured
+    if(explicitOverride !== false) return configured
+    return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
+        ? 5000
+        : configured
+}
+
 // Canonical key for a SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK> env name, or null when
 // the suffix has no CHAIN_NETWORK shape at all (e.g. SYNC_BOOTSTRAP_DEPTH_BADKEY).
 // An unrecognized chain still yields a key: it is a real key that matches no chain,
@@ -164,6 +173,7 @@ module.exports = {
     bootstrapDepthEnvKey,
     unmatchedBootstrapDepthKeys,
     assertBootstrapDepthChains,
+    resolveMaxRollbackDepth,
 
     getConfig: function(){
         let config = {};
@@ -326,6 +336,7 @@ module.exports = {
 
         // Security: Maximum rollback depth from a single source (blocks)
         config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
+        config['MAX_ROLLBACK_DEPTH_EXPLICIT'] = process.env.MAX_ROLLBACK_DEPTH !== undefined;
 
         // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
         config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';

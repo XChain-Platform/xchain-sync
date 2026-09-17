@@ -96,6 +96,9 @@ class ClientSync {
         this.hashVerifier = hashVerifier;
         this.config       = config;
         this.util         = util;
+        this.maxRollbackDepth = envConfig.resolveMaxRollbackDepth(
+            this.chain, this.network, this.config['MAX_ROLLBACK_DEPTH'],
+            this.config['MAX_ROLLBACK_DEPTH_EXPLICIT']);
         // Independent block-hash recomputation (true byzantine / replication-
         // integrity detection). Verifies the replicated raw rows actually hash to
         // the committed hash, rather than trusting verbatim-replicated hashes.
@@ -205,7 +208,7 @@ class ClientSync {
         // misconfigured small depth can't quietly strand the replica. (depth 0 = full-
         // history replica, not truncated, so it is exempt.)
         if(this._truncatedDepth >= 1){
-            let maxRollback = Number(this.config['MAX_ROLLBACK_DEPTH']);
+            let maxRollback = Number(this.maxRollbackDepth);
             if(!Number.isFinite(maxRollback) || maxRollback < 1) maxRollback = 100;
             if(this._truncatedDepth <= maxRollback){
                 let clamped = maxRollback + 1;
@@ -3891,7 +3894,7 @@ class ClientSync {
 
         if(this.lastAppliedBlock !== null){
             let depth = this.lastAppliedBlock - event.block_index + 1;
-            if(depth > this.config['MAX_ROLLBACK_DEPTH']){
+            if(depth > this.maxRollbackDepth){
                 // A reorg too deep to roll back safely must FAIL CLOSED, not fail open.
                 // Returning bare here would leave lastAppliedBlock pointing at the now-
                 // orphaned tip: every canonical block the source re-streams from
@@ -3904,7 +3907,7 @@ class ClientSync {
                 // a durable halt via the same contract used for consensus divergence and let
                 // the operator investigate/clear, rather than advancing onto the fork.
                 await this.haltOnDivergence(event.block_index,
-                    [{ field: 'rollback_depth', depth, max: this.config['MAX_ROLLBACK_DEPTH'] }],
+                    [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
                     this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
                 return; // halted: no rollback, lastAppliedBlock left as-is, no further applies
             }
