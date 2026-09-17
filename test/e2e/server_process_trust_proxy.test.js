@@ -15,65 +15,73 @@ const ServerProcess = require('./helpers/serverProcess');
 const SERVER_PORT = 29951;
 const FORWARDED_IP = '198.51.100.7';
 
-describe('E2E: ServerProcess proxy trust', function() {
+let server;
+const sourceDb = {
+    dbType: 'indexer',
+    getLastBlock: async () => null,
+    getReplicaStatus: async () => ({ isReplica: false })
+};
 
-    let server;
-    const sourceDb = {
-        dbType: 'indexer',
-        getLastBlock: async () => null,
-        getReplicaStatus: async () => ({ isReplica: false })
-    };
+function stubConsole() {
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+}
 
-    before(function() {
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
+async function restoreConsoleAndStopServer() {
+    sinon.restore();
+    if (server) await server.stop();
+}
+
+async function stopServer() {
+    if (server) {
+        await server.stop();
+        server = null;
+    }
+}
+
+async function requestContext(trustProxy) {
+    server = new ServerProcess(sourceDb, SERVER_PORT);
+    if (trustProxy === undefined) delete server.config.TRUST_PROXY;
+    else server.config.TRUST_PROXY = trustProxy;
+    await server.start();
+
+    server.app.get('/request-context', (req, res) => {
+        res.json({ ip: req.ip, protocol: req.protocol });
     });
 
-    after(async function() {
-        sinon.restore();
-        if (server) await server.stop();
-    });
-
-    afterEach(async function() {
-        if (server) {
-            await server.stop();
-            server = null;
+    let response = await fetch(server.getUrl() + '/request-context', {
+        headers: {
+            'x-forwarded-for': FORWARDED_IP,
+            'x-forwarded-proto': 'https'
         }
     });
+    assert.strictEqual(response.status, 200);
+    return response.json();
+}
 
-    async function requestContext(trustProxy) {
-        server = new ServerProcess(sourceDb, SERVER_PORT);
-        if (trustProxy === undefined) delete server.config.TRUST_PROXY;
-        else server.config.TRUST_PROXY = trustProxy;
-        await server.start();
+async function honourForwardedClientAndProtocol() {
+    this.timeout(30000);
+    let context = await requestContext(true);
 
-        server.app.get('/request-context', (req, res) => {
-            res.json({ ip: req.ip, protocol: req.protocol });
-        });
+    assert.strictEqual(context.ip, FORWARDED_IP);
+    assert.strictEqual(context.protocol, 'https');
+}
 
-        let response = await fetch(server.getUrl() + '/request-context', {
-            headers: {
-                'x-forwarded-for': FORWARDED_IP,
-                'x-forwarded-proto': 'https'
-            }
-        });
-        assert.strictEqual(response.status, 200);
-        return response.json();
-    }
+async function ignoreForwardedClientAndProtocol() {
+    this.timeout(30000);
+    let context = await requestContext(undefined);
 
-    it('honours forwarded client and protocol when TRUST_PROXY is true', async function() {
-        this.timeout(30000);
-        let context = await requestContext(true);
+    assert.notStrictEqual(context.ip, FORWARDED_IP);
+    assert.strictEqual(context.protocol, 'http');
+}
 
-        assert.strictEqual(context.ip, FORWARDED_IP);
-        assert.strictEqual(context.protocol, 'https');
-    });
+function registerProxyTrustTests() {
+    before(stubConsole);
+    after(restoreConsoleAndStopServer);
+    afterEach(stopServer);
 
-    it('ignores forwarded client and protocol when TRUST_PROXY is unset', async function() {
-        this.timeout(30000);
-        let context = await requestContext(undefined);
+    it('honours forwarded client and protocol when TRUST_PROXY is true', honourForwardedClientAndProtocol);
+    it('ignores forwarded client and protocol when TRUST_PROXY is unset', ignoreForwardedClientAndProtocol);
+}
 
-        assert.notStrictEqual(context.ip, FORWARDED_IP);
-        assert.strictEqual(context.protocol, 'http');
-    });
-});
+describe('E2E: ServerProcess proxy trust', registerProxyTrustTests);
