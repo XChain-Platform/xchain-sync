@@ -38,31 +38,18 @@
 
 'use strict';
 
-const http      = require('http');
-const express   = require('express');
-const cors      = require('cors');
-const { parseCorsOrigin } = require('../../../../src/http/cors_origin');
-const WebSocket = require('ws');
 const sinon     = require('sinon');
 
-const Database         = require('../../../../src/db');
-const ServerPoller     = require('../../../../src/server/poller');
-const BlockBroadcaster = require('../../../../src/server/block_broadcaster');
-const SnapshotBuilder  = require('../../../../src/server/snapshot_builder');
-const ClientSync       = require('../../../../src/client/sync');
-const ClientApplier    = require('../../../../src/client/applier');
-const ClientRollback   = require('../../../../src/client/rollback');
-const HashVerifier     = require('../../../../src/client/hash_verifier');
-const Utility          = require('../../../../src/util');
-// Proxy-trust and rate-limiter wiring comes from the real api.js rather than a
-// parallel copy: how req.ip resolves and which limiter guards which route are
-// production decisions, and a harness that re-declares them cannot notice when
-// production drifts. api.js guards its env check and listen() behind
-// require.main === module, so requiring it here opens no port.
-const { trustProxyHops, createRateLimiters } = require('../../../../src/api');
+const Database       = require('../../../../src/db');
+const ClientSync     = require('../../../../src/client/sync');
+const ClientApplier  = require('../../../../src/client/applier');
+const ClientRollback = require('../../../../src/client/rollback');
+const HashVerifier   = require('../../../../src/client/hash_verifier');
+const Utility        = require('../../../../src/util');
 
 const decoderFixtures = require('../../helpers/decoderFixtures');
 const { getMariadb }   = require('../../helpers/mariadbLoader');
+const ServerProcess    = require('../../helpers/serverProcess');
 
 const SOURCE_HOST  = process.env.E2E_DB_HOST         || '127.0.0.1';
 const SOURCE_PORT  = parseInt(process.env.E2E_DB_PORT) || 23306;
@@ -101,128 +88,12 @@ const SERVER_CONFIG = {
     TRANSPARENCY_RATE_LIMIT: 100000
 };
 
-function mountStatusRoute(app, sourceDb){
-    let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
-    app.get('/status/:dbType/:chain/:network', async (req, res) => {
-        let dbType = validateDbType(req.params.dbType);
-        if(!dbType) return res.status(400).json({ error: 'Invalid dbType' });
-        if(req.params.chain !== CHAIN || req.params.network !== NETWORK)
-            return res.status(404).json({ error: 'Chain/network not found' });
-        try {
-            let last = await sourceDb.getLastBlock();
-            let row  = last !== null ? await sourceDb.getBlockHashRow(last) : null;
-            let body = {
-                chain: req.params.chain,
-                network: req.params.network,
-                dbType: dbType,
-                block_height: row ? Number(row.block_index) : null,
-                block_time:   row ? Number(row.block_time)  : null
-            };
-            if(dbType === 'decoder'){
-                body.block_hash = row ? row.block_hash : null;
-            } else {
-                body.ledger_hash   = row ? row.ledger_hash   : null;
-                body.actions_hash  = row ? row.actions_hash  : null;
-                body.contract_hash = row ? row.contract_hash : null;
-            }
-            res.json(body);
-        } catch(e){
-            res.status(500).json({ error: e.message });
-        }
-    });
-}
-
-function mountSchemaRoute(app, sourceDb){
-    app.get('/schema/:dbType/:chain/:network', async (req, res) => {
-        try {
-            let tables = await sourceDb.doQuery(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
-                [sourceDb.dbName]
-            );
-            let schema = {};
-            for(let row of tables){
-                let tn = row.table_name || row.TABLE_NAME;
-                let ddl = await sourceDb.doQuery("SHOW CREATE TABLE `" + tn + "`");
-                if(ddl.length > 0) schema[tn] = ddl[0]['Create Table'];
-            }
-            res.json({ chain: req.params.chain, network: req.params.network, dbType: req.params.dbType, tables: schema });
-        } catch(e){
-            res.status(500).json({ error: e.message });
-        }
-    });
-}
-
-function mountSnapshotRoutes(app, sourceDb, snapshotBuilder, limiters){
-    app.get('/snapshot/:dbType/:chain/:network', limiters.fullSnapshotLimiter, async (req, res) => {
-        try {
-            await snapshotBuilder.streamFullSnapshot(sourceDb, res);
-        } catch(e){
-            if(!res.headersSent) res.status(500).json({ error: e.message });
-        }
-    });
-
-    app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', limiters.incrSnapshotLimiter, async (req, res) => {
-        let since = parseInt(req.params.blockHeight);
-        if(isNaN(since) || since < 0) return res.status(400).json({ error: 'Invalid blockHeight' });
-        try {
-            await snapshotBuilder.streamIncrementalSnapshot(sourceDb, since, res);
-        } catch(e){
-            if(!res.headersSent) res.status(500).json({ error: e.message });
-        }
-    });
-}
-
-function mountTransparencyRoute(app, limiters){
-    // Transparency is indexer-only; decoder requests must return 400.
-    app.get('/transparency/:dbType/:chain/:network/roots', limiters.transparencyLimiter, (req, res) => {
-        if(req.params.dbType !== 'indexer')
-            return res.status(400).json({ error: 'Transparency log is indexer-only' });
-        res.json({ entries: [] });
-    });
-}
-
-// Build the mini HTTP+WS server that mirrors src/api.js for decoder
-// surface. Reuses real BlockBroadcaster + SnapshotBuilder + ServerPoller
-// so the test exercises actual Phase 3 code paths.
-function buildServer(sourceDb, broadcaster, snapshotBuilder, cfg){
-    let app = express();
-    // Must precede the limiters, which read req.ip: same ordering requirement
-    // startApi() has.
-    app.set('trust proxy', trustProxyHops(cfg['TRUST_PROXY']));
-    app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
-
-    // The limiter instances startApi() mounts, on the routes it guards.
-    let limiters = createRateLimiters(cfg);
-    app.use(limiters.backstopLimiter);
-    mountStatusRoute(app, sourceDb);
-    mountSchemaRoute(app, sourceDb);
-    mountSnapshotRoutes(app, sourceDb, snapshotBuilder, limiters);
-    mountTransparencyRoute(app, limiters);
-
-    let server = http.createServer(app);
-    let wss    = new WebSocket.Server({ noServer: true });
-    server.on('upgrade', (request, socket, head) => {
-        let m = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
-        if(!m){ socket.destroy(); return; }
-        let [, dbType, chain, network] = m;
-        if(dbType !== 'indexer' && dbType !== 'decoder'){ socket.destroy(); return; }
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            broadcaster.addSubscription(ws, request, chain, network, 'full', dbType);
-        });
-    });
-    return server;
-}
-
 class DecoderLifecycle {
     constructor(assignState){
         this.assignState = assignState;
         this.sourceDb = null;
         this.replicaDb = null;
-        this.broadcaster = null;
-        this.snapshotBuilder = null;
-        this.poller = null;
-        this.server = null;
-        this.pollInterval = null;
+        this.serverProcess = null;
         this.client = null;
     }
 
@@ -272,18 +143,14 @@ class DecoderLifecycle {
     async teardown(){
         sinon.restore();
         if(this.client) this.client.stop();
-        if(this.pollInterval) clearInterval(this.pollInterval);
-        if(this.poller) this.poller.stop();
-        if(this.server) await new Promise(r => this.server.close(r));
+        if(this.serverProcess) await this.serverProcess.stop();
         if(this.sourceDb)  await this.sourceDb.close();
         if(this.replicaDb) await this.replicaDb.close();
     }
 
     async reset(){
         if(this.client) { this.client.stop(); this.client = null; }
-        if(this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
-        if(this.poller) { this.poller.stop(); this.poller = null; }
-        if(this.server) { await new Promise(r => this.server.close(r)); this.server = null; }
+        if(this.serverProcess) { await this.serverProcess.stop(); this.serverProcess = null; }
         await decoderFixtures.truncateAll(this.sourceDb);
         await decoderFixtures.truncateAll(this.replicaDb);
         this.publish();
@@ -297,23 +164,9 @@ class DecoderLifecycle {
     }
 
     async startServer(overrides){
-        // One config object for the broadcaster, the poller and the app, so a
-        // test that flips TRUST_PROXY moves both budget surfaces at once, the
-        // way a deployment does.
-        let cfg = Object.assign({}, SERVER_CONFIG, overrides);
-
-        this.broadcaster     = new BlockBroadcaster(cfg);
-        this.snapshotBuilder = new SnapshotBuilder(util);
-        this.poller          = new ServerPoller(CHAIN, NETWORK, this.sourceDb, this.broadcaster, null, cfg, util);
-        this.server = buildServer(this.sourceDb, this.broadcaster, this.snapshotBuilder, cfg);
-        await new Promise(r => this.server.listen(SERVER_PORT, r));
-
-        // Drive the poller manually; match the indexer e2e harness pattern.
-        this.poller.lastPolledBlock = await this.sourceDb.getLastBlock();
-        await this.poller.updateStatus();
-        this.pollInterval = setInterval(async () => {
-            try { await this.poller.poll(); } catch(e){}
-        }, 200);
+        this.serverProcess = new ServerProcess(this.sourceDb, SERVER_PORT, CHAIN, NETWORK);
+        Object.assign(this.serverProcess.config, SERVER_CONFIG, overrides);
+        await this.serverProcess.start();
     }
 
     makeClient(){
