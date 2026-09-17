@@ -11,15 +11,10 @@
 const assert = require('assert');
 const HashVerifier = require('../../../src/client/hash_verifier');
 
-describe('Boundary: Hash Continuity Check', function(){
+let verifier;
+const hashes = { ledger_hash: 'aaa', actions_hash: 'bbb', contract_hash: 'ccc' };
 
-    let verifier;
-    const hashes = { ledger_hash: 'aaa', actions_hash: 'bbb', contract_hash: 'ccc' };
-
-    beforeEach(function(){
-        verifier = new HashVerifier();
-    });
-
+function registerBlockIndexContinuityTests(){
     describe('block index continuity (exact +1 requirement)', function(){
         it('valid: 10 → 11 (sequential)', function(){
             let result = verifier.verifyChainContinuity(10, hashes, { block_index: 11 });
@@ -58,7 +53,9 @@ describe('Boundary: Hash Continuity Check', function(){
             assert.strictEqual(result.valid, false);
         });
     });
+}
 
+function registerBootstrapTests(){
     describe('null prevBlockIndex (bootstrap)', function(){
         it('valid: null → 1 (first block)', function(){
             let result = verifier.verifyChainContinuity(null, null, { block_index: 1 });
@@ -76,14 +73,18 @@ describe('Boundary: Hash Continuity Check', function(){
             assert.strictEqual(result.valid, true);
         });
     });
+}
 
+function registerNullHashTests(){
     describe('null prevHashes', function(){
         it('valid: prevBlockIndex=5, prevHashes=null → skips check', function(){
             let result = verifier.verifyChainContinuity(null, null, { block_index: 6 });
             assert.strictEqual(result.valid, true);
         });
     });
+}
 
+function registerHashComparisonTests(){
     describe('hash comparison boundaries', function(){
         it('match: all three hashes identical', function(){
             let result = verifier.compareBlockHashes(1, hashes, { ...hashes });
@@ -128,4 +129,16 @@ describe('Boundary: Hash Continuity Check', function(){
             assert.strictEqual(result.mismatches.length, 3);
         });
     });
+}
+
+describe('Boundary: Hash Continuity Check', function(){
+
+    beforeEach(function(){
+        verifier = new HashVerifier();
+    });
+
+    registerBlockIndexContinuityTests();
+    registerBootstrapTests();
+    registerNullHashTests();
+    registerHashComparisonTests();
 });
