@@ -343,6 +343,11 @@ class ClientSync {
         this._replicaGapAlertSweeps   = this.numericSetting('REPLICA_GAP_ALERT_SWEEPS', 2, 1);
         this._replicaGapAlertRepeatMs = this.numericSetting('REPLICA_GAP_ALERT_REPEAT_MS', 21600000, 0);
 
+        // Validated table names returned by the primary source's /schema endpoint.
+        // null means no source schema has been observed, so a missing-table verdict
+        // would be unknown rather than empty.
+        this._sourceTables = null;
+
         // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
         // testnet, which mints blocks at ~10/sec and is tens of millions of
         // blocks high) the replica perpetually trails the live tip, so every
@@ -448,12 +453,14 @@ class ClientSync {
     async warnMissingTables(){
         try {
             let present = await this.db.listExistingTables();
-            let missing = replicatedTables.missingReplicatedTables(present, this.dbType);
+            let missing = replicatedTables.missingReplicatedTables(
+                present, this.dbType, this._sourceTables
+            );
             this._missingTables = missing;
             if(missing && missing.length){
                 getLogger().warn('MISSING_REPLICATED_TABLES: ' + this.chain + '/' + this.network + '/' +
                     this.dbType + ' replica schema is missing ' + missing.length +
-                    ' table(s) that this build replicates per block: ' + missing.join(', ') +
+                    ' source table(s) that this build replicates per block: ' + missing.join(', ') +
                     '. Rows for these tables are SKIPPED (errno 1146 is tolerated so a schema gap ' +
                     'cannot wedge the replica), so replication is partial while /status still ' +
                     'reports halted:false. Migrate this replica to the source schema; the same ' +
@@ -466,8 +473,8 @@ class ClientSync {
         }
     }
 
-    // Per-block replicated tables absent from this replica's schema, or null when
-    // the check has not run / could not read the table listing.
+    // Source-side per-block replicated tables absent from this replica's schema,
+    // or null when the check has not run or either table listing is unknown.
     getMissingTables(){ return this._missingTables === undefined ? null : this._missingTables; }
 
     // Multi-source Byzantine quorum helpers.
@@ -780,15 +787,19 @@ class ClientSync {
         if(!schema || !schema.tables) return;
 
         // Validate every table name + DDL up front, then collect the apply set.
+        // Keep the independently validated name set for missing-table checks: a
+        // source on an older release legitimately omits tables known to this build.
+        let sourceTables = new Set();
         let pending = [];
         for(let tableName in schema.tables){
             let createSql = schema.tables[tableName];
-            if(!createSql) continue;
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
                 getLogger().error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
                 continue;
             }
+            sourceTables.add(tableName);
+            if(!createSql) continue;
             let ddlCheck = validation.validateDdl(createSql);
             if(!ddlCheck.valid){
                 getLogger().error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
@@ -796,6 +807,7 @@ class ClientSync {
             }
             pending.push({ tableName, createSql });
         }
+        this._sourceTables = sourceTables;
 
         // Multi-pass fixpoint. A CREATE can fail because a table it FK-references
         // has not been created yet; retrying the not-yet-applied tables until a

@@ -232,15 +232,17 @@ function contentParityExclusions(dbType){
 // names the gap: any table in the per-block replicated set that this schema
 // lacks is a table replication will skip without ever failing.
 //
-// Deliberately a superset signal. A table absent on BOTH the source and this
-// replica (source older than this build) is reported too, because from here the
-// two cases are indistinguishable and reporting the harmless one costs an
-// operator one migration check, while missing the real one costs silent data
-// loss. Returns null when the table listing itself is unavailable: "unknown"
-// must not read as "nothing missing".
-function missingReplicatedTables(present, dbType){
+// Client callers pass the validated source table set so a mixed-version source
+// does not make build-newer tables look like replica gaps. Server callers omit
+// it and continue checking their own schema against this build's topology.
+// Returns null when either required listing is unavailable: "unknown" must not
+// read as "nothing missing".
+function missingReplicatedTables(present, dbType, sourcePresent){
     if(!present || typeof present.has !== 'function') return null;
-    return getReplicatedTables(dbType).filter(t => !present.has(t)).sort();
+    if(sourcePresent === null || (sourcePresent !== undefined && typeof sourcePresent.has !== 'function')) return null;
+    return getReplicatedTables(dbType)
+        .filter(t => (sourcePresent === undefined || sourcePresent.has(t)) && !present.has(t))
+        .sort();
 }
 
 // The cursor column for id-ordered paging of an append-only lookup table

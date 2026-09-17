@@ -247,6 +247,13 @@ function healthEntryDegraded(entry){
     return entry.circuit === 'open' || entry.poll_error_count > 0 || entry.halted === true;
 }
 
+function clientMissingTables(syncService, chain, network, dbType){
+    let sync = (typeof syncService.getClientSync === 'function')
+        ? syncService.getClientSync(chain, network, dbType) : null;
+    return (sync && typeof sync.getMissingTables === 'function')
+        ? sync.getMissingTables() : null;
+}
+
 // Build the status row for one (db, dbType, chain, network) tuple.
 //
 // Module-scope (not a closure inside startApi) and exported so the row shape is
@@ -482,17 +489,8 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
             // indexer split); omit rather than fail the whole status.
         }
     }
-    // Replica-completeness gap, made monitorable.
-    //
-    // Every apply path tolerates errno 1146 so a replica whose schema lags the
-    // source does not wedge; the consequence is that entire tables can fail to
-    // arrive while this row still reports halted:false and lag_blocks:0, and
-    // table_counts cannot show it because a missing table is simply absent from
-    // the object (indistinguishable from a table nobody counted). Publish the
-    // names instead, so a monitor can alert on a non-empty array rather than on
-    // repeated ER_NO_SUCH_TABLE stack traces under a green status. null means the
-    // table listing itself failed: unknown, NOT "nothing missing".
-    row.missing_tables = missingReplicatedTables(present, dbType);
+    // ClientSync owns the source-scoped verdict; null means either schema is unknown.
+    row.missing_tables = clientMissingTables(syncService, chain, network, dbType);
     return row;
 }
 
