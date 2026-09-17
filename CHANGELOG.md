@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The vendored gate registry arms the token bridge and policy inheritance on testnet per chain at BTC 153160, LTC 4888478 and DOGE 67906525.
+
 ## [0.19.1] - 2026-09-16
 
 ### Fixed
