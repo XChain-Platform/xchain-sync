@@ -14,19 +14,20 @@ const { getMariadb } = require('./mariadbLoader');
 const Utility = require('../../../src/util');
 const { splitSqlStatements } = require('../../../src/db/sql_util');
 const validation = require('../../../src/util/validation');
+const fixturePorts = require('../../../bin/fixture-ports.js');
 
 const TEST_DB_HOST = process.env.E2E_DB_HOST || '127.0.0.1';
-const TEST_DB_PORT = parseInt(process.env.E2E_DB_PORT) || 23306;
+const TEST_DB_PORT = fixturePorts.port('E2E_DB_PORT');
 const TEST_DB_USER = process.env.E2E_DB_USER || 'xchain-node';
 const TEST_DB_PASS = process.env.E2E_DB_PASS || 'xchain-fixture-throwaway';
 
 const REPLICA_DB_HOST = process.env.E2E_REPLICA_DB_HOST || '127.0.0.1';
-const REPLICA_DB_PORT = parseInt(process.env.E2E_REPLICA_DB_PORT) || 23307;
+const REPLICA_DB_PORT = fixturePorts.port('E2E_REPLICA_DB_PORT');
 const REPLICA_DB_USER = process.env.E2E_REPLICA_DB_USER || 'xchain-node';
 const REPLICA_DB_PASS = process.env.E2E_REPLICA_DB_PASS || 'xchain-fixture-throwaway';
 
 const SOURCE2_DB_HOST = process.env.E2E_SOURCE2_DB_HOST || '127.0.0.1';
-const SOURCE2_DB_PORT = parseInt(process.env.E2E_SOURCE2_DB_PORT) || 23308;
+const SOURCE2_DB_PORT = fixturePorts.port('E2E_SOURCE2_DB_PORT');
 const SOURCE2_DB_USER = process.env.E2E_SOURCE2_DB_USER || 'xchain-node';
 const SOURCE2_DB_PASS = process.env.E2E_SOURCE2_DB_PASS || 'xchain-fixture-throwaway';
 

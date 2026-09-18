@@ -10,7 +10,7 @@ services:
       MARIADB_USER: xchain-node
       MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
-      - "33065:3306"   # Direct access for admin seeding (bypasses toxiproxy)
+      - "${SOURCE_DIRECT_PORT:-33065}:3306"   # Direct access for admin seeding (bypasses toxiproxy)
     networks:
       - chaos-net
     tmpfs:
@@ -43,10 +43,10 @@ services:
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.9.0
     ports:
-      - "8474:8474"    # Toxiproxy HTTP API
-      - "33060:33060"  # Source DB proxy endpoint
-      - "33061:33061"  # Replica DB proxy endpoint
-      - "33062:33062"  # WebSocket proxy endpoint (for CE-NET tests)
+      - "${TOXIPROXY_PORT:-8474}:8474"    # Toxiproxy HTTP API
+      - "${SOURCE_PROXY_PORT:-33060}:33060"  # Source DB proxy endpoint
+      - "${REPLICA_PROXY_PORT:-33061}:33061"  # Replica DB proxy endpoint
+      - "${WS_PROXY_PORT:-33062}:33062"  # WebSocket proxy endpoint (for CE-NET tests)
     extra_hosts:
       - "host-gateway:host-gateway"
     networks:

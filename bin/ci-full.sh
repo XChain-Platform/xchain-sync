@@ -97,12 +97,13 @@ run_tier "ci" npm run ci
 # helper already defaults to those ports and credentials, so no env override
 # is needed once the stack is up.
 E2E_COMPOSE="test/e2e/docker-compose.e2e.yml"
+E2E_DB_PORT_RESOLVED="$(node bin/fixture-ports.js port E2E_DB_PORT)" || exit 1
 e2e_compose_down() {
-  docker compose -f "$E2E_COMPOSE" down -v >/dev/null 2>&1
+  node bin/fixture-ports.js compose "$E2E_COMPOSE" down -v >/dev/null 2>&1
 }
 trap e2e_compose_down EXIT
 run_tier "e2e: bring up service containers (source-db, replica-db)" \
-  docker compose -f "$E2E_COMPOSE" up -d --wait
+  node bin/fixture-ports.js compose "$E2E_COMPOSE" up -d --wait
 
 # Cross-repo consensus drift guards (rollback-coverage and friends) live in
 # the unit tier but the shared `ci` job never checks out a sibling, so they
@@ -125,7 +126,7 @@ run_tier "e2e: e2e tier (test:e2e:ci)" npm run test:e2e:ci
 # Reuses source-db (:23306) with the admin credentials, not the e2e
 # xchain-node user, matching the workflow step exactly.
 run_tier "e2e: integration tier (green suites, test:integration:ci)" \
-  env TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=23306 TEST_DB_USER=root TEST_DB_PASS=test \
+  env TEST_DB_HOST=127.0.0.1 TEST_DB_PORT="$E2E_DB_PORT_RESOLVED" TEST_DB_USER=root TEST_DB_PASS=test \
   npm run test:integration:ci
 
 run_tier "e2e: tear down service containers" e2e_compose_down

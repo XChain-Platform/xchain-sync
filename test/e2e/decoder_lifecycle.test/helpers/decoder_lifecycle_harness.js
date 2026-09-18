@@ -50,11 +50,12 @@ const Utility        = require('../../../../src/util');
 const decoderFixtures = require('../../helpers/decoderFixtures');
 const { getMariadb }   = require('../../helpers/mariadbLoader');
 const ServerProcess    = require('../../helpers/serverProcess');
+const fixturePorts     = require('../../../../bin/fixture-ports.js');
 
 const SOURCE_HOST  = process.env.E2E_DB_HOST         || '127.0.0.1';
-const SOURCE_PORT  = parseInt(process.env.E2E_DB_PORT) || 23306;
+const SOURCE_PORT  = fixturePorts.port('E2E_DB_PORT');
 const REPLICA_HOST = process.env.E2E_REPLICA_DB_HOST  || '127.0.0.1';
-const REPLICA_PORT = parseInt(process.env.E2E_REPLICA_DB_PORT) || 23307;
+const REPLICA_PORT = fixturePorts.port('E2E_REPLICA_DB_PORT');
 const DB_USER      = process.env.E2E_DB_USER          || 'xchain-node';
 const DB_PASS      = process.env.E2E_DB_PASS          || 'xchain-fixture-throwaway';
 

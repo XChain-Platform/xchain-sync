@@ -37,6 +37,7 @@
 
 const { expect } = require('chai');
 const testDb     = require('../e2e/helpers/testDb');
+const fixturePorts = require('../../bin/fixture-ports.js');
 
 const {
     assertReplicaMatchesSource,
@@ -71,7 +72,7 @@ describe('Chaos: Network Partition', function () {
 
     let server, client;
     const SERVER_PORT    = 30300;
-    const WS_PROXY_PORT  = 33062;
+    const WS_PROXY_PORT  = fixturePorts.port('WS_PROXY_PORT');
 
 before(async function () {
     await waitForToxiproxy();
