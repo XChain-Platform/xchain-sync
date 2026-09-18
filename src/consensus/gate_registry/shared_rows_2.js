@@ -205,10 +205,13 @@ addGate('mirror_admission_activation.ADMIT_MAX_FUTURE_BLOCKS', 'constant', {
  * unrelated instants. The 'COIN:network' key shape is established precedent.
  *
  * Mainnet is null under the 2026-08-29 write hold. TESTNET SIZED 2026-09-16 20:41Z, LTC and DOGE
- * RE-CUT 2026-09-17 22:45Z onto the BTC instant after their cadences drifted off it; the measured
- * tips, the formula, the cadence-window rule, the epoch-close rule and the per-chain re-size rule
- * are written once in the canon (xchain-documentation/protocol/constants.js), which this row is
- * held value-identical to. The v7 HUB_SCHEMA_VERSION roll completes BEFORE any of these heights:
+ * RE-CUT 2026-09-17 22:45Z onto the BTC instant after their cadences drifted off it. DOGE RE-CUT
+ * AGAIN 2026-09-18 01:32Z onto a fresh tip, and LTC set INERT in the same pass because a 21x
+ * cadence burst left no LTC height inside the 6 h ordering margin under both that burst and the
+ * target cadence; LTC arms in v0.21.0. The measured tips, the formula, the cadence-window rule,
+ * the epoch-close rule and the per-chain re-size rule are written once in the canon
+ * (xchain-documentation/protocol/constants.js), which this row is held value-identical to. The
+ * v7 HUB_SCHEMA_VERSION roll completes BEFORE any of these heights:
  * the heights map rides frames carrying no schema_version, so a v7 indexer above the activation
  * against a v6 hub would see no heights at all and defer forever under the fail-closed rule.
  */
@@ -217,8 +220,8 @@ addGate('mirror_admission_activation.MIRROR_ADMISSION_ACTIVATION', 'height', {
     'LTC:mainnet':  null,
     'DOGE:mainnet': null,
     'BTC:testnet':  153222,      // SIZED 2026-09-16 20:41Z: epoch close 153,216 + 6 buried; tip 152,756 + 466 at 498.7 s/blk, about 64.5 h
-    'LTC:testnet':  4891504,     // RE-CUT 2026-09-17 22:45Z onto that instant: tip 4,889,190 + 2314 at 82.5 s/blk
-    'DOGE:testnet': 67911796,    // RE-CUT 2026-09-17 22:45Z onto that instant: tip 67,904,912 + 6884 at 27.7 s/blk
+    'LTC:testnet':  null,        // INERT 2026-09-18 01:32Z: no LTC height is in band under both a 21x burst and the target cadence; arms in v0.21.0
+    'DOGE:testnet': 67912153,    // RE-CUT 2026-09-18 01:32Z onto that instant: tip 67,905,268 + 6885 at 27.38 s/blk
     'BTC:regtest':  UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
     'LTC:regtest':  UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
     'DOGE:regtest': UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
@@ -229,8 +232,8 @@ addGate('mirror_admission_activation.MIRROR_ADMISSION_CONSUMER_ACTIVATION', 'hei
     'LTC:mainnet':  null,
     'DOGE:mainnet': null,
     'BTC:testnet':  153266,      // its producer + 44 blocks, about 6 h: strictly above, never equal
-    'LTC:testnet':  4891766,     // its producer + 262 blocks, about 6 h at 82.5 s/blk
-    'DOGE:testnet': 67912575,    // its producer + 779 blocks, about 6 h at 27.7 s/blk
+    'LTC:testnet':  null,        // INERT with its producer: a null consumer over a null producer is the fail-closed pair
+    'DOGE:testnet': 67912942,    // its producer + 789 blocks, about 6 h at 27.38 s/blk
     'BTC:regtest':  UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
     'LTC:regtest':  UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
     'DOGE:regtest': UNPINNED,   // ARMS by XC_MIRROR_ADMISSION_ACTIVATION at registration
