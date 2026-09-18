@@ -1,6 +1,5 @@
 {
-  "armed_map_fingerprint": "69934f9b966c1c491fb0e737a41730488c729e3c209f1eda44b3ec7f6d2d6193",
-  "armed_map_fingerprint_v2": "69934f9b966c1c491fb0e737a41730488c729e3c209f1eda44b3ec7f6d2d6193",
+  "armed_map_fingerprint": "f3d4455007a84ab8000c47f586c0806097449574002f4bcf0f043ef3998a87d1",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -41,10 +40,10 @@
     "swq_source_cap_activation.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE": "a68b412c4282555f15546cf6e1fc42893b7e07f271557ceb021821098dd66c1b",
     "swq_source_cap_activation.STAKE_WEIGHT_MAX_SOURCES": "40510175845988f13f6162ed8526f0b09f73384467fa855e1e79b44a56562a58",
     "swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION": "d9105d53199963f94287f25b3d87d1e625b77d56ac8baab6d6ee64029b0fae74",
-    "train_activation.TRAIN_ACTIVATION": "8f740a4fe0949e295750bdf03de698c1914c5d584f617c179ca93910ab43d26e"
+    "train_activation.TRAIN_ACTIVATION": "3f842b0a9bec3dfc429b72e9172b941e262d8a1eef56eb2b4c60f63fdd90b8e4"
   },
   "armed_map_rows": 39,
-  "carrier_logic_digest": "cad8451409684926fbd52dfad60324c9e933adb794e468eb3e93f16704e75953",
+  "carrier_logic_digest": "f142db83339b2a74577e6e79d49cffc45c45ac642bcd57609b554f98a2f2e068",
   "vendoredCoins": {
     "src/coins/BTC.js": "900d82359d27269ebb775a207e84cac7ac0702f57f07c0239d5406f2a0ec6c90",
     "src/coins/DOGE.js": "a0952d619edec50c09d0cbac90023cba2e8e75f0fa98b650e2ee1f4eadd7540b",

@@ -64,13 +64,14 @@ function sha256(rel) {
 
 /** The whole identity of this build, as the pin stores it. */
 function buildPin() {
-    const v2 = require(path.join(REPO_ROOT, 'src/consensus/armed_map/fingerprint_v2.js')).computeArmedMapFingerprintV2();
+    const v2 = require(path.join(REPO_ROOT, 'src/consensus/armed_map/fingerprint.js')).computeArmedMapFingerprintV2();
     const logicPin = require(path.join(REPO_ROOT, 'bin/lib/carrier_logic_pin.js'));
     const coins = {};
     for (const rel of COIN_FILES) coins[rel] = sha256(rel);
     return {
+        // The legacy field carries v2 and the version field says so; the _v2 alias of the
+        // W1 to W4 window left the pin at W5 (activation-registry C4, D103).
         armed_map_fingerprint: v2.hex,
-        armed_map_fingerprint_v2: v2.hex,
         armed_map_fingerprint_version: 2,
         armedMapRows: v2.rows || null,
         armed_map_rows: v2.count === undefined ? null : v2.count,
@@ -82,8 +83,7 @@ function buildPin() {
 /** Pin against tree, field by field, so a failure names the file that moved. */
 function compare(pin, fresh) {
     const differences = [];
-    for (const field of ['armed_map_fingerprint', 'armed_map_fingerprint_v2',
-        'armed_map_fingerprint_version', 'armed_map_rows', 'carrier_logic_digest']) {
+    for (const field of ['armed_map_fingerprint', 'armed_map_fingerprint_version', 'armed_map_rows', 'carrier_logic_digest']) {
         if (pin[field] !== fresh[field]) differences.push(`${field} ${pin[field]} became ${fresh[field]}`);
     }
     for (const group of ['armedMapRows', 'vendoredCoins']) {
@@ -96,6 +96,11 @@ function compare(pin, fresh) {
             else if (!after) differences.push(`${group}: ${name} disappeared`);
             else differences.push(`${group}: ${name} changed bytes`);
         }
+    }
+    // A pin field this tool no longer writes (the W1 to W4 _v2 alias, or any future
+    // retirement) is a pin taken by an older tool: it does not hold until re-pinned.
+    for (const field of Object.keys(pin)) {
+        if (!Object.prototype.hasOwnProperty.call(fresh, field)) differences.push(`${field} is no longer recorded; re-pin`);
     }
     return differences;
 }
@@ -143,7 +148,6 @@ function main() {
     }
     console.log(`armed-map fingerprint  ${fresh.armed_map_fingerprint}`);
     console.log(`armed-map version      ${fresh.armed_map_fingerprint_version}`);
-    console.log(`armed-map v2           ${fresh.armed_map_fingerprint_v2}`);
     console.log(`armed-map v2 rows      ${fresh.armed_map_rows}`);
     console.log(`carrier logic digest   ${fresh.carrier_logic_digest}`);
     console.log(`vendored coin files    ${Object.keys(fresh.vendoredCoins).length}`);

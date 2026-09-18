@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-17
+
+### Changed
+- The vendored registry includes shipped mirror-admission and anchor-attestation barrier heights.
+- `carrier_logic_pin_ops --move` can re-pin changed carrier logic and record path and hash transitions atomically.
+- Activation modules and fingerprint tooling follow the consolidated consensus layout.
+
 ## [0.19.1] - 2026-09-16
 
 ### Fixed

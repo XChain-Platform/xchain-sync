@@ -66,7 +66,7 @@
 
 const M = require('../merkle.js');
 const CC = require('../consensus-constants.js');
-const SUB = require('../state_subtree_activation.js');
+const SUB = require('../consensus/gates/state_subtree_gate.js');
 const CST = require('../contract_state_subtree.js');
 const ESC = require('../escrow_leaf_subtree.js');
 const { minimalDecimal } = require('../db/balance_helpers.js');

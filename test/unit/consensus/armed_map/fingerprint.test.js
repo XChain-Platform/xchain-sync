@@ -22,9 +22,10 @@ const path   = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '../../../..');
-const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
+const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
 const { ENTRIES, collectRows } = require(path.join(ROOT, 'src/consensus/armed_map/manifest'));
 const { canonicalValue, fingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/canonical'));
+const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
 const { buildPin, compare } = require(path.join(ROOT, 'bin/pin-identity.js'));
 const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));
 
@@ -85,8 +86,10 @@ describe('armed map v2: fingerprint module and publication', function () {
     });
 
     it('names each row by the sha256 of its exported value, so a mismatch points at the row', function () {
-        const { STATE_COMMITMENT_ACTIVATION } = require(path.join(ROOT, 'src/state_commitment_activation'));
-        const expected = crypto.createHash('sha256').update(canonicalValue(STATE_COMMITMENT_ACTIVATION), 'utf8').digest('hex');
+        // The row read through the registry (the W4 caller contract), so the case does not
+        // name the gate module's path and survives its W5 move.
+        const row = get('state_commitment_activation.STATE_COMMITMENT_ACTIVATION');
+        const expected = crypto.createHash('sha256').update(canonicalValue(row), 'utf8').digest('hex');
         assert.strictEqual(computeArmedMapFingerprintV2().rows['state_commitment_activation.STATE_COMMITMENT_ACTIVATION'], expected);
     });
 
@@ -95,16 +98,16 @@ describe('armed map v2: fingerprint module and publication', function () {
     });
 
     it('never lists a directory, so the value cannot depend on the file layout', function () {
-        for (const rel of ['canonical.js', 'manifest.js', 'fingerprint_v2.js']) {
+        for (const rel of ['canonical.js', 'manifest.js', 'fingerprint.js']) {
             const src = fs.readFileSync(path.join(ROOT, 'src/consensus/armed_map', rel), 'utf8');
             assert.ok(!/readdirSync|readdir\(/.test(src), rel + ' reads a directory');
         }
     });
 
-    it('uses v2 for the legacy field and records version 2 plus the logic digest', function () {
+    it('uses v2 for the legacy field and records version 2 plus the logic digest, with no _v2 alias (W5)', function () {
         const pin = buildPin();
         assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
-        assert.strictEqual(pin.armed_map_fingerprint_v2, pin.armed_map_fingerprint);
+        assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armed_map_fingerprint_v2'), 'the W1 to W4 alias is gone at W5');
         assert.strictEqual(pin.armed_map_fingerprint_version, 2);
         assert.strictEqual(pin.carrier_logic_digest, logicPin.digest(logicPin.readPin(ROOT)));
     });
@@ -112,7 +115,7 @@ describe('armed map v2: fingerprint module and publication', function () {
 
 describe('armed map v2: fingerprint module and publication', function () {
 
-    it('both /health bodies carry v2, version 2 and the carrier logic digest', function () {
+    it('both /health bodies carry v2, version 2 and the carrier logic digest, and no _v2 alias', function () {
         this.timeout(30000);
         const res = spawnSync(process.execPath, ['-e', HEALTH_DRIVE, require.resolve('proxyquire'), path.join(ROOT, 'src/api.js')], {
             cwd: ROOT, encoding: 'utf8',
@@ -128,10 +131,11 @@ describe('armed map v2: fingerprint module and publication', function () {
         assert.strictEqual(healthy.status, 200);
         for (const reading of [starting, healthy]) {
             assert.strictEqual(reading.body.armed_map_fingerprint, hex);
-            assert.strictEqual(reading.body.armed_map_fingerprint_v2, hex);
             assert.strictEqual(reading.body.armed_map_fingerprint_version, 2);
             assert.strictEqual(reading.body.carrier_logic_digest, logicDigest);
-            assert.strictEqual(reading.keys.indexOf('armed_map_fingerprint_v2'), reading.keys.indexOf('armed_map_fingerprint') + 1);
+            // C4: the alias is gone; the version field directly follows the legacy field it describes.
+            assert.ok(!reading.keys.includes('armed_map_fingerprint_v2'), 'the _v2 alias must not be published');
+            assert.strictEqual(reading.keys.indexOf('armed_map_fingerprint_version'), reading.keys.indexOf('armed_map_fingerprint') + 1);
         }
     });
 
@@ -139,7 +143,6 @@ describe('armed map v2: fingerprint module and publication', function () {
         it('records v2, its row hashes and count with no v1 fields', function () {
             const pin = buildPin();
             assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
-            assert.strictEqual(pin.armed_map_fingerprint_v2, computeArmedMapFingerprintV2().hex);
             assert.strictEqual(pin.armed_map_rows, ENTRIES.length);
             assert.deepStrictEqual(pin.armedMapRows, computeArmedMapFingerprintV2().rows);
             assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armedMapFingerprint'));
@@ -149,12 +152,19 @@ describe('armed map v2: fingerprint module and publication', function () {
         it('reports a moved v2 and a changed row count, and nothing for an identical tree', function () {
             const fresh = buildPin();
             assert.deepStrictEqual(compare(fresh, fresh), []);
-            const movedV2 = compare({ ...fresh, armed_map_fingerprint_v2: '0'.repeat(64) }, fresh);
+            const movedV2 = compare({ ...fresh, armed_map_fingerprint: '0'.repeat(64) }, fresh);
             assert.strictEqual(movedV2.length, 1);
-            assert.ok(movedV2[0].includes(fresh.armed_map_fingerprint_v2), movedV2[0]);
+            assert.ok(movedV2[0].includes(fresh.armed_map_fingerprint), movedV2[0]);
             assert.strictEqual(compare({ ...fresh, armed_map_rows: fresh.armed_map_rows - 1 }, fresh).length, 1);
-            assert.strictEqual(compare({ ...fresh, armed_map_fingerprint_v2: undefined }, fresh).length, 1,
-                'a pin taken before v2 existed must not read as holding');
+            // A pin from before v2 spells no version and holds v1 in the legacy field.
+            const preV2 = { ...fresh, armed_map_fingerprint: '1'.repeat(64), armed_map_fingerprint_version: undefined };
+            assert.strictEqual(compare(preV2, fresh).length, 2, 'a pin taken before v2 existed must not read as holding');
+            // A W3 or W4 pin still spells the _v2 alias this tool no longer writes: stale until re-pinned.
+            const aliased = compare({ ...fresh, armed_map_fingerprint_v2: fresh.armed_map_fingerprint }, fresh);
+            assert.strictEqual(aliased.length, 1, aliased.join('; '));
+            assert.ok(aliased[0].includes('armed_map_fingerprint_v2'), 'the difference names the stale field: ' + aliased[0]);
+            assert.ok(!Object.prototype.hasOwnProperty.call(JSON.parse(fs.readFileSync(path.join(ROOT, 'bin/pins/identity.json'), 'utf8')), 'armed_map_fingerprint_v2'),
+                'the committed pin must not carry the alias');
         });
     });
 });

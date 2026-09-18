@@ -55,10 +55,13 @@ const DEFAULT_CONTENT_PARITY_WINDOW = 100;
 
 const replicatedTables = require('../schema/replicated_tables');
 const lifecycle = require('../table_lifecycle');
-const { buildStateHashData } = require('../stateHash');
+const { buildStateHashData } = require('../consensus/state_hash');
 const { gasTickSymbol } = require('../consensus-constants');
 const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
-const { isStateKeyBinCollationActive } = require('../state_key_collation_activation');
+// The state-key binary collation flag day is a registry row read by literal key (W5),
+// keyed '<COIN>:<network>' so the coin goes with the height.
+const gateRegistry = require('../consensus/gate_registry');
+const STATE_KEY_COLLATION_KEY = 'state_key_collation_activation.STATE_KEY_COLLATION_ACTIVATION';
 
 class BlockHasher {
 
@@ -175,8 +178,8 @@ class BlockHasher {
         // state_key collation is flag-day gated, byte-for-byte mirror of
         // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
         // (utf8_general_ci) below the activation height, COLLATE utf8_bin
-        // pinned at/after it (see state_key_collation_activation.js).
-        let stateKeyBin = isStateKeyBinCollationActive(block_index, network, coin);
+        // pinned at/after it (the state_key_collation_activation registry row).
+        let stateKeyBin = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null);
         let stateKeyCollate = stateKeyBin ? ' COLLATE utf8_bin' : '';
         query = `SELECT cs.contract_index, cs.state_key, cs.state_value
                  FROM contract_state cs

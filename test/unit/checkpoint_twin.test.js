@@ -10,8 +10,9 @@
  *
  **********************************************************************
  * Vendored checkpoint verifier conformance. src/checkpoint.js (+ its
- * stake_weighted_quorum / equivocation_header / checkpoint_commitment_activation
- * siblings) is a byte-identical TWIN of the xchain-sdk copies. This guards that
+ * consensus/stake_weighted_quorum and consensus/equivocation_header siblings; the
+ * CHECKPOINT_COMMITMENT flag day is a registry row) is a code-identical TWIN of the
+ * xchain-sdk copies. This guards that
  * the vendored copy actually verifies a real federation-signed checkpoint and
  * rejects a tampered one, so drift from the SDK is caught here rather than in
  * production (mirrors how merkle.js is golden-vector guarded).
@@ -30,8 +31,7 @@ const SYNC_SRC = path.join(__dirname, '../../src');
 const SDK_SRC  = path.join(__dirname, '../../../xchain-sdk/src');
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 // The four files this suite's header declares twins of the SDK copies.
-const TWINS = ['checkpoint.js', 'stake_weighted_quorum.js', 'equivocation_header.js',
-    'checkpoint_commitment_activation.js'];
+const TWINS = ['checkpoint.js', 'consensus/stake_weighted_quorum.js', 'consensus/equivocation_header.js'];
 
 // Cut unquoted // comments (tracking ' " ` quote state per line) so the two
 // sides compare on CODE. The prose is independently worded in both copies and

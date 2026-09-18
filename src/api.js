@@ -32,7 +32,7 @@ const http        = require('http');
 const WebSocket   = require('ws');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
-const { computeArmedMapFingerprintV2 } = require('./consensus/armed_map/fingerprint_v2');
+const { computeArmedMapFingerprintV2 } = require('./consensus/armed_map/fingerprint');
 const { carrierLogicDigest } = require('./health/carrier_logic');
 const SyncService = require('./SyncService');
 const Utility     = require('./util');
@@ -47,7 +47,10 @@ const coins       = require('./coins');
 // instance is safe. See BlockHasher.computeIndexMapChecksum (NON-consensus).
 const statusUtil = new Utility();
 
-function consensusIdentityFields(){ const armedMapV2 = computeArmedMapFingerprintV2().hex; return { armed_map_fingerprint: armedMapV2, armed_map_fingerprint_v2: armedMapV2, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
+// The armed-map identity every /health body carries: fingerprint v2 in the legacy field,
+// the version that names the algorithm, and the logic digest beside it. The _v2 alias of
+// the W1 to W4 window is gone since W5 (activation-registry C4).
+function consensusIdentityFields(){ return { armed_map_fingerprint: computeArmedMapFingerprintV2().hex, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
 
 dotenv.config();
 

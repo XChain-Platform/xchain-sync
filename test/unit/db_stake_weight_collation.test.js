@@ -26,7 +26,7 @@
 const assert   = require('assert');
 const sinon    = require('sinon');
 const Database = require('../../src/db');
-const swc      = require('../../src/stake_weight_collation_activation');
+const swc      = require('../../src/consensus/gates/stake_weight_collation_gate');
 
 function makeUtil() { return { isNull: (x) => x == null, logError: () => {}, throwError: () => {} }; }
 

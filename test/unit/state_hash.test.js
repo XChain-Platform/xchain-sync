@@ -21,7 +21,7 @@
  ********************************************************************/
 
 const assert  = require('assert');
-const { buildStateHashData, STATE_HASH_VERSION } = require('../../src/stateHash');
+const { buildStateHashData, STATE_HASH_VERSION } = require('../../src/consensus/state_hash');
 const Utility = require('../../src/util');
 const vectors = require('../fixtures/state-hash-vectors.json');
 

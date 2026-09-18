@@ -59,15 +59,19 @@ const { execFileSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-// Files this repo carries but does not author. A consensus carrier is hashed by
-// name and bytes, so a restored comment moves the armed-map fingerprint; a twin
-// is compared with its canonical copy; a vendored file is refreshed by a script.
-// Their deleted lines are the canonical repo's to put back, never this one's.
+// Files this repo carries but does not author. A twin is compared byte for byte
+// with its canonical copy (the indexer's, through the platform's reconcile
+// check) and a vendored file is refreshed by a script, so a comment restored
+// here alone reads as drift at the next check. Their deleted lines are the
+// canonical repo's to put back, never this one's. The activation gates and the
+// three carriers sit under src/consensus/ since the activation-registry W5
+// window (the same tail as the indexer's copies); the armed-map fingerprint no
+// longer hashes any file by name, so nothing here is frozen for its own sake.
 const FROZEN = [
     /^src\/coins\//, /^src\/observability\//,
-    /^src\/[a-z_]+_activation\.js$/,
-    /^src\/(stateHash|equivocation_header|stake_weighted_quorum|consensus-constants)\.js$/,
-    /^src\/(merkle|contract_state_subtree|escrow_leaf_subtree|table_lifecycle|stateCommitment|checkpoint|armedMapFingerprint)\.js$/,
+    /^src\/consensus\/gates\/[a-z_]+_gate\.js$/,
+    /^src\/consensus\/(state_hash|equivocation_header|stake_weighted_quorum)\.js$/,
+    /^src\/(merkle|contract_state_subtree|escrow_leaf_subtree|table_lifecycle|checkpoint)\.js$/,
     /^src\/table_lifecycle\//,
     /^src\/state_commitment\//,
     /^test\/unit\/(stateSubtreeActivation|contractStateSubtree|escrowLeafSubtree)\.test\.js$/,

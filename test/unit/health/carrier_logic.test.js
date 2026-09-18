@@ -27,7 +27,7 @@ const ROOT = path.join(__dirname, '../../..');
 const MODULE = path.join(ROOT, 'src/health/carrier_logic.js');
 const health = require(MODULE);
 const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));
-const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint_v2'));
+const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -45,7 +45,7 @@ function freshCopy(withPin) {
 }
 
 // Boots startApi() with the service, the coin-pin check and the listener
-// stubbed (the shape armed_map/fingerprint_v2.test.js uses) and prints the
+// stubbed (the shape armed_map/fingerprint.test.js uses) and prints the
 // 503 body, which is the consensusIdentityFields() spread the route serves.
 const HEALTH_DRIVE = `
 const http = require('http');
@@ -107,7 +107,7 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
         assert.ok(!/require\(['"]\.\.\/bin/.test(api), 'src/api.js requires under bin/');
     });
 
-    it('/health carries the digest as its own field beside v2, version 2, v2 equal to the legacy field', function () {
+    it('/health carries the digest as its own field beside v2 and version 2, with no _v2 alias', function () {
         this.timeout(30000);
         const res = spawnSync(process.execPath, ['-e', HEALTH_DRIVE, require.resolve('proxyquire'), path.join(ROOT, 'src/api.js')], {
             cwd: ROOT, encoding: 'utf8',
@@ -120,7 +120,7 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
         assert.strictEqual(body.carrier_logic_digest, logicPin.digest(logicPin.readPin(ROOT)));
         assert.match(body.carrier_logic_digest, HEX64);
         assert.strictEqual(body.armed_map_fingerprint_version, 2);
-        assert.strictEqual(body.armed_map_fingerprint_v2, computeArmedMapFingerprintV2().hex);
-        assert.strictEqual(body.armed_map_fingerprint, body.armed_map_fingerprint_v2);
+        assert.strictEqual(body.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
+        assert.ok(!Object.prototype.hasOwnProperty.call(body, 'armed_map_fingerprint_v2'), 'the W1 to W4 alias is gone at W5');
     });
 });

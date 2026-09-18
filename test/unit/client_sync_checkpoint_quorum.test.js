@@ -157,7 +157,7 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
     // uuid:c9dfc3d9. Deciding "pre-commitment" from the WIRE's missing state_root alone
     // lets a rootless checkpoint served AT an active height return before the
     // seq-regression and freshness guards below without a trace. The replica
-    // bundles the flag-day map (checkpoint_commitment_activation.js) and the verifier
+    // reads the flag-day row (checkpoint_commitment_activation, a registry row) and the verifier
     // already fail-closes on the same predicate, so the activation question is decided
     // locally. Regtest's threshold is 0, so every checkpoint here is commitment-active.
     it('WARNS on a rootless checkpoint at a commitment-ACTIVE height (does not anchor, does not halt)', async function(){

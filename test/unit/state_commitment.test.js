@@ -25,7 +25,7 @@
 const assert = require('assert');
 const M  = require('../../src/merkle.js');
 const SC = require('../../src/state_commitment/index.js');
-const act = require('../../src/state_commitment_activation.js');
+const act = require('../../src/consensus/gates/state_commitment_gate.js');
 
 // Deterministic pseudo-random key + amount derived from an index.
 function keyFor(i){ return M.sha256(Buffer.from('key:' + i, 'utf8')); }            // 32-byte key buf

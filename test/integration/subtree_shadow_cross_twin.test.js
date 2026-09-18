@@ -45,7 +45,7 @@ const fixtures = require('./helpers/fixtures');
 
 const ServerPoller  = require('../../src/server/poller');
 const ClientApplier = require('../../src/client/applier');
-const SUB = require('../../src/state_subtree_activation');
+const SUB = require('../../src/consensus/gates/state_subtree_gate');
 const CST = require('../../src/contract_state_subtree');
 const SC  = require('../../src/state_commitment');
 

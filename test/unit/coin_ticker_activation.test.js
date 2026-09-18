@@ -32,7 +32,7 @@
 
 const assert = require('assert');
 const { coinTicker } = require('../../src/consensus-constants');
-const { isStateCommitmentActive } = require('../../src/state_commitment_activation');
+const { isStateCommitmentActive } = require('../../src/consensus/gates/state_commitment_gate');
 
 describe('coinTicker() + per-chain activation lookup', function () {
 

@@ -80,7 +80,7 @@
  *
  ********************************************************************/
 
-const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../stateHash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../consensus/state_hash');
 const {
     DEACTIVATION_TABLES, SLASH_SPECS, ROTATION_TABLES, REQUEST_STATUS_TABLES,
     POLL_FINALIZE_TABLES, COOLDOWN_STATUS_TABLES, ATTEST_BATCH_HEAD_VERSION,

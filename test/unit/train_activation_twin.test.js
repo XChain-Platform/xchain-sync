@@ -30,15 +30,15 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-const local = require('../../src/train_activation.js');
+const local = require('../../src/consensus/gates/train_gate.js');
 
 // CI sets these to wherever it checked the siblings out; fall back to the dev
 // sibling layout one level above this repo.
 const DOCS_DIR    = process.env.XCHAIN_DOCS_DIR    || path.join(__dirname, '..', '..', '..', 'xchain-documentation');
 const INDEXER_DIR = process.env.XCHAIN_INDEXER_DIR || path.join(__dirname, '..', '..', '..', 'xchain-indexer');
 const CONSTANTS_PATH = path.join(DOCS_DIR, 'protocol', 'constants.js');
-const TWIN_PATH      = path.join(INDEXER_DIR, 'src', 'train_activation.js');
-const HERE_PATH      = path.resolve(__dirname, '..', '..', 'src', 'train_activation.js');
+const TWIN_PATH      = path.join(INDEXER_DIR, 'src', 'consensus', 'gates', 'train_gate.js');
+const HERE_PATH      = path.resolve(__dirname, '..', '..', 'src', 'consensus', 'gates', 'train_gate.js');
 
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 

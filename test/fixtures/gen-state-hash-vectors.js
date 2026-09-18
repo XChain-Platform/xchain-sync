@@ -30,7 +30,7 @@ const path = require('path');
 process.env.INDEXER_COIN    = process.env.INDEXER_COIN    || 'BTC';
 process.env.INDEXER_NETWORK = process.env.INDEXER_NETWORK || 'regtest';
 
-const { buildStateHashData } = require('../../src/stateHash');
+const { buildStateHashData } = require('../../src/consensus/state_hash');
 const IndexerUtil = require('../../../xchain-indexer/src/utility.js');
 
 const BLOCK_INDEX     = 1000;
