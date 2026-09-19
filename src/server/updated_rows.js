@@ -69,6 +69,14 @@
  *     cursor, so the action-scoped stream misses every later supply bump. Found via
  *     the ticks touched by a credit / debit / escrow row in this window, since those
  *     ledger tables are action-scoped and pin the supply change to a block.
+ *   - metadata refresh on a surviving tokens row (the indexer re-derives every
+ *     derived token column from the `issues` history on each valid ISSUE, so an
+ *     EDIT of an existing tick - ownership TRANSFER, description, the locks, the
+ *     callback and list fields, the bridge opt-in - is an in-place UPDATE). Both
+ *     action_index and last_action_index stay pinned at the first issuance, below
+ *     the cursor, so the action-scoped stream misses the edit. Found via the
+ *     ticks carrying a valid `issues` row in this window, since `issues` is
+ *     action-scoped and pins the edit to a block.
  *
  * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
  * source's own authoritative gate value lands on the replica. The follower ALSO
@@ -86,18 +94,8 @@ const {
     POLL_FINALIZE_TABLES, COOLDOWN_STATUS_TABLES, ATTEST_BATCH_HEAD_VERSION,
     ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, BET_STATUS_SPECS
 } = require('./updated_rows/table_specs.js');
-
-// table -> Map(action_index -> row). The Map dedups rows reached by more than
-// one class (e.g. a stake both deactivated and slashed in the same window) by
-// their UNIQUE action_index, so each table emits each surviving row once.
-function add(acc, table, rows){
-    if(!rows || rows.length === 0) return;
-    let m = acc[table] || (acc[table] = new Map());
-    for(let r of rows){
-        if(r && r.action_index !== undefined && r.action_index !== null)
-            m.set(String(r.action_index), r);
-    }
-}
+const { add } = require('./updated_rows/accumulator.js');
+const { collectTokenSupplyRows, collectTokenEditRows } = require('./updated_rows/token_rows.js');
 
 // Query classes skip missing tables or columns on older source schemas. Other
 // numeric database errors propagate to the caller.
@@ -305,57 +303,6 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
 }
 
-async function collectTokenSupplyRows(db, from, to, conn, acc){
-    // 6. tokens.supply refresh on surviving token rows. The indexer materialises
-    //    tokens.supply as an in-place UPDATE (db.createToken on DEPLOY/ISSUE/MINT and
-    //    db.updateTokens after order/swap/dispense settlement and STAKE rebalances). The
-    //    row's action_index stays at the DEPLOY action, and last_action_index is also
-    //    written back to that same DEPLOY index (createToken sets both from the first
-    //    valid issuance), so BOTH columns sit below the catch-up cursor: the
-    //    action-scoped stream keyed on action_index never carries the later supply bump.
-    //    Followers therefore served a stale supply (invisible to /status counts and not
-    //    covered by any hash). Supply changes exactly when a credit / debit / escrow row
-    //    is written for the tick, and those ledger tables ARE action-scoped (they ride the
-    //    per-block / catch-up stream). So the set of ticks whose supply moved in this
-    //    window is exactly the set of tick_ids touched by a credit / debit / escrow row
-    //    whose action falls in [from, to]. We carry the CURRENT full tokens row for those
-    //    ticks (SELECT t.* -> the source `id`, which followers replicate verbatim, so the
-    //    follower's INSERT ... ON DUPLICATE KEY UPDATE lands on the matching PRIMARY KEY
-    //    row and overwrites supply to the source's current value). Idempotent: re-sending
-    //    an already-current row is a no-op. Reorg-safe: on rollback the source
-    //    re-materialises supply (rollback.js -> updateTokens) and the next forward window's
-    //    ledger changes re-emit the refreshed row; in-order block apply means a later
-    //    window's row never lands before an earlier one. tokens.supply stays out of the
-    //    consensus block hashes, but since 2026-07-07 this class HAS a state_hash twin:
-    //    buildStateHashData's token_supply class hashes (tick, supply) for the same
-    //    ledger-touched tick set (flag-day gated per chain via
-    //    TOKEN_SUPPLY_STATE_HASH_ACTIVATION), so once armed, a follower that drops this
-    //    upsert halts at the block instead of serving a stale supply.
-    try {
-        // Join each ledger table to `actions` independently and UNION the tick_ids,
-        // rather than UNION ALL-ing the three full tables into a derived table and
-        // joining once. The derived-table form forces MariaDB to materialise every
-        // credits/debits/escrows row before the block-range predicate can apply (it
-        // cannot push `a.block_index BETWEEN ? AND ?` down into the UNION ALL), an
-        // O(total ledger size) scan on every block/catch-up window. Per-branch joins
-        // let the optimiser drive from `actions` (block_index range) into each table
-        // via its action_index index. UNION (not UNION ALL) preserves the original
-        // SELECT DISTINCT semantics, so the emitted tick set is byte-identical.
-        let tokenRows = await db.doQuery(
-            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
-                "SELECT c.tick_id FROM credits c JOIN actions a ON a.action_index = c.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
-                "UNION " +
-                "SELECT d.tick_id FROM debits d JOIN actions a ON a.action_index = d.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
-                "UNION " +
-                "SELECT e.tick_id FROM escrows e JOIN actions a ON a.action_index = e.action_index " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL)",
-            [from, to, from, to, from, to], conn);
-        add(acc, 'tokens', tokenRows);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
-}
-
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
 // Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
 // the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
@@ -379,6 +326,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     await collectInvalidArchiveRows(db, from, to, conn, acc);
     await collectAttestBatchHeadRows(db, from, to, conn, acc);
     await collectTokenSupplyRows(db, from, to, conn, acc);
+    await collectTokenEditRows(db, from, to, conn, acc);
     let out = {};
     for(let table in acc){
         let arr = Array.from(acc[table].values());
