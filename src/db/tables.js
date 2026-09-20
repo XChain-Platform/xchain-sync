@@ -23,7 +23,7 @@
 const path       = require('path');
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
-const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../stateHash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../consensus/state_hash');
 
 module.exports = {
 
