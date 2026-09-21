@@ -68,7 +68,7 @@ const REDACTED = '[redacted]';
 
 // Deliberately NOT swept here: bare hex. Hub and indexer lines are full of
 // legitimate 64-char hex (txids, block hashes, state roots, digests) and
-// redacting those would gut the logs this shim exists to make readable. The
+// redacting those would gut the logs this spec exists to make readable. The
 // watch collector applies a hex-key sweep at its own boundary instead, where the
 // output is a committed report rather than an operator's live tail.
 function scrubMessage(msg) {
@@ -104,9 +104,7 @@ function formatFieldValue(value) {
  *
  * The message stays immediately after the service tag so every existing
  * substring grep across the platform (handover greps, StatusService, the
- * decoder's wait loops) keeps matching: the prefix is the only addition.
- *
- * The level token is lowercase on purpose: an uppercase ERROR would
+ * decoder's wait loops) keeps matching: the prefix is the only addition. The level token is lowercase on purpose: an uppercase ERROR would
  * be counted by the server-monitor's `grep -cE 'ERROR|FATAL'` rate alert on
  * every console.error line and page the fleet on first deploy.
  */
@@ -219,12 +217,12 @@ class LogShipper {
         this.pending  = null;
         this.lastErrorNoteMs = 0;
         this.stats = { emitted: 0, shipped: 0, dropped: 0, failures: 0 };
-        this.transport = transport || ((body) => this.postBatch(body));
-        if (registry) this.attachMetrics(registry);
-        if (this.config.shipEnabled) this.startFlushTimer();
+        this.transport = transport || ((body) => this._post(body));
+        if (registry) this._attachMetrics(registry);
+        if (this.config.shipEnabled) this._startTimer();
     }
 
-    attachMetrics(registry) {
+    _attachMetrics(registry) {
         const emitted = registry.counter({ name: 'log_lines_emitted_total', help: 'Log lines emitted by the structured log shim', labelNames: ['level'] });
         // Cumulative totals are counters, not gauges: a _total-suffixed gauge
         // reads to a scraper as a resettable level, so rate() over it is
@@ -235,7 +233,7 @@ class LogShipper {
         const failed  = registry.counter({ name: 'log_ship_failures_total',   help: 'Failed log-ship batch attempts' });
         // Buffer depth IS a level, so it stays a gauge.
         const pending = registry.gauge({ name: 'log_ship_buffer_lines',     help: 'Log lines currently buffered for shipping' });
-        this.levelCounter = emitted;
+        this._levelCounter = emitted;
         registry.addCollector(() => {
             shipped.setMonotonic({}, this.stats.shipped);
             dropped.setMonotonic({}, this.stats.dropped);
@@ -244,7 +242,7 @@ class LogShipper {
         });
     }
 
-    startFlushTimer() {
+    _startTimer() {
         this.timer = setInterval(() => { this.flush(); }, this.config.intervalMs);
         // A logging timer must never be the reason the process refuses to exit.
         if (typeof this.timer.unref === 'function') this.timer.unref();
@@ -265,9 +263,9 @@ class LogShipper {
         Object.assign(record, safeFields);
 
         this.stats.emitted += 1;
-        if (this.levelCounter) this.levelCounter.inc({ level }, 1);
-        this.emitLocal(level, record);
-        if (this.config.shipEnabled) this.enqueue(record);
+        if (this._levelCounter) this._levelCounter.inc({ level }, 1);
+        this._emitLocal(level, record);
+        if (this.config.shipEnabled) this._enqueue(record);
         return record;
     }
 
@@ -276,7 +274,7 @@ class LogShipper {
     warn(msg, fields)  { return this.log('warn',  msg, fields); }
     error(msg, fields) { return this.log('error', msg, fields); }
 
-    emitLocal(level, record) {
+    _emitLocal(level, record) {
         const fn = level === 'error' ? (this.console.error || this.console.log)
             : level === 'warn' ? (this.console.warn || this.console.log)
                 : this.console.log;
@@ -288,7 +286,7 @@ class LogShipper {
         else fn.call(this.console, formatTextLine(record));
     }
 
-    enqueue(record) {
+    _enqueue(record) {
         if (this.buffer.length >= this.config.maxBuffer) {
             // Drop oldest: during an incident the newest lines are the ones worth having.
             this.buffer.shift();
@@ -319,7 +317,7 @@ class LogShipper {
                 const keep = batch.slice(Math.max(0, batch.length - room));
                 this.stats.dropped += batch.length - keep.length;
                 this.buffer.unshift(...keep);
-                this.noteShipError(err);
+                this._noteError(err);
             })
             .finally(() => { this.inFlight = false; this.pending = null; });
         return this.pending;
@@ -327,7 +325,7 @@ class LogShipper {
 
     // At most one stderr line per minute: a collector outage must not itself
     // become the log flood that fills the disk.
-    noteShipError(err) {
+    _noteError(err) {
         const now = Date.now();
         if (now - this.lastErrorNoteMs < 60000) return;
         this.lastErrorNoteMs = now;
@@ -335,7 +333,7 @@ class LogShipper {
         if (sink) sink.call(this.console, `[log-ship] batch failed (${err && err.message ? err.message : 'unknown'}); buffered=${this.buffer.length} dropped=${this.stats.dropped}`);
     }
 
-    postBatch(body) {
+    _post(body) {
         const { url, token, timeoutMs } = this.config;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
