@@ -56,9 +56,9 @@ class HashVerifier {
         };
     }
 
-    // Advisory: compare local vs remote per-table content checksums (NON-consensus,
-    // ). Both sides are BlockHasher.computeTableContentChecksums results over
-    // the SAME window and the same published bounds.
+    // Advisory: compare local vs remote per-table content checksums (NON-consensus).
+    // Both sides are BlockHasher.computeTableContentChecksums results over the SAME
+    // window and the same published bounds.
     //
     // The comparison is deliberately gated on EQUAL ROW COUNTS, and that gate is what
     // makes the signal trustworthy rather than noisy:
