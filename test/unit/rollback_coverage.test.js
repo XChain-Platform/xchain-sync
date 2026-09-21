@@ -240,7 +240,7 @@ describe('Rollback coverage guard @regression', function(){
         const IndexerRollback = require(rbPath);
         // Rollback's constructor only assigns config aliases + the static table
         // arrays (no DB/network work), so a bare stub yields the lists we need.
-        const indexer = new IndexerRollback({});
+        const indexer = new IndexerRollback({ util: { resetLists () {} } });
         const indexerRollback = new Set([...indexer.dataTables, ...indexer.blockTables]);
 
         // INDEXER_LOCAL (tables the indexer rolls back that sync intentionally
@@ -290,7 +290,7 @@ describe('Rollback coverage guard @regression', function(){
         const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
         const IndexerRollback = require(rbPath);
-        const indexer = new IndexerRollback({});
+        const indexer = new IndexerRollback({ util: { resetLists () {} } });
         assert.deepStrictEqual(
             [...(indexer.indexTables || [])].sort(),
             [...rollback.indexTables].sort(),
