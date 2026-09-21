@@ -148,6 +148,18 @@ class ClientApplier {
             'rollcall_gates'
         ]);
 
+        // Repair-only identities for replicated lookup tables whose natural value must
+        // agree with the source at the source's carried id. These tables are normally
+        // INSERT IGNORE because every block may re-send them, but that cannot repair an
+        // id mapping changed by first-seen AUTO_INCREMENT order: PRIMARY collisions look
+        // benign even when the row at that id has a different value, while natural-key
+        // collisions silently keep the same value at the wrong id. Upsert-only replicated
+        // tables therefore need ID-stable migrations; this map is the bounded recovery
+        // path for an already-unstable replica during a from-zero lookup repair.
+        this.repairNaturalKeyColumns = new Map([
+            ['index_statuses', ['status']]
+        ]);
+
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
@@ -577,6 +589,12 @@ class ClientApplier {
             for(let table in snapshotData.tables){
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
+                // The strict option is only set by the from-zero lookup repair. Reconcile
+                // the carried id/status pairs before INSERT IGNORE so both a natural-key
+                // collision and a wrong row hidden by a PRIMARY collision are corrected.
+                let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
+                if(opts && opts.strictIgnoreCheck && repairKeyColumns)
+                    await this.reconcileLookupRows(table, rows, repairKeyColumns);
                 await this.insertRows(table, rows, opts);
             }
             // Rebuild balances if this snapshot touched credits/debits. The
@@ -725,6 +743,7 @@ class ClientApplier {
                 throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
+
         // Mutable-aggregate full-dump tables (useUpsert) overwrite their existing row so
         // a re-dump on a non-empty replica refreshes (not skips) stale values.
         // Batch inserts in groups of 100 for efficiency
@@ -825,6 +844,40 @@ class ClientApplier {
             suspect.push(w);
         }
         return suspect;
+    }
+
+    // Remove rows that conflict with the source page by either surrogate id or natural
+    // key. The caller immediately re-inserts the page in the same transaction. Probing
+    // exact pairs first keeps an already-converged repair idempotent and avoids writes.
+    async reconcileLookupRows(table, rows, keyColumns){
+        let retireIds = new Set();
+        for(let row of rows){
+            let id = row ? row.id : undefined;
+            if(id === undefined || id === null)
+                throw new Error('Lookup repair row for ' + table + ' is missing id');
+
+            let values = [];
+            for(let column of keyColumns){
+                if(row[column] === undefined)
+                    throw new Error('Lookup repair row for ' + table + ' is missing natural key ' + column);
+                values.push(row[column]);
+            }
+
+            let keyHolders = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
+            if(keyHolders && keyHolders.length === 1 && Number(keyHolders[0].id) === Number(id))
+                continue;
+
+            let idHolder = await this.db.findRowIdById(table, id);
+            for(let holder of (idHolder || [])) retireIds.add(Number(holder.id));
+
+            for(let holder of (keyHolders || [])) retireIds.add(Number(holder.id));
+        }
+
+        for(let id of retireIds){
+            await this.db.deleteRowById(table, id);
+            logger.warn('LOOKUP_ID_STATUS_RECONCILED table=' + table + ' retired_id=' + id +
+                ' cause=first_seen_auto_increment_id_instability');
+        }
     }
 
     // Retire the rows of a superseded lookup generation so the source's rows can land.
