@@ -89,7 +89,7 @@ describe('observability/installObservability', function () {
     // The registry and shipper are process-wide by design (one process is one
     // service), so a suite that installs many times has to drop them between
     // cases or it reads the previous case's service label and HTTP series.
-    afterEach(function () { require('../../src/observability/index.js').resetObservability(); });
+    afterEach(function () { require('../../src/observability/index.js')._resetObservability(); });
     registerRouteTests(testContext);
 });
 
@@ -106,10 +106,10 @@ describe('observability/logShipper: message redaction', function () {
 });
 
 describe('observability/patchConsole', function () {
-    const { patchConsole, unpatchConsole, getLogger, getRegistry, resetObservability } =
+    const { patchConsole, unpatchConsole, getLogger, getRegistry, _resetObservability } =
         require('../../src/observability/index.js');
 
-    afterEach(function () { resetObservability(); });
+    afterEach(function () { _resetObservability(); });
     registerFlushAndHealthTests({
         ...testContext, patchConsole, unpatchConsole, getLogger, getRegistry
     });
