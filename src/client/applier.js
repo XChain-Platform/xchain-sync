@@ -586,17 +586,7 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            for(let table in snapshotData.tables){
-                let rows = snapshotData.tables[table];
-                if(!rows || rows.length === 0) continue;
-                // The strict option is only set by the from-zero lookup repair. Reconcile
-                // the carried id/status pairs before INSERT IGNORE so both a natural-key
-                // collision and a wrong row hidden by a PRIMARY collision are corrected.
-                let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
-                if(opts && opts.strictIgnoreCheck && repairKeyColumns)
-                    await this.reconcileLookupRows(table, rows, repairKeyColumns);
-                await this.insertRows(table, rows, opts);
-            }
+            await this.insertSnapshotTables(snapshotData.tables, opts);
             // Rebuild balances if this snapshot touched credits/debits. The
             // incremental catch-up inserts new credit/debit rows, but the
             // balances table is a derived aggregate. Without recomputing it
@@ -632,6 +622,22 @@ class ClientApplier {
             await this.db.rollbackTransaction();
             logger.error(util.format('Error applying incremental snapshot:', e));
             throw e;
+        }
+    }
+
+    // One incremental snapshot's tables, inserted in payload order inside the
+    // caller's transaction. The strict option is only set by the from-zero lookup
+    // repair: reconcile the carried id/status pairs before INSERT IGNORE so both a
+    // natural-key collision and a wrong row hidden by a PRIMARY collision are
+    // corrected.
+    async insertSnapshotTables(tables, opts){
+        for(let table in tables){
+            let rows = tables[table];
+            if(!rows || rows.length === 0) continue;
+            let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
+            if(opts && opts.strictIgnoreCheck && repairKeyColumns)
+                await this.reconcileLookupRows(table, rows, repairKeyColumns);
+            await this.insertRows(table, rows, opts);
         }
     }
 
