@@ -33,13 +33,6 @@ const ServerPoller = require('../../src/server/poller');
 const fs = require('fs');
 const path = require('path');
 
-function indexerCfg(over){
-    return Object.assign({
-        coin: 'bitcoin', network: 'mainnet', dbType: 'indexer',
-        db_host: 'srchost', db_port: 3306, db_name: 'btc_idx', db_user: 'u', db_pass: 'p'
-    }, over || {});
-}
-
 let service, config;
 
 function registerHooks(){
