@@ -316,6 +316,18 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                     console.error('[API] index_map_checksum compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
                 }
             }
+            // Advisory tokens fold-column parity (NON-consensus, default off), the only
+            // check that sees an ISSUE edit or its reorg reversal missing on a replica.
+            // See BlockHasher.computeTokenFoldChecksum; null => follower skips.
+            row.token_fold_parity = null;
+            if(cfg['TOKEN_FOLD_PARITY_CHECK'] && polledBlock !== null){
+                try {
+                    row.token_fold_parity = await new BlockHasher(db, statusUtil).computeTokenFoldChecksum(polledBlock);
+                } catch(e){
+                    getLogger().error('[API] token_fold_parity compute failed for ' + chain + '/' + network +
+                        ' at block ' + polledBlock + ' (advisory, returning null): ' + e.message);
+                }
+            }
         }
         // Advisory per-table CONTENT parity (NON-consensus, default off).
         // Published for BOTH dbTypes, unlike the three hashes and the index-map

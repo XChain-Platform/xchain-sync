@@ -55,6 +55,7 @@ const DEFAULT_CONTENT_PARITY_WINDOW = 100;
 
 const replicatedTables = require('../schema/replicated_tables');
 const lifecycle = require('../table_lifecycle');
+const tokenRefold = require('../db/token_refold');
 const { buildStateHashData } = require('../consensus/state_hash');
 const { gasTickSymbol } = require('../consensus-constants');
 const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
@@ -328,6 +329,31 @@ class BlockHasher {
         );
         let mapped = rows.map(r => ({ id: String(r.id), address: String(r.address) }));
         return this.util.getDataHash({ index_map: mapped });
+    }
+
+    // ADVISORY, NON-CONSENSUS, same posture as computeIndexMapChecksum. The tokens
+    // metadata columns ISSUE folds in place (owner, locks, callback, lists, mint window,
+    // bridge policy) sit in no block hash, no state_hash class and no content-parity
+    // window, so a replica that missed an edit (updated_rows class 7) or its reversal on a
+    // reorg (ClientRollback -> token_refold.refoldTokenRows) diverged with nothing to see
+    // it. This digests every tokens row's fold columns (token_refold.FOLD_COLUMNS).
+    //
+    // The table is current state, not a block window, so the SOURCE bounds it instead:
+    // a row whose last_action_index is above the last action at uptoBlock was edited
+    // after the height this status publishes, and is left out and named in `ahead`. A
+    // FOLLOWER passes that list back as opts.exclude and applies no bound of its own, so
+    // a replica row wrongly carrying a later last_action_index still lands in its digest.
+    async computeTokenFoldChecksum(uptoBlock, opts){
+        let follower = !!(opts && Array.isArray(opts.exclude));
+        let bound = null;
+        if(!follower){
+            let r = await this.db.doQuery("SELECT MAX(action_index) AS m FROM actions WHERE block_index <= ?",
+                [uptoBlock], null, { rethrow: true });
+            bound = (r && r.length && r[0].m !== null && r[0].m !== undefined) ? String(r[0].m) : '0';
+        }
+        let res = await tokenRefold.tokenFoldRows(this.db, bound, follower ? opts.exclude : []);
+        return { h: this.util.getDataHash({ token_fold: res.rows }), n: res.rows.length,
+                 ahead: follower ? opts.exclude.map(String) : res.ahead };
     }
 
     // ADVISORY, NON-CONSENSUS. Same posture as computeIndexMapChecksum
