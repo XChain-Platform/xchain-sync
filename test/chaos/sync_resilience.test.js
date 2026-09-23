@@ -46,7 +46,7 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
-const { waitForClientDisconnect } = require('../e2e/helpers/waitFor');
+const { waitForClientDisconnect, waitForServerPollFailures } = require('../e2e/helpers/waitFor');
 
 const {
     bootstrapDatabases,
@@ -113,18 +113,22 @@ async function recoverFromCompoundFailure() {
     // Seed blocks via DIRECT connection while proxy is disabled
     await seedSourceDirect(16, 25);
 
-    // Let the server's circuit breaker start failing before crashing it.
-    await sleep(5000);
+    // Crash the server only once it has FELT the outage: a failed poll cycle,
+    // not a duration (the first failure lands on the severed pooled socket).
+    await waitForServerPollFailures(server, 1, 30000);
 
     // Phase 2: Server crashes (while source is still down)
     await server.stop();
     server = null;
 
-    // Client loses WebSocket connection
-    await sleep(3000);
+    // Restart only after the client has SEEN the socket close, so the reconnect
+    // path is what heals the gap.
+    await waitForClientDisconnect(client);
 
     // Phase 3: Recovery (source comes back, server restarts)
     await sourceFaults.dbUp();
+    // Hold the restored source briefly before restart (settle, not a gate:
+    // pool acquires back off and retry, and the recovery wait below gates).
     await sleep(2000);
 
     server = createServer(SERVER_PORT);
@@ -133,6 +137,21 @@ async function recoverFromCompoundFailure() {
     // Force server to poll and catch up on blocks 16-25
     for (let i = 0; i < 10; i++) {
         try { await server.poll(); } catch { /* circuit may be recovering */ }
+        // Pace the forced polls (the background loop also polls every 200ms).
+        await sleep(500);
+    }
+}
+
+// Lift the source latency, settle, then force paced polls over re-seeded blocks.
+async function liftLatencyAndForcePolls() {
+    await sourceFaults.reset();
+    // Settle after the toxic is lifted (not a gate: the polls below tolerate
+    // failure and the recovery wait decides).
+    await sleep(1000);
+
+    for (let i = 0; i < 10; i++) {
+        try { await server.poll(); } catch { /* recovery in progress */ }
+        // Pace the forced polls.
         await sleep(500);
     }
 }
@@ -223,6 +242,8 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         // Seed more blocks while client is disconnected
         await seedSourceBlocks(31, 50);
         await server.poll();
+        // Let the 31-50 broadcast pass while no client is attached, so the gap
+        // is real (no observable: a broadcast to zero subscribers leaves no trace).
         await sleep(1000);
 
         // Don't do full bootstrap; just connect live sync
@@ -274,10 +295,14 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
 
         // Force server poll; will detect reorg (currentBlock=17 < lastPolled=20)
         try { await server.poll(); } catch { /* may fail under latency */ }
+        // Keep the reorg in flight under latency before re-seeding (exposure
+        // window, not a gate: the recovery wait and hash checks below decide).
         await sleep(2000);
 
         // Server broadcasts reorg event; client should rollback to block 17
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
+        // Give the reorg broadcast time to land before the replacement blocks
+        // appear (exposure window; the outcome is asserted after recovery).
         await sleep(3000);
 
         // Different creditAmount so the assertions below can confirm this is
@@ -285,15 +310,8 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
         // Re-seed blocks 18-22 with different data
         await fixtures.seedBlocks(sourceDbDirect, 18, 22, { creditAmount: '7777' });
 
-        // Remove latency for recovery
-        await sourceFaults.reset();
-        await sleep(1000);
-
-        // Force polls to process re-seeded blocks
-        for (let i = 0; i < 10; i++) {
-            try { await server.poll(); } catch { /* recovery in progress */ }
-            await sleep(500);
-        }
+        // Remove latency for recovery, then force polls over the re-seeded blocks
+        await liftLatencyAndForcePolls();
 
         // Wait for replica to reach block 22
         const recoveryMs = await waitForSyncRecovery(22, 60000);

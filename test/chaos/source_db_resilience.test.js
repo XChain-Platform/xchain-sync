@@ -71,6 +71,19 @@ const {
     REPLICA_PROXY
 } = require('./helpers/toxiproxy-client');
 
+// Seed through the proxied source, retrying until it answers after a restore
+// (the budget covers the 30s breaker cooldown; seedBlocks skips written blocks).
+async function seedWhenSourceAnswers(start, end, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError;
+    while (Date.now() < deadline) {
+        try { return await seedSourceBlocks(start, end); } catch (e) { lastError = e; }
+        // Pace the retries.
+        await sleep(250);
+    }
+    throw lastError;
+}
+
 describe('Chaos: Source Database Resilience', function () {
 
     let server, client;
@@ -141,11 +154,11 @@ describe('CE-SRC-01: Complete Source DB Unavailability', function () {
 
     it('server recovers and resumes sync after source DB is restored', async function () {
         await sourceFaults.dbDown();
-        await sleep(5000);
+        // Restore only once the server has FELT the outage (a failed poll cycle).
+        await waitForServerPollFailures(server, 1, 30000);
 
         await sourceFaults.dbUp();
-        await sleep(2000); // allow pool to reconnect
-        await seedSourceBlocks(21, 25);
+        await seedWhenSourceAnswers(21, 25);
 
         await server.poll();
 
@@ -228,7 +241,8 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
     it('server stays alive when all DB connections are held for 30s', async function () {
         await sourceFaults.timeout(30000);
 
-        // Wait for several poll cycles to fail (exhaust the 10-connection pool)
+        // Hold the pool exhausted, then prove the server still answers (negative
+        // window: held reads hang rather than fail, so there is nothing to poll).
         await sleep(8000);
 
         const alive = await isServerAlive(server.getUrl());
@@ -238,6 +252,8 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
 
     it('server recovers after timeout toxic is removed', async function () {
         await sourceFaults.timeout(30000);
+        // Keep the pool held long enough to stall polls (exposure window, not a
+        // gate: the recovery wait below decides).
         await sleep(5000);
 
         await sourceFaults.reset();
@@ -245,7 +261,8 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         await fixtures.seedBlocks(sourceDbDirect, 21, 23);
 
-        // Allow circuit breaker to recover (up to 30s cooldown + half-open attempt)
+        // Give held reads time to release before the forced poll (cooldown
+        // settle; the breaker exposes no state to wait on).
         await sleep(5000);
         await server.poll();
 
@@ -269,6 +286,7 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
 
         for (let i = 0; i < 20; i++) {
             try { await server.poll(); } catch { /* expected failures */ }
+            // Pace the forced polls so resets land across many cycles.
             await sleep(200);
         }
 
@@ -286,6 +304,7 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
 
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* expected */ }
+            // Pace the forced polls so resets land across many cycles.
             await sleep(300);
         }
 
@@ -296,6 +315,8 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
 
     it('success rate returns to 100% after toxic is removed', async function () {
         await sourceFaults.resetConnections(0.3);
+        // Expose the pool to resets before lifting the toxic (exposure window;
+        // the five polls below are the assertion).
         await sleep(2000);
         await sourceFaults.reset();
 
@@ -326,19 +347,24 @@ describe('CE-SRC-05: Source Down → Blocks Accumulate → Recovery', function (
         expect(preOutageBlock).to.be.at.least(20);
 
         await sourceFaults.dbDown();
-        await sleep(3000);
+        // Accumulate blocks only once the server has FELT the outage.
+        await waitForServerPollFailures(server, 1, 30000);
 
         // Seed blocks via DIRECT connection (bypasses disabled proxy)
         await seedSourceDirect(21, 35);
 
-        // Let poll failures accumulate against the circuit breaker.
-        await sleep(5000);
+        // Let poll failures accumulate against the circuit breaker: one more
+        // failed cycle, which waits out a 10s pool acquire timeout.
+        await waitForServerPollFailures(server, 1, 60000);
 
         await sourceFaults.dbUp();
+        // Settle after restore (not a gate: the polls below tolerate failure
+        // and the recovery wait decides).
         await sleep(2000);
 
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* circuit may still be half-open */ }
+            // Pace the forced polls.
             await sleep(500);
         }
 

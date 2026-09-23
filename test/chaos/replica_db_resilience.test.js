@@ -154,6 +154,8 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
         // Seed blocks while replica is down
         await seedSourceBlocks(11, 20);
         await server.poll();
+        // Keep the replica down while the broadcast lands (exposure window; each
+        // event against a dead replica costs a 10s acquire, and recovery gates).
         await sleep(3000);
 
         // Restore replica
@@ -229,6 +231,8 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
         // Seed blocks; server broadcasts, client receives but can't write
         await seedSourceBlocks(11, 15);
         await server.poll();
+        // Hold the client stuck on held writes, then prove the server still
+        // answers (negative window: a stuck write never settles to poll on).
         await sleep(8000);
 
         // Server must stay reachable even though the client is stuck
@@ -245,6 +249,8 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
         // Seed new blocks into source; server will broadcast them
         await seedSourceBlocks(11, 15);
         await server.poll();
+        // Keep writes held before lifting the toxic (exposure window, not a
+        // gate: the recovery wait below decides).
         await sleep(5000);
 
         await replicaFaults.reset();
@@ -273,6 +279,7 @@ describe('CE-DST-04: Intermittent Connection Drops', function () {
         // Force multiple poll cycles to broadcast blocks
         for (let i = 0; i < 15; i++) {
             try { await server.poll(); } catch { /* expected */ }
+            // Pace the forced polls so resets land across many writes.
             await sleep(300);
         }
 
@@ -287,6 +294,8 @@ describe('CE-DST-04: Intermittent Connection Drops', function () {
 
     it('all blocks eventually reach replica after toxic removal', async function () {
         await replicaFaults.resetConnections(0.3);
+        // Expose writes to resets before lifting the toxic (exposure window;
+        // the recovery wait below decides).
         await sleep(3000);
         await replicaFaults.reset();
 
@@ -313,6 +322,8 @@ describe('CE-DST-05: Replica Down → Blocks Accumulate → Recovery', function 
 
         // Take replica DB down
         await replicaFaults.dbDown();
+        // Hold the outage before blocks appear (exposure window; the client
+        // exposes no replica-down state to wait on).
         await sleep(2000);
 
         // Seed a batch of blocks into source while replica is down
@@ -321,14 +332,17 @@ describe('CE-DST-05: Replica Down → Blocks Accumulate → Recovery', function 
         // Server polls and broadcasts (client receives via WebSocket but can't write)
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* expected */ }
+            // Pace the forced polls.
             await sleep(300);
         }
 
-        // Wait for blocks to be broadcast and fail on client
+        // Let broadcasts fail on the client before restore (exposure window:
+        // settling all 20 at a 10s acquire each would outrun the test budget).
         await sleep(5000);
 
         // Restore replica DB
         await replicaFaults.dbUp();
+        // Settle after restore (not a gate: the recovery wait below decides).
         await sleep(2000);
 
         // Client should detect gap and perform incremental catch-up
