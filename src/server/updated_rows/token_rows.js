@@ -83,7 +83,7 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    action on the tick moved a balance and re-emitted it. An ownership TRANSFER
     //    (`ISSUE|0|<TICK>||||||<new owner>`) is exactly that shape, so explorer read APIs
     //    served the OLD owner indefinitely while consensus had the new one
-    //    (xchain-indexer#39; ownership-gated client UI reads this field).
+    //    until this class ships (ownership-gated client UI reads this field).
     //
     //    Keyed on the tick's valid `issues` rows in the window rather than on the ISSUE
     //    action alone: `issues` stores every ISSUE, valid or not, and only a valid one
