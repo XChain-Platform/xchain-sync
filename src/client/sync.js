@@ -2042,6 +2042,7 @@ class ClientSync {
             }
 
             await this.verifyTableContentParity(source, blockHeight, remoteStatus);
+            await this.verifyTokenFoldParity(source, blockHeight, remoteStatus);
             return verdict;
         } catch(e){
             getLogger().error(util.format('Hash verification failed against ' + source + ':', e));
@@ -2118,6 +2119,50 @@ class ClientSync {
         } catch(e){
             getLogger().error(util.format('Table-content parity check errored at block %s (advisory, ignoring):', blockHeight, e.message));
             return null;
+        }
+    }
+
+    // Advisory tokens fold-column parity (NON-consensus; never halts, never throws).
+    // Same preconditions as the two checks above: both sides opted in and we are AT
+    // the source's published height. The source's `ahead` ticks (edited after that
+    // height on its live table) are fed back as the exclusion, so both digests cover
+    // the same ticks. A mismatch means this replica holds an ISSUE edit the source
+    // does not, or lacks one it has: the forward class-7 carry or the rollback refold
+    // went wrong.
+    async verifyTokenFoldParity(source, blockHeight, remoteStatus){
+        if(!this.config['TOKEN_FOLD_PARITY_CHECK']) return null;
+        let remote = remoteStatus && remoteStatus.token_fold_parity;
+        if(!remote || typeof remote.h !== 'string') return null;
+        if(Number(remoteStatus.block_height) !== Number(blockHeight)) return null;
+        try {
+            let local = await this.blockHasher.computeTokenFoldChecksum(blockHeight, { exclude: remote.ahead || [] });
+            if(local.h !== remote.h){
+                getLogger().warn('TOKEN_FOLD_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                    ': local=' + local.h + ' (' + local.n + ' rows) source=' + remote.h + ' (' + remote.n + ' rows)' +
+                    ' (advisory, NOT halting; tokens owner/lock/callback/list/mint-window/bridge columns diverged)');
+                await this.recordSyncStateCounter('token_fold_mismatch', blockHeight);
+                return false;
+            }
+            getLogger().info('Token fold parity passed against ' + source + ' (' + local.n + ' rows)');
+            return true;
+        } catch(e){
+            getLogger().error(util.format('Token fold parity check errored at block %s (advisory, ignoring):', blockHeight, e.message));
+            return null;
+        }
+    }
+
+    // Durable running count plus last block for one advisory mismatch kind, under
+    // dbType-namespaced sync-state keys. Best-effort health signal; never throws.
+    async recordSyncStateCounter(kind, blockIndex){
+        try {
+            if(!this.db || typeof this.db.setSyncState !== 'function') return;
+            let countKey = kind + '_count:' + this.dbType;
+            let cur = (typeof this.db.getSyncState === 'function') ? await this.db.getSyncState(countKey) : null;
+            let n = (cur != null && Number.isFinite(Number(cur))) ? Number(cur) + 1 : 1;
+            await this.db.setSyncState(countKey, String(n));
+            await this.db.setSyncState(kind + '_last_block:' + this.dbType, String(blockIndex));
+        } catch(e){
+            // advisory; swallow
         }
     }
 

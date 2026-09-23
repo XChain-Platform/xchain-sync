@@ -92,17 +92,18 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    add()-by-action_index dedup are class 6's, so a tick reached by both classes in
     //    one window emits once.
     //
-    //    FORWARD ONLY, deliberately. A reorg that orphans an edit-ISSUE leaves no valid
-    //    `issues` row behind for the tick, so nothing re-emits the row and the follower
-    //    keeps the orphaned edit's values while the source re-folds back (rollback.js ->
-    //    updateTokens). That reverse leg needs a replica-side re-derive beside the escrow
-    //    one in ClientRollback and is not built here.
+    //    FORWARD ONLY here. A reorg that orphans an edit-ISSUE leaves no valid `issues`
+    //    row in any later window, so nothing re-emits the row while the source re-folds
+    //    back (rollback/commit.js -> updateTokens). The reverse leg is replica-side:
+    //    ClientRollback refolds every tick the orphaned range issued on from the surviving
+    //    issues (src/db/token_refold.js), inside the rollback transaction.
     //
     //    UN-GATED, like classes 5 and 5b: shipping a row is not a hash preimage, and no
     //    state_hash class covers these columns (the token_supply twin hashes (tick, supply)
-    //    only), so a follower that never receives the edit diverges silently instead of
-    //    halting. That is the gap this closes, and it must be live before any future
-    //    state-hash twin arms or a follower would halt on a row it was never sent.
+    //    only). Both legs are instead watched by the advisory TOKEN_FOLD_PARITY_CHECK
+    //    digest (BlockHasher.computeTokenFoldChecksum), which logs and counts a divergence
+    //    but never halts. This carry must stay live before any future state-hash twin
+    //    arms, or a follower would halt on a row it was never sent.
     try {
         let tokenRows = await db.doQuery(
             "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +

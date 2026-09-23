@@ -476,6 +476,15 @@ module.exports = {
         // OFF by default: it reads a window of ~93 indexer tables per status poll.
         config['TABLE_CONTENT_PARITY_CHECK'] = (process.env.TABLE_CONTENT_PARITY_CHECK || '').toLowerCase() === 'true';
 
+        // TOKEN_FOLD_PARITY_CHECK: advisory digest of the tokens metadata columns ISSUE
+        // folds in place (BlockHasher.computeTokenFoldChecksum). Those columns are in no
+        // consensus hash and are excluded from the content-parity windows as in-place
+        // state, so a replica missing an edit or its reorg reversal is visible only here.
+        // Same posture as the two checks above: read on both sides, NEVER halts, a
+        // mismatch is logged and durably counted, OFF by default (one tokens scan per
+        // status poll on the source).
+        config['TOKEN_FOLD_PARITY_CHECK'] = (process.env.TOKEN_FOLD_PARITY_CHECK || '').toLowerCase() === 'true';
+
         // TABLE_CONTENT_PARITY_WINDOW: how many blocks (and, for the append-only
         // lookups that carry no block column, how many ids) each content checksum
         // spans. Server-side setting: the source publishes the window it used and a

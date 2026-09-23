@@ -26,6 +26,7 @@
  ********************************************************************/
 
 const balanceHelpers = require('../db/balance_helpers');
+const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
@@ -801,6 +802,17 @@ class ClientRollback {
                 }
             }
 
+            // Ticks whose `issues` history this rollback truncates, read while the orphaned
+            // rows still exist. Refolded near the end (see refoldTokenRows below).
+            let issueTickIds = [];
+            if(firstActionIndex !== null){
+                try {
+                    issueTickIds = await tokenRefold.collectIssueTickIds(this.db, firstActionIndex);
+                } catch(e){
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+            }
+
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
                     try {
@@ -1165,6 +1177,24 @@ class ClientRollback {
                 // benign skip; log the step context and rethrow every real fault so
                 // the outer catch aborts rather than committing a partial reorg-reset.
                 if(e.errno !== 1146){ logger.error(util.format('rebuildBalances after rollback failed:', e)); throw e; }
+            }
+
+            // Refold the tokens metadata of every tick the orphaned range issued on, the
+            // reverse leg of updated_rows class 7. An orphaned ISSUE that edited a surviving
+            // token (owner, a lock, the callback, a list, the mint window, the bridge policy)
+            // rewrote the row in place, and the generic delete cannot touch it: its
+            // action_index is the FIRST issuance. The source refolds it from the surviving
+            // issues (xchain-indexer rollback/commit.js updateTokens), and no forward window
+            // ever re-sends it, so without this the replica kept the orphaned edit forever.
+            // Runs after every delete, as the source's refresh does, and BEFORE the supply
+            // recompute below, which reads tokens.decimals.
+            try {
+                let refold = await tokenRefold.refoldTokenRows(this.db, issueTickIds);
+                if(refold.skipped.length)
+                    logger.warn('ClientRollback: tokens refold skipped ' + refold.skipped.length + ' tick(s) whose first ' +
+                        'issuance is not held locally (truncated replica?); tick_ids ' + refold.skipped.slice(0, 20).join(','));
+            } catch(e){
+                if(e.errno !== 1146 && e.errno !== 1054){ logger.error(util.format('refoldTokenRows after rollback failed:', e)); throw e; }
             }
 
             // Recompute tokens.supply from the surviving credits/debits/escrows. The
