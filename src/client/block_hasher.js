@@ -65,8 +65,9 @@ const STATE_KEY_COLLATION_KEY = 'state_key_collation_activation.STATE_KEY_COLLAT
 
 class BlockHasher {
 
-    // db:   a DB handle exposing async doQuery(sql, params) against the REPLICA
-    //       (schema-identical to the indexer, with surrogate ids preserved).
+    // db:   a DB handle exposing async doQuery(sql, params) and
+    //       doQueryStrict(sql, params) against the REPLICA (schema-identical to
+    //       the indexer, with surrogate ids preserved).
     // util: xchain-sync Utility; its getDataHash() is the conformance copy of
     //       the indexer's (JSON.stringify(Object.assign({}, data), bigint->string),
     //       SHA-256 hex).
@@ -82,6 +83,9 @@ class BlockHasher {
     // omitted -> legacy folding collation, matching pre-activation blocks. Live
     // recompute callers MUST pass them or the replica gates differently than the
     // source at/after an armed height and false-halts on divergence.
+    // Gather every preimage row set with doQueryStrict: a swallowed read error
+    // returning [] would hash a truncated preimage and halt on a false divergence
+    // instead of surfacing as a recompute error (same rule as db/actions.js).
     async computeBlockHashes(block_index, network, coin){
         let query   = null;
         let actions = [];
@@ -108,7 +112,7 @@ class BlockHasher {
                     a.block_index=?
                 ORDER BY
                     c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
-        ledger.credits = await this.db.doQuery(query, [block_index]);
+        ledger.credits = await this.db.doQueryStrict(query, [block_index]);
         query = `SELECT
                     d.action_index,
                     a1.address AS address,
@@ -122,7 +126,7 @@ class BlockHasher {
                     a.block_index=?
                 ORDER BY
                     d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
-        ledger.debits = await this.db.doQuery(query, [block_index]);
+        ledger.debits = await this.db.doQueryStrict(query, [block_index]);
         query = `SELECT
                     e.action_index,
                     a1.address AS address,
@@ -136,7 +140,7 @@ class BlockHasher {
                     a.block_index=?
                 ORDER BY
                     e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
-        ledger.escrows = await this.db.doQuery(query, [block_index]);
+        ledger.escrows = await this.db.doQueryStrict(query, [block_index]);
         // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
         // to their chain-independent role token, byte-for-byte mirror of
         // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
@@ -157,7 +161,7 @@ class BlockHasher {
                     a.block_index=?
                 ORDER BY
                     a.action_index ASC`;
-        actions = await this.db.doQuery(query, [block_index]);
+        actions = await this.db.doQueryStrict(query, [block_index]);
         let contracts_data = {
             contracts:   [],
             state:       [],
@@ -173,7 +177,7 @@ class BlockHasher {
                  LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
                  WHERE a.block_index=?
                  ORDER BY c.action_index ASC`;
-        contracts_data.contracts = await this.db.doQuery(query, [block_index]);
+        contracts_data.contracts = await this.db.doQueryStrict(query, [block_index]);
         // contract state (latest value per key written in this block).
         // state_key collation is flag-day gated, byte-for-byte mirror of
         // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
@@ -190,7 +194,7 @@ class BlockHasher {
                      GROUP BY contract_index, state_key` + stateKeyCollate + `
                  ) latest ON cs.id = latest.max_id
                  ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
-        contracts_data.state = await this.db.doQuery(query, [block_index]);
+        contracts_data.state = await this.db.doQueryStrict(query, [block_index]);
         // Executions, resolved the same way as deployments above.
         query = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
                  FROM contract_executions ce
@@ -198,7 +202,7 @@ class BlockHasher {
                  LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
                  WHERE a.block_index=?
                  ORDER BY ce.action_index ASC`;
-        contracts_data.executions = await this.db.doQuery(query, [block_index]);
+        contracts_data.executions = await this.db.doQueryStrict(query, [block_index]);
         // Emissions carry no block column, so scope comes through their execution.
         query = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
                  FROM contract_emissions em
@@ -206,7 +210,7 @@ class BlockHasher {
                  INNER JOIN actions a ON (a.action_index=ce.action_index)
                  WHERE a.block_index=?
                  ORDER BY em.execution_index ASC, em.position ASC`;
-        contracts_data.emissions = await this.db.doQuery(query, [block_index]);
+        contracts_data.emissions = await this.db.doQueryStrict(query, [block_index]);
         // Deposits, with the resolved secondary sort keys pinned to a BINARY collation so
         // the tie-break order cannot vary with a node's default collation.
         query = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
@@ -216,7 +220,7 @@ class BlockHasher {
                  LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
                  WHERE a.block_index=?
                  ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts_data.deposits = await this.db.doQuery(query, [block_index]);
+        contracts_data.deposits = await this.db.doQueryStrict(query, [block_index]);
         // Same resolution and tie-order treatment as deposits.
         query = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
                  FROM withdrawals w
@@ -225,7 +229,7 @@ class BlockHasher {
                  LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
                  WHERE a.block_index=?
                  ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
-        contracts_data.withdrawals = await this.db.doQuery(query, [block_index]);
+        contracts_data.withdrawals = await this.db.doQueryStrict(query, [block_index]);
         // Previous block's committed hashes, which chain this block to the last.
         let prev_block_index = block_index - 1;
         query = `SELECT
@@ -239,7 +243,7 @@ class BlockHasher {
                 LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
             WHERE
                 b.block_index=?`;
-        let results = await this.db.doQuery(query, [prev_block_index]);
+        let results = await this.db.doQueryStrict(query, [prev_block_index]);
         if(results.length > 0){
             hashes['ledger']    = results[0].ledger;
             hashes['actions']   = results[0].actions;

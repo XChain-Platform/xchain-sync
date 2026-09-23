@@ -893,13 +893,16 @@ async function startApi(){
         }
     });
 
-    // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=&limit=
-    // One keyset page of the decoder `dispensers` table for the client's replace-table
-    // reconcile. dispensers rides neither the block stream nor the id-cursor lookup
-    // paging (no monotonic id; the decoder soft-expires/hard-purges rows), so the
-    // client periodically re-dumps the full table and swaps it in atomically; see
-    // SnapshotBuilder.streamDispensers + ClientSync.reconcileDispensers. Decoder-only;
-    // rate-limited as an incremental fetch.
+    // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=
+    // The WHOLE decoder `dispensers` table in one statement-consistent response
+    // (has_more always false) for the client's replace-table reconcile. dispensers
+    // rides neither the block stream nor the id-cursor lookup paging (no monotonic id;
+    // the decoder soft-expires/hard-purges rows), so the client periodically re-dumps
+    // it and swaps it in atomically; see SnapshotBuilder.streamDispensers +
+    // ClientSync.reconcileDispensers. The cursor params filter within that one query;
+    // a `limit` param from an older client is ignored, and the response's only size
+    // ceiling is the client's SNAPSHOT_MAX_CONTENT. Decoder-only; rate-limited as an
+    // incremental fetch.
     app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
@@ -914,8 +917,6 @@ async function startApi(){
         if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
            (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
             return res.status(400).json({ error: 'Invalid cursor', code: 'BAD_REQUEST' });
-        let limit = parseInt(req.query.limit);
-        if(isNaN(limit)) limit = undefined; // builder applies its default
 
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -924,7 +925,7 @@ async function startApi(){
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         try {
-            await builder.streamDispensers(db, afterTx, afterAddr, limit, res);
+            await builder.streamDispensers(db, afterTx, afterAddr, res);
         } catch(e){
             console.error('[API error] /snapshot-dispensers/:dbType/:chain/:network:', e);
             if(!res.headersSent)

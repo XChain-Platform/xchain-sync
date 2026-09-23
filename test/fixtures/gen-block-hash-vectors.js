@@ -71,7 +71,8 @@ const results = [
 
 async function main(){
     let call = 0;
-    const mockDb = { doQuery: async () => results[call++] };
+    const next = async () => results[call++];
+    const mockDb = { doQuery: next, doQueryStrict: next };
     // Hash with the INDEXER's getDataHash so the expected values are authentic.
     const hasher = new BlockHasher(mockDb, new IndexerUtil());
     const expected = await hasher.computeBlockHashes(BLOCK_INDEX);

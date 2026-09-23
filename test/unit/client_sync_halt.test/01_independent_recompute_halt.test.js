@@ -27,16 +27,18 @@ const Utility = require('../../../src/util');
 const HashVerifier = require('../../../src/client/hash_verifier');
 const vectors = require('../../fixtures/block-hash-vectors.json');
 
-// db.doQuery feeds BlockHasher the canned golden rows IN CALL ORDER (one
-// sequence per computeBlockHashes pass), so the recompute yields the
+// db.doQuery / doQueryStrict feed BlockHasher the canned golden rows IN CALL
+// ORDER (one sequence per computeBlockHashes pass), so the recompute yields the
 // indexer-authentic committed hashes from vectors.expected.
 function seqDb(results){
     let i = 0;
+    const next = async () => results[i++];
     return {
         dbName: 'test_db', dbType: 'indexer',
         getLastBlock: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null),
-        doQuery: sinon.stub().callsFake(async () => results[i++]),
+        doQuery: sinon.stub().callsFake(next),
+        doQueryStrict: sinon.stub().callsFake(next),
         recordHalt: sinon.stub().resolves({ block_index: 0 }),
         getActiveHalt: sinon.stub().resolves(null),
         clearHalt: sinon.stub().resolves(1)
@@ -116,11 +118,15 @@ describe('ClientSync: independent recompute halt @regression', function(){
         await sync.applyBlockEvent(event);
         assert.strictEqual(sync.isHalted(), false, 'no recompute, no halt when opted out');
         assert.strictEqual(db.doQuery.called, false, 'recompute queries must not run when disabled');
+        assert.strictEqual(db.doQueryStrict.called, false, 'recompute queries must not run when disabled');
         assert.strictEqual(sync.lastAppliedBlock, vectors.block_index);
     });
 
     it('a recompute DB error is logged but does NOT halt (no self-inflicted fork on infra faults)', async function(){
-        db.doQuery = sinon.stub().rejects(new Error('transient DB error'));
+        // Model the production reader: doQuery swallows the error into [], doQueryStrict throws.
+        // A preimage gathered fail-soft would hash the empty rows and halt on a false divergence.
+        db.doQuery = sinon.stub().resolves([]);
+        db.doQueryStrict = sinon.stub().rejects(new Error('transient DB error'));
         const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' };
         await sync.applyBlockEvent(event);
         assert.strictEqual(sync.isHalted(), false, 'an infra error must not halt the validator');

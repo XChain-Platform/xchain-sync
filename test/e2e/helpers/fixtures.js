@@ -40,8 +40,12 @@ function blockHash(blockIndex, label) {
 async function computeAndInsertBlockHashes(db, blockIndex, conn) {
     // When called inside a fixture block transaction, every read/write must ride
     // that transaction's connection or the hasher can't see the block's own
-    // uncommitted rows. BlockHasher only needs doQuery, so a thin facade pins it.
-    let hasherDb = conn ? { doQuery: (q, a) => db.doQuery(q, a, conn) } : db;
+    // uncommitted rows. BlockHasher only needs doQuery and doQueryStrict, so a thin
+    // facade pins both.
+    let hasherDb = conn ? {
+        doQuery:       (q, a) => db.doQuery(q, a, conn),
+        doQueryStrict: (q, a) => db.doQueryStrict(q, a, conn)
+    } : db;
     let computed = await new BlockHasher(hasherDb, _util).computeBlockHashes(blockIndex);
     let ids = {};
     for (let [field, hash] of [['ledger_hash_id', computed.ledger_hash],

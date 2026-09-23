@@ -42,6 +42,13 @@ function parseIntMin1(val, defaultVal){
     return Math.max(1, parseIntSafe(val, defaultVal));
 }
 
+// Parse an integer, falling back to the default (not clamping) below the minimum,
+// so an out-of-range value can never select a disable or a one-row page by accident.
+function parseIntAtLeast(val, min, defaultVal){
+    let parsed = parseIntSafe(val, defaultVal);
+    return parsed < min ? defaultVal : parsed;
+}
+
 // A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
 function parseCsvSet(val){
     return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
@@ -428,6 +435,22 @@ module.exports = {
         // COUNT(*) per replicated table, a cost its /status contract accepts only because
         // that endpoint is operator-polled rather than hot.
         config['COMPLETENESS_CHECK_INTERVAL'] = parseIntMin0(process.env.COMPLETENESS_CHECK_INTERVAL, 3600000);
+
+        // DISPENSERS_RECONCILE_EVERY: a decoder client replaces its `dispensers` table
+        // every Nth incremental catch-up, since the table rides no block stream (>= 1).
+        config['DISPENSERS_RECONCILE_EVERY'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_EVERY, 1, 20);
+
+        // DISPENSERS_RECONCILE_MAX_INTERVAL_MS: wall-clock bound (ms) on that reconcile,
+        // sampled on catch-ups and on the live status tick. 0 disables the bound.
+        config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 0, 1800000);
+
+        // LOOKUP_PAGE_SIZE: rows per page when a client pages the append-only lookup
+        // tables by id cursor (>= 1); the client clamps it to 100000.
+        config['LOOKUP_PAGE_SIZE'] = parseIntAtLeast(process.env.LOOKUP_PAGE_SIZE, 1, 50000);
+
+        // GAP_LOG_INTERVAL_MS: throttle window (ms) for the client's catch-up gap log
+        // summaries (>= 1).
+        config['GAP_LOG_INTERVAL_MS'] = parseIntAtLeast(process.env.GAP_LOG_INTERVAL_MS, 1, 30000);
 
         // INDEX_MAP_PARITY_CHECK: advisory id->address map parity. Default OFF, and
         // UNLIKE the VERIFY_* gates above it NEVER halts: a mismatch is logged + counted

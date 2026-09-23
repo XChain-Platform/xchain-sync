@@ -59,8 +59,7 @@ describe('ClientSync.dispenserReconcileIntervalDue (wall-clock term)', function(
     });
 
     it('is not due before any reconcile has stamped a time', function(){
-        // firstResume belongs to the catch-up path: firing it from a recurring tick
-        // would retry a failing re-dump on every tick instead of once per interval.
+        // A bare context carries no success, attempt or live-follow time to measure from.
         let ctx = { config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
                     _lastDispenserReconcileAt: null };
         assert.strictEqual(due(ctx, 99999999), false);
@@ -172,5 +171,113 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
         assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
         await tick(ctx, 61001);
         assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
+    });
+});
+
+// A replica that bootstrapped from a full snapshot never reconciles, so the bound
+// measures from live-follow, and a failed attempt defers the retry one interval.
+describe('ClientSync.dispenserReconcileIntervalDue without a successful reconcile', function(){
+    function due(over, now){
+        let ctx = Object.assign({ config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
+                                  _lastDispenserReconcileAt: null }, over);
+        return ClientSync.prototype.dispenserReconcileIntervalDue.call(ctx, now);
+    }
+
+    it('is due once live-follow began longer than the interval ago', function(){
+        assert.strictEqual(due({ _dispenserClockArmedAt: 1000 }, 1000 + 60000), true);
+    });
+
+    it('is not due inside the interval from live-follow', function(){
+        assert.strictEqual(due({ _dispenserClockArmedAt: 1000 }, 1000 + 59999), false);
+    });
+
+    it('waits a full interval after a failed attempt, then is due again', function(){
+        let over = { _dispenserClockArmedAt: 1000, _lastDispenserReconcileAttemptAt: 70000 };
+        assert.strictEqual(due(over, 70000 + 59999), false);
+        assert.strictEqual(due(over, 70000 + 60000), true);
+    });
+
+    it('does not retry a failing re-dump every tick after an old success', function(){
+        let over = { _lastDispenserReconcileAt: 1000, _lastDispenserReconcileAttemptAt: 90000 };
+        assert.strictEqual(due(over, 90001), false);
+    });
+
+    it('measures from a success newer than both fallbacks', function(){
+        let over = { _lastDispenserReconcileAt: 100000, _lastDispenserReconcileAttemptAt: 99000,
+                     _dispenserClockArmedAt: 1000 };
+        assert.strictEqual(due(over, 100000 + 59999), false);
+    });
+
+    it('stays disabled by 0 whatever the fallbacks say', function(){
+        let over = { config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '0' }, _dispenserClockArmedAt: 1 };
+        assert.strictEqual(due(over, 99999999), false);
+    });
+
+    it('fires the status tick on a snapshot-bootstrapped replica', async function(){
+        let ctx = {
+            dbType: 'decoder', config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
+            sources: ['http://source1:3006'], lastKnownServerBlock: 500, lastAppliedBlock: 500,
+            _halted: null, _lastDispenserReconcileAt: null, _dispenserClockArmedAt: 1000,
+            _dispenserReconcileInFlight: false,
+            recordUpstreamStatus: sinon.stub(), logGap: sinon.stub(),
+            incrementalCatchUp: sinon.stub().resolves(), maybeVerifyCompleteness: sinon.stub().resolves(),
+            reconcileDispensers: sinon.stub().resolves(),
+            dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
+        };
+        let logStub = sinon.stub(console, 'log');
+        let clock = sinon.useFakeTimers({ now: 1000 + 60000, toFake: ['Date'] });
+        try {
+            await ClientSync.prototype.handleEvent.call(ctx, { type: 'status', block_height: 500 }, 0);
+        } finally {
+            clock.restore();
+            logStub.restore();
+        }
+        assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
+    });
+});
+
+describe('ClientSync.reconcileDispensers attempt stamp and request', function(){
+    const axios = require('axios');
+
+    function reconcileCtx(){
+        return {
+            dbType: 'decoder', chain: 'bitcoin', network: 'mainnet',
+            config: { SNAPSHOT_MAX_CONTENT: 1024 * 1024 },
+            upstreamHeaders: () => ({}),
+            withApplyLock: (fn) => fn(),
+            applier: { applyDispensersReplace: sinon.stub().resolves() }
+        };
+    }
+
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    it('stamps the attempt but not the success when the re-dump fails', async function(){
+        sinon.stub(axios, 'get').rejects(new Error('ECONNRESET'));
+        let ctx = reconcileCtx();
+        let clock = sinon.useFakeTimers({ now: 42000, toFake: ['Date'] });
+        try { await ClientSync.prototype.reconcileDispensers.call(ctx, 'http://source1:3006'); }
+        finally { clock.restore(); }
+        assert.strictEqual(ctx._lastDispenserReconcileAttemptAt, 42000);
+        assert.strictEqual(ctx._lastDispenserReconcileAt, undefined);
+        assert.strictEqual(ctx.applier.applyDispensersReplace.called, false, 'local table left intact');
+    });
+
+    it('requests the whole table with no page-size parameter and stamps the success', async function(){
+        let body = JSON.stringify({ has_more: false, rows: [{ tx_index: 1, address_id: 2 }] });
+        let get = sinon.stub(axios, 'get').resolves({ data: Buffer.from(body) });
+        let ctx = reconcileCtx();
+        await ClientSync.prototype.reconcileDispensers.call(ctx, 'http://source1:3006');
+        assert.strictEqual(get.firstCall.args[0], 'http://source1:3006/snapshot-dispensers/decoder/bitcoin/mainnet');
+        assert.strictEqual(ctx.applier.applyDispensersReplace.firstCall.args[0].length, 1);
+        assert.ok(ctx._lastDispenserReconcileAt >= ctx._lastDispenserReconcileAttemptAt);
+    });
+});
+
+describe('ClientSync.shouldReconcileDispensers ignores the tick-only fallbacks', function(){
+    it('still treats a replica with no successful reconcile as the first resume', function(){
+        let ctx = { config: { DISPENSERS_RECONCILE_EVERY: '1000' }, _lastDispenserReconcileAt: null,
+                    _dispenserClockArmedAt: 5000, _lastDispenserReconcileAttemptAt: 5000, _catchUpCount: 0 };
+        assert.strictEqual(ClientSync.prototype.shouldReconcileDispensers.call(ctx, 5001), true);
     });
 });

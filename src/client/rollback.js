@@ -120,10 +120,11 @@ class ClientRollback {
         // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
         // Also topology-derived. dispensers is absent from the topology's txScoped by
         // design: it is not per-block replicated (the decoder live-prunes it, which
-        // the block stream can't model (see replicatedTables.js)); it SEEDS from the
-        // full snapshot and is then held in parity by the periodic apply-side reconcile
-        // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace),
-        // which replicatedTables.js:47-49 names as the whole of its parity story.
+        // the block stream can't model (see src/schema/replicated_tables.js)); it SEEDS from
+        // the full snapshot and is then held in parity by the periodic apply-side reconcile
+        // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace), which
+        // the dispensers (decoder) carve-out in src/schema/replicated_tables.js names as
+        // the whole of its parity story.
         // Deleting its rows on a reorg would corrupt that replicated state with no
         // per-block stream to restore them before the next reconcile, so a reorg leaves
         // dispensers untouched.

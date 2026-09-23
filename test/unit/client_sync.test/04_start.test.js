@@ -92,8 +92,38 @@ function registerStartGroup2Tests(){
     });
 }
 
+// A full-snapshot bootstrap never reconciles dispensers, so live-follow is the only
+// point the status tick's wall-clock bound can measure from on such a replica.
+function registerStartDispenserClockTests(){
+    describe('start', function(){
+        it('starts the dispensers wall clock when a snapshot-bootstrapped decoder enters live-follow', async function(){
+            sync.dbType = 'decoder';
+            db.getLastBlock.resolves(null);
+            sinon.stub(sync, 'bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
+            let before = Date.now();
+
+            await sync.start();
+
+            assert.strictEqual(sync._lastDispenserReconcileAt, undefined, 'the snapshot path stamps no reconcile');
+            assert.ok(sync._dispenserClockArmedAt >= before, 'the clock must be armed at live-follow');
+        });
+
+        it('leaves the dispensers clock alone on an indexer replica', async function(){
+            db.getLastBlock.resolves(null);
+            sinon.stub(sync, 'bootstrapFromSnapshot').callsFake(async () => { sync.lastAppliedBlock = 10; });
+            sinon.stub(sync, 'connectWebSockets').callsFake(() => { sync.running = false; });
+
+            await sync.start();
+
+            assert.strictEqual(sync._dispenserClockArmedAt, undefined);
+        });
+    });
+}
+
 describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerStartGroup1Tests();
     registerStartGroup2Tests();
+    registerStartDispenserClockTests();
 });

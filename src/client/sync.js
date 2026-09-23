@@ -51,9 +51,9 @@ const envConfig = require('../config');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in verifyTableCounts for the
-// mechanism; kept here as a named set so a second such table is added in one place
-// rather than at each call site's excludeTables argument.
-const OPERATIONAL_LOG_TABLES = new Set(['events']);
+// mechanism. Declared once in replicated_tables.js, which the content-parity plan
+// also reads, so the count and content checks cannot disagree about a table.
+const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
 
 // Permanent bootstrap exhaustion. start()-time throws already unwind to
 // SyncService's sync.start().catch(... process.exit(1)) restart contract on their
@@ -67,16 +67,24 @@ class BootstrapExhaustedError extends Error {}
 
 // Is the decoder `dispensers` table due a wall-clock reconcile? The one term of the
 // reconcile decision that carries no cycle-counter side effect, so the recurring status
-// tick can sample it without corrupting the every-Nth catch-up cadence. Due only once
-// some reconcile has stamped a time: a replica that has never converged dispensers is the
-// firstResume case, owned by the catch-up path, and firing that from a tick would retry a
-// failing re-dump on every tick instead of once per interval.
-function dispenserIntervalDue(config, lastReconcileAt, nowMs){
+// tick can sample it without corrupting the every-Nth catch-up cadence. Measured from the
+// later of the last success and `since` (the tick's last attempt, else when live-follow
+// began), so a snapshot-bootstrapped replica that never reconciled is still bounded and a
+// failing re-dump retries once per interval, not once per tick. No time known: not due.
+function dispenserIntervalDue(config, lastReconcileAt, nowMs, since){
     let maxIntervalMs = parseInt(config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'], 10);
     if(isNaN(maxIntervalMs) || maxIntervalMs < 0) maxIntervalMs = 1800000;
     if(maxIntervalMs === 0) return false;            // explicitly disabled
-    if(lastReconcileAt == null) return false;
-    return (nowMs - lastReconcileAt) >= maxIntervalMs;
+    let from = latestTime(lastReconcileAt, since);
+    if(from == null) return false;
+    return (nowMs - from) >= maxIntervalMs;
+}
+
+// Return the later of two optional epoch-ms times, or null when neither is set.
+function latestTime(a, b){
+    if(a == null) return (b == null) ? null : b;
+    if(b == null) return a;
+    return Math.max(a, b);
 }
 
 class ClientSync {
@@ -688,6 +696,8 @@ class ClientSync {
 
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
 
+        // Start the dispensers wall clock at live-follow: a full snapshot seeds the table at parity.
+        if(this.dbType === 'decoder') this._dispenserClockArmedAt = Date.now();
         this.connectWebSockets();
 
         // Keep alive
@@ -2527,14 +2537,6 @@ class ClientSync {
         return this._exactParityTableSet;
     }
 
-    // Re-fetch the decoder `dispensers` table in full and replace the local copy.
-    // dispensers cannot ride the block stream or the id-cursor lookup paging (no
-    // monotonic id; the decoder soft-expires then hard-purges rows), so a truncated
-    // bootstrap never seeds it and an incremental catch-up lets it drift. This keyset-
-    // paged re-dump + atomic replace (ClientApplier.applyDispensersReplace) is the
-    // convergence path; verifyDecoderCompleteness then verifies row counts without
-    // false alarms. Decoder-only, best-effort: any fetch/parse failure aborts WITHOUT
-    // touching the local table (the replace runs only once every page is in hand).
     // Decide whether to reconcile the decoder `dispensers` table on this catch-up cycle
     // (advances the per-process cycle counter as a side effect). Reconcile when:
     //   (a) firstResume  - nothing reconciled yet this process (a resume that skipped
@@ -2550,7 +2552,7 @@ class ClientSync {
     //       healthy live-following replica never enters a catch-up at all, which is
     //       precisely the cadence this clause claims to bound.
     // `_lastDispenserReconcileAt` is stamped by reconcileDispensers on success (covering
-    // the bootstrap reconcile too), so firstResume is false once any reconcile has run.
+    // the from-height bootstrap reconcile too), so firstResume is false once any has run.
     shouldReconcileDispensers(nowMs){
         this._catchUpCount = (this._catchUpCount || 0) + 1;
         let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
@@ -2566,22 +2568,32 @@ class ClientSync {
 
     // Wall-clock term of the reconcile decision, WITHOUT shouldReconcileDispensers'
     // cycle-counter side effect, so a recurring caller can sample the same bound without
-    // corrupting the every-Nth catch-up cadence.
+    // corrupting the every-Nth catch-up cadence. Falls back to the last attempt, else the
+    // live-follow start, so a replica that never reconciled is bounded too.
     dispenserReconcileIntervalDue(nowMs){
-        return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
+        let since = latestTime(this._lastDispenserReconcileAttemptAt, this._dispenserClockArmedAt);
+        return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs, since);
     }
 
+    // Re-fetch the decoder `dispensers` table in full and replace the local copy.
+    // dispensers cannot ride the block stream or the id-cursor lookup paging (no
+    // monotonic id; the decoder soft-expires then hard-purges rows), so a truncated
+    // bootstrap never seeds it and an incremental catch-up lets it drift. The source
+    // serves the whole table in one statement-consistent response (the has_more walk
+    // stays so a source that still pages completes too), then an atomic replace
+    // (ClientApplier.applyDispensersReplace) converges it. Decoder-only, best-effort:
+    // any fetch/parse failure aborts WITHOUT touching the local table.
     async reconcileDispensers(source){
         if(this.dbType !== 'decoder') return;
         if(!source) return;
+        // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
+        this._lastDispenserReconcileAttemptAt = Date.now();
         try {
             let all = [];
             let afterTx = null, afterAddr = null;
-            let pageSize = this.lookupPageSize();
             for(let guard = 0; guard < 1000000; guard++){
                 let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
-                    '?limit=' + pageSize +
-                    (afterTx !== null ? '&after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
+                    (afterTx !== null ? '?after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
                 let response = await axios.get(url, {
                     headers: this.upstreamHeaders(),
                     responseType: 'arraybuffer',
@@ -2769,7 +2781,7 @@ class ClientSync {
             // it: the one cadence the bound claims to protect against (no catch-ups at
             // all) was the one it could not reach, and the replica went on serving rows
             // the source soft-expired or hard-purged for the life of the process. Row
-            // counts cannot substitute (replicatedTables.js: a soft-expire leaves counts
+            // counts cannot substitute (src/schema/replicated_tables.js: a soft-expire leaves counts
             // equal, a hard-purge leaves the replica ahead, reported for indexer only).
             // Deliberately NOT folded into maybeVerifyCompleteness: that sweep returns
             // early when COMPLETENESS_CHECK_INTERVAL is falsy and when the heights differ,
