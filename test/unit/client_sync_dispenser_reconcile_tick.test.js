@@ -27,6 +27,7 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 const ClientSync = require('../../src/client/sync');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 
 describe('ClientSync.dispenserReconcileIntervalDue (wall-clock term)', function(){
     function due(ctx, now){
@@ -264,7 +265,8 @@ describe('ClientSync.reconcileDispensers attempt stamp and request', function(){
     });
 
     it('requests the whole table with no page-size parameter and stamps the success', async function(){
-        let body = JSON.stringify({ has_more: false, rows: [{ tx_index: 1, address_id: 2 }] });
+        let body = JSON.stringify({ schema_version: SCHEMA_VERSION.decoder, has_more: false,
+            rows: [{ tx_index: 1, address_id: 2 }] });
         let get = sinon.stub(axios, 'get').resolves({ data: Buffer.from(body) });
         let ctx = reconcileCtx();
         await ClientSync.prototype.reconcileDispensers.call(ctx, 'http://source1:3006');

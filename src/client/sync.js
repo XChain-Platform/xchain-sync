@@ -2640,12 +2640,16 @@ class ClientSync {
     // serves the whole table in one statement-consistent response (the has_more walk
     // stays so a source that still pages completes too), then an atomic replace
     // (ClientApplier.applyDispensersReplace) converges it. Decoder-only, best-effort:
-    // any fetch/parse failure aborts WITHOUT touching the local table.
+    // any fetch/parse failure aborts WITHOUT touching the local table. Every page is
+    // checked against SCHEMA_VERSION like the lookup-page and snapshot channels, so a
+    // code-version mismatch aborts before the replace (the status-tick caller has no
+    // earlier version-checked apply in front of it).
     async reconcileDispensers(source){
         if(this.dbType !== 'decoder') return;
         if(!source) return;
         // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
         this._lastDispenserReconcileAttemptAt = Date.now();
+        let expected = SCHEMA_VERSION[this.dbType];
         try {
             let all = [];
             let afterTx = null, afterAddr = null;
@@ -2664,6 +2668,10 @@ class ClientSync {
                     try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
                 }
                 let page = JSON.parse(jsonStr.toString());
+                if(page.schema_version !== expected){
+                    throw new Error('Dispensers page schema mismatch: server=' +
+                        page.schema_version + ' client=' + expected);
+                }
                 let rows = Array.isArray(page.rows) ? page.rows : [];
                 for(let r of rows) all.push(r);
                 if(!page.has_more || rows.length === 0) break;
