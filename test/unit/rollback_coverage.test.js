@@ -22,10 +22,12 @@
  * diverges from the source (the exact failure xchain-indexer's rollback guard
  * prevents on the source side).
  *
- * The risk here is sharper than on the source: ClientRollback's table lists are
- * a hand-maintained mirror of xchain-indexer/src/rollback.js (see the header
- * comment there). They have drifted before: `prices` was added to the indexer's
- * rollback set but not here, so reorged price rows lingered on every replica.
+ * The risk here is sharper than on the source: ClientRollback's generic lists
+ * derive from the table-lifecycle registry and the decoder topology (see the
+ * header of src/client/rollback.js), but its bespoke resets and restores are a
+ * hand-maintained mirror of xchain-indexer/src/rollback/. Hand-copied lists
+ * drift: `prices` joined the indexer's rollback set but not the replica's, so
+ * reorged price rows lingered on every replica.
  * This test fails when a table ServerPoller replicates is not handled by
  * ClientRollback for that dbType, catching the drift at CI time.
  *
@@ -94,7 +96,7 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 
 // Coverage that lives outside ClientRollback's table arrays: the replica-side
 // rollback buckets, derived from the table-lifecycle registry twin
-// (src/tableLifecycle.js, byte-identical to the xchain-indexer copy; asserted
+// (src/table_lifecycle.js, byte-identical to the xchain-indexer copy; asserted
 // below). Per-table rationale lives with each registry entry.
 const lifecycleTwin = require('../../src/table_lifecycle');
 const pathMod = require('path');

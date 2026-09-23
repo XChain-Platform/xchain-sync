@@ -31,11 +31,12 @@ const logger = getLogger();
 module.exports = {
 
     // Light-client stakes_root support (SPV spec sec.4.1, BTC-only). Source-deduped
-    // capability stake-weight query, ported VERBATIM from xchain-indexer/src/db.js
+    // capability stake-weight query, ported VERBATIM from
+    // xchain-indexer/src/db/stakes/effective_set_sql.js
     // stakeWeightsSql: it MUST produce a byte-identical SQL string + arg order or
     // the follower's stakes_root diverges from the indexer's committed root and the
     // state-commitment check false-halts. The cross-repo drift guard in
-    // test/unit/rollback/rollback_coverage.test.js locks the two together. Reads only tables
+    // test/unit/rollback_coverage.test.js locks the two together. Reads only tables
     // xchain-sync replicates (stakes, delegations, stake_key_revocations,
     // capability_slash_events, index_addresses, index_pubkeys).
     stakeWeightsSql(valid_id, blockIndex, minStake){

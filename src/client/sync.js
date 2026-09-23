@@ -936,6 +936,62 @@ class ClientSync {
         this._applyTimers.clear();
     }
 
+    // Table and key of an upsert full-dump duplicate-key failure (errno 1062), or null
+    // for any other error. An upsert absorbs its own row's key collision, so a 1062 means
+    // the UPDATE leg moved a key (markets.id) onto a value another replica row holds.
+    upsertDuplicateKeyTarget(e){
+        if(!e || e.errno !== 1062 || typeof e.upsertTable !== 'string') return null;
+        let m = /Duplicate entry '(.*?)' for key '([^']*)'/.exec(String(e.sqlMessage || e.message || ''));
+        return { table: e.upsertTable, entry: m ? m[1] : null, key: m ? m[2] : null };
+    }
+
+    // Halt when an upsert full-dump fails on the same table and key twice with no
+    // successful apply between (id-space skew no retry can clear); a first hit retries.
+    async noteUpsertDuplicateKey(source, e){
+        let target = this.upsertDuplicateKeyTarget(e);
+        if(!target) return false;
+        let id = target.table + '|' + target.key + '|' + target.entry;
+        let repeat = (this._upsertDupKeyTarget === id);
+        this._upsertDupKeyTarget = id;
+        if(!repeat){
+            getLogger().warn('Upsert full-dump of ' + target.table + ' hit a duplicate key (' +
+                target.entry + ' on ' + target.key + '); retrying once before halting');
+            return false;
+        }
+        // Reset so a replica resumed after an operator clear gets its one retry again.
+        this._upsertDupKeyTarget = null;
+        await this.haltOnUpsertDuplicateKey(source, target);
+        return true;
+    }
+
+    // Durable halt for a repeating upsert duplicate key: same recordHalt/isHalted
+    // persistence and /status surface as the schema-apply halt, its own reason.
+    async haltOnUpsertDuplicateKey(source, target){
+        if(this._halted) return;
+        let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
+        let detail = [target];
+        this._halted = {
+            blockIndex, reason: 'apply-duplicate-key',
+            mismatches: detail, sources: [source],
+            at: new Date().toISOString()
+        };
+        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
+        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist duplicate-key halt (still halting in-memory):', e)); }
+        getLogger().error('================================================================');
+        getLogger().error('UPSERT DUPLICATE KEY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('the ' + target.table + ' full-dump from ' + source + ' failed twice on duplicate entry ' +
+            target.entry + ' for key ' + target.key + ': a replica row already holds a key the');
+        getLogger().error('source assigns to a different row (id-space skew from a source re-index, a');
+        getLogger().error('cross-source bootstrap, or a row the source deleted and this replica kept).');
+        getLogger().error('Retrying the same payload cannot clear it. HALTING (applying no further blocks).');
+        getLogger().error('Operator must re-bootstrap this replica or reconcile the colliding row, then clear the halt.');
+        getLogger().error('================================================================');
+        this.pendingHashes.clear();
+        this._strictConfirmPending.clear();
+        for(let [, timer] of this._applyTimers) clearTimeout(timer);
+        this._applyTimers.clear();
+    }
+
     // True when a snapshot download aborted because the body outgrew the axios
     // ceiling (SNAPSHOT_MAX_CONTENT). One definition for both the incremental
     // fallback and the bootstrap halt, so the two can never disagree on what the
@@ -1708,6 +1764,7 @@ class ClientSync {
                     (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
                 return;
             await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+            this._upsertDupKeyTarget = null;
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
 
@@ -1825,6 +1882,7 @@ class ClientSync {
                 return;
             }
             getLogger().error(util.format('Incremental catch-up failed:', e));
+            if(await this.noteUpsertDuplicateKey(source, e)) return;
             // Schema-gap failures are fixable right now: heal and retry once.
             // The heal's debounce bounds the recursion: a second schema-gap
             // failure inside the window returns false and falls through.

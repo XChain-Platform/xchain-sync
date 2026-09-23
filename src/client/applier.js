@@ -238,7 +238,9 @@ class ClientApplier {
         // would leave the re-dump with nothing to collide on and append duplicate rows
         // silently. attest_validator_stats has no such gap: validator_pubkey_provider has
         // been in its CREATE TABLE since the table was introduced and no migration adds
-        // it, so every replica that has the table has the key.
+        // it, so every replica that has the table has the key. Keeping the source id means
+        // a replica whose markets ids have skewed from the source's can hit that same 1062;
+        // ClientSync.noteUpsertDuplicateKey turns a repeat of it into a durable halt.
         this.localSurrogateIdOnlyTables = new Set([
             'attest_validator_stats'
         ]);
@@ -767,7 +769,14 @@ class ClientApplier {
                 }
             }
 
-            await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+            try {
+                await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+            } catch(e){
+                // Name the upsert table on the error so ClientSync can tell a repeating
+                // full-dump duplicate key apart from any other apply failure.
+                if(useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
+                throw e;
+            }
 
             // events rows >64KB silently truncate on a still-TEXT (pre-migration)
             // replica when INSERT IGNORE is used: the id collision guard skips the row

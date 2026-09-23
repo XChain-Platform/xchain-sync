@@ -15,9 +15,12 @@
  * XChain Indexer Sync - Client Rollback
  *
  * Handles rolling back the local replica database to a given block.
- * Table lists are copied from xchain-indexer/src/rollback.js and
- * MUST be kept in sync when new tables are added to the indexer.
- * test/unit/rollback/rollback_coverage.test.js enforces that the sync set
+ * The generic indexer table lists come from lifecycle.replicaRollbackTables()
+ * (src/table_lifecycle.js) and the decoder lists from TOPOLOGY.decoder
+ * (src/schema/replicated_tables.js): a new table is declared there, never
+ * added to a list here. Only the bespoke in-place resets and restores are
+ * hand-written, mirroring xchain-indexer/src/rollback/.
+ * test/unit/rollback_coverage.test.js enforces that the sync set
  * covers every table ServerPoller replicates.
  *
  ********************************************************************/
@@ -80,7 +83,7 @@ class ClientRollback {
         this.activationDelay = delay;
 
         // Generic rollback table lists, generated from the table-lifecycle
-        // registry (src/tableLifecycle.js, the byte-identical twin of the
+        // registry (src/table_lifecycle.js, the byte-identical twin of the
         // xchain-indexer copy). replicaRollbackTables() yields exactly the
         // source indexer's generic lists minus indexer-local tables that never
         // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
@@ -88,7 +91,7 @@ class ClientRollback {
         // registry joins both sides at once. Per-table rationale lives with
         // the registry entries; the bespoke in-place resets/restores below
         // stay hand-written (and remain drift-guarded by the parity tests in
-        // test/unit/rollback/rollback_coverage.test.js).
+        // test/unit/rollback_coverage.test.js).
         let rollbackLists = lifecycle.replicaRollbackTables();
         this.blockTables  = rollbackLists.blockTables;
         this.indexTables  = rollbackLists.indexTables;
@@ -104,7 +107,7 @@ class ClientRollback {
         // purely local artifacts that no longer feed any consensus value: under the
         // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
         // (address/tick/action/status), not from address_id/tick_id/etc. (see
-        // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/BlockHasher.js). If a
+        // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/client/block_hasher.js). If a
         // lookup id is ever reintroduced into a consensus-visible projection, these orphan
         // rows would silently fork hashes after a reorg and this skip would become a bug.
 
@@ -1251,8 +1254,8 @@ class ClientRollback {
 // after orphaned offers/statuses are deleted) and ClientApplier (forward-apply
 // path, after the block's offers/statuses are inserted) so both derive
 // byte-identical gate values. The SQL between the //<ESCROW-REDERIVE-SQL> markers
-// is kept logically identical with xchain-indexer/src/rollback.js (cross-repo drift
-// guard in test/unit/rollback/rollback_coverage.test.js). Uses db.doQuery so it joins
+// is kept logically identical with xchain-indexer/src/rollback/rederive.js (cross-repo
+// drift guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
 // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
@@ -1297,8 +1300,8 @@ async function rederiveEscrowGate(db){
 // coinpay_action_index IS the match's action_index. Both statements touch only rows whose
 // status disagrees and no-op when the target status has never been minted locally, so
 // neither can blank a status_id. The SQL between the //<COINPAY-MATCH-REDERIVE-SQL>
-// markers is kept logically identical with xchain-indexer/src/rollback.js (cross-repo
-// drift guard in test/unit/rollback/rollback_coverage.test.js). Uses db.doQuery so it joins
+// markers is kept logically identical with xchain-indexer/src/rollback/rederive.js
+// (cross-repo drift guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 //
 // Skipped on a truncated replica: it holds only [base..tip] of coinpay_statuses, so
