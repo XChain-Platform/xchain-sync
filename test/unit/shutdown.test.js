@@ -135,6 +135,8 @@ describe('graceful shutdown', function(){
         });
 
         it('stays under Docker\'s 10s default stop grace', function(){
+            // xchain-node stamps a 30 s budget; docker's ten seconds is the bound
+            // left on a container created before that budget existed.
             assert.ok(DEFAULT_SHUTDOWN_TIMEOUT_MS < 10000);
         });
     });
