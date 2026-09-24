@@ -32,6 +32,12 @@
 const { expect } = require('chai');
 const ServerPoller = require('../../src/server/poller');
 
+function fileIt(title, fn){
+    const test = it(title, fn);
+    test.file = __filename;
+    return test;
+}
+
 // Mirrors src/db.js: outside a transaction doQuery swallows a query error and
 // returns [] unless the caller passed { rethrow: true }; getLastBlock turns an
 // empty result into null. `queryFails` is the source-DB outage.
@@ -78,7 +84,7 @@ function makePoller(db){
 
 describe('Chaos: source cursor read fails closed', function () {
 
-    it('a source-DB outage surfaces out of poll instead of reading as an idle chain', async function () {
+    fileIt('a source-DB outage surfaces out of poll instead of reading as an idle chain', async function () {
         let db = makeSourceDb({ queryFails: true });
         let { poller } = makePoller(db);
         poller.lastPolledBlock = 20;
@@ -93,7 +99,7 @@ describe('Chaos: source cursor read fails closed', function () {
         expect(poller.lastPolledBlock).to.equal(20);
     });
 
-    it('an outage on a poller with no cursor yet does not seed lastPolledBlock from a swallowed error', async function () {
+    fileIt('an outage on a poller with no cursor yet does not seed lastPolledBlock from a swallowed error', async function () {
         let db = makeSourceDb({ queryFails: true });
         let { poller } = makePoller(db);
         poller.lastPolledBlock = null;
@@ -105,7 +111,7 @@ describe('Chaos: source cursor read fails closed', function () {
         expect(poller.lastPolledBlock).to.equal(null);
     });
 
-    it('a genuinely empty source is still a quiet no-op, not an error', async function () {
+    fileIt('a genuinely empty source is still a quiet no-op, not an error', async function () {
         // rows: [] with no fault is what an indexer that has not written block 1 yet
         // returns. The fail-closed read must not turn that into a poll failure.
         let db = makeSourceDb({ queryFails: false, rows: [] });
