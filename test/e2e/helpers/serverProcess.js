@@ -9,20 +9,13 @@
 // contact legal@dankest.llc.
 
 const http    = require('http');
-const express = require('express');
-const cors    = require('cors');
-const { parseCorsOrigin } = require('../../../src/http/cors_origin');
 const WebSocket = require('ws');
 const ServerPoller     = require('../../../src/server/poller');
 const BlockBroadcaster = require('../../../src/server/block_broadcaster');
 const TransparencyLog  = require('../../../src/server/transparency_log');
 const SnapshotBuilder  = require('../../../src/server/snapshot_builder');
 const testDb           = require('./testDb');
-// Trust-proxy and rate-limiter wiring is imported from the real api.js rather
-// than re-declared here. api.js now guards its startup env check and listen()
-// behind require.main === module (see module.exports at the bottom), so
-// requiring it for these two seams no longer opens a port or starts polling.
-const { trustProxyHops, createRateLimiters } = require('../../../src/api');
+const { createApp } = require('../../../src/api');
 
 class ServerProcess {
 
@@ -83,171 +76,20 @@ class ServerProcess {
             this.broadcaster, this.log, this.config, testDb.util
         );
 
-        let app = express();
+        let provider = {
+            isReady:                () => true,
+            getHubConfigAgeSeconds: () => 0,
+            getChains:              () => [{ coin: this.chain, network: this.network, dbType: this.dbType }],
+            getDatabase:            (chain, network, dbType) =>
+                (chain === this.chain && network === this.network && dbType === this.dbType) ? this.sourceDb : null,
+            getBroadcaster:         () => this.broadcaster,
+            getSnapshotBuilder:     () => this.snapshotBuilder,
+            getPoller:              () => this.poller,
+            getTransparencyLog:     (chain, network) =>
+                (chain === this.chain && network === this.network) ? this.log : null
+        };
+        let app = createApp(provider, this.config);
         this.app = app;
-        // Must precede the limiters below (they read req.ip): same ordering
-        // requirement as api.js's startApi(). Deriving from trustProxyHops
-        // rather than a re-declared literal is the whole point of this seam:
-        // a hand-rolled 'false'/unset here previously let a proxy-trust bug
-        // through that this real wiring catches.
-        app.set('trust proxy', trustProxyHops(this.config.TRUST_PROXY));
-        app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN), methods: ['GET'] }));
-
-        // Same limiter instances startApi() builds and mounts, not a
-        // re-declaration of their windows/limits/keying. Only the config
-        // values differ (see TRANSPARENCY_RATE_LIMIT above), never the code
-        // that turns them into middleware or the route->limiter assignment.
-        let limiters = createRateLimiters(this.config);
-        app.use(limiters.backstopLimiter);
-
-        // Routes mirror src/api.js (all namespaced by :dbType). This helper
-        // backs the e2e suite, so its surface needs to match the real API
-        // after the Phase 3 path migration; otherwise the suite would
-        // either 404 on status checks or pass-by-accident on snapshots.
-        // :dbType is one of 'indexer' or 'decoder'. The source DB type selects
-        // the matching hash shape for status and polling.
-
-        let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
-
-        // Status endpoints
-        app.get('/status', async (req, res) => {
-            try {
-                let lastBlock = await this.sourceDb.getLastBlock();
-                let hashRow = lastBlock !== null ? await this.sourceDb.getBlockHashRow(lastBlock) : null;
-                let result = {};
-                result[this.chain] = {};
-                let status = {
-                    block_height: hashRow ? Number(hashRow.block_index) : null,
-                    block_time:   hashRow ? Number(hashRow.block_time)  : null
-                };
-                if (this.dbType === 'decoder') {
-                    status.block_hash = hashRow ? hashRow.block_hash : null;
-                } else {
-                    status.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
-                    status.actions_hash  = hashRow ? hashRow.actions_hash  : null;
-                    status.contract_hash = hashRow ? hashRow.contract_hash : null;
-                }
-                result[this.chain][this.network] = { [this.dbType]: status };
-                result.last_updated = new Date().toISOString();
-                res.json(result);
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/status/:dbType/:chain/:network', async (req, res) => {
-            let dbType = validateDbType(req.params.dbType);
-            if (!dbType) return res.status(400).json({ error: 'Invalid dbType' });
-            let { chain, network } = req.params;
-            if (chain !== this.chain || network !== this.network)
-                return res.status(404).json({ error: 'Chain/network not found' });
-
-            try {
-                let lastBlock = await this.sourceDb.getLastBlock();
-                let hashRow = lastBlock !== null ? await this.sourceDb.getBlockHashRow(lastBlock) : null;
-                let body = {
-                    chain, network, dbType,
-                    block_height: hashRow ? Number(hashRow.block_index) : null,
-                    block_time:   hashRow ? Number(hashRow.block_time)  : null,
-                    last_updated: new Date().toISOString()
-                };
-                if (dbType === 'decoder') {
-                    body.block_hash = hashRow ? hashRow.block_hash : null;
-                } else {
-                    body.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
-                    body.actions_hash  = hashRow ? hashRow.actions_hash  : null;
-                    body.contract_hash = hashRow ? hashRow.contract_hash : null;
-                }
-                res.json(body);
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/schema/:dbType/:chain/:network', async (req, res) => {
-            if (!validateDbType(req.params.dbType))
-                return res.status(400).json({ error: 'Invalid dbType' });
-            try {
-                let tables = await this.sourceDb.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
-                    [this.sourceDb.dbName]
-                );
-                let schema = {};
-                for (let row of tables) {
-                    let tn = row.table_name || row.TABLE_NAME;
-                    let ddl = await this.sourceDb.doQuery("SHOW CREATE TABLE `" + tn + "`");
-                    if (ddl.length > 0) schema[tn] = ddl[0]['Create Table'];
-                }
-                res.json({ chain: this.chain, network: this.network, dbType: req.params.dbType, tables: schema });
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/snapshot/:dbType/:chain/:network', limiters.fullSnapshotLimiter, async (req, res) => {
-            if (!validateDbType(req.params.dbType))
-                return res.status(400).json({ error: 'Invalid dbType' });
-            try {
-                await this.snapshotBuilder.streamFullSnapshot(this.sourceDb, res);
-            } catch (e) {
-                if (!res.headersSent) res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/snapshot/:dbType/:chain/:network/since/:blockHeight', limiters.incrSnapshotLimiter, async (req, res) => {
-            if (!validateDbType(req.params.dbType))
-                return res.status(400).json({ error: 'Invalid dbType' });
-            let sinceBlock = parseInt(req.params.blockHeight);
-            if (isNaN(sinceBlock) || sinceBlock < 0)
-                return res.status(400).json({ error: 'Invalid blockHeight' });
-            try {
-                await this.snapshotBuilder.streamIncrementalSnapshot(this.sourceDb, sinceBlock, res);
-            } catch (e) {
-                if (!res.headersSent) res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/transparency/:dbType/:chain/:network/roots', limiters.transparencyLimiter, async (req, res) => {
-            if (req.params.dbType !== 'indexer')
-                return res.status(400).json({ error: 'Transparency log is indexer-only' });
-            let page  = parseInt(req.query.page) || 0;
-            let limit = parseInt(req.query.limit) || 100;
-            try {
-                let result = await this.log.getPage(page, limit);
-                res.json(result);
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/transparency/:dbType/:chain/:network/proof/:block_index', limiters.transparencyLimiter, async (req, res) => {
-            if (req.params.dbType !== 'indexer')
-                return res.status(400).json({ error: 'Transparency log is indexer-only' });
-            let { chain, network, block_index } = req.params;
-            if (chain !== this.chain || network !== this.network)
-                return res.status(404).json({ error: 'Chain/network not found' });
-            try {
-                let result = await this.log.getProof(block_index);
-                if (!result) return res.status(404).json({ error: 'Block not found' });
-                res.json(result);
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
-
-        app.get('/transparency/:dbType/:chain/:network/root/latest', limiters.transparencyLimiter, async (req, res) => {
-            if (req.params.dbType !== 'indexer')
-                return res.status(400).json({ error: 'Transparency log is indexer-only' });
-            let { chain, network } = req.params;
-            if (chain !== this.chain || network !== this.network)
-                return res.status(404).json({ error: 'Chain/network not found' });
-            try {
-                let result = await this.log.getLatestRoot();
-                res.json(result || { epoch: null, merkle_root: null });
-            } catch (e) {
-                res.status(500).json({ error: e.message });
-            }
-        });
 
         this.server = http.createServer(app);
         this.wss = new WebSocket.Server({ noServer: true });
