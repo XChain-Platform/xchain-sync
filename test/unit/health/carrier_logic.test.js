@@ -59,7 +59,7 @@ class SyncService {
     start() { return Promise.resolve(); }
 }
 const api = proxyquire(process.argv[2], {
-    './SyncService': SyncService,
+    './sync_service': SyncService,
     './coins': { verifyConsensusPin: () => {} },
     http: { createServer: (app) => (server = http.createServer(app)) },
 });

@@ -94,7 +94,7 @@ async function bootRealApi(trustProxyEnv, extraEnv){
         let api = proxyquire('../../../../src/api', {
             'http': { createServer: (app) => { capturedApp = app; return fakeServer; } },
             'ws':   { Server: function(){ return fakeWss; } },
-            './SyncService': SyncServiceStub
+            './sync_service': SyncServiceStub
         });
         await api.startApi();
     } finally {
