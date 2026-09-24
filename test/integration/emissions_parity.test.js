@@ -34,6 +34,7 @@ const assert   = require('assert');
 const setup    = require('./helpers/setup');
 const testDb   = require('./helpers/testDb');
 const fixtures = require('./helpers/fixtures');
+const { assertStreamedEmissions } = require('./emissions_parity.test/helpers/emissions_parity_suite');
 
 describe('Integration: contract_emissions reorg-safe streaming (emissions fix) @regression', function () {
     this.timeout(30000);
@@ -83,15 +84,8 @@ describe('Integration: contract_emissions reorg-safe streaming (emissions fix) @
             "INSERT INTO contract_emissions (execution_index, emitted_action, action_index, position) VALUES (?, ?, ?, ?)",
             [execAction, 'SLASH', null, 1]);
 
-        // The fix: execution_index-scoped stream returns BOTH, ORDER BY execution_index, position.
         const streamed = await sourceDb.getEmissionRowsForBlock(B);
-        assert.strictEqual(streamed.length, 2,
-            'getEmissionRowsForBlock must include the NULL-action_index SLASH row the hash counts');
-        assert.deepStrictEqual(streamed.map(r => r.emitted_action), ['ORDER', 'SLASH'],
-            'rows ordered by execution_index then position');
-        const slash = streamed.find(r => r.emitted_action === 'SLASH');
-        assert.ok(slash, 'SLASH emission present in the streamed set');
-        assert.strictEqual(slash.action_index, null, 'SLASH emission carries NULL action_index');
+        assertStreamedEmissions(streamed);
 
         // The bug it fixes: the generic action-scoped INNER JOIN silently drops the NULL row,
         // so a follower fed by this path would recompute a divergent contract_hash and halt.

@@ -26,10 +26,14 @@ const BlockHasher = require('../../src/client/block_hasher');
 const Utility = require('../../src/util');
 const vectors = require('../fixtures/block-hash-vectors.json');
 
-// A BlockHasher whose db.doQuery returns the canned result-sets in CALL ORDER.
+// A BlockHasher whose strict reader returns the canned result-sets in CALL ORDER.
+// The fail-soft reader throws, so a gather that regresses to doQuery fails here.
 function hasherFor(results){
     let i = 0;
-    const db = { doQuery: async () => results[i++] };
+    const db = {
+        doQuery: async () => { throw new Error('fail-soft doQuery used for a consensus preimage gather'); },
+        doQueryStrict: async () => results[i++]
+    };
     return new BlockHasher(db, new Utility());
 }
 
@@ -66,6 +70,21 @@ describe('BlockHasher: independent recompute conformance @regression', function(
         assert.ok(got.ledger_hash && got.actions_hash && got.contract_hash,
             'empty block still yields the three chained hashes');
     });
+
+    it('a read error rejects instead of hashing a truncated preimage', async function(){
+        // Model the production reader: doQuery swallows the error into [], doQueryStrict throws.
+        let call = 0;
+        const db = {
+            doQuery: async () => [],
+            doQueryStrict: async () => {
+                if(++call === 3) throw new Error('lock wait timeout on escrows');
+                return [];
+            }
+        };
+        await assert.rejects(new BlockHasher(db, new Utility()).computeBlockHashes(vectors.block_index),
+            /lock wait timeout on escrows/,
+            'a failed gather must surface as a recompute error, never as an empty row set');
+    });
 });
 
 describe('BlockHasher: independent recompute conformance @regression', function(){
@@ -77,7 +96,8 @@ describe('BlockHasher: independent recompute conformance @regression', function(
 
         // Capture emitted SQL while feeding empty result-sets.
         function capturingHasher(calls){
-            const db = { doQuery: async (sql) => { calls.push(sql); return []; } };
+            const capture = async (sql) => { calls.push(sql); return []; };
+            const db = { doQuery: capture, doQueryStrict: capture };
             return new BlockHasher(db, new Utility());
         }
         const stateQueryOf = (calls) => {

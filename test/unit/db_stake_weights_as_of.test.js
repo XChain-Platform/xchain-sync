@@ -133,10 +133,10 @@ describe(STAKE_WEIGHTS_AS_OF_TITLE, function(){
             /denominator S/);
     });
 
-    it('does not reference _stakeWeightsSql (keeps the drift-guarded twin untouched)', async function(){
-        // The reconstruction is self-contained; _stakeWeightsSql must remain the
+    it('does not reference stakeWeightsSql (keeps the drift-guarded twin untouched)', async function(){
+        // The reconstruction is self-contained; stakeWeightsSql must remain the
         // byte-identical consensus twin used only by the live, in-order callers.
-        let spy = sinon.spy(db, '_stakeWeightsSql');
+        let spy = sinon.spy(db, 'stakeWeightsSql');
         await db.getStakeWeightsByCapabilityAsOf('oracle_publish', 106, '500', 1000);
         assert.strictEqual(spy.called, false);
     });

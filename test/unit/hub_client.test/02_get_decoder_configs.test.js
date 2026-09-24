@@ -29,7 +29,7 @@ describe('HubClient', function(){
     describe('getDecoderConfigs', function(){
         it('extracts xchain-decoder entries', async function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
-                bitcoin: { mainnet: { 'xchain-decoder': { db_host: 'dh', db_port: '3309', name: 'dec', user: 'u', pass: 'p' } } }
+                bitcoin: { mainnet: { 'xchain-decoder': { db_host: 'dh', db_port: '3309', name: 'dec', user: 'fixture-user', pass: 'fixture-pass' } } }
             }}});
             let configs = await hub.getDecoderConfigs();
             assert.strictEqual(configs.length, 1);

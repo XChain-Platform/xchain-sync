@@ -32,7 +32,7 @@ describe('HubClient', function(){
                 bitcoin: {
                     mainnet: {
                         'xchain-indexer': {
-                            db_host: 'db1', db_port: '3307', name: 'btc_main', user: 'u', pass: 'p'
+                            db_host: 'db1', db_port: '3307', name: 'btc_main', user: 'fixture-user', pass: 'fixture-pass'
                         }
                     }
                 }
@@ -50,7 +50,7 @@ describe('HubClient', function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
                 litecoin: {
                     testnet: {
-                        'xchain-indexer': { host: 'fallback_host', port: '3308', name: 'ltc', user: 'u', pass: 'p' }
+                        'xchain-indexer': { host: 'fallback_host', port: '3308', name: 'ltc', user: 'fixture-user', pass: 'fixture-pass' }
                     }
                 }
             }}});
@@ -61,7 +61,7 @@ describe('HubClient', function(){
 
         it('defaults db_host to 127.0.0.1 when neither present', async function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
-                doge: { regtest: { 'xchain-indexer': { name: 'd', user: 'u', pass: 'p' } } }
+                doge: { regtest: { 'xchain-indexer': { name: 'd', user: 'fixture-user', pass: 'fixture-pass' } } }
             }}});
             let configs = await hub.getIndexerConfigs();
             assert.strictEqual(configs[0].db_host, '127.0.0.1');
@@ -102,7 +102,7 @@ describe('HubClient', function(){
 
         it('skips empty coin keys', async function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
-                '': { mainnet: { 'xchain-indexer': { name: 'x', user: 'u', pass: 'p' } } }
+                '': { mainnet: { 'xchain-indexer': { name: 'x', user: 'fixture-user', pass: 'fixture-pass' } } }
             }}});
             let configs = await hub.getIndexerConfigs();
             assert.strictEqual(configs.length, 0);
@@ -110,8 +110,8 @@ describe('HubClient', function(){
 
         it('handles multiple chains', async function(){
             sinon.stub(axios, 'post').resolves({ data: { result: {
-                bitcoin: { mainnet: { 'xchain-indexer': { name: 'b', user: 'u', pass: 'p' } } },
-                litecoin: { mainnet: { 'xchain-indexer': { name: 'l', user: 'u', pass: 'p' } } }
+                bitcoin: { mainnet: { 'xchain-indexer': { name: 'b', user: 'fixture-user', pass: 'fixture-pass' } } },
+                litecoin: { mainnet: { 'xchain-indexer': { name: 'l', user: 'fixture-user', pass: 'fixture-pass' } } }
             }}});
             let configs = await hub.getIndexerConfigs();
             assert.strictEqual(configs.length, 2);

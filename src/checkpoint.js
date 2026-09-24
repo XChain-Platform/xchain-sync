@@ -43,8 +43,9 @@ const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 // The canonical signing string:
 //   XCHECKPOINT|CHAIN|NETWORK|BLOCK_INDEX|BLOCK_HASH|LEDGER_HASH|ACTIONS_HASH|CONTRACT_HASH|CHECKPOINT_SEQ|SNAPSHOT_BLOCK
 // It MUST stay byte-identical to every other producer and verifier of it: the hub's
-// StateCheckpointEngine and StateAnchorPublisher, the indexer's ANCHOR verifier and
-// recovery wrapper, the SDK's checkpoint.js and the explorer's canonicalCheckpointString.
+// StateCheckpointEngine and StateAnchorPublisher, the indexer's ANCHOR verifier, recovery
+// wrapper and bridge-proof checkpoint_source.js, the SDK's checkpoint.js and the explorer's
+// canonicalCheckpointString.
 function canonicalCheckpoint(cp){
     if (!cp) throw new Error('CheckpointVerifier: checkpoint object required');
     let raw = ['XCHECKPOINT', cp.chain, cp.network, String(cp.block_index), cp.block_hash,

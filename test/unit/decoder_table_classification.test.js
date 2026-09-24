@@ -42,7 +42,7 @@ const fs     = require('fs');
 const path   = require('path');
 
 const { getReplicatedTables }  = require('../../src/schema/replicated_tables');
-const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
+const { OPERATOR_LOCAL_TABLES, decoderIncrementalSets } = require('../../src/server/snapshot_builder');
 
 // Resolved exactly as the other two decoder-schema readers resolve it
 // (generatedColumns.test.js, replicatedDatetimeColumns.test.js), so this guard
@@ -64,8 +64,8 @@ function requireSibling(ctx){
 
 // Decoder tables deliberately NOT replicated. Each entry is a decision, not an
 // oversight, and the same decision is repeated by hand in SnapshotBuilder
-// (OPERATOR_LOCAL_TABLES, and the function-local decoderSkip inside
-// streamIncrementalSnapshot), which is why the last case below cross-checks it.
+// (OPERATOR_LOCAL_TABLES, and the skip set of decoderIncrementalSets), which is
+// why the cases below cross-check it.
 //
 // mempool_transactions: node-local, non-deterministic observation state; its own
 // schema comment forbids sharing raw values across nodes.
@@ -75,7 +75,7 @@ const ADD_INSTRUCTIONS =
     '\n\nEither add it to TOPOLOGY.decoder in src/schema/replicated_tables.js (and update the ' +
     'by-value pin in test/unit/replicated_tables.test.js), or add it to DECODER_EXCLUDED ' +
     'here with a written reason. Either way check SnapshotBuilder OPERATOR_LOCAL_TABLES / ' +
-    'decoderSkip and ClientRollback decoderBlockTables / decoderTxScopedTables.';
+    'decoderIncrementalSets and ClientRollback decoderBlockTables / decoderTxScopedTables.';
 
 function decoderSqlTables(){
     return fs.readdirSync(DECODER_SQL_DIR)
@@ -139,5 +139,27 @@ describe('decoder table classification (schema exhaustiveness) @regression', fun
         for(const table of DECODER_EXCLUDED)
             assert.ok(!declared.has(table),
                 table + ' is in both TOPOLOGY.decoder and DECODER_EXCLUDED - pick one');
+    });
+});
+
+describe('decoder incremental-snapshot buckets (topology exhaustiveness) @regression', function(){
+
+    it('places every replicated decoder table in exactly one incremental-snapshot bucket', function(){
+        // No sibling needed. A table no bucket names falls to the bare `continue` in
+        // streamIncrementalSnapshot, so derivation alone cannot cover special/actionScoped.
+        const buckets = Object.values(decoderIncrementalSets());
+        const replicated = getReplicatedTables('decoder');
+        assert.ok(replicated.length >= 8,
+            'decoder topology enumeration looks broken: ' + replicated.join(','));
+
+        const misplaced = replicated.filter(t => buckets.filter(b => b.has(t)).length !== 1);
+        assert.deepStrictEqual(misplaced, [],
+            misplaced.length
+                ? 'decoder table(s) replicated but not in exactly one SnapshotBuilder ' +
+                  'decoderIncrementalSets bucket: ' + misplaced.join(', ') + '. An ' +
+                  'unclassified table rides no incremental snapshot, so every incrementally-' +
+                  'caught-up replica freezes it at bootstrap height and shows a permanent ' +
+                  '/status count shortfall until a full re-snapshot. Classify it there.'
+                : undefined);
     });
 });

@@ -51,9 +51,9 @@ const envConfig = require('../config');
 
 // Tables whose row counts cannot converge between source and replica, and so are
 // never a completeness signal. See the exclusion in verifyTableCounts for the
-// mechanism; kept here as a named set so a second such table is added in one place
-// rather than at each call site's excludeTables argument.
-const OPERATIONAL_LOG_TABLES = new Set(['events']);
+// mechanism. Declared once in replicated_tables.js, which the content-parity plan
+// also reads, so the count and content checks cannot disagree about a table.
+const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
 
 // Permanent bootstrap exhaustion. start()-time throws already unwind to
 // SyncService's sync.start().catch(... process.exit(1)) restart contract on their
@@ -67,16 +67,24 @@ class BootstrapExhaustedError extends Error {}
 
 // Is the decoder `dispensers` table due a wall-clock reconcile? The one term of the
 // reconcile decision that carries no cycle-counter side effect, so the recurring status
-// tick can sample it without corrupting the every-Nth catch-up cadence. Due only once
-// some reconcile has stamped a time: a replica that has never converged dispensers is the
-// firstResume case, owned by the catch-up path, and firing that from a tick would retry a
-// failing re-dump on every tick instead of once per interval.
-function dispenserIntervalDue(config, lastReconcileAt, nowMs){
+// tick can sample it without corrupting the every-Nth catch-up cadence. Measured from the
+// later of the last success and `since` (the tick's last attempt, else when live-follow
+// began), so a snapshot-bootstrapped replica that never reconciled is still bounded and a
+// failing re-dump retries once per interval, not once per tick. No time known: not due.
+function dispenserIntervalDue(config, lastReconcileAt, nowMs, since){
     let maxIntervalMs = parseInt(config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'], 10);
     if(isNaN(maxIntervalMs) || maxIntervalMs < 0) maxIntervalMs = 1800000;
     if(maxIntervalMs === 0) return false;            // explicitly disabled
-    if(lastReconcileAt == null) return false;
-    return (nowMs - lastReconcileAt) >= maxIntervalMs;
+    let from = latestTime(lastReconcileAt, since);
+    if(from == null) return false;
+    return (nowMs - from) >= maxIntervalMs;
+}
+
+// Return the later of two optional epoch-ms times, or null when neither is set.
+function latestTime(a, b){
+    if(a == null) return (b == null) ? null : b;
+    if(b == null) return a;
+    return Math.max(a, b);
 }
 
 class ClientSync {
@@ -96,6 +104,9 @@ class ClientSync {
         this.hashVerifier = hashVerifier;
         this.config       = config;
         this.util         = util;
+        this.maxRollbackDepth = envConfig.resolveMaxRollbackDepth(
+            this.chain, this.network, this.config['MAX_ROLLBACK_DEPTH'],
+            this.config['MAX_ROLLBACK_DEPTH_EXPLICIT']);
         // Independent block-hash recomputation (true byzantine / replication-
         // integrity detection). Verifies the replicated raw rows actually hash to
         // the committed hash, rather than trusting verbatim-replicated hashes.
@@ -130,7 +141,7 @@ class ClientSync {
         // weakening gates the repo declares UNSAFE to turn off (operator decision
         // 2026-06-12): the all-gates-off posture stays an explicit operator choice.
         let modeKey    = 'SYNC_MODE_' + String(this.chain).toUpperCase();
-        this._syncMode = process.env[modeKey] || this.config[modeKey] || 'full';
+        this._syncMode = envConfig.envValueByName(modeKey) || this.config[modeKey] || 'full';
         if(this.dbType === 'indexer' && this._syncMode === 'infra-only'){
             let haltingGates = [];
             if(this.config['VERIFY_RECOMPUTE'])                  haltingGates.push('VERIFY_RECOMPUTE');
@@ -205,7 +216,7 @@ class ClientSync {
         // misconfigured small depth can't quietly strand the replica. (depth 0 = full-
         // history replica, not truncated, so it is exempt.)
         if(this._truncatedDepth >= 1){
-            let maxRollback = Number(this.config['MAX_ROLLBACK_DEPTH']);
+            let maxRollback = Number(this.maxRollbackDepth);
             if(!Number.isFinite(maxRollback) || maxRollback < 1) maxRollback = 100;
             if(this._truncatedDepth <= maxRollback){
                 let clamped = maxRollback + 1;
@@ -340,6 +351,11 @@ class ClientSync {
         this._replicaGapAlertSweeps   = this.numericSetting('REPLICA_GAP_ALERT_SWEEPS', 2, 1);
         this._replicaGapAlertRepeatMs = this.numericSetting('REPLICA_GAP_ALERT_REPEAT_MS', 21600000, 0);
 
+        // Validated table names returned by the primary source's /schema endpoint.
+        // null means no source schema has been observed, so a missing-table verdict
+        // would be unknown rather than empty.
+        this._sourceTables = null;
+
         // Throttled gap logging. On an inherently fast chain (e.g. Dogecoin
         // testnet, which mints blocks at ~10/sec and is tens of millions of
         // blocks high) the replica perpetually trails the live tip, so every
@@ -445,12 +461,14 @@ class ClientSync {
     async warnMissingTables(){
         try {
             let present = await this.db.listExistingTables();
-            let missing = replicatedTables.missingReplicatedTables(present, this.dbType);
+            let missing = replicatedTables.missingReplicatedTables(
+                present, this.dbType, this._sourceTables
+            );
             this._missingTables = missing;
             if(missing && missing.length){
                 getLogger().warn('MISSING_REPLICATED_TABLES: ' + this.chain + '/' + this.network + '/' +
                     this.dbType + ' replica schema is missing ' + missing.length +
-                    ' table(s) that this build replicates per block: ' + missing.join(', ') +
+                    ' source table(s) that this build replicates per block: ' + missing.join(', ') +
                     '. Rows for these tables are SKIPPED (errno 1146 is tolerated so a schema gap ' +
                     'cannot wedge the replica), so replication is partial while /status still ' +
                     'reports halted:false. Migrate this replica to the source schema; the same ' +
@@ -463,8 +481,8 @@ class ClientSync {
         }
     }
 
-    // Per-block replicated tables absent from this replica's schema, or null when
-    // the check has not run / could not read the table listing.
+    // Source-side per-block replicated tables absent from this replica's schema,
+    // or null when the check has not run or either table listing is unknown.
     getMissingTables(){ return this._missingTables === undefined ? null : this._missingTables; }
 
     // Multi-source Byzantine quorum helpers.
@@ -678,6 +696,8 @@ class ClientSync {
 
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
 
+        // Start the dispensers wall clock at live-follow: a full snapshot seeds the table at parity.
+        if(this.dbType === 'decoder') this._dispenserClockArmedAt = Date.now();
         this.connectWebSockets();
 
         // Keep alive
@@ -777,15 +797,19 @@ class ClientSync {
         if(!schema || !schema.tables) return;
 
         // Validate every table name + DDL up front, then collect the apply set.
+        // Keep the independently validated name set for missing-table checks: a
+        // source on an older release legitimately omits tables known to this build.
+        let sourceTables = new Set();
         let pending = [];
         for(let tableName in schema.tables){
             let createSql = schema.tables[tableName];
-            if(!createSql) continue;
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
                 getLogger().error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
                 continue;
             }
+            sourceTables.add(tableName);
+            if(!createSql) continue;
             let ddlCheck = validation.validateDdl(createSql);
             if(!ddlCheck.valid){
                 getLogger().error('Rejected DDL for table ' + tableName + ': ' + ddlCheck.reason);
@@ -793,6 +817,7 @@ class ClientSync {
             }
             pending.push({ tableName, createSql });
         }
+        this._sourceTables = sourceTables;
 
         // Multi-pass fixpoint. A CREATE can fail because a table it FK-references
         // has not been created yet; retrying the not-yet-applied tables until a
@@ -904,6 +929,62 @@ class ClientSync {
         getLogger().error('loop forever on errno 1146/1054. HALTING (applying no further blocks).');
         getLogger().error('Operator must fix the DDL fault (disk, permissions, lock, malformed');
         getLogger().error('DDL) and clear the halt before this replica can resume.');
+        getLogger().error('================================================================');
+        this.pendingHashes.clear();
+        this._strictConfirmPending.clear();
+        for(let [, timer] of this._applyTimers) clearTimeout(timer);
+        this._applyTimers.clear();
+    }
+
+    // Table and key of an upsert full-dump duplicate-key failure (errno 1062), or null
+    // for any other error. An upsert absorbs its own row's key collision, so a 1062 means
+    // the UPDATE leg moved a key (markets.id) onto a value another replica row holds.
+    upsertDuplicateKeyTarget(e){
+        if(!e || e.errno !== 1062 || typeof e.upsertTable !== 'string') return null;
+        let m = /Duplicate entry '(.*?)' for key '([^']*)'/.exec(String(e.sqlMessage || e.message || ''));
+        return { table: e.upsertTable, entry: m ? m[1] : null, key: m ? m[2] : null };
+    }
+
+    // Halt when an upsert full-dump fails on the same table and key twice with no
+    // successful apply between (id-space skew no retry can clear); a first hit retries.
+    async noteUpsertDuplicateKey(source, e){
+        let target = this.upsertDuplicateKeyTarget(e);
+        if(!target) return false;
+        let id = target.table + '|' + target.key + '|' + target.entry;
+        let repeat = (this._upsertDupKeyTarget === id);
+        this._upsertDupKeyTarget = id;
+        if(!repeat){
+            getLogger().warn('Upsert full-dump of ' + target.table + ' hit a duplicate key (' +
+                target.entry + ' on ' + target.key + '); retrying once before halting');
+            return false;
+        }
+        // Reset so a replica resumed after an operator clear gets its one retry again.
+        this._upsertDupKeyTarget = null;
+        await this.haltOnUpsertDuplicateKey(source, target);
+        return true;
+    }
+
+    // Durable halt for a repeating upsert duplicate key: same recordHalt/isHalted
+    // persistence and /status surface as the schema-apply halt, its own reason.
+    async haltOnUpsertDuplicateKey(source, target){
+        if(this._halted) return;
+        let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
+        let detail = [target];
+        this._halted = {
+            blockIndex, reason: 'apply-duplicate-key',
+            mismatches: detail, sources: [source],
+            at: new Date().toISOString()
+        };
+        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
+        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist duplicate-key halt (still halting in-memory):', e)); }
+        getLogger().error('================================================================');
+        getLogger().error('UPSERT DUPLICATE KEY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('the ' + target.table + ' full-dump from ' + source + ' failed twice on duplicate entry ' +
+            target.entry + ' for key ' + target.key + ': a replica row already holds a key the');
+        getLogger().error('source assigns to a different row (id-space skew from a source re-index, a');
+        getLogger().error('cross-source bootstrap, or a row the source deleted and this replica kept).');
+        getLogger().error('Retrying the same payload cannot clear it. HALTING (applying no further blocks).');
+        getLogger().error('Operator must re-bootstrap this replica or reconcile the colliding row, then clear the halt.');
         getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
@@ -1683,6 +1764,7 @@ class ClientSync {
                     (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
                 return;
             await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+            this._upsertDupKeyTarget = null;
             if(typeof snapshotData.block_height === 'number')
                 this.lastAppliedBlock = snapshotData.block_height;
 
@@ -1800,6 +1882,7 @@ class ClientSync {
                 return;
             }
             getLogger().error(util.format('Incremental catch-up failed:', e));
+            if(await this.noteUpsertDuplicateKey(source, e)) return;
             // Schema-gap failures are fixable right now: heal and retry once.
             // The heal's debounce bounds the recursion: a second schema-gap
             // failure inside the window returns false and falls through.
@@ -1959,6 +2042,7 @@ class ClientSync {
             }
 
             await this.verifyTableContentParity(source, blockHeight, remoteStatus);
+            await this.verifyTokenFoldParity(source, blockHeight, remoteStatus);
             return verdict;
         } catch(e){
             getLogger().error(util.format('Hash verification failed against ' + source + ':', e));
@@ -2035,6 +2119,50 @@ class ClientSync {
         } catch(e){
             getLogger().error(util.format('Table-content parity check errored at block %s (advisory, ignoring):', blockHeight, e.message));
             return null;
+        }
+    }
+
+    // Advisory tokens fold-column parity (NON-consensus; never halts, never throws).
+    // Same preconditions as the two checks above: both sides opted in and we are AT
+    // the source's published height. The source's `ahead` ticks (edited after that
+    // height on its live table) are fed back as the exclusion, so both digests cover
+    // the same ticks. A mismatch means this replica holds an ISSUE edit the source
+    // does not, or lacks one it has: the forward class-7 carry or the rollback refold
+    // went wrong.
+    async verifyTokenFoldParity(source, blockHeight, remoteStatus){
+        if(!this.config['TOKEN_FOLD_PARITY_CHECK']) return null;
+        let remote = remoteStatus && remoteStatus.token_fold_parity;
+        if(!remote || typeof remote.h !== 'string') return null;
+        if(Number(remoteStatus.block_height) !== Number(blockHeight)) return null;
+        try {
+            let local = await this.blockHasher.computeTokenFoldChecksum(blockHeight, { exclude: remote.ahead || [] });
+            if(local.h !== remote.h){
+                getLogger().warn('TOKEN_FOLD_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+                    ': local=' + local.h + ' (' + local.n + ' rows) source=' + remote.h + ' (' + remote.n + ' rows)' +
+                    ' (advisory, NOT halting; tokens owner/lock/callback/list/mint-window/bridge columns diverged)');
+                await this.recordSyncStateCounter('token_fold_mismatch', blockHeight);
+                return false;
+            }
+            getLogger().info('Token fold parity passed against ' + source + ' (' + local.n + ' rows)');
+            return true;
+        } catch(e){
+            getLogger().error(util.format('Token fold parity check errored at block %s (advisory, ignoring):', blockHeight, e.message));
+            return null;
+        }
+    }
+
+    // Durable running count plus last block for one advisory mismatch kind, under
+    // dbType-namespaced sync-state keys. Best-effort health signal; never throws.
+    async recordSyncStateCounter(kind, blockIndex){
+        try {
+            if(!this.db || typeof this.db.setSyncState !== 'function') return;
+            let countKey = kind + '_count:' + this.dbType;
+            let cur = (typeof this.db.getSyncState === 'function') ? await this.db.getSyncState(countKey) : null;
+            let n = (cur != null && Number.isFinite(Number(cur))) ? Number(cur) + 1 : 1;
+            await this.db.setSyncState(countKey, String(n));
+            await this.db.setSyncState(kind + '_last_block:' + this.dbType, String(blockIndex));
+        } catch(e){
+            // advisory; swallow
         }
     }
 
@@ -2343,7 +2471,7 @@ class ClientSync {
     // every sweep or never).
     numericSetting(key, fallback, min){
         let raw = (this.config && this.config[key] != null && this.config[key] !== '')
-            ? this.config[key] : process.env[key];
+            ? this.config[key] : envConfig.envValueByName(key);
         let n = Number(raw);
         if(!Number.isFinite(n)) n = fallback;
         if(min != null && n < min) n = min;
@@ -2512,14 +2640,6 @@ class ClientSync {
         return this._exactParityTableSet;
     }
 
-    // Re-fetch the decoder `dispensers` table in full and replace the local copy.
-    // dispensers cannot ride the block stream or the id-cursor lookup paging (no
-    // monotonic id; the decoder soft-expires then hard-purges rows), so a truncated
-    // bootstrap never seeds it and an incremental catch-up lets it drift. This keyset-
-    // paged re-dump + atomic replace (ClientApplier.applyDispensersReplace) is the
-    // convergence path; verifyDecoderCompleteness then verifies row counts without
-    // false alarms. Decoder-only, best-effort: any fetch/parse failure aborts WITHOUT
-    // touching the local table (the replace runs only once every page is in hand).
     // Decide whether to reconcile the decoder `dispensers` table on this catch-up cycle
     // (advances the per-process cycle counter as a side effect). Reconcile when:
     //   (a) firstResume  - nothing reconciled yet this process (a resume that skipped
@@ -2535,7 +2655,7 @@ class ClientSync {
     //       healthy live-following replica never enters a catch-up at all, which is
     //       precisely the cadence this clause claims to bound.
     // `_lastDispenserReconcileAt` is stamped by reconcileDispensers on success (covering
-    // the bootstrap reconcile too), so firstResume is false once any reconcile has run.
+    // the from-height bootstrap reconcile too), so firstResume is false once any has run.
     shouldReconcileDispensers(nowMs){
         this._catchUpCount = (this._catchUpCount || 0) + 1;
         let every = parseInt(this.config['DISPENSERS_RECONCILE_EVERY'], 10);
@@ -2551,22 +2671,36 @@ class ClientSync {
 
     // Wall-clock term of the reconcile decision, WITHOUT shouldReconcileDispensers'
     // cycle-counter side effect, so a recurring caller can sample the same bound without
-    // corrupting the every-Nth catch-up cadence.
+    // corrupting the every-Nth catch-up cadence. Falls back to the last attempt, else the
+    // live-follow start, so a replica that never reconciled is bounded too.
     dispenserReconcileIntervalDue(nowMs){
-        return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
+        let since = latestTime(this._lastDispenserReconcileAttemptAt, this._dispenserClockArmedAt);
+        return dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs, since);
     }
 
+    // Re-fetch the decoder `dispensers` table in full and replace the local copy.
+    // dispensers cannot ride the block stream or the id-cursor lookup paging (no
+    // monotonic id; the decoder soft-expires then hard-purges rows), so a truncated
+    // bootstrap never seeds it and an incremental catch-up lets it drift. The source
+    // serves the whole table in one statement-consistent response (the has_more walk
+    // stays so a source that still pages completes too), then an atomic replace
+    // (ClientApplier.applyDispensersReplace) converges it. Decoder-only, best-effort:
+    // any fetch/parse failure aborts WITHOUT touching the local table. Every page is
+    // checked against SCHEMA_VERSION like the lookup-page and snapshot channels, so a
+    // code-version mismatch aborts before the replace (the status-tick caller has no
+    // earlier version-checked apply in front of it).
     async reconcileDispensers(source){
         if(this.dbType !== 'decoder') return;
         if(!source) return;
+        // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
+        this._lastDispenserReconcileAttemptAt = Date.now();
+        let expected = SCHEMA_VERSION[this.dbType];
         try {
             let all = [];
             let afterTx = null, afterAddr = null;
-            let pageSize = this.lookupPageSize();
             for(let guard = 0; guard < 1000000; guard++){
                 let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
-                    '?limit=' + pageSize +
-                    (afterTx !== null ? '&after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
+                    (afterTx !== null ? '?after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
                 let response = await axios.get(url, {
                     headers: this.upstreamHeaders(),
                     responseType: 'arraybuffer',
@@ -2579,6 +2713,10 @@ class ClientSync {
                     try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
                 }
                 let page = JSON.parse(jsonStr.toString());
+                if(page.schema_version !== expected){
+                    throw new Error('Dispensers page schema mismatch: server=' +
+                        page.schema_version + ' client=' + expected);
+                }
                 let rows = Array.isArray(page.rows) ? page.rows : [];
                 for(let r of rows) all.push(r);
                 if(!page.has_more || rows.length === 0) break;
@@ -2754,7 +2892,7 @@ class ClientSync {
             // it: the one cadence the bound claims to protect against (no catch-ups at
             // all) was the one it could not reach, and the replica went on serving rows
             // the source soft-expired or hard-purged for the life of the process. Row
-            // counts cannot substitute (replicatedTables.js: a soft-expire leaves counts
+            // counts cannot substitute (src/schema/replicated_tables.js: a soft-expire leaves counts
             // equal, a hard-purge leaves the replica ahead, reported for indexer only).
             // Deliberately NOT folded into maybeVerifyCompleteness: that sweep returns
             // early when COMPLETENESS_CHECK_INTERVAL is falsy and when the heights differ,
@@ -3891,7 +4029,7 @@ class ClientSync {
 
         if(this.lastAppliedBlock !== null){
             let depth = this.lastAppliedBlock - event.block_index + 1;
-            if(depth > this.config['MAX_ROLLBACK_DEPTH']){
+            if(depth > this.maxRollbackDepth){
                 // A reorg too deep to roll back safely must FAIL CLOSED, not fail open.
                 // Returning bare here would leave lastAppliedBlock pointing at the now-
                 // orphaned tip: every canonical block the source re-streams from
@@ -3904,7 +4042,7 @@ class ClientSync {
                 // a durable halt via the same contract used for consensus divergence and let
                 // the operator investigate/clear, rather than advancing onto the fork.
                 await this.haltOnDivergence(event.block_index,
-                    [{ field: 'rollback_depth', depth, max: this.config['MAX_ROLLBACK_DEPTH'] }],
+                    [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
                     this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
                 return; // halted: no rollback, lastAppliedBlock left as-is, no further applies
             }

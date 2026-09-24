@@ -100,7 +100,7 @@ class ClientApplier {
             // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
             'sync_meta',
             // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent (item 4622).
+            // full-dump re-send on an incremental catch-up idempotent.
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
             // reward_type, round_reference, round_qualifier). The recovery-redriven collector
@@ -148,11 +148,23 @@ class ClientApplier {
             'rollcall_gates'
         ]);
 
+        // Repair-only identities for replicated lookup tables whose natural value must
+        // agree with the source at the source's carried id. These tables are normally
+        // INSERT IGNORE because every block may re-send them, but that cannot repair an
+        // id mapping changed by first-seen AUTO_INCREMENT order: PRIMARY collisions look
+        // benign even when the row at that id has a different value, while natural-key
+        // collisions silently keep the same value at the wrong id. Upsert-only replicated
+        // tables therefore need ID-stable migrations; this map is the bounded recovery
+        // path for an already-unstable replica during a from-zero lookup repair.
+        this.repairNaturalKeyColumns = new Map([
+            ['index_statuses', ['status']]
+        ]);
+
         // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
         // value (markets = OHLCV; attest_validator_stats = running counters). On a
         // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
         // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values (4622).
+        // STALE row, so they must UPSERT to overwrite with the source values.
         this.upsertFullDumpTables = new Set([
             'markets',
             'attest_validator_stats'
@@ -184,7 +196,7 @@ class ClientApplier {
         //
         // Nothing joins `blocks.id`: the source's own createBlock INSERTs without it,
         // the other *_hash_id columns point into index_transactions, and the client
-        // cursor is `SELECT MAX(block_index)` (db.js getLastBlock), never an id.
+        // cursor is the highest block_index (db getLastBlock), never an id.
         this.localSurrogateIdTables = new Map([
             ['blocks', 'block_index']
         ]);
@@ -226,12 +238,24 @@ class ClientApplier {
         // would leave the re-dump with nothing to collide on and append duplicate rows
         // silently. attest_validator_stats has no such gap: validator_pubkey_provider has
         // been in its CREATE TABLE since the table was introduced and no migration adds
-        // it, so every replica that has the table has the key.
+        // it, so every replica that has the table has the key. Keeping the source id means
+        // a replica whose markets ids have skewed from the source's can hit that same 1062;
+        // ClientSync.noteUpsertDuplicateKey turns a repeat of it into a durable halt.
         this.localSurrogateIdOnlyTables = new Set([
             'attest_validator_stats'
         ]);
     }
 
+    /**
+     * Apply a single block payload from a WebSocket event.
+     *
+     * Runs the whole block inside one transaction: a duplicate or malformed payload
+     * returns before anything is written, and any failure rolls the block back so
+     * ClientSync retries it rather than committing part of it.
+     *
+     * @param {object} payload the server's block event: block_index, data (a
+     *                         { table: [rows] } map) and any updated_rows
+     */
     async applyBlock(payload){
         // Clear any prior block's computed roots up front: on an early return
         // (malformed payload or an already-applied duplicate) ClientSync must NOT
@@ -384,10 +408,8 @@ class ClientApplier {
         if(!pairs.size) return [];
         let aIn = Array.from(addrIds);
         let tIn = Array.from(tickIds);
-        let addrRows = await this.db.doQuery(
-            'SELECT id, address FROM index_addresses WHERE id IN (' + aIn.map(() => '?').join(',') + ')', aIn);
-        let tickRows = await this.db.doQuery(
-            'SELECT id, tick FROM index_tickers WHERE id IN (' + tIn.map(() => '?').join(',') + ')', tIn);
+        let addrRows = await this.db.findIndexAddressTextByIds(aIn);
+        let tickRows = await this.db.findIndexTickTextByIds(tIn);
         let addrMap = new Map(); for(let r of addrRows) addrMap.set(String(r.id), r.address);
         let tickMap = new Map(); for(let r of tickRows) tickMap.set(String(r.id), r.tick);
         let out = [];
@@ -455,10 +477,7 @@ class ClientApplier {
             // the narrow catch at the escrow-gate rederive below.
             let localTables = [];
             try {
-                let schemaRows = await this.db.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
-                    [this.db.dbName]
-                );
+                let schemaRows = await this.db.findStreamableTableNames();
                 localTables = (schemaRows || [])
                     .map(r => r.table_name || r.TABLE_NAME)
                     .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
@@ -493,7 +512,7 @@ class ClientApplier {
                     logger.error('Skipping clear of invalid table: ' + tables[i]);
                     continue;
                 }
-                await this.db.doQuery('DELETE FROM `' + tables[i] + '`');
+                await this.db.deleteAllRows(tables[i]);
             }
 
             for(let table of tables){
@@ -524,9 +543,7 @@ class ClientApplier {
             // the hub's full lowercase coin name into the constructor), so the full name
             // matches zero rows and the cleanup silently no-ops on every production chain.
             try {
-                await this.db.doQuery(
-                    'DELETE FROM state_tree_roots WHERE chain = ? AND network = ? AND block_index >= ?',
-                    [this.coinTicker, this.network, snapshotData.block_height]);
+                await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
             } catch(e){
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
@@ -547,9 +564,16 @@ class ClientApplier {
         }
     }
 
-    // opts.strictIgnoreCheck: see the SHOW WARNINGS block in insertRows.
-    // Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
-    // live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
+    /**
+     * Apply an incremental snapshot.
+     *
+     * opts.strictIgnoreCheck: see the SHOW WARNINGS block in insertRows.
+     * Set only by ClientSync's from-zero lookup repair; every other caller (ordinary
+     * live/catch-up apply) omits it and keeps the cheap, silent INSERT IGNORE path.
+     *
+     * @param {object} snapshotData the server's catch-up payload since a block
+     * @param {object} [opts]
+     */
     async applyIncrementalSnapshot(snapshotData, opts){
         if(!snapshotData || !snapshotData.tables) return;
 
@@ -564,11 +588,7 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            for(let table in snapshotData.tables){
-                let rows = snapshotData.tables[table];
-                if(!rows || rows.length === 0) continue;
-                await this.insertRows(table, rows, opts);
-            }
+            await this.insertSnapshotTables(snapshotData.tables, opts);
             // Rebuild balances if this snapshot touched credits/debits. The
             // incremental catch-up inserts new credit/debit rows, but the
             // balances table is a derived aggregate. Without recomputing it
@@ -607,6 +627,22 @@ class ClientApplier {
         }
     }
 
+    // One incremental snapshot's tables, inserted in payload order inside the
+    // caller's transaction. The strict option is only set by the from-zero lookup
+    // repair: reconcile the carried id/status pairs before INSERT IGNORE so both a
+    // natural-key collision and a wrong row hidden by a PRIMARY collision are
+    // corrected.
+    async insertSnapshotTables(tables, opts){
+        for(let table in tables){
+            let rows = tables[table];
+            if(!rows || rows.length === 0) continue;
+            let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
+            if(opts && opts.strictIgnoreCheck && repairKeyColumns)
+                await this.reconcileLookupRows(table, rows, repairKeyColumns);
+            await this.insertRows(table, rows, opts);
+        }
+    }
+
     // Replace the decoder `dispensers` table wholesale from a freshly-fetched full
     // set. dispensers is excluded from the block stream and the id-cursor lookup
     // paging (no monotonic id; the decoder soft-expires then hard-purges rows), so
@@ -622,7 +658,7 @@ class ClientApplier {
         if(!Array.isArray(rows)) return;
         await this.db.beginTransaction();
         try {
-            await this.db.doQuery('DELETE FROM `dispensers`');
+            await this.db.deleteAllDispensers();
             if(rows.length) await this.insertRows('dispensers', rows);
             await this.db.commitTransaction();
         } catch(e){
@@ -635,6 +671,9 @@ class ClientApplier {
     async insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
 
+        // The table name is spliced into every statement below rather than bound as a
+        // parameter, so refuse anything that is not a plain identifier before it can
+        // reach the database.
         let tableCheck = validation.validateIdentifier(table);
         if(!tableCheck.valid){
             // Fail closed, not open: a `return` here silently drops every row for this
@@ -699,13 +738,11 @@ class ClientApplier {
             let deleteBatch = 500;
             for(let i = 0; i < keyValues.length; i += deleteBatch){
                 let slice = keyValues.slice(i, i + deleteBatch);
-                await this.db.doQuery(
-                    'DELETE FROM `' + table + '` WHERE `' + naturalKey + '` IN (' +
-                        slice.map(() => '?').join(', ') + ')',
-                    slice);
+                await this.db.deleteRowsByKeyValues(table, naturalKey, slice);
             }
         }
 
+        // Column names are spliced in the same way, so each one gets the same check.
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
             if(!colCheck.valid){
@@ -714,27 +751,16 @@ class ClientApplier {
                 throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
-        let colList   = columns.map(c => '`' + c + '`').join(', ');
-        let placeholders = columns.map(() => '?').join(', ');
 
-        let insertPrefix = useIgnore
-            ? 'INSERT IGNORE INTO `' + table + '` (' + colList + ') VALUES '
-            : 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
-        // Mutable-aggregate full-dump tables overwrite their existing row so a
-        // re-dump on a non-empty replica refreshes (not skips) stale values.
-        let updateSuffix = useUpsert
-            ? ' ON DUPLICATE KEY UPDATE ' + columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ')
-            : '';
-
+        // Mutable-aggregate full-dump tables (useUpsert) overwrite their existing row so
+        // a re-dump on a non-empty replica refreshes (not skips) stale values.
         // Batch inserts in groups of 100 for efficiency
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
             let batch = rows.slice(i, i + batchSize);
-            let valueClauses = [];
             let args = [];
 
             for(let row of batch){
-                valueClauses.push('(' + placeholders + ')');
                 for(let col of columns){
                     // decodeValue restores base64 binary sentinels back to Buffers
                     // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
@@ -743,10 +769,16 @@ class ClientApplier {
                 }
             }
 
-            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
-            await this.db.doQuery(query, args);
+            try {
+                await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+            } catch(e){
+                // Name the upsert table on the error so ClientSync can tell a repeating
+                // full-dump duplicate key apart from any other apply failure.
+                if(useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
+                throw e;
+            }
 
-            // 5284: events rows >64KB silently truncate on a still-TEXT (pre-migration)
+            // events rows >64KB silently truncate on a still-TEXT (pre-migration)
             // replica when INSERT IGNORE is used: the id collision guard skips the row
             // on re-send, so the truncated copy is never healed. Detect this by reading
             // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
@@ -798,7 +830,7 @@ class ClientApplier {
                 if(suspect.length){
                     let retired = await this.retireStaleNaturalKeyRows(table, batch, rows, suspect);
                     if(retired.length){
-                        await this.db.doQuery(query, args);
+                        await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
                         suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
                     }
                     for(let w of suspect){
@@ -827,6 +859,40 @@ class ClientApplier {
             suspect.push(w);
         }
         return suspect;
+    }
+
+    // Remove rows that conflict with the source page by either surrogate id or natural
+    // key. The caller immediately re-inserts the page in the same transaction. Probing
+    // exact pairs first keeps an already-converged repair idempotent and avoids writes.
+    async reconcileLookupRows(table, rows, keyColumns){
+        let retireIds = new Set();
+        for(let row of rows){
+            let id = row ? row.id : undefined;
+            if(id === undefined || id === null)
+                throw new Error('Lookup repair row for ' + table + ' is missing id');
+
+            let values = [];
+            for(let column of keyColumns){
+                if(row[column] === undefined)
+                    throw new Error('Lookup repair row for ' + table + ' is missing natural key ' + column);
+                values.push(row[column]);
+            }
+
+            let keyHolders = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
+            if(keyHolders && keyHolders.length === 1 && Number(keyHolders[0].id) === Number(id))
+                continue;
+
+            let idHolder = await this.db.findRowIdById(table, id);
+            for(let holder of (idHolder || [])) retireIds.add(Number(holder.id));
+
+            for(let holder of (keyHolders || [])) retireIds.add(Number(holder.id));
+        }
+
+        for(let id of retireIds){
+            await this.db.deleteRowById(table, id);
+            logger.warn('LOOKUP_ID_STATUS_RECONCILED table=' + table + ' retired_id=' + id +
+                ' cause=first_seen_auto_increment_id_instability');
+        }
     }
 
     // Retire the rows of a superseded lookup generation so the source's rows can land.
@@ -868,22 +934,19 @@ class ClientApplier {
 
             for(let row of batch){
                 let id = Number(row.id);
-                let mine = await this.db.doQuery('SELECT id FROM `' + table + '` WHERE id = ? LIMIT 1', [id]);
+                let mine = await this.db.findRowIdById(table, id);
                 if(mine && mine.length) continue;                 // the source's row is already here
 
                 let values = keyColumns.map(c => row[c]);
                 if(values.some(v => v === undefined)) continue;
-                let holder = await this.db.doQuery(
-                    'SELECT id FROM `' + table + '` WHERE ' +
-                        keyColumns.map(c => '`' + c + '` = ?').join(' AND ') + ' LIMIT 2',
-                    values);
+                let holder = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
                 if(!holder || holder.length !== 1) continue;       // absent, or ambiguous: not this shape
 
                 let holderId = Number(holder[0].id);
                 if(holderId === id || carried.has(holderId)) continue;
                 if(holderId < low || holderId > high) continue;
 
-                await this.db.doQuery('DELETE FROM `' + table + '` WHERE id = ?', [holderId]);
+                await this.db.deleteRowById(table, holderId);
                 retired.push(holderId);
                 logger.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
                     ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
@@ -899,10 +962,7 @@ class ClientApplier {
     async uniqueKeyColumns(table, indexName){
         let check = validation.validateIdentifier(indexName);
         if(!check.valid) return [];
-        let rows = await this.db.doQuery(
-            "SELECT column_name FROM information_schema.statistics " +
-            "WHERE table_schema = ? AND table_name = ? AND index_name = ? ORDER BY seq_in_index ASC",
-            [this.db.dbName, table, indexName]);
+        let rows = await this.db.findIndexColumnNames(table, indexName);
         let columns = [];
         for(let r of (rows || [])){
             let name = String(r.column_name || r.COLUMN_NAME || '');
@@ -939,14 +999,7 @@ class ClientApplier {
     // (d.block_index = B live; d.block_index >= since on an incremental catch-up).
     async mirrorAnchorRewardReconcile(scopeSql, scopeArgs){
         try {
-            await this.db.doQuery(
-                "DELETE vr FROM validator_rewards vr " +
-                "JOIN anchor_reward_reconcile_log d " +
-                "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
-                " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
-                " AND d.round_qualifier = vr.round_qualifier " +
-                "WHERE " + scopeSql,
-                scopeArgs);
+            await this.db.deleteReconciledValidatorRewards(scopeSql, scopeArgs);
         } catch(e){
             // Schema-gap errors (log table / columns absent on an older replica) are safe
             // to skip: such a replica received no log rows either. Anything else must
@@ -1013,27 +1066,17 @@ class ClientApplier {
                 throw new Error('Rejected column name in upsertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
-        let colList      = columns.map(c => '`' + c + '`').join(', ');
-        let placeholders = columns.map(() => '?').join(', ');
-        // VALUES(col) back-reference is the MariaDB idiom for "the value this row
-        // would have inserted"; updating the key column to itself is a harmless no-op.
-        let updateList   = columns.map(c => '`' + c + '` = VALUES(`' + c + '`)').join(', ');
-
-        let insertPrefix = 'INSERT INTO `' + table + '` (' + colList + ') VALUES ';
-        let updateSuffix = ' ON DUPLICATE KEY UPDATE ' + updateList;
-
+        // A plain INSERT with the ON DUPLICATE KEY UPDATE suffix: every carried column
+        // is written on both insert and update.
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
             let batch = rows.slice(i, i + batchSize);
-            let valueClauses = [];
             let args = [];
             for(let row of batch){
-                valueClauses.push('(' + placeholders + ')');
                 for(let col of columns)
                     args.push(decodeValue(row[col] !== undefined ? row[col] : null));
             }
-            let query = insertPrefix + valueClauses.join(', ') + updateSuffix;
-            await this.db.doQuery(query, args);
+            await this.db.insertRowValues(table, columns, batch.length, args, false, true);
         }
     }
 

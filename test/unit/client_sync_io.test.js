@@ -168,6 +168,20 @@ describe('ClientSync: fetchAndApplySchema', function(){
         assert.ok(errorCalls.some(m => m && m.indexOf('Rejected DDL') !== -1),
             'should log rejected DDL');
     });
+
+    it('records validated source table names for replica-gap checks', async function(){
+        sinon.stub(axios, 'get').resolves({ data: {
+            tables: {
+                goodtable: 'CREATE TABLE `goodtable` (id int)',
+                emptytable: '',
+                'bad-name': 'CREATE TABLE `bad-name` (id int)'
+            }
+        }});
+        db.doQuery.resolves([]);
+        await sync.fetchAndApplySchema('http://src1:3006');
+
+        assert.deepStrictEqual(sync._sourceTables, new Set(['goodtable', 'emptytable']));
+    });
 });
 
 describe('ClientSync: fetchAndApplySchema', function(){
@@ -207,6 +221,7 @@ describe('ClientSync: fetchAndApplySchema', function(){
         let errorCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errorCalls.some(m => m && m.indexOf('Failed to fetch schema') !== -1),
             'outer catch must log "Failed to fetch schema"');
+        assert.strictEqual(sync._sourceTables, null, 'failed fetch must leave source schema unknown');
     });
 });
 

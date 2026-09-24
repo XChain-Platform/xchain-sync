@@ -268,8 +268,8 @@ class TestDatabase {
 // wrapper already provides.
 const RealDatabase = require('../../../src/db');
 for (const method of ['getStateRootsRow', 'getBlockLeafRows',
-                      'getStakeWeightsByCapability', '_stakeWeightsSql',
-                      'applyStakeWeightCap', '_cappedStakeWeightsSql',
+                      'getStakeWeightsByCapability', 'stakeWeightsSql',
+                      'applyStakeWeightCap', 'cappedStakeWeightsSql',
                       // getBlockScopedRows keys by lifecycle.blockKey(table), never
                       // a fixed block_index (rollcalls scope by close_block).
                       'getBlockScopedRows'])

@@ -31,14 +31,15 @@ const logger = getLogger();
 module.exports = {
 
     // Light-client stakes_root support (SPV spec sec.4.1, BTC-only). Source-deduped
-    // capability stake-weight query, ported VERBATIM from xchain-indexer/src/db.js
-    // _stakeWeightsSql: it MUST produce a byte-identical SQL string + arg order or
+    // capability stake-weight query, ported VERBATIM from
+    // xchain-indexer/src/db/stakes/effective_set_sql.js
+    // stakeWeightsSql: it MUST produce a byte-identical SQL string + arg order or
     // the follower's stakes_root diverges from the indexer's committed root and the
     // state-commitment check false-halts. The cross-repo drift guard in
-    // test/unit/rollback/rollback_coverage.test.js locks the two together. Reads only tables
+    // test/unit/rollback_coverage.test.js locks the two together. Reads only tables
     // xchain-sync replicates (stakes, delegations, stake_key_revocations,
     // capability_slash_events, index_addresses, index_pubkeys).
-    _stakeWeightsSql(valid_id, blockIndex, minStake){
+    stakeWeightsSql(valid_id, blockIndex, minStake){
         // Precision: DECIMAL(30,8) (22 integer digits, 8 fractional) is sufficient because the
         // staking tick is XCHAIN at 8 decimals and total supply stays far below 10^22; every
         // same-version node truncates identically, so the stake-weight tally is deterministic.
@@ -96,7 +97,7 @@ module.exports = {
     },
 
     // SWQ source-cap wrapper (SWQ-TRUNC-1 liveness half). Wraps an inner source-keyed
-    // stake-weight builder ({sql,args} from _stakeWeightsSql or the sync AsOf variant)
+    // stake-weight builder ({sql,args} from stakeWeightsSql or the sync AsOf variant)
     // and replaces the raw key-row LIMIT with a windowed cap on the consensus UNIT:
     // DISTINCT staking SOURCES (DENSE_RANK over source) plus a per-source key bound
     // (ROW_NUMBER per source). One source can no longer fill the window and evict
@@ -117,7 +118,7 @@ module.exports = {
     // truncate on, so the collation decides which sources and which keys survive into
     // the hashed stakes_root. Below the height the emitted SQL is byte-identical to
     // what shipped before the gate; the suffix is '' and concatenates away.
-    _cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation){
+    cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation){
         let c = stakeWeightCollation.stakeWeightCollate(binCollation);
         let sql = `SELECT r.pubkey AS pubkey, r.source AS source, r.weight AS weight, r._sr AS _sr
                    FROM (
@@ -135,8 +136,8 @@ module.exports = {
     // Apply the cap regime in force for `coin`/`network` at `blockIndex` to an inner
     // source-keyed stake-weight builder, returning { rows:[{pubkey,source,weight}],
     // truncated }. Twin of the indexer's stakeWeightsWithCap gate: at/after
-    // SWQ_SOURCE_CAP_ACTIVATION the windowed source-cap (_cappedStakeWeightsSql);
-    // below it the legacy uncapped key-row LIMIT. The gate + caps + _cappedStakeWeightsSql
+    // SWQ_SOURCE_CAP_ACTIVATION the windowed source-cap (cappedStakeWeightsSql);
+    // below it the legacy uncapped key-row LIMIT. The gate + caps + cappedStakeWeightsSql
     // are byte-mirrored to the indexer so the follower's stakes_root set is identical on
     // both sides of the height. Sync reads coin/network from the caller (it has no
     // per-chain config); a null coin/network stays inert (legacy uncapped path).
@@ -149,7 +150,7 @@ module.exports = {
         if(swqCap.isSwqSourceCapActive(blockIndex, network, coin)){
             let maxSources = swqCap.STAKE_WEIGHT_MAX_SOURCES;
             let maxKeys    = swqCap.STAKE_WEIGHT_MAX_KEYS_PER_SOURCE;
-            let capped = this._cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation);
+            let capped = this.cappedStakeWeightsSql(inner, maxSources, maxKeys, binCollation);
             // Strict for the M-17 reason getBlockLeafRows is: this row set IS the
             // stakes_root, and the SPV checkpoint forward-follow
             // (ClientSync.oraclePublishSetAt) reads it with NO transaction open, so a
@@ -190,7 +191,7 @@ module.exports = {
         // rethrow: a null here would silently return the empty stake set (M-17).
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
-        let sw = this._stakeWeightsSql(valid_id, blockIndex, String(minStake));
+        let sw = this.stakeWeightsSql(valid_id, blockIndex, String(minStake));
         let { rows } = await this.applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
         return rows;
     },
@@ -212,14 +213,14 @@ module.exports = {
     // add-back there would double-count and fork the committed ledger. This is a NO-OP
     // when no slash with block_index > S exists (addback is NULL -> COALESCE 0), so it
     // returns a result byte-identical to getStakeWeightsByCapability(cap, S) computed
-    // in order at S. _stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
+    // in order at S. stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
     // NOT reused/modified here so the drift guard and the consensus query stay untouched.
     async getStakeWeightsByCapabilityAsOf(capability, snapshotBlock, minStake, limit, coin, network){
         // rethrow for the same M-17 reason, and this is the caller that runs with NO
         // transaction open (ClientSync.oraclePublishSetAt).
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
-        // Membership exclusion is identical to _stakeWeightsSql: a key slashed at
+        // Membership exclusion is identical to stakeWeightsSql: a key slashed at
         // block > S has cse.block_index > S, so NOT EXISTS is TRUE and the key is
         // correctly KEPT in the set at S. Only the q-subquery AMOUNT is reconstructed.
         const slashExcl = (keyCol) =>
@@ -272,7 +273,7 @@ module.exports = {
                    ) ek ON ek.source_id = q.source_id
                    JOIN index_pubkeys ip ON ip.id = ek.pubkey_id`;
         // Arg order tracks the placeholders left-to-right: the addback block bound
-        // first, then the same sequence _stakeWeightsSql uses (all historical-block
+        // first, then the same sequence stakeWeightsSql uses (all historical-block
         // args bound to snapshotBlock), then the LIMIT.
         let args = [snapshotBlock,
                     valid_id, snapshotBlock, snapshotBlock, String(minStake),

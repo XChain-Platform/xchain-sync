@@ -61,6 +61,71 @@ async function runAndLog(fn, input) {
     }
 }
 
+// snapshotTablesObject (helpers/generators/payloads.js) fills every table,
+// including blocks, with genericDataRow()'s random column names, which essentially
+// never happen to name the column block_index. ClientApplier.insertRows requires
+// that natural key for blocks (localSurrogateIdTables), so an unpatched generated
+// snapshot throws on an apply path unrelated to what these properties exercise.
+// Patching it in here keeps the fix inside this suite rather than reshaping the
+// shared generator for every other suite that uses it.
+function withBlockNaturalKeys(snapshot) {
+    if (!snapshot || !snapshot.tables || !snapshot.tables.blocks) return snapshot;
+    return {
+        ...snapshot,
+        tables: {
+            ...snapshot.tables,
+            blocks: snapshot.tables.blocks.map((row, index) => ({
+                ...row,
+                block_index: row.block_index == null ? index : row.block_index,
+            })),
+        },
+    };
+}
+
+// FK edges documented independently of the ordering algorithm: pubkeys.address_id ->
+// index_addresses.id (applier.js) and blocks.*_hash_id -> index_transactions.id
+// (sync.js). Used as the oracle for the FK-safe delete-order property below instead
+// of the production orderSnapshotTables function, since asserting against that
+// function's own output would pass even if its ordering logic regressed.
+const BLOCKS_FK_CHILD_BEFORE_PARENT = [
+    ['pubkeys', 'index_addresses'],
+    ['blocks', 'index_transactions'],
+];
+const BLOCKS_FK_CANDIDATE_TABLES = [
+    'pubkeys', 'index_addresses', 'blocks', 'index_transactions',
+    'index_actions', 'transactions', 'actions', 'balances', 'sync_meta',
+    'fuzz_alpha', 'fuzz_omega',
+];
+
+// Property body for the FK-safe delete-order test: applies a full snapshot naming
+// exactly tableNames and asserts every table was deleted exactly once, with every
+// known FK child deleted before its parent.
+async function assertFkSafeDeleteOrder(tableNames) {
+    let snapshot = withBlockNaturalKeys({
+        schema_version: SCHEMA_VERSION.indexer,
+        block_height: 100,
+        tables: Object.fromEntries(tableNames.map(n => [n, [{ id: 1 }]])),
+    });
+
+    db.doQuery.resetHistory();
+    await applier.applyFullSnapshot(snapshot);
+
+    let deleteOrder = [];
+    for (let i = 0; i < db.doQuery.callCount; i++) {
+        let sql = db.doQuery.getCall(i).args[0];
+        let m = typeof sql === 'string' && sql.match(/^DELETE FROM `(.+)`$/);
+        if (m) deleteOrder.push(m[1]);
+    }
+
+    assert.deepStrictEqual([...deleteOrder].sort(), [...tableNames].sort());
+
+    for (let [child, parent] of BLOCKS_FK_CHILD_BEFORE_PARENT) {
+        if (!tableNames.includes(child) || !tableNames.includes(parent)) continue;
+        assert.ok(deleteOrder.indexOf(child) < deleteOrder.indexOf(parent),
+            child + ' must be deleted before ' + parent + ', got order: ' + deleteOrder.join(','));
+    }
+}
+
 describe('Tier 1 - ClientApplier @tier1', function () {
     this.timeout(0);
     useClientApplierHooks();
@@ -148,40 +213,19 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             return fc.assert(fc.asyncProperty(
                 partialSnapshotPayload(),
                 async (snapshot) => {
-                    await applier.applyFullSnapshot(snapshot);
+                    await applier.applyFullSnapshot(withBlockNaturalKeys(snapshot));
                 }
             ), { numRuns: NUM_RUNS });
         });
 
-        it('clears tables in reverse order via DELETE (FK-safe)', function () {
+        it('clears tables via DELETE, children before parents (FK-safe)', function () {
             // applyFullSnapshot clears via `DELETE FROM` (not TRUNCATE) for FK
-            // compatibility, iterating the table keys in reverse so child tables are
-            // cleared before their parents. Capture the DELETE order from doQuery.
+            // compatibility. assertFkSafeDeleteOrder checks the result against the
+            // documented FK graph rather than the production ordering function.
             return fc.assert(fc.asyncProperty(
-                fc.array(
-                    fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), minLength: 1, maxLength: 15 }),
-                    { minLength: 2, maxLength: 8 }
-                ).filter(names => new Set(names).size === names.length),
-                async (tableNames) => {
-                    let snapshot = {
-                        schema_version: SCHEMA_VERSION.indexer,
-                        block_height: 100,
-                        tables: Object.fromEntries(tableNames.map(n => [n, [{ id: 1 }]])),
-                    };
-
-                    db.doQuery.resetHistory();
-                    await applier.applyFullSnapshot(snapshot);
-
-                    let deleteOrder = [];
-                    for (let i = 0; i < db.doQuery.callCount; i++) {
-                        let sql = db.doQuery.getCall(i).args[0];
-                        let m = typeof sql === 'string' && sql.match(/^DELETE FROM `(.+)`$/);
-                        if (m) deleteOrder.push(m[1]);
-                    }
-
-                    let expectedOrder = [...tableNames].reverse();
-                    assert.deepStrictEqual(deleteOrder, expectedOrder);
-                }
+                fc.uniqueArray(fc.constantFrom(...BLOCKS_FK_CANDIDATE_TABLES),
+                    { minLength: 2, maxLength: BLOCKS_FK_CANDIDATE_TABLES.length }),
+                assertFkSafeDeleteOrder
             ), { numRuns: Math.min(NUM_RUNS, 500) });
         });
     });
@@ -197,7 +241,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             return fc.assert(fc.asyncProperty(
                 partialSnapshotPayload(),
                 async (snapshot) => {
-                    await applier.applyIncrementalSnapshot(snapshot);
+                    await applier.applyIncrementalSnapshot(withBlockNaturalKeys(snapshot));
                 }
             ), { numRuns: NUM_RUNS });
         });
@@ -209,7 +253,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                     // Add since_block to make it incremental
                     snapshot.since_block = 1;
                     db.truncateTable.resetHistory();
-                    await applier.applyIncrementalSnapshot(snapshot);
+                    await applier.applyIncrementalSnapshot(withBlockNaturalKeys(snapshot));
                     assert.strictEqual(db.truncateTable.callCount, 0);
                 }
             ), { numRuns: NUM_RUNS });

@@ -84,7 +84,7 @@ const lifecycle = require('../table_lifecycle');
 // verification path consumes the flattened union via getReplicatedTables().
 //
 // The INDEXER topology is generated from the table-lifecycle registry
-// (src/tableLifecycle.js, byte-identical twin of the xchain-indexer copy):
+// (src/table_lifecycle.js, byte-identical twin of the xchain-indexer copy):
 // each indexer table's registry entry declares its stream scope, so adding a
 // table there simultaneously adds it to the per-block stream, the /status
 // completeness count, and both rollback sets. The DECODER topology stays
@@ -128,9 +128,9 @@ const TOPOLOGY = {
         // it converges via full snapshot + the periodic re-dump/replace reconcile,
         // which is the ONLY thing keeping it in parity. The count is a post-replace
         // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
-        // the replica ahead (_verifyTableCounts flags remote > local only) and a
-        // soft-expire UPDATE leaves counts equal, so neither can ever fire, and
-        // _incrementalCatchUp excludes the table on every non-reconcile cycle.
+        // the replica ahead (ClientSync.verifyTableCounts flags remote > local only)
+        // and a soft-expire UPDATE leaves counts equal, so neither can ever fire, and
+        // ClientSync.incrementalCatchUp excludes the table on every non-reconcile cycle.
         special:      ['dispensers']
     },
 
@@ -163,15 +163,26 @@ function getReplicatedTables(dbType){
     return [...new Set(all)];
 }
 
+// Replicated tables whose content cannot converge between source and replica, so
+// neither the /status row-count check (ClientSync.verifyTableCounts) nor the
+// content-parity plan may compare them. Both read this one declaration.
+//
+// `events` is an append-only operational log keyed by an AUTO_INCREMENT id both
+// sides generate independently, applied with INSERT IGNORE, so a source row whose
+// id the replica already used is dropped and the replica keeps its own row there.
+// The id-windowed content digest then sees equal counts over different rows.
+const OPERATIONAL_LOG_TABLES = Object.freeze(['events']);
+
 // The advisory content-parity plan for a dbType: the replicated tables whose
 // CONTENT (not merely their row count) a follower can prove against the source,
 // each paired with the bound its checksum window uses.
 //
 // Coverage is the per-block replicated set minus the two exclusion classes the
-// registry declares (src/tableLifecycle.js CONTENT_PARITY_*): the operator
+// registry declares (src/table_lifecycle.js CONTENT_PARITY_*): the operator
 // carve-outs (markets, decoder dispensers) and the in-place mutated tables,
 // which the enforced state_hash already commits and which have no stable window
-// content. Derived from the same topology the stream and the row counts use, so
+// content. The operational logs above are out too, as the count check leaves
+// them out. Derived from the same topology the stream and the row counts use, so
 // a table added to replication joins this check with no second list to update.
 //
 // bound values, consumed by BlockHasher.computeTableContentChecksums:
@@ -192,6 +203,7 @@ function contentParityPlan(dbType){
     let add = (table, bound) => {
         if(mutable.has(table)) return;                                   // committed by state_hash instead
         if(lifecycle.contentParityCarveOut(table, type) !== null) return; // operator ruling
+        if(OPERATIONAL_LOG_TABLES.includes(table)) return;               // ids diverge by construction
         if(plan.some(p => p.table === table)) return;                    // topology buckets can overlap
         plan.push({ table: table, bound: bound });
     };
@@ -207,7 +219,7 @@ function contentParityPlan(dbType){
 
 // Every replicated table that is NOT in the content-parity plan, mapped to the
 // reason it is out. Exists so the coverage guard can assert the complement is
-// exactly the two declared exclusion classes and nothing has silently fallen
+// exactly the declared exclusions and nothing has silently fallen
 // through: a replicated table that is neither checked nor knowingly excluded is
 // the defect  was raised for.
 function contentParityExclusions(dbType){
@@ -218,6 +230,8 @@ function contentParityExclusions(dbType){
         let carve = lifecycle.contentParityCarveOut(table, type);
         if(carve !== null) out[table] = 'operator-carve-out: ' + carve;
         else if(mutable.has(table)) out[table] = 'in-place mutated; committed by the enforced state_hash class instead';
+        else if(OPERATIONAL_LOG_TABLES.includes(table))
+            out[table] = 'operational log: independently generated ids applied with INSERT IGNORE; neither count nor id-windowed content can converge';
     }
     return out;
 }
@@ -232,15 +246,17 @@ function contentParityExclusions(dbType){
 // names the gap: any table in the per-block replicated set that this schema
 // lacks is a table replication will skip without ever failing.
 //
-// Deliberately a superset signal. A table absent on BOTH the source and this
-// replica (source older than this build) is reported too, because from here the
-// two cases are indistinguishable and reporting the harmless one costs an
-// operator one migration check, while missing the real one costs silent data
-// loss. Returns null when the table listing itself is unavailable: "unknown"
-// must not read as "nothing missing".
-function missingReplicatedTables(present, dbType){
+// Client callers pass the validated source table set so a mixed-version source
+// does not make build-newer tables look like replica gaps. Server callers omit
+// it and continue checking their own schema against this build's topology.
+// Returns null when either required listing is unavailable: "unknown" must not
+// read as "nothing missing".
+function missingReplicatedTables(present, dbType, sourcePresent){
     if(!present || typeof present.has !== 'function') return null;
-    return getReplicatedTables(dbType).filter(t => !present.has(t)).sort();
+    if(sourcePresent === null || (sourcePresent !== undefined && typeof sourcePresent.has !== 'function')) return null;
+    return getReplicatedTables(dbType)
+        .filter(t => (sourcePresent === undefined || sourcePresent.has(t)) && !present.has(t))
+        .sort();
 }
 
 // The cursor column for id-ordered paging of an append-only lookup table
@@ -263,5 +279,5 @@ function lookupCursorColumn(table){
 
 module.exports = {
     getTopology, getReplicatedTables, missingReplicatedTables, lookupCursorColumn,
-    contentParityPlan, contentParityExclusions
+    contentParityPlan, contentParityExclusions, OPERATIONAL_LOG_TABLES
 };

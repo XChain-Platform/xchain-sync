@@ -16,7 +16,7 @@
  *
  * dispensers rides neither the block stream nor the id-cursor lookup
  * paging (no monotonic id; the decoder soft-expires via UPDATE then
- * hard-purges via DELETE). SnapshotBuilder's decoderSkip set lives inside
+ * hard-purges via DELETE). SnapshotBuilder's decoder skip set applies only to
  * streamIncrementalSnapshot, so the INCREMENTAL path skips dispensers while
  * the FULL snapshot carries it: the full-snapshot table filter excludes only
  * OPERATOR_LOCAL_TABLES / SOURCE_UNSTREAMED_TABLES, and dispensers is in
@@ -61,11 +61,12 @@ const Utility          = require('../../src/util');
 
 const decoderFixtures = require('./helpers/decoderFixtures');
 const { getMariadb }  = require('./helpers/mariadbLoader');
+const fixturePorts    = require('../../bin/fixture-ports.js');
 
 const SOURCE_HOST  = process.env.E2E_DB_HOST         || '127.0.0.1';
-const SOURCE_PORT  = parseInt(process.env.E2E_DB_PORT) || 23306;
+const SOURCE_PORT  = fixturePorts.port('E2E_DB_PORT');
 const REPLICA_HOST = process.env.E2E_REPLICA_DB_HOST  || '127.0.0.1';
-const REPLICA_PORT = parseInt(process.env.E2E_REPLICA_DB_PORT) || 23307;
+const REPLICA_PORT = fixturePorts.port('E2E_REPLICA_DB_PORT');
 const DB_USER      = process.env.E2E_DB_USER          || 'xchain-node';
 const DB_PASS      = process.env.E2E_DB_PASS          || 'xchain-fixture-throwaway';
 
@@ -124,9 +125,7 @@ function buildServer(sourceDb, broadcaster, snapshotBuilder){
         if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
            (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
             return res.status(400).json({ error: 'Invalid cursor' });
-        let limit = parseInt(req.query.limit);
-        if(isNaN(limit)) limit = undefined;
-        try { await snapshotBuilder.streamDispensers(sourceDb, afterTx, afterAddr, limit, res); }
+        try { await snapshotBuilder.streamDispensers(sourceDb, afterTx, afterAddr, res); }
         catch(e){ if(!res.headersSent) res.status(500).json({ error: e.message }); }
     });
 
@@ -234,8 +233,8 @@ describe('E2E: Decoder dispensers reconcile', function() {
     }
 
     // `every` => DISPENSERS_RECONCILE_EVERY; `pageSize` => LOOKUP_PAGE_SIZE
-    // (forced smaller than the fixture row count to prove a small page size does
-    // NOT split the dump: streamDispensers is deliberately single-response and
+    // (forced smaller than the fixture row count to prove the lookup page size does
+    // NOT bound the dump: streamDispensers is deliberately single-response and
     // answers has_more=false whatever the cursor params say, so the client's
     // fetch walk completes in one round trip. That contract is pinned directly in
     // test/unit/snapshot_builder.test.js, describe('streamDispensers')).

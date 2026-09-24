@@ -52,11 +52,11 @@ describe('updatedRows.collectUpdatedRows', function(){
         let hitDeactivation = db.calls.some(c => c.sql.indexOf('deactivation_block') !== -1);
         assert.strictEqual(hitDeactivation, false);
         // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
-        // + bet-status + anchor_invalid + attest-batch-head + tokens-supply classes still run,
-        // none of which depend on the activation delay (4 slash + 2 rotation + 2 request
-        // + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor + 1 attest batch head
-        // + 1 tokens = 16).
-        assert.strictEqual(db.calls.length, 16);
+        // + bet-status + anchor_invalid + attest-batch-head + tokens-supply + tokens-edit
+        // classes still run, none of which depend on the activation delay (4 slash
+        // + 2 rotation + 2 request + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor
+        // + 1 attest batch head + 1 tokens supply + 1 tokens edit = 17).
+        assert.strictEqual(db.calls.length, 17);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -169,6 +169,50 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(tq.sql.indexOf('SELECT t.*') !== -1);
         assert.ok(out.tokens && out.tokens.length === 1);
         assert.strictEqual(out.tokens[0].supply, '1000');
+    });
+});
+
+describe('updatedRows.collectUpdatedRows', function(){
+
+    afterEach(() => sinon.restore());
+
+    it('refreshes a surviving tokens row edited by an ISSUE that moved no balance (#39)', async function(){
+        // The reported shape: an ownership transfer (ISSUE|0|<TICK>||||||<new owner>) rewrites
+        // tokens.owner_id in place but writes no credit / debit / escrow row in its own tick,
+        // so the ledger-keyed supply class above sees nothing and the action-scoped stream
+        // carries only the new `issues` row (tokens.action_index stays at the first issuance).
+        // Every follower served the PRE-TRANSFER owner until some later action on the tick
+        // happened to move a balance. Routed on the issues subquery alone, with NO route for
+        // the supply class, so this asserts the edit rides its own class.
+        let db = fakeDb([
+            { match: 'SELECT i.tick_id FROM issues i', rows: [{ id: 5, tick_id: 42, action_index: 100, last_action_index: 100, owner_id: 77 }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        let eq = db.calls.find(c => c.sql.indexOf('SELECT i.tick_id FROM issues i') !== -1);
+        assert.ok(eq, 'expected the tokens-edit refresh query');
+        assert.deepStrictEqual(eq.args, [300, 300]);
+        // Keyed on the ISSUE action's block, and only a VALID ISSUE re-derives the row.
+        assert.ok(eq.sql.indexOf('JOIN actions a ON a.action_index = i.action_index') !== -1);
+        assert.match(eq.sql, /JOIN index_statuses s ON s\.id = i\.status_id AND s\.status = 'valid'/);
+        assert.ok(eq.sql.indexOf('a.block_index BETWEEN ? AND ?') !== -1);
+        // SELECT t.* carries the source `id` so the follower's upsert lands on the PK.
+        assert.ok(eq.sql.indexOf('SELECT t.*') !== -1);
+        assert.ok(out.tokens && out.tokens.length === 1);
+        assert.strictEqual(out.tokens[0].owner_id, 77);
+    });
+
+    it('emits one tokens row when the edit and supply classes both reach the same tick', async function(){
+        // A MINT-bearing re-issuance moves a balance AND rewrites the row, so both token
+        // classes return it. add() dedups by the row's UNIQUE action_index (pinned at the
+        // first issuance), exactly as it does for a stake that was both deactivated and
+        // slashed, so the payload carries the tick once.
+        let db = fakeDb([
+            { match: 'SELECT i.tick_id FROM issues i', rows: [{ id: 5, tick_id: 42, action_index: 100, owner_id: 77, supply: '1000' }] },
+            { match: 'FROM `tokens` t WHERE t.tick_id IN', rows: [{ id: 5, tick_id: 42, action_index: 100, owner_id: 77, supply: '1000' }] }
+        ]);
+        let out = await collectUpdatedRows(db, 300, 300, 6);
+        assert.strictEqual(out.tokens.length, 1);
+        assert.strictEqual(out.tokens[0].action_index, 100);
     });
 });
 

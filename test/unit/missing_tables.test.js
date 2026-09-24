@@ -31,6 +31,7 @@ const { getReplicatedTables, missingReplicatedTables } = require('../../src/sche
 // whose source was already writing them.
 const BET_TABLES = ['bets', 'bet_statuses', 'bet_resolves', 'bet_feeds',
                     'bet_feed_statuses', 'bet_cancels'];
+const BRIDGE_TABLES = ['bridge_settlements', 'xbridges'];
 
 // A schema listing that holds every replicated table except `absent`.
 function presentExcept(dbType, absent){
@@ -74,6 +75,16 @@ describe('missingReplicatedTables', function(){
         assert.strictEqual(missingReplicatedTables(undefined, 'indexer'), null);
         assert.strictEqual(missingReplicatedTables(['bets'], 'indexer'), null);
     });
+
+    it('checks only tables present in an explicitly supplied source schema', function(){
+        let source = presentExcept('indexer', BRIDGE_TABLES);
+        let local = new Set(source);
+        assert.deepStrictEqual(missingReplicatedTables(local, 'indexer', source), []);
+
+        source.add('bridge_settlements');
+        assert.deepStrictEqual(missingReplicatedTables(local, 'indexer', source), ['bridge_settlements']);
+        assert.strictEqual(missingReplicatedTables(local, 'indexer', null), null);
+    });
 });
 
 function makeSync(dbOverrides, dbType){
@@ -101,6 +112,7 @@ function makeSync(dbOverrides, dbType){
     };
     let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rb,
                               new HashVerifier(), config, new Utility());
+    sync._sourceTables = new Set(getReplicatedTables(dbType || 'indexer'));
     return { sync, db };
 }
 
@@ -145,6 +157,20 @@ describe('ClientSync.warnMissingTables', function(){
         });
         await sync.warnMissingTables();
         assert.deepStrictEqual(sync.getMissingTables(), ['bets']);
+    });
+
+    it('stays silent for replicated tables absent from both source and replica', async function(){
+        let sourceTables = presentExcept('indexer', BRIDGE_TABLES);
+        let { sync } = makeSync({
+            listExistingTables: sinon.stub().resolves(new Set(sourceTables))
+        });
+        sync._sourceTables = sourceTables;
+
+        await sync.warnMissingTables();
+
+        let calls = warnStub.getCalls().filter(c => String(c.args[0]).indexOf('MISSING_REPLICATED_TABLES') === 0);
+        assert.strictEqual(calls.length, 0);
+        assert.deepStrictEqual(sync.getMissingTables(), []);
     });
 });
 
@@ -220,8 +246,9 @@ function mockDb(present, dbType){
 
 // A client-mode SyncService that reports the exact shape the live incident
 // showed: caught up, not halted, nothing wrong.
-function mockClientSyncService(){
+function mockClientSyncService(missingTables){
     return {
+        getClientSync: () => ({ getMissingTables: () => missingTables }),
         getClientSyncState: () => ({
             lastKnownServerBlock: 100, sourceHeightStale: false, halted: false, haltInfo: null,
             truncated: false, bootstrapBase: null, sourceQuorum: 1, sourcesConfigured: 1,
@@ -236,7 +263,8 @@ describe('/status missing_tables', function(){
 
     it('names the missing tables on a replica that otherwise looks perfectly healthy', async function(){
         let { buildStatusRow } = loadApi('client');
-        let row = await buildStatusRow(mockClientSyncService(),
+        let expected = BET_TABLES.filter(t => getReplicatedTables('indexer').includes(t)).sort();
+        let row = await buildStatusRow(mockClientSyncService(expected),
                                        mockDb(presentExcept('indexer', BET_TABLES)),
                                        'indexer', 'bitcoin', 'mainnet');
 
@@ -246,13 +274,12 @@ describe('/status missing_tables', function(){
         // table_counts cannot show the gap: an absent table is simply not a key.
         for(let t of BET_TABLES) assert.ok(!(t in row.table_counts));
         // missing_tables can, and does.
-        let expected = BET_TABLES.filter(t => getReplicatedTables('indexer').includes(t)).sort();
         assert.deepStrictEqual(row.missing_tables, expected);
     });
 
     it('is an empty array on a complete replica', async function(){
         let { buildStatusRow } = loadApi('client');
-        let row = await buildStatusRow(mockClientSyncService(),
+        let row = await buildStatusRow(mockClientSyncService([]),
                                        mockDb(new Set(getReplicatedTables('indexer'))),
                                        'indexer', 'bitcoin', 'mainnet');
         assert.deepStrictEqual(row.missing_tables, []);
@@ -260,7 +287,7 @@ describe('/status missing_tables', function(){
 
     it('is null, not [], when the table listing fails', async function(){
         let { buildStatusRow } = loadApi('client');
-        let row = await buildStatusRow(mockClientSyncService(),
+        let row = await buildStatusRow(mockClientSyncService(null),
                                        mockDb(new Error('information_schema unavailable')),
                                        'indexer', 'bitcoin', 'mainnet');
         assert.strictEqual(row.missing_tables, null);
@@ -273,7 +300,7 @@ describe('/status missing_tables', function(){
 
     it('scopes to the decoder replicated set on a decoder replica', async function(){
         let { buildStatusRow } = loadApi('client');
-        let row = await buildStatusRow(mockClientSyncService(),
+        let row = await buildStatusRow(mockClientSyncService(['pubkeys']),
                                        mockDb(presentExcept('decoder', ['pubkeys']), 'decoder'),
                                        'decoder', 'bitcoin', 'mainnet');
         assert.deepStrictEqual(row.missing_tables, ['pubkeys']);

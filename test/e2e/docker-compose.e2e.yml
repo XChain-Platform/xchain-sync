@@ -18,7 +18,7 @@ services:
       MARIADB_USER: xchain-node
       MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
-      - "23306:3306"
+      - "${E2E_DB_PORT:-23306}:3306"
     tmpfs:
       - /var/lib/mysql
     healthcheck:
@@ -36,7 +36,7 @@ services:
       MARIADB_USER: xchain-node
       MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
-      - "23307:3306"
+      - "${E2E_REPLICA_DB_PORT:-23307}:3306"
     tmpfs:
       - /var/lib/mysql
     healthcheck:
@@ -54,7 +54,7 @@ services:
       MARIADB_USER: xchain-node
       MARIADB_PASSWORD: xchain-fixture-throwaway
     ports:
-      - "23308:3306"
+      - "${E2E_SOURCE2_DB_PORT:-23308}:3306"
     tmpfs:
       - /var/lib/mysql
     healthcheck:

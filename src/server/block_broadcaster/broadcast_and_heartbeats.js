@@ -206,14 +206,16 @@ module.exports = {
 
         let data = isPreSerialized ? message : JSON.stringify(message, bigIntReplacer);
 
-        // Backpressure (item 5410): drop a peer only when it is genuinely stuck, not merely
-        // slow. Two independent signals on the OS send buffer:
-        //   1) a hard byte ceiling - the peer is accumulating unboundedly (server-memory risk);
-        //   2) a non-draining stall timeout - the buffer has not made any downward progress for
-        //      WS_BACKPRESSURE_STALL_MS. The stall timer resets on ANY drop in bufferedAmount,
-        //      so a slow-but-draining replica keeps resetting and stays connected instead of
-        //      being force-dropped into a re-bootstrap thrash loop (the old count-based check
-        //      dropped it because the buffer rarely returned to exactly zero under load).
+        // Backpressure: drop a peer only when it is genuinely stuck, not merely slow.
+        // Two independent signals on the OS send buffer:
+        //   1) a hard byte ceiling - the peer is accumulating unboundedly
+        //      (server-memory risk);
+        //   2) a non-draining stall timeout - the buffer has not made any downward
+        //      progress for WS_BACKPRESSURE_STALL_MS. The stall timer resets on ANY
+        //      drop in bufferedAmount, so a slow-but-draining replica keeps resetting
+        //      and stays connected instead of being force-dropped into a re-bootstrap
+        //      thrash loop (the old count-based check dropped it because the buffer
+        //      rarely returned to exactly zero under load).
         let buffered = ws.bufferedAmount;
         let drop     = null;
         if(buffered > this.config['WS_BACKPRESSURE_MAX_BYTES']){

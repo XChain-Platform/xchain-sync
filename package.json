@@ -1,7 +1,7 @@
 {
   "name": "xchain-sync",
   "description": "Database replication service for the XChain Platform: syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
@@ -43,6 +43,8 @@
     "test:integration:parity": "mocha --timeout 30000 --exit test/integration/index_map_parity.test.js test/integration/index_map_parity_http.test.js",
     "test:integration:ci": "mocha --require ./test/setup/index.js --timeout 120000 --exit 'test/integration/**/*.test.js' --exclude 'test/integration/client_bootstrap.test.js' --exclude 'test/integration/client_live_sync.test.js' --exclude 'test/integration/emissions_parity.test.js' --exclude 'test/integration/lifecycle.test.js'",
     "test:e2e": "mocha --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js'",
+    "test:e2e:up": "node bin/fixture-ports.js compose test/e2e/docker-compose.e2e.yml up -d --wait",
+    "test:e2e:down": "node bin/fixture-ports.js compose test/e2e/docker-compose.e2e.yml down -v",
     "test:e2e:ci": "mocha --require ./test/setup/index.js --timeout 600000 --slow 30000 --recursive 'test/e2e/**/*.test.js' --exit",
     "test:regression": "mocha --timeout 10000 --exit --grep @regression --recursive 'test/unit/**/*.test.js'",
     "test:fuzz": "mocha --timeout 0 --recursive 'test/fuzz/suites/**/*.fuzz.js'",
@@ -56,6 +58,8 @@
     "test:perf:pool": "node test/perf/helpers/pool_fanout_load.js",
     "test:perf:stampede": "mocha --timeout 900000 --slow 30000 --exit test/perf/scenarios/08_bootstrap_stampede.test.js",
     "test:chaos": "mocha --timeout 240000 --recursive 'test/chaos/**/*.test.js'",
+    "test:chaos:up": "node bin/fixture-ports.js compose test/chaos/fixtures/docker-compose.chaos.yml up -d --wait",
+    "test:chaos:down": "node bin/fixture-ports.js compose test/chaos/fixtures/docker-compose.chaos.yml down -v",
     "test:mutate": "npx stryker run test/mutation/stryker.config.json",
     "test:mutate:quick": "npx stryker run test/mutation/stryker.quick.config.json",
     "test:mutate:check": "npx stryker run test/mutation/stryker.config.json --incremental",

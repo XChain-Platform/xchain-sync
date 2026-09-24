@@ -610,10 +610,10 @@ class Database {
               definition: 'CHAR(64) NULL AFTER `block_merkle_root`' },
             { table: 'state_tree_roots', column: 'contract_state_root_shadow',
               definition: 'CHAR(64) NULL AFTER `contract_state_root`' },
-            // Stage B's shadow column ( B3), same reasoning as the two
-            // above: state_tree_roots is follower-derived, so an aged replica
-            // never gains it from the definition file and the first shadow-window
-            // block would fail its INSERT with errno 1054.
+            // Stage B's shadow column, with the same reasoning as the two above:
+            // state_tree_roots is follower-derived, so an aged replica never gains
+            // it from the definition file and the first shadow-window block would
+            // fail its INSERT with errno 1054.
             { table: 'state_tree_roots', column: 'balances_root_escrow_shadow',
               definition: 'CHAR(64) NULL AFTER `contract_state_root_shadow`' },
             // The key-rebuild preconditions ride the same ADD COLUMN loop, so the columns
@@ -749,7 +749,7 @@ class Database {
     // assertStakeWeightOrderingCollation, sharing that module's ONE definition of the
     // declared contract so the two services cannot disagree about what "undrifted"
     // means. The follower rebuilds stakes_root from the byte-mirrored
-    // _cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
+    // cappedStakeWeightsSql; its window caps truncate on this order, so a drifted
     // collation selects different cap survivors and the replica halts on a root it
     // computed wrong. Once the collation gate is armed, a drifted CHARSET fails the
     // query outright (errno 1253), so halting at boot with the column named is the

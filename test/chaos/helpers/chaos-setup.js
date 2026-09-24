@@ -32,12 +32,13 @@ const testDb        = require('../../e2e/helpers/testDb');
 const fixtures      = require('../../e2e/helpers/fixtures');
 const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
+const fixturePorts = require('../../../bin/fixture-ports.js');
 
 // Connection constants: proxied ports from docker-compose.chaos.yml
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
-const SOURCE_PROXY_PORT  = parseInt(process.env.SOURCE_PROXY_PORT  || '33060', 10);
-const REPLICA_PROXY_PORT = parseInt(process.env.REPLICA_PROXY_PORT || '33061', 10);
-const SOURCE_DIRECT_PORT = parseInt(process.env.SOURCE_DIRECT_PORT || '33065', 10);
+const SOURCE_PROXY_PORT  = fixturePorts.port('SOURCE_PROXY_PORT');
+const REPLICA_PROXY_PORT = fixturePorts.port('REPLICA_PROXY_PORT');
+const SOURCE_DIRECT_PORT = fixturePorts.port('SOURCE_DIRECT_PORT');
 const CHAOS_DB_USER      = 'xchain-node';
 const CHAOS_DB_PASS      = 'xchain-fixture-throwaway';
 

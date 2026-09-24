@@ -25,9 +25,10 @@
 'use strict';
 
 const http = require('http');
+const fixturePorts = require('../../../bin/fixture-ports.js');
 
 const TOXIPROXY_HOST = process.env.TOXIPROXY_HOST || '127.0.0.1';
-const TOXIPROXY_PORT = parseInt(process.env.TOXIPROXY_PORT || '8474', 10);
+const TOXIPROXY_PORT = fixturePorts.port('TOXIPROXY_PORT');
 
 const SOURCE_PROXY = {
     name:     'source_db_chaos',

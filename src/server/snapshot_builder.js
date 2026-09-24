@@ -92,15 +92,10 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 const OPERATOR_LOCAL_TABLES = new Set([
     ...tableLifecycle.tablesWhere(t =>
         ['local', 'hub-mirror', 'follower-derived'].includes(t.replication)),
-    // mempool_transactions: node-local, non-deterministic observation state (its own
-    // schema comment forbids sharing raw values across nodes). It is a DECODER-DB
-    // table with no registry entry (the registry covers the indexer DB). Every other
-    // channel already excludes it: the per-block stream (replicatedTables.js), the
-    // incremental snapshot (decoderSkip in streamIncrementalSnapshot), and the
-    // /status completeness count (getReplicatedTables). Listing it here closes the
-    // one remaining leak: the FULL snapshot used to ship the source's
-    // bootstrap-instant mempool, freezing it forever on full-bootstrap decoder
-    // replicas while incremental-bootstrap replicas held zero rows for the same table.
+    // Keep mempool_transactions out of the FULL snapshot too: it is node-local decoder
+    // state with no registry entry, and every other channel (block stream, incremental
+    // snapshot, /status count) already skips it, so shipping it would freeze the
+    // source's bootstrap-instant mempool on full-bootstrap replicas.
     'mempool_transactions',
     // sync_halt, sync_state: replica-local durable CONTROL tables the source never
     // ships (created by db.verifySyncTables for both dbTypes; no registry entry).
@@ -226,6 +221,14 @@ const PRIORITY_TABLES = [
 // sync_meta carries a FK on pubkeys.
 const TRAILING_TABLES = ['balances', 'sync_meta', 'pubkeys'];
 
+// Indexer full-dump tables outside the lookup topology that are still append-only,
+// mapped to the column that pages them in-band. Neither is synced out of band, so
+// both stream under skipLookups too. pubkeys has no surrogate id and pages by its
+// address_id PRIMARY KEY: sound only inside one read view, since across requests
+// that cursor skips late rows (see replicatedTables.lookupCursorColumn), so it
+// must never join the out-of-band rows route.
+const INDEXER_INBAND_PAGED = Object.freeze({ events: 'id', pubkeys: 'address_id' });
+
 // Order a set of snapshot table names into the builder's dependency order:
 // priority tables first (in declared order), everything else alphabetically,
 // trailing tables last. Exported (alongside OPERATOR_LOCAL_TABLES) so
@@ -247,6 +250,42 @@ function orderSnapshotTables(allTables){
     }
 
     return ordered;
+}
+
+// Classify the decoder tables for an incremental snapshot. The three streamed
+// buckets derive from TOPOLOGY.decoder so they cannot drift from the per-block
+// stream; only the skip set is declared, and a unit test proves the four exhaustive.
+//
+// Decoder full-dump tables: index_* and pubkeys are small + append-only;
+//   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
+//   `events` is full-dumped too: it carries no block_index/tx_index cursor
+//   to scope incrementally, so the only way an incrementally-caught-up
+//   follower converges its events table is a complete re-dump. It is safe
+//   to re-send because events has an AUTO_INCREMENT `id` PK and the client
+//   applies all incremental rows with INSERT IGNORE (existing ids are no-ops).
+//
+// dispensers is skipped here for the same reason it is not per-block
+// streamed: the decoder soft-expires dispensers (UPDATE expired_block_index)
+// and defers the hard-purge to purgeExpiredDispensers. An insert-only
+// incremental delta (the tx_index->block_index join) would re-introduce the
+// count divergence on any follower that catches up incrementally, and a plain
+// re-dump would collide on the (tx_index, address_id) PK (dispensers is not in
+// ClientApplier.ignoreTables, so it is not INSERT IGNORE). dispensers seeds
+// from the full snapshot and is then held in parity SOLELY by the apply-side
+// reconcile: ClientApplier.applyDispensersReplace via
+// ClientSync.reconcileDispensers, gated by DISPENSERS_RECONCILE_EVERY /
+// DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
+// (replicatedTables `special`) is a post-replace equality sanity check, not a
+// backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
+// leaves the replica ahead, which verifyTableCounts does not report.
+function decoderIncrementalSets(){
+    let topology = replicatedTables.getTopology('decoder');
+    return {
+        blockScoped: new Set(topology.blockScoped),
+        txScoped:    new Set(topology.txScoped),
+        fullDump:    new Set(topology.index),
+        skip:        new Set(['mempool_transactions', 'dispensers'])
+    };
 }
 
 class SnapshotBuilder {
@@ -540,32 +579,12 @@ class SnapshotBuilder {
             let tableOrder = await this.getOrderedTables(db, conn);
             let first = true;
 
-            // Scoping rules per dbType.
-            // Decoder full-dump tables: index_* and pubkeys are small + append-only;
-            //   the client uses INSERT IGNORE so re-sending existing rows is a no-op.
-            //   `events` is full-dumped too: it carries no block_index/tx_index cursor
-            //   to scope incrementally, so the only way an incrementally-caught-up
-            //   follower converges its events table is a complete re-dump. It is safe
-            //   to re-send because events has an AUTO_INCREMENT `id` PK and the client
-            //   applies all incremental rows with INSERT IGNORE (existing ids are no-ops).
-            let decoderBlockScoped = new Set(['blocks', 'transactions']);
-            let decoderTxScoped    = new Set(['transaction_outputs']);
-            let decoderFullDump    = new Set(['index_addresses', 'index_transactions', 'pubkeys', 'events']);
-            // dispensers is skipped here for the same reason it is not per-block
-            // streamed: the decoder soft-expires dispensers (UPDATE expired_block_index)
-            // and defers the hard-purge to purgeExpiredDispensers. An insert-only
-            // incremental delta (the tx_index->block_index join) would re-introduce the
-            // count divergence on any follower that catches up incrementally, and a plain
-            // re-dump would collide on the (tx_index, address_id) PK (dispensers is not in
-            // ClientApplier.ignoreTables, so it is not INSERT IGNORE). dispensers seeds
-            // from the full snapshot and is then held in parity SOLELY by the apply-side
-            // reconcile: ClientApplier.applyDispensersReplace via
-            // ClientSync.reconcileDispensers, gated by DISPENSERS_RECONCILE_EVERY /
-            // DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
-            // (replicatedTables `special`) is a post-replace equality sanity check, not a
-            // backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
-            // leaves the replica ahead, which verifyTableCounts does not report.
-            let decoderSkip        = new Set(['mempool_transactions', 'dispensers']);
+            // Scoping rules per dbType. Decoder buckets: see decoderIncrementalSets.
+            let decoderSets        = decoderIncrementalSets();
+            let decoderBlockScoped = decoderSets.blockScoped;
+            let decoderTxScoped    = decoderSets.txScoped;
+            let decoderFullDump    = decoderSets.fullDump;
+            let decoderSkip        = decoderSets.skip;
 
             // Indexer block-scoped set. These tables carry a block_index but no
             // action_index, so the action_index branch below cannot reach them.
@@ -685,17 +704,16 @@ class SnapshotBuilder {
                         continue;
                     }
 
-                    // The indexer `events` log is the one indexerFullDump member that is
-                    // append-only on an AUTO_INCREMENT id yet absent from lookupSet: its
+                    // The indexer `events` log and `pubkeys` cache are the indexerFullDump
+                    // members that are append-only yet absent from lookupSet: their
                     // replication class is 'snapshot', not 'stream:index', so the branch
-                    // above cannot reach it and it fell to the bundled SELECT * below,
-                    // materializing the whole audit log per catch-up. Page it
-                    // by the same id cursor, which emits a byte-identical "events":[...]
-                    // key, so no client, protocol, or schema change is implied. Unlike the
-                    // lookupSet tables it is NOT synced out of band, so it must still be
-                    // streamed under skipLookups rather than skipped.
-                    if(dbType === 'indexer' && table === 'events' && indexerFullDump.has(table)){
-                        first = await this.streamLookupPaged(writer, db, table, conn, first);
+                    // above cannot reach them and the bundled SELECT * below would
+                    // materialize the whole table per catch-up. Page each by its
+                    // INDEXER_INBAND_PAGED cursor, which emits a byte-identical key, so no
+                    // client, protocol, or schema change is implied. Unlike the lookupSet
+                    // tables they are NOT synced out of band, so they stream under skipLookups.
+                    if(dbType === 'indexer' && Object.hasOwn(INDEXER_INBAND_PAGED, table) && indexerFullDump.has(table)){
+                        first = await this.streamLookupPaged(writer, db, table, conn, first, INDEXER_INBAND_PAGED[table]);
                         continue;
                     }
 
@@ -929,8 +947,9 @@ class SnapshotBuilder {
     // array (or gzip buffer) all at once. `first` tracks whether any table key has
     // been written yet (for the inter-table comma); returns the updated value.
     // Uses the shared REPEATABLE READ conn, so paging is consistent across batches.
-    async streamLookupPaged(writer, db, table, conn, first){
-        let col = replicatedTables.lookupCursorColumn(table);
+    // `cursorCol` overrides the lookup cursor for a table paged only in-band.
+    async streamLookupPaged(writer, db, table, conn, first, cursorCol){
+        let col = cursorCol || replicatedTables.lookupCursorColumn(table);
         let after = 0;
         let wrote = false;
         let firstRow = true;
@@ -1024,7 +1043,7 @@ class SnapshotBuilder {
         }
     }
 
-    // Stream one keyset-ordered page of the decoder `dispensers` table. dispensers
+    // Stream the whole decoder `dispensers` table, keyset-ordered. dispensers
     // is excluded from both the incremental block stream and the id-cursor lookup
     // paging (streamTableRowsById): it has no monotonic surrogate id (PK is
     // (tx_index, address_id)) and the decoder soft-expires then hard-purges rows, so
@@ -1049,7 +1068,7 @@ class SnapshotBuilder {
     // cursor params stay honoured (filtered within the same single query) and
     // has_more is always false, so an old paging client simply completes its walk
     // in one round trip.
-    async streamDispensers(db, afterTx, afterAddr, limit, res){
+    async streamDispensers(db, afterTx, afterAddr, res){
         let dbType = (db && db.dbType) || 'indexer';
         if(dbType !== 'decoder'){
             return res.status(400).json({ error: 'dispensers reconcile is decoder-only' });
@@ -1107,5 +1126,6 @@ SnapshotBuilder.SnapshotStreamWriter = SnapshotStreamWriter;
 SnapshotBuilder.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
 SnapshotBuilder.SOURCE_UNSTREAMED_TABLES = SOURCE_UNSTREAMED_TABLES;
 SnapshotBuilder.orderSnapshotTables = orderSnapshotTables;
+SnapshotBuilder.decoderIncrementalSets = decoderIncrementalSets;
 
 module.exports = SnapshotBuilder;

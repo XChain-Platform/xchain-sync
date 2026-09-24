@@ -72,7 +72,7 @@ function pagingStreamAbortTests(){
         sinon.stub(zlib, 'createGzip').returns(fake);
         let res = new PassThrough(); res.setHeader = sinon.stub(); res.on('data', () => {});
 
-        let p = builder.streamDispensers(db, NaN, NaN, 50000, res);
+        let p = builder.streamDispensers(db, NaN, NaN, res);
         await new Promise(r => setImmediate(r));
         res.emit('close');
         await p;

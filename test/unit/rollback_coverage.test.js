@@ -22,10 +22,12 @@
  * diverges from the source (the exact failure xchain-indexer's rollback guard
  * prevents on the source side).
  *
- * The risk here is sharper than on the source: ClientRollback's table lists are
- * a hand-maintained mirror of xchain-indexer/src/rollback.js (see the header
- * comment there). They have drifted before: `prices` was added to the indexer's
- * rollback set but not here, so reorged price rows lingered on every replica.
+ * The risk here is sharper than on the source: ClientRollback's generic lists
+ * derive from the table-lifecycle registry and the decoder topology (see the
+ * header of src/client/rollback.js), but its bespoke resets and restores are a
+ * hand-maintained mirror of xchain-indexer/src/rollback/. Hand-copied lists
+ * drift: `prices` joined the indexer's rollback set but not the replica's, so
+ * reorged price rows lingered on every replica.
  * This test fails when a table ServerPoller replicates is not handled by
  * ClientRollback for that dbType, catching the drift at CI time.
  *
@@ -94,13 +96,14 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 
 // Coverage that lives outside ClientRollback's table arrays: the replica-side
 // rollback buckets, derived from the table-lifecycle registry twin
-// (src/tableLifecycle.js, byte-identical to the xchain-indexer copy; asserted
+// (src/table_lifecycle.js, byte-identical to the xchain-indexer copy; asserted
 // below). Per-table rationale lives with each registry entry.
 const lifecycleTwin = require('../../src/table_lifecycle');
 const pathMod = require('path');
 const fs = require('fs');
 const assertLocal = require('assert');
 const sh = require('../../src/consensus/state_hash');
+const { withDbMixins } = require('../helpers/db_mixins.js');
 const widenSet = require('../../src/schema/utf8mb4_columns');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
@@ -239,7 +242,7 @@ describe('Rollback coverage guard @regression', function(){
         const IndexerRollback = require(rbPath);
         // Rollback's constructor only assigns config aliases + the static table
         // arrays (no DB/network work), so a bare stub yields the lists we need.
-        const indexer = new IndexerRollback({});
+        const indexer = new IndexerRollback({ util: { resetLists () {} } });
         const indexerRollback = new Set([...indexer.dataTables, ...indexer.blockTables]);
 
         // INDEXER_LOCAL (tables the indexer rolls back that sync intentionally
@@ -289,7 +292,7 @@ describe('Rollback coverage guard @regression', function(){
         const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
         const IndexerRollback = require(rbPath);
-        const indexer = new IndexerRollback({});
+        const indexer = new IndexerRollback({ util: { resetLists () {} } });
         assert.deepStrictEqual(
             [...(indexer.indexTables || [])].sort(),
             [...rollback.indexTables].sort(),
@@ -453,30 +456,27 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
-    // The follower rebuilds the BTC stakes_root from db._stakeWeightsSql; it MUST stay
-    // byte-identical to the xchain-indexer _stakeWeightsSql, or the follower's
+    // The follower rebuilds the BTC stakes_root from db.stakeWeightsSql; it MUST stay
+    // byte-identical to the xchain-indexer stakeWeightsSql, or the follower's
     // stakes_root (hence state_root) diverges from the source and the state-commitment
     // check false-halts. Both files carry the method verbatim; this extracts the body
     // and asserts whitespace-normalised equality. If you edit one, edit the other.
-    it('_stakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+    it('stakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function stakeSql(p){
             const src = fs.readFileSync(p, 'utf8');
-            // The indexer spells the method stakeWeightsSql (its code-structure pass dropped
-            // the underscore prefix); this repo still spells it _stakeWeightsSql. The optional
-            // prefix accepts both, and the body comparison below is unchanged.
-            const m = src.match(/_?stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
-            assert.ok(m, `_stakeWeightsSql not found in ${p}`);
+            const m = src.match(/(?<![A-Za-z0-9_$])stakeWeightsSql\(valid_id, blockIndex, minStake\)\{([\s\S]*?)return \{ sql, args \};/);
+            assert.ok(m, `stakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db/stakes.js');
-        // The indexer split its stakes mixin into parts, and _stakeWeightsSql now lives in
+        // The indexer split its stakes mixin into parts, and stakeWeightsSql now lives in
         // src/db/stakes/effective_set_sql.js. Pin the exact file rather than the src/db/
         // tree: if the method is moved again, stakeSql()'s assert.ok fires by name here
         // instead of silently finding a copy elsewhere.
         const indexerPath = indexerFile('src/db/stakes/effective_set_sql.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(stakeSql(syncPath), stakeSql(indexerPath),
-            '_stakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (the stakes_root is consensus-critical)');
+            'stakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (the stakes_root is consensus-critical)');
     });
 
     // Cross-repo drift guard for the SWQ source-cap windowed wrapper (SWQ-TRUNC-1
@@ -486,23 +486,21 @@ describe('Rollback coverage guard @regression', function(){
     // per-repo JS gate wrappers (stakeWeightsWithCap / applyStakeWeightCap) differ by
     // design - the indexer reads network/coin from this.config, sync from params - but
     // both call THIS builder + the shared swq_source_cap_activation.js caps, which are
-    // the consensus-relevant surface. If you edit one _cappedStakeWeightsSql, edit both.
-    it('_cappedStakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+    // the consensus-relevant surface. If you edit one cappedStakeWeightsSql, edit both.
+    it('cappedStakeWeightsSql is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function cappedSql(p){
             const src = fs.readFileSync(p, 'utf8');
-            // Same optional prefix as stakeSql() above: cappedStakeWeightsSql in the indexer,
-            // _cappedStakeWeightsSql here.
-            const m = src.match(/_?cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
-            assert.ok(m, `_cappedStakeWeightsSql not found in ${p}`);
+            const m = src.match(/(?<![A-Za-z0-9_$])cappedStakeWeightsSql\(inner, maxSources, maxKeys, binCollation\)\{([\s\S]*?)return \{ sql, args \};/);
+            assert.ok(m, `cappedStakeWeightsSql not found in ${p}`);
             return m[1].replace(/\s+/g, ' ').trim();
         }
         const syncPath = require('path').resolve(__dirname, '../../src/db/stakes.js');
-        // Same split as above: the capped wrapper sits beside _stakeWeightsSql in the
+        // Same split as above: the capped wrapper sits beside stakeWeightsSql in the
         // effective-set part, and cappedSql()'s assert.ok is what fails loudly if it moves.
         const indexerPath = indexerFile('src/db/stakes/effective_set_sql.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(cappedSql(syncPath), cappedSql(indexerPath),
-            '_cappedStakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
+            'cappedStakeWeightsSql drifted between the two repos\' stakes mixins; keep them byte-identical (feeds the consensus stakes_root at/after the source-cap flag-day)');
     });
 
     // Bespoke-logic parity (not a table-name check): the cooldown-maturity reversal is an
@@ -653,7 +651,10 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(COOLDOWN_STATUS_TABLES, ['unstakes', 'contract_unstakes'],
             'updated_rows must track the cooldown status flip on both unstake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name, so the
+        // guard reads both: the key it pins is the contract, not the file.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
@@ -720,7 +721,10 @@ describe('Rollback coverage guard @regression', function(){
             assert.ok(/collectDerivedAnchorRewards\s*\(/.test(src),
                 `${f} does not call collectDerivedAnchorRewards; its replication channel drops derived anchor/archive rewards`);
         }
-        const applier = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/applier.js'), 'utf8'));
+        // The reconcile DELETE lives in the validator_rewards mixin and ClientApplier
+        // calls it by name, so the guard reads both.
+        const applier = norm(['../../src/client/applier.js', '../../src/db/validator_rewards.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
             'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
         // RB-ANCHOR restore parity on that same identity. The source twin
@@ -908,7 +912,9 @@ describe('Rollback coverage guard @regression', function(){
             'ARCHIVE_HEAD_VERSIONS_SQL must render as IN (1)');
         const fs = require('fs'), pathMod = require('path');
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
-        const ur = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8'));
+        // The anchor SELECT lives in the tables mixin and the collector calls it by name.
+        const ur = norm(['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND ARCHIVE_CHUNK_HEIGHT_COL BETWEEN \? AND \?/.test(ur),
             'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
             'scoped by the shared ARCHIVE_CHUNK_HEIGHT_COL');
@@ -965,7 +971,9 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(POLL_FINALIZE_TABLES, ['polls'],
             'updated_rows must track the poll finalization flip on polls');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
@@ -986,7 +994,9 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
             'updated_rows must track the rotation rewrite on both contract stake tables');
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
+        // The SELECT lives in the tables mixin and the collector calls it by name.
+        const src = ['../../src/server/updated_rows.js', '../../src/db/tables.js']
+            .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
             'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
@@ -1289,13 +1299,13 @@ describe('Rollback coverage guard @regression', function(){
         const { collectUpdatedRows } = require('../../src/server/updated_rows');
         // Fake DB: the anchor self-join query returns a v1 parent stamped invalid_archive.
         let anchorParent = { action_index: 301, version: 1, status_id: 99, match_batch_seq: 7 };
-        let db = {
+        let db = withDbMixins({
             dbType: 'indexer',
             doQuery: async (sql) => {
                 if(sql.indexOf('anchor_actions p') !== -1) return [anchorParent];
                 return [];
             }
-        };
+        });
         let out = await collectUpdatedRows(db, 300, 300, null);
         assert.ok(Array.isArray(out.anchor_actions) && out.anchor_actions.length === 1,
             'collectUpdatedRows must return the anchor_actions parent row for the CRC-failure window');

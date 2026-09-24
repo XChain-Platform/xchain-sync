@@ -57,4 +57,26 @@ module.exports = {
         return await this.doQuery("SELECT * FROM pubkeys WHERE address_id IN (" + ids.map(() => '?').join(',') + ")", ids, conn);
     },
 
+    /**
+     * The address string for each of a set of index_addresses ids.
+     *
+     * @param {Array<number>} aIn distinct index_addresses ids, at least one
+     * @returns {Promise<object[]>} the driver's row array, rows of { id, address }
+     */
+    async findIndexAddressTextByIds(aIn){
+        return await this.doQuery(
+            'SELECT id, address FROM index_addresses WHERE id IN (' + aIn.map(() => '?').join(',') + ')', aIn);
+    },
+
+    /**
+     * The tick string for each of a set of index_tickers ids.
+     *
+     * @param {Array<number>} tIn distinct index_tickers ids, at least one
+     * @returns {Promise<object[]>} the driver's row array, rows of { id, tick }
+     */
+    async findIndexTickTextByIds(tIn){
+        return await this.doQuery(
+            'SELECT id, tick FROM index_tickers WHERE id IN (' + tIn.map(() => '?').join(',') + ')', tIn);
+    },
+
 };

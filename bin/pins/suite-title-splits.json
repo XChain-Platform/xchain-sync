@@ -169,6 +169,13 @@
       "test/unit/hub_client.test/09_parse_endpoints.test.js",
       "test/unit/hub_client.test/10_credential_tier.test.js"
     ],
+    "test/unit/observability.test.js": [
+      "test/unit/observability.test.js",
+      "test/unit/observability.test/01_metrics.test.js",
+      "test/unit/observability.test/02_log_shipper.test.js",
+      "test/unit/observability.test/03_routes.test.js",
+      "test/unit/observability.test/04_flush_and_health.test.js"
+    ],
     "test/unit/server_poller.test.js": [
       "test/unit/server_poller.test.js",
       "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js",

@@ -45,7 +45,7 @@ function streamDispensersPagingTests(){
     it('rejects a non-decoder dbType with 400', async function(){
         let db = createMockDb(); // dbType defaults to indexer-shaped (undefined)
         let res = createMockRes();
-        await builder.streamDispensers(db, NaN, NaN, 50000, res);
+        await builder.streamDispensers(db, NaN, NaN, res);
         assert.ok(res.status.calledWith(400), 'dispensers reconcile is decoder-only');
     });
 
@@ -59,7 +59,7 @@ function streamDispensersPagingTests(){
         res.setHeader = sinon.stub();
         await new Promise((resolve) => {
             res.on('finish', resolve);
-            builder.streamDispensers(db, NaN, NaN, 50000, res);
+            builder.streamDispensers(db, NaN, NaN, res);
         });
         let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
         assert.strictEqual(parsed.rows.length, 2);
@@ -84,14 +84,14 @@ function streamDispensersPagingTests(){
         res.setHeader = sinon.stub();
         await new Promise((resolve) => {
             res.on('finish', resolve);
-            builder.streamDispensers(db, 8, 1, 3, res);
+            builder.streamDispensers(db, 8, 1, res);
         });
         let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
         assert.strictEqual(parsed.has_more, false,
             'has_more is always false so an old paging client completes in one round trip');
         let q = db.doQueryStrict.firstCall.args[0];
         assert.ok(/WHERE \(tx_index > \? OR \(tx_index = \? AND address_id > \?\)\)/.test(q), 'composite keyset predicate');
-        assert.ok(!/LIMIT/.test(q), 'legacy limit arg is ignored: no paging');
+        assert.ok(!/LIMIT/.test(q), 'no paging within the cursor branch either');
         assert.deepStrictEqual(db.doQueryStrict.firstCall.args[1], [8, 8, 1]);
     });
 }
@@ -113,7 +113,7 @@ function streamDispensersFailureTests(){
         res.setHeader = sinon.stub();
 
         await assert.rejects(
-            () => builder.streamDispensers(db, NaN, NaN, 50000, res),
+            () => builder.streamDispensers(db, NaN, NaN, res),
             /errno 1205/,
             'the read error must reach the route handler, which answers 500');
         assert.strictEqual(res.setHeader.called, false, 'no response headers before the read succeeds');
@@ -129,7 +129,7 @@ function streamDispensersFailureTests(){
         res.setHeader = sinon.stub();
 
         await assert.rejects(
-            () => builder.streamDispensers(db, 8, 1, 3, res),
+            () => builder.streamDispensers(db, 8, 1, res),
             /errno 1205/);
     });
 }

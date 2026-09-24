@@ -31,6 +31,7 @@ class ServerProcess {
         this.port     = port;
         this.chain    = chain || 'bitcoin';
         this.network  = network || 'mainnet';
+        this.dbType   = sourceDb.dbType || 'indexer';
 
         this.config = {
             SYNC_MODE: 'server',
@@ -54,6 +55,7 @@ class ServerProcess {
             TRANSPARENCY_RATE_LIMIT: 100000
         };
 
+        this.app         = null;
         this.server      = null;
         this.wss         = null;
         this.broadcaster = null;
@@ -74,7 +76,7 @@ class ServerProcess {
 
     async start() {
         this.broadcaster     = new BlockBroadcaster(this.config);
-        this.log             = new TransparencyLog(this.sourceDb);
+        this.log             = this.dbType === 'indexer' ? new TransparencyLog(this.sourceDb) : null;
         this.snapshotBuilder = new SnapshotBuilder(testDb.util);
         this.poller          = new ServerPoller(
             this.chain, this.network, this.sourceDb,
@@ -82,6 +84,7 @@ class ServerProcess {
         );
 
         let app = express();
+        this.app = app;
         // Must precede the limiters below (they read req.ip): same ordering
         // requirement as api.js's startApi(). Deriving from trustProxyHops
         // rather than a re-declared literal is the whole point of this seam:
@@ -101,8 +104,8 @@ class ServerProcess {
         // backs the e2e suite, so its surface needs to match the real API
         // after the Phase 3 path migration; otherwise the suite would
         // either 404 on status checks or pass-by-accident on snapshots.
-        // :dbType is one of 'indexer' or 'decoder'; this helper only seeds
-        // indexer-shaped data, so 'decoder' requests respond as a stub.
+        // :dbType is one of 'indexer' or 'decoder'. The source DB type selects
+        // the matching hash shape for status and polling.
 
         let validateDbType = (dt) => (dt === 'indexer' || dt === 'decoder') ? dt : null;
 
@@ -113,15 +116,18 @@ class ServerProcess {
                 let hashRow = lastBlock !== null ? await this.sourceDb.getBlockHashRow(lastBlock) : null;
                 let result = {};
                 result[this.chain] = {};
-                result[this.chain][this.network] = {
-                    indexer: {
-                        block_height: hashRow ? Number(hashRow.block_index) : null,
-                        block_time:   hashRow ? Number(hashRow.block_time)  : null,
-                        ledger_hash:  hashRow ? hashRow.ledger_hash         : null,
-                        actions_hash: hashRow ? hashRow.actions_hash        : null,
-                        contract_hash:hashRow ? hashRow.contract_hash       : null
-                    }
+                let status = {
+                    block_height: hashRow ? Number(hashRow.block_index) : null,
+                    block_time:   hashRow ? Number(hashRow.block_time)  : null
                 };
+                if (this.dbType === 'decoder') {
+                    status.block_hash = hashRow ? hashRow.block_hash : null;
+                } else {
+                    status.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
+                    status.actions_hash  = hashRow ? hashRow.actions_hash  : null;
+                    status.contract_hash = hashRow ? hashRow.contract_hash : null;
+                }
+                result[this.chain][this.network] = { [this.dbType]: status };
                 result.last_updated = new Date().toISOString();
                 res.json(result);
             } catch (e) {
@@ -146,7 +152,7 @@ class ServerProcess {
                     last_updated: new Date().toISOString()
                 };
                 if (dbType === 'decoder') {
-                    body.block_hash = hashRow ? hashRow.ledger_hash : null;  // stub: helper seeds indexer rows
+                    body.block_hash = hashRow ? hashRow.block_hash : null;
                 } else {
                     body.ledger_hash   = hashRow ? hashRow.ledger_hash   : null;
                     body.actions_hash  = hashRow ? hashRow.actions_hash  : null;

@@ -44,7 +44,7 @@ const GENERATED_COLUMNS = Object.freeze({
 const _sets = new Map();
 function generatedColumns(table){
     if(!_sets.has(table))
-        _sets.set(table, new Set(GENERATED_COLUMNS[table] || []));
+        _sets.set(table, new Set(Object.prototype.hasOwnProperty.call(GENERATED_COLUMNS, table) ? GENERATED_COLUMNS[table] : []));
     return _sets.get(table);
 }
 

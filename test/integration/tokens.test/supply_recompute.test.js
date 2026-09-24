@@ -10,9 +10,9 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const setup  = require('./helpers/setup');
-const testDb = require('./helpers/testDb');
-const balanceHelpers = require('../../src/db/balance_helpers');
+const setup  = require('../helpers/setup');
+const testDb = require('../helpers/testDb');
+const balanceHelpers = require('../../../src/db/balance_helpers');
 
 // Behavioural proof for recomputeTokenSupplies (the reorg tokens.supply fix). The
 // unit suite pins the SQL *shape*; this pins the arithmetic MariaDB actually

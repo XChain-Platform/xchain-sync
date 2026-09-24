@@ -181,6 +181,26 @@ function applyReplicaFreshness(row, pollerStatus){
     return row;
 }
 
+async function applyProtocolHaltFreshness(row, db, dbType){
+    if(!db || typeof db.getActiveHalt !== 'function'){
+        row.replica_halted = null;
+        return row;
+    }
+    try {
+        row.replica_halted = !!(await db.getActiveHalt(dbType));
+    } catch(e){
+        row.replica_halted = null;
+        row.replica_stale = true;
+        row.lag_blocks = null;
+        return row;
+    }
+    if(row.replica_halted){
+        row.replica_stale = true;
+        row.lag_blocks = null;
+    }
+    return row;
+}
+
 // One /health databases[] row for a chain, and the verdict it implies.
 //
 // Module-scope and exported for the same reason buildStatusRow is: this is the
@@ -227,6 +247,13 @@ function healthEntryDegraded(entry){
     return entry.circuit === 'open' || entry.poll_error_count > 0 || entry.halted === true;
 }
 
+function clientMissingTables(syncService, chain, network, dbType){
+    let sync = (typeof syncService.getClientSync === 'function')
+        ? syncService.getClientSync(chain, network, dbType) : null;
+    return (sync && typeof sync.getMissingTables === 'function')
+        ? sync.getMissingTables() : null;
+}
+
 // Build the status row for one (db, dbType, chain, network) tuple.
 //
 // Module-scope (not a closure inside startApi) and exported so the row shape is
@@ -266,6 +293,7 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                                ? pollerStatus.poll_error_count : 0
         };
         applyReplicaFreshness(row, pollerStatus);
+        await applyProtocolHaltFreshness(row, db, dbType);
         if(dbType === 'decoder'){
             row.block_hash = hashRow ? hashRow.block_hash : null;
         } else {
@@ -286,6 +314,18 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
                     row.index_map_checksum = await new BlockHasher(db, statusUtil).computeIndexMapChecksum(polledBlock);
                 } catch(e){
                     console.error('[API] index_map_checksum compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
+                }
+            }
+            // Advisory tokens fold-column parity (NON-consensus, default off), the only
+            // check that sees an ISSUE edit or its reorg reversal missing on a replica.
+            // See BlockHasher.computeTokenFoldChecksum; null => follower skips.
+            row.token_fold_parity = null;
+            if(cfg['TOKEN_FOLD_PARITY_CHECK'] && polledBlock !== null){
+                try {
+                    row.token_fold_parity = await new BlockHasher(db, statusUtil).computeTokenFoldChecksum(polledBlock);
+                } catch(e){
+                    getLogger().error('[API] token_fold_parity compute failed for ' + chain + '/' + network +
+                        ' at block ' + polledBlock + ' (advisory, returning null): ' + e.message);
                 }
             }
         }
@@ -461,17 +501,8 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
             // indexer split); omit rather than fail the whole status.
         }
     }
-    // Replica-completeness gap, made monitorable.
-    //
-    // Every apply path tolerates errno 1146 so a replica whose schema lags the
-    // source does not wedge; the consequence is that entire tables can fail to
-    // arrive while this row still reports halted:false and lag_blocks:0, and
-    // table_counts cannot show it because a missing table is simply absent from
-    // the object (indistinguishable from a table nobody counted). Publish the
-    // names instead, so a monitor can alert on a non-empty array rather than on
-    // repeated ER_NO_SUCH_TABLE stack traces under a green status. null means the
-    // table listing itself failed: unknown, NOT "nothing missing".
-    row.missing_tables = missingReplicatedTables(present, dbType);
+    // ClientSync owns the source-scoped verdict; null means either schema is unknown.
+    row.missing_tables = clientMissingTables(syncService, chain, network, dbType);
     return row;
 }
 
@@ -874,13 +905,16 @@ async function startApi(){
         }
     });
 
-    // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=&limit=
-    // One keyset page of the decoder `dispensers` table for the client's replace-table
-    // reconcile. dispensers rides neither the block stream nor the id-cursor lookup
-    // paging (no monotonic id; the decoder soft-expires/hard-purges rows), so the
-    // client periodically re-dumps the full table and swaps it in atomically; see
-    // SnapshotBuilder.streamDispensers + ClientSync.reconcileDispensers. Decoder-only;
-    // rate-limited as an incremental fetch.
+    // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=
+    // The WHOLE decoder `dispensers` table in one statement-consistent response
+    // (has_more always false) for the client's replace-table reconcile. dispensers
+    // rides neither the block stream nor the id-cursor lookup paging (no monotonic id;
+    // the decoder soft-expires/hard-purges rows), so the client periodically re-dumps
+    // it and swaps it in atomically; see SnapshotBuilder.streamDispensers +
+    // ClientSync.reconcileDispensers. The cursor params filter within that one query;
+    // a `limit` param from an older client is ignored, and the response's only size
+    // ceiling is the client's SNAPSHOT_MAX_CONTENT. Decoder-only; rate-limited as an
+    // incremental fetch.
     app.get('/snapshot-dispensers/:dbType/:chain/:network', incrSnapshotLimiter, async (req, res) => {
         if(cfg['SYNC_MODE'] !== 'server')
             return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
@@ -895,8 +929,6 @@ async function startApi(){
         if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
            (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
             return res.status(400).json({ error: 'Invalid cursor', code: 'BAD_REQUEST' });
-        let limit = parseInt(req.query.limit);
-        if(isNaN(limit)) limit = undefined; // builder applies its default
 
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -905,7 +937,7 @@ async function startApi(){
         if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
 
         try {
-            await builder.streamDispensers(db, afterTx, afterAddr, limit, res);
+            await builder.streamDispensers(db, afterTx, afterAddr, res);
         } catch(e){
             console.error('[API error] /snapshot-dispensers/:dbType/:chain/:network:', e);
             if(!res.headersSent)
@@ -1254,5 +1286,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness,
+module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
                    buildHealthEntry, healthEntryDegraded, buildStatusRow, startApi };

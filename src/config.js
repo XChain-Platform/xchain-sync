@@ -42,6 +42,13 @@ function parseIntMin1(val, defaultVal){
     return Math.max(1, parseIntSafe(val, defaultVal));
 }
 
+// Parse an integer, falling back to the default (not clamping) below the minimum,
+// so an out-of-range value can never select a disable or a one-row page by accident.
+function parseIntAtLeast(val, min, defaultVal){
+    let parsed = parseIntSafe(val, defaultVal);
+    return parsed < min ? defaultVal : parsed;
+}
+
 // A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
 function parseCsvSet(val){
     return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
@@ -67,6 +74,15 @@ function bootstrapDepthKey(chain, network){
     let ticker = coinTicker(String(chain));
     if(ticker === undefined || ticker === null) return null;
     return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
+}
+
+function resolveMaxRollbackDepth(chain, network, configuredDepth, explicitOverride){
+    const configured = parseIntMin1(configuredDepth, 100)
+    if(explicitOverride === true) return configured
+    if(explicitOverride !== false) return configured
+    return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
+        ? 5000
+        : configured
 }
 
 // Canonical key for a SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK> env name, or null when
@@ -154,16 +170,24 @@ module.exports = {
     /** The replication connection to measure replica lag on, empty when unset. */
     replicaConnectionFromEnv: () => process.env.SYNC_REPLICA_CONNECTION,
 
-    /** One variable whose NAME the caller computes (SYNC_MODE_<CHAIN>, a pinned-validator override). */
+    /**
+     * One variable whose NAME the caller computes (a per-chain key such as
+     * SYNC_MODE_<CHAIN> or a pinned-validator override), read when called, so a
+     * variable set after boot is still seen. undefined when unset.
+     */
     envValueByName: (name) => process.env[name],
 
-    /** The live environment, for a caller that also accepts an injected one in tests. */
+    /**
+     * The live environment object, for a resolver or startup scanner that also
+     * accepts an injected environment in tests and falls back to this one.
+     */
     envSource: () => process.env,
 
     bootstrapDepthKey,
     bootstrapDepthEnvKey,
     unmatchedBootstrapDepthKeys,
     assertBootstrapDepthChains,
+    resolveMaxRollbackDepth,
 
     getConfig: function(){
         let config = {};
@@ -289,12 +313,12 @@ module.exports = {
         // Transparency endpoint rate limit (requests per minute per IP)
         config['TRANSPARENCY_RATE_LIMIT'] = parseInt(process.env.TRANSPARENCY_RATE_LIMIT) || 10;
 
-        // WebSocket backpressure (item 5410): a replica is dropped only when its send buffer
-        // is genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory (a peer
-        // accumulating past this is not draining); STALL_MS is how long the buffer may go
-        // without making downward progress before the peer is dropped. This replaces the old
-        // count-based WS_BACKPRESSURE_LIMIT, which dropped slow-but-draining replicas and
-        // thrashed them into re-bootstraps.
+        // WebSocket backpressure: a replica is dropped only when its send buffer is
+        // genuinely stuck, not merely slow. MAX_BYTES caps per-peer server memory
+        // (a peer accumulating past this is not draining); STALL_MS is how long the
+        // buffer may go without making downward progress before the peer is dropped.
+        // This replaces the old count-based WS_BACKPRESSURE_LIMIT, which dropped
+        // slow-but-draining replicas and thrashed them into re-bootstraps.
         config['WS_BACKPRESSURE_MAX_BYTES'] = parseIntMin1(process.env.WS_BACKPRESSURE_MAX_BYTES, 16777216); // 16 MiB
         config['WS_BACKPRESSURE_STALL_MS']  = parseIntMin1(process.env.WS_BACKPRESSURE_STALL_MS, 30000);     // 30 s
         if(process.env.WS_BACKPRESSURE_LIMIT !== undefined)
@@ -326,6 +350,7 @@ module.exports = {
 
         // Security: Maximum rollback depth from a single source (blocks)
         config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
+        config['MAX_ROLLBACK_DEPTH_EXPLICIT'] = process.env.MAX_ROLLBACK_DEPTH !== undefined;
 
         // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
         config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
@@ -411,6 +436,22 @@ module.exports = {
         // that endpoint is operator-polled rather than hot.
         config['COMPLETENESS_CHECK_INTERVAL'] = parseIntMin0(process.env.COMPLETENESS_CHECK_INTERVAL, 3600000);
 
+        // DISPENSERS_RECONCILE_EVERY: a decoder client replaces its `dispensers` table
+        // every Nth incremental catch-up, since the table rides no block stream (>= 1).
+        config['DISPENSERS_RECONCILE_EVERY'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_EVERY, 1, 20);
+
+        // DISPENSERS_RECONCILE_MAX_INTERVAL_MS: wall-clock bound (ms) on that reconcile,
+        // sampled on catch-ups and on the live status tick. 0 disables the bound.
+        config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 0, 1800000);
+
+        // LOOKUP_PAGE_SIZE: rows per page when a client pages the append-only lookup
+        // tables by id cursor (>= 1); the client clamps it to 100000.
+        config['LOOKUP_PAGE_SIZE'] = parseIntAtLeast(process.env.LOOKUP_PAGE_SIZE, 1, 50000);
+
+        // GAP_LOG_INTERVAL_MS: throttle window (ms) for the client's catch-up gap log
+        // summaries (>= 1).
+        config['GAP_LOG_INTERVAL_MS'] = parseIntAtLeast(process.env.GAP_LOG_INTERVAL_MS, 1, 30000);
+
         // INDEX_MAP_PARITY_CHECK: advisory id->address map parity. Default OFF, and
         // UNLIKE the VERIFY_* gates above it NEVER halts: a mismatch is logged + counted
         // only. It catches a replica whose index_addresses id->address map content
@@ -434,6 +475,15 @@ module.exports = {
         // checksums on /status, a client at the same height recomputes and compares).
         // OFF by default: it reads a window of ~93 indexer tables per status poll.
         config['TABLE_CONTENT_PARITY_CHECK'] = (process.env.TABLE_CONTENT_PARITY_CHECK || '').toLowerCase() === 'true';
+
+        // TOKEN_FOLD_PARITY_CHECK: advisory digest of the tokens metadata columns ISSUE
+        // folds in place (BlockHasher.computeTokenFoldChecksum). Those columns are in no
+        // consensus hash and are excluded from the content-parity windows as in-place
+        // state, so a replica missing an edit or its reorg reversal is visible only here.
+        // Same posture as the two checks above: read on both sides, NEVER halts, a
+        // mismatch is logged and durably counted, OFF by default (one tokens scan per
+        // status poll on the source).
+        config['TOKEN_FOLD_PARITY_CHECK'] = (process.env.TOKEN_FOLD_PARITY_CHECK || '').toLowerCase() === 'true';
 
         // TABLE_CONTENT_PARITY_WINDOW: how many blocks (and, for the append-only
         // lookups that carry no block column, how many ids) each content checksum
