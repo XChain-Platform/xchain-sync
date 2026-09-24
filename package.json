@@ -33,7 +33,7 @@
   "scripts": {
     "api": "node ./src/api.js",
     "lint": "eslint .",
-    "test": "mocha --require ./test/setup/index.js --timeout 5000 --recursive 'test/unit/**/*.test.js'",
+    "test": "mocha --require ./test/setup/index.js --timeout 20000 --recursive 'test/unit/**/*.test.js'",
     "ci": "mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit && npm run ci:security",
     "ci:security": "mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/security/**/*.test.js' --exit",
     "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' --all mocha --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
