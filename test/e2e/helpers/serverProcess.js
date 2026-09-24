@@ -98,7 +98,7 @@ class ServerProcess {
             let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             let [, dbType, chain, network] = match;
-            if (!validateDbType(dbType)) { socket.destroy(); return; }
+            if (dbType !== 'indexer' && dbType !== 'decoder') { socket.destroy(); return; }
             this.wss.handleUpgrade(request, socket, head, (ws) => {
                 this.broadcaster.addSubscription(ws, request, chain, network, 'full', dbType);
             });
