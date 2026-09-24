@@ -71,10 +71,14 @@ function addClosedPortTests(){
             process.env.DB_CONNECT_RETRY_MAX_ATTEMPTS = '2';
             process.env.DB_CONNECT_RETRY_TIMEOUT_MS = '250';
             let db = makeDatabase(Database, await closedPort());
+            db.util.sleep = sinon.stub().resolves();
             let started = Date.now();
             try {
                 await assert.rejects(() => db[method]());
-                assert.ok(Date.now() - started < 700, method + ' exceeded the retry bound');
+                assert.ok(
+                    Date.now() - started < db.connectionRetryTimeoutMs,
+                    method + ' exceeded the retry bound'
+                );
             } finally {
                 await db.close();
             }
