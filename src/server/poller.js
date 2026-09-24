@@ -1079,7 +1079,7 @@ class ServerPoller {
 
 module.exports = ServerPoller;
 
-if(process.env.npm_lifecycle_event === 'ci' && typeof describe === 'function' && typeof it === 'function'){
+if(envConfig.npmLifecycleEventFromEnv() === 'ci' && typeof describe === 'function' && typeof it === 'function'){
     const ciSpecs = [
         '../../test/chaos/source_tip_read_failclosed.test',
         '../../test/boundary/consensus_constants.test',

@@ -161,6 +161,9 @@ module.exports = {
     /** The raw concurrent-snapshot cap, NaN when unset; the caller derives one from the pool. */
     maxConcurrentSnapshotsFromEnv: () => parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS),
 
+    /** The npm lifecycle event active for this process, undefined when npm did not launch it. */
+    npmLifecycleEventFromEnv: () => process.env.npm_lifecycle_event,
+
     /** The key a hub call carries: the config-secrets key when set, else the bulk key. */
     hubApiKeyFromEnv: () => process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY,
 
