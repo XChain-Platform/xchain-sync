@@ -17,7 +17,7 @@
 
 const assert  = require('assert');
 const sinon   = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const { ROLE_BY_ADDRESS } = require('../../src/util/protocol_address_roles');
 
 // Pick one concrete special address per ledger role from the frozen map.
@@ -36,7 +36,7 @@ describe('getBlockLeafRows special-address canonicalization (consensus)', functi
     const REWARD  = addrForRole('REWARD');
 
     beforeEach(function () {
-        db = new Database('localhost', 3306, 'idx', 'u', 'p', { isNull: x => x == null }, 'indexer');
+        db = makeTestDatabase('idx', 'u', 'p', { isNull: x => x == null }, 'indexer');
         // Return one row per ledger table (special address) plus a contract row whose
         // source address is ALSO a special address, to prove contract rows are left raw.
         sinon.stub(db, 'doQuery').callsFake(async (sql) => {

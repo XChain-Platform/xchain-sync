@@ -10,13 +10,13 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 
 // Minimal util stub: addMissingColumns only touches this.doQuery (stubbed
 // below) and the pure validation helpers, so util is never exercised here.
 function makeDb(){
     let util = { isNull: (v) => v === null || v === undefined };
-    return new Database('localhost', 3306, 'replica_db', 'u', 'p', util, 'indexer');
+    return makeTestDatabase('replica_db', 'u', 'p', util, 'indexer');
 }
 
 const DDL = [

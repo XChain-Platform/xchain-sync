@@ -31,6 +31,7 @@
 const assert   = require('assert');
 const sinon    = require('sinon');
 const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 
 function makeUtil(){
     return {
@@ -41,7 +42,7 @@ function makeUtil(){
     };
 }
 function makeDb(rows){
-    const db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+    const db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
     sinon.stub(db, 'getStatusId').resolves(1);
     sinon.stub(db, 'doQuery').resolves(rows || []);
     return db;

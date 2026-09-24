@@ -27,7 +27,7 @@
 
 const assert   = require('assert');
 const sinon    = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 
 function makeUtil() {
     return {
@@ -41,7 +41,7 @@ function makeUtil() {
 // A Database whose doQueryStrict answers per statement. `answers` maps a
 // statement to rows, or to an Error to simulate a server that lacks it.
 function dbWith(answers) {
-    const db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+    const db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
     db._asked = [];
     sinon.stub(db, 'doQueryStrict').callsFake((sql) => {
         db._asked.push(sql);

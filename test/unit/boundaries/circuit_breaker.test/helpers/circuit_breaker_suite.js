@@ -22,7 +22,7 @@ function createDatabase(poolStub){
     };
     let Database = proxyquire('../../../../../src/db', { 'mariadb': mockMariadb });
     let util = new Utility();
-    return new Database('localhost', 3306, 'testdb', 'user', 'pass', util);
+    return new Database('unit-test-fixture', 0, 'testdb', 'user', 'pass', util);
 }
 
 function registerHooks(){

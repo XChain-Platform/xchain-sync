@@ -25,13 +25,13 @@
 
 const assert   = require('assert');
 const sinon    = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const swc      = require('../../src/consensus/gates/stake_weight_collation_gate');
 
 function makeUtil() { return { isNull: (x) => x == null, logError: () => {}, throwError: () => {} }; }
 
 function dbWithCapturedQueries() {
-    const db = new Database('localhost', 3306, 'idx', 'u', 'p', makeUtil(), 'indexer');
+    const db = makeTestDatabase('idx', 'u', 'p', makeUtil(), 'indexer');
     const calls = [];
     sinon.stub(db, 'doQueryStrict').callsFake((q, a) => { calls.push({ q, a }); return Promise.resolve([]); });
     db._calls = calls;
@@ -109,7 +109,7 @@ describe('sync: stake-weight ordering collation gate', function () {
     describe('fail-closed startup assertion', function () {
 
         function dbAnswering(rows, dbType) {
-            const db = new Database('localhost', 3306, 'idx', 'u', 'p', makeUtil(), dbType || 'indexer');
+            const db = makeTestDatabase('idx', 'u', 'p', makeUtil(), dbType || 'indexer');
             sinon.stub(db, 'doQuery').resolves(rows);
             return db;
         }
@@ -120,7 +120,7 @@ describe('sync: stake-weight ordering collation gate', function () {
         // replica. Asserting the OPTIONS rather than the outcome, because a fail-soft
         // read and a genuinely absent column produce the same empty array.
         it('reads the column through a strict query, so a driver fault cannot read as absent', async function () {
-            const db = new Database('localhost', 3306, 'idx', 'u', 'p', makeUtil(), 'indexer');
+            const db = makeTestDatabase('idx', 'u', 'p', makeUtil(), 'indexer');
             const seen = [];
             sinon.stub(db, 'doQuery').callsFake((q, a, c, opts) => { seen.push(opts); return Promise.resolve([]); });
             await db.assertStakeWeightOrderingCollation();

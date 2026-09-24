@@ -23,7 +23,7 @@
 
 const assert     = require('assert');
 const sinon      = require('sinon');
-const Database   = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const ClientSync = require('../../src/client/sync');
 const Utility = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
@@ -37,7 +37,7 @@ function makeUtil(){
     };
 }
 function makeDb(){
-    return new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+    return makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
 }
 
 const STAKE_WEIGHTS_AS_OF_TITLE = 'Database.getStakeWeightsByCapabilityAsOf (#4927)';
