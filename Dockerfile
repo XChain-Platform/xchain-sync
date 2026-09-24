@@ -1,9 +1,11 @@
-# Pinned to node:22-bookworm, the tag .nvmrc and package.json engines already
-# declare and the sibling service images already build on. `node:latest` floats:
-# xchain-node rebuilds this image on every update (ModuleService.buildAndUp), so
-# a routine rolling upgrade silently moves the runtime off the declared Node 22
-# with no signal anywhere.
-FROM node:22-bookworm
+# Pinned by digest to the node:22.23.2-bookworm image whose V8/ICU build match
+# xchain-vm's consensus runtime pin: the floating node:22-bookworm tag moved to
+# a Node 22 patch whose V8/ICU no longer match, so validators built from it
+# would fail checkConsensusRuntime(). `node:latest` floats too: xchain-node
+# rebuilds this image on every update (ModuleService.buildAndUp), so a routine
+# rolling upgrade silently moves the runtime off the declared Node 22 with no
+# signal anywhere.
+FROM node:22.23.2-bookworm@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844
 
 RUN mkdir /XChainIndexerSync/
 COPY ./package.json /XChainIndexerSync/package.json
