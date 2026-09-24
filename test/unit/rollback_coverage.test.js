@@ -1187,18 +1187,15 @@ describe('Rollback coverage guard @regression', function(){
     // here. The mask is deliberately narrow (only those four directory names, only inside a
     // src/ path) so it cannot swallow a real divergence.
     const maskTwinDepth = (s) => s.replace(/src\/(?:consensus|hub|chain|api)\//g, 'src/');
-    // The two sides part names as well: the indexer renamed its copies to snake_case and
-    // xchain-sync keeps its own, so each pair carries both names (the reconcile-twins.sh
-    // table holds the same mapping).
-    for(const [twin, indexerTwin] of [
-        ['stateSubtreeActivation.test.js', 'state_subtree_activation.test.js'],
-        ['contractStateSubtree.test.js',   'contract_state_subtree.test.js'],
-        ['escrowLeafSubtree.test.js',      'escrow_leaf_subtree.test.js'],
+    for(const twin of [
+        'state_subtree_activation.test.js',
+        'contract_state_subtree.test.js',
+        'escrow_leaf_subtree.test.js',
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer, modulo sibling require depth (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
             const syncPath    = pathMod.resolve(__dirname, '../../test/unit/' + twin);
-            const indexerPath = indexerFile('test/unit/' + indexerTwin);
+            const indexerPath = indexerFile('test/unit/' + twin);
             if(!requireSibling(this, indexerPath)) return;
             assert.strictEqual(maskTwinDepth(fs.readFileSync(syncPath, 'utf8')),
                                maskTwinDepth(fs.readFileSync(indexerPath, 'utf8')),

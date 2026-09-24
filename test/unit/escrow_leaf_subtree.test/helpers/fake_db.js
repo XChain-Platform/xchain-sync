@@ -19,7 +19,7 @@
  *
  * The ENTRY file (test/unit/escrow_leaf_subtree.test.js) deliberately keeps its
  * own copy instead of requiring this one: the entry is byte-locked to
- * xchain-sync/test/unit/escrowLeafSubtree.test.js, whose parts directory is
+ * xchain-sync/test/unit/escrow_leaf_subtree.test.js, whose parts directory is
  * spelled in camelCase, so a require naming this directory would differ across
  * the pair and break that lock.
  */
