@@ -48,7 +48,7 @@ services:
       - "${REPLICA_PROXY_PORT:-33061}:33061"  # Replica DB proxy endpoint
       - "${WS_PROXY_PORT:-33062}:33062"  # WebSocket proxy endpoint (for CE-NET tests)
     extra_hosts:
-      - "host-gateway:host-gateway"
+      - "host.docker.internal:host-gateway"
     networks:
       - chaos-net
     depends_on:
