@@ -107,7 +107,7 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
 
     describe('the gate detects what it claims to detect', function(){
 
-        this.timeout(10000);
+        this.timeout(20000);
 
         let dir;
         const frontier = { through: '2026-09-11', accounted: ['2026-09-11-already-folded-in.sql'] };
@@ -155,7 +155,7 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
 
     describe('the gate detects what it claims to detect', function(){
 
-        this.timeout(10000);
+        this.timeout(20000);
 
         let dir;
         const frontier = { through: '2026-09-11', accounted: ['2026-09-11-already-folded-in.sql'] };

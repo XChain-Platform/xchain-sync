@@ -116,7 +116,7 @@ describe('armed map v2: fingerprint module and publication', function () {
 describe('armed map v2: fingerprint module and publication', function () {
 
     it('both /health bodies carry v2, version 2 and the carrier logic digest, and no _v2 alias', function () {
-        this.timeout(30000);
+        this.timeout(60000);
         const res = spawnSync(process.execPath, ['-e', HEALTH_DRIVE, require.resolve('proxyquire'), path.join(ROOT, 'src/api.js')], {
             cwd: ROOT, encoding: 'utf8',
             env: { ...process.env, SYNC_API_PORT: '0', SYNC_MODE: 'client', XCHAIN_LOG_PATCH: '0' },

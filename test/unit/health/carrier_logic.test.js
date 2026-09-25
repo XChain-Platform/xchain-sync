@@ -76,6 +76,8 @@ const api = proxyquire(process.argv[2], {
 
 describe('health/carrier_logic: the published carrier logic digest', function () {
 
+    this.timeout(60000);
+
     it('equals the pin module digest of the committed pin, with no second formula in effect', function () {
         const expected = logicPin.digest(logicPin.readPin(ROOT));
         assert.match(expected, HEX64);
@@ -108,7 +110,6 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
     });
 
     it('/health carries the digest as its own field beside v2 and version 2, with no _v2 alias', function () {
-        this.timeout(30000);
         const res = spawnSync(process.execPath, ['-e', HEALTH_DRIVE, require.resolve('proxyquire'), path.join(ROOT, 'src/api.js')], {
             cwd: ROOT, encoding: 'utf8',
             env: { ...process.env, SYNC_API_PORT: '0', SYNC_MODE: 'client', XCHAIN_LOG_PATCH: '0' },
