@@ -36,7 +36,7 @@ let cached = null;
 /**
  * @returns {{hex: string, rows: Object<string, string>, count: number}|{hex: 'UNREADABLE', reason: string}}
  */
-function computeArmedMapFingerprintV2() {
+function computeArmedMapFingerprint() {
     if (cached) return cached;
     const collected = collectRows();
     if (!collected.ok) {
@@ -54,4 +54,7 @@ function computeArmedMapFingerprintV2() {
     return cached;
 }
 
-module.exports = { computeArmedMapFingerprintV2 };
+module.exports = {
+    computeArmedMapFingerprint,
+    computeArmedMapFingerprintV2: computeArmedMapFingerprint,
+};
