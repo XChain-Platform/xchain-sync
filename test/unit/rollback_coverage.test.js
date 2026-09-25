@@ -143,8 +143,6 @@ function requireSibling(ctx, absPath){
 // directories fails here by name instead of passing unseen. The entry path is what
 // requireSibling() checks and what the table-list guards require().
 const INDEXER_ROLLBACK_ENTRY = 'src/rollback/index.js';
-const INDEXER_ROLLBACK_PATH = indexerFile(INDEXER_ROLLBACK_ENTRY);
-const IndexerRollback = fs.existsSync(INDEXER_ROLLBACK_PATH) ? require(INDEXER_ROLLBACK_PATH) : null;
 function indexerRollbackSource(){
     const jsIn = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort() : [])
         .map((f) => pathMod.join(dir, f));
@@ -241,6 +239,7 @@ describe('Rollback coverage guard @regression', function(){
         // mirrored into ClientRollback or given a deliberate, reasoned exemption here.
         const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
+        const IndexerRollback = require(rbPath);
         // Rollback's constructor only assigns config aliases + the static table
         // arrays (no DB/network work), so a bare stub yields the lists we need.
         const indexer = new IndexerRollback({ util: { resetLists () {} } });
@@ -292,6 +291,7 @@ describe('Rollback coverage guard @regression', function(){
         // Cross-repo drift guard: the source indexer must roll back the same set.
         const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, rbPath)) return;
+        const IndexerRollback = require(rbPath);
         const indexer = new IndexerRollback({ util: { resetLists () {} } });
         assert.deepStrictEqual(
             [...(indexer.indexTables || [])].sort(),
