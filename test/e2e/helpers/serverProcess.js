@@ -76,6 +76,9 @@ class ServerProcess {
             this.broadcaster, this.log, this.config, testDb.util
         );
 
+        // Adapt the single database fixture to the production app's provider contract.
+        // Return only this harness's chain tuple so a mismatched route cannot borrow
+        // a database, broadcaster, or transparency log from another test instance.
         let provider = {
             isReady:                () => true,
             getHubConfigAgeSeconds: () => 0,
@@ -91,10 +94,16 @@ class ServerProcess {
         let app = createApp(provider, this.config);
         this.app = app;
 
+        // Mount the same Express application used in production behind a disposable
+        // HTTP server, while keeping WebSocket upgrades explicit because the app
+        // handles ordinary requests but does not own the upgrade lifecycle.
         this.server = http.createServer(app);
         this.wss = new WebSocket.Server({ noServer: true });
 
         this.server.on('upgrade', (request, socket, head) => {
+            // Reject malformed or unsupported subscription paths before ws takes ownership
+            // of the socket; a rejected upgrade must be destroyed because no HTTP response
+            // can safely return the connection to the ordinary request handler.
             let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)/);
             if (!match) { socket.destroy(); return; }
             let [, dbType, chain, network] = match;
@@ -145,6 +154,8 @@ class ServerProcess {
                 if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);
             }
         }
+        // Publish the initialized cursor and source status before timers begin, ensuring
+        // the first status broadcast cannot advertise constructor defaults.
         await this.poller.updateStatus();
 
         // Start polling loop
@@ -179,7 +190,9 @@ class ServerProcess {
         // not one already running against the (shared) test DB.
         if (this._pollInFlight)  await this._pollInFlight;
 
-        // Close all WebSocket connections
+        // Close each WebSocket subscriber before HTTP listener shutdown because an
+        // upgraded connection can otherwise keep the server's close callback pending
+        // after the test has finished.
         if (this.wss) {
             for (let client of this.wss.clients) {
                 try { client.close(); } catch (e) {}
