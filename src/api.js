@@ -69,7 +69,7 @@ const cfg = config.getConfig();
 // process; it runs from the entry-point guard at the bottom instead.
 function checkStartupEnv(){
     for(const key of REQUIRED_ENV){
-        if(!process.env[key]){
+        if(!config.readEnvNow(key)){
             console.error('Missing required environment variable: ' + key);
             process.exit(1);
         }
@@ -124,7 +124,7 @@ function createRateLimiters(cfg){
     // unaffected; override with SYNC_RATE_LIMIT_RPM.
     const backstopLimiter = rateLimit({
         windowMs:        60 * 1000,
-        limit:           parseInt(process.env.SYNC_RATE_LIMIT_RPM, 10) || 500,
+        limit:           parseInt(config.readEnvNow('SYNC_RATE_LIMIT_RPM'), 10) || 500,
         standardHeaders: true,
         legacyHeaders:   false,
         message:         { error: 'Too many requests', code: 'RATE_LIMITED' },
