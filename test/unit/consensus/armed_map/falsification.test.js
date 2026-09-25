@@ -32,7 +32,7 @@ const runnerRequire = createRequire(require.main.filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 
-const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprintV2();' +
+const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
     'process.stdout.write(JSON.stringify({ hex: r.hex, count: r.count, rows: r.rows, reason: r.reason }));';
 
 const roots = [];
@@ -101,8 +101,8 @@ describe('armed map v2: falsification on temp trees', function () {
     after(removeTrees);
 
     it('a copied tree reads the same v2 as this checkout, so the harness measures the real thing', function () {
-        const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
-        assert.strictEqual(baseline.hex, computeArmedMapFingerprintV2().hex);
+        const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
+        assert.strictEqual(baseline.hex, computeArmedMapFingerprint().hex);
     });
 
     it('does not move under the regtest venue arming environment (no sync carrier reads it)', function () {

@@ -22,7 +22,7 @@ const path   = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '../../../..');
-const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
+const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
 const { ENTRIES, collectRows } = require(path.join(ROOT, 'src/consensus/armed_map/manifest'));
 const { canonicalValue, fingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/canonical'));
 const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
@@ -73,7 +73,7 @@ const get = (port) => new Promise((resolve, reject) => {
 describe('armed map v2: fingerprint module and publication', function () {
 
     it('publishes a 64-hex fingerprint over every manifest row', function () {
-        const v2 = computeArmedMapFingerprintV2();
+        const v2 = computeArmedMapFingerprint();
         assert.match(v2.hex, /^[0-9a-f]{64}$/, v2.reason);
         assert.strictEqual(v2.count, ENTRIES.length);
         assert.strictEqual(Object.keys(v2.rows).length, ENTRIES.length);
@@ -82,7 +82,7 @@ describe('armed map v2: fingerprint module and publication', function () {
     it('is the canonical fingerprint of the manifest rows, with no second computation path', function () {
         const collected = collectRows();
         assert.strictEqual(collected.ok, true, collected.reason);
-        assert.strictEqual(computeArmedMapFingerprintV2().hex, fingerprint(collected.rows).hex);
+        assert.strictEqual(computeArmedMapFingerprint().hex, fingerprint(collected.rows).hex);
     });
 
     it('names each row by the sha256 of its exported value, so a mismatch points at the row', function () {
@@ -90,11 +90,11 @@ describe('armed map v2: fingerprint module and publication', function () {
         // name the gate module's path and survives its W5 move.
         const row = get('state_commitment_activation.STATE_COMMITMENT_ACTIVATION');
         const expected = crypto.createHash('sha256').update(canonicalValue(row), 'utf8').digest('hex');
-        assert.strictEqual(computeArmedMapFingerprintV2().rows['state_commitment_activation.STATE_COMMITMENT_ACTIVATION'], expected);
+        assert.strictEqual(computeArmedMapFingerprint().rows['state_commitment_activation.STATE_COMMITMENT_ACTIVATION'], expected);
     });
 
     it('is memoised per process, like v1', function () {
-        assert.strictEqual(computeArmedMapFingerprintV2(), computeArmedMapFingerprintV2());
+        assert.strictEqual(computeArmedMapFingerprint(), computeArmedMapFingerprint());
     });
 
     it('never lists a directory, so the value cannot depend on the file layout', function () {
@@ -106,7 +106,7 @@ describe('armed map v2: fingerprint module and publication', function () {
 
     it('uses v2 for the legacy field and records version 2 plus the logic digest, with no _v2 alias (W5)', function () {
         const pin = buildPin();
-        assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
+        assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprint().hex);
         assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armed_map_fingerprint_v2'), 'the W1 to W4 alias is gone at W5');
         assert.strictEqual(pin.armed_map_fingerprint_version, 2);
         assert.strictEqual(pin.carrier_logic_digest, logicPin.digest(logicPin.readPin(ROOT)));
@@ -124,7 +124,7 @@ describe('armed map v2: fingerprint module and publication', function () {
         assert.strictEqual(res.status, 0, res.stderr);
         // startApi() logs its listening line to stdout ahead of the readings.
         const { starting, healthy } = JSON.parse(res.stdout.slice(res.stdout.indexOf('{"starting"')));
-        const hex = computeArmedMapFingerprintV2().hex;
+        const hex = computeArmedMapFingerprint().hex;
         const logicDigest = logicPin.digest(logicPin.readPin(ROOT));
         assert.strictEqual(starting.status, 503);
         assert.strictEqual(starting.body.status, 'starting');
@@ -142,9 +142,9 @@ describe('armed map v2: fingerprint module and publication', function () {
     describe('identity pin', function () {
         it('records v2, its row hashes and count with no v1 fields', function () {
             const pin = buildPin();
-            assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
+            assert.strictEqual(pin.armed_map_fingerprint, computeArmedMapFingerprint().hex);
             assert.strictEqual(pin.armed_map_rows, ENTRIES.length);
-            assert.deepStrictEqual(pin.armedMapRows, computeArmedMapFingerprintV2().rows);
+            assert.deepStrictEqual(pin.armedMapRows, computeArmedMapFingerprint().rows);
             assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armedMapFingerprint'));
             assert.ok(!Object.prototype.hasOwnProperty.call(pin, 'armedMapFiles'));
         });

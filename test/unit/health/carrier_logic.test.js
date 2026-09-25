@@ -27,7 +27,7 @@ const ROOT = path.join(__dirname, '../../..');
 const MODULE = path.join(ROOT, 'src/health/carrier_logic.js');
 const health = require(MODULE);
 const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));
-const { computeArmedMapFingerprintV2 } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
+const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -120,7 +120,7 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
         assert.strictEqual(body.carrier_logic_digest, logicPin.digest(logicPin.readPin(ROOT)));
         assert.match(body.carrier_logic_digest, HEX64);
         assert.strictEqual(body.armed_map_fingerprint_version, 2);
-        assert.strictEqual(body.armed_map_fingerprint, computeArmedMapFingerprintV2().hex);
+        assert.strictEqual(body.armed_map_fingerprint, computeArmedMapFingerprint().hex);
         assert.ok(!Object.prototype.hasOwnProperty.call(body, 'armed_map_fingerprint_v2'), 'the W1 to W4 alias is gone at W5');
     });
 });
