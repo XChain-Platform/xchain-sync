@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Source MariaDB — what the sync server reads from (indexer DB)
   source-db-chaos:
-    image: mariadb:11
+    image: mariadb:11.4
     command: --max-connections=500
     environment:
       MARIADB_ROOT_PASSWORD: test
@@ -23,7 +23,7 @@ services:
 
   # Replica MariaDB — what the sync client writes to
   replica-db-chaos:
-    image: mariadb:11
+    image: mariadb:11.4
     command: --max-connections=500
     environment:
       MARIADB_ROOT_PASSWORD: test
