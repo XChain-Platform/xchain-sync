@@ -24,9 +24,12 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 const { spawnSync } = require('child_process');
+const { createRequire } = require('module');
 
 const ROOT = path.join(__dirname, '../../../..');
 const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
+const runnerRequire = createRequire(require.main.filename);
+const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprintV2();' +
@@ -47,7 +50,7 @@ function tree({ nodeModules = true } = {}) {
     fs.cpSync(path.join(ROOT, 'src'), path.join(root, 'src'), { recursive: true });
     fs.mkdirSync(path.join(root, path.dirname(COMPLETENESS)), { recursive: true });
     fs.copyFileSync(path.join(ROOT, COMPLETENESS), path.join(root, COMPLETENESS));
-    if (nodeModules) fs.symlinkSync(fs.realpathSync(path.join(ROOT, 'node_modules')), path.join(root, 'node_modules'), 'dir');
+    if (nodeModules) fs.symlinkSync(NODE_MODULES, path.join(root, 'node_modules'), 'dir');
     return root;
 }
 
@@ -71,7 +74,7 @@ function boot(root, rel) {
 }
 
 function runCompleteness(root) {
-    return spawnSync(process.execPath, [require.resolve('mocha/bin/mocha.js'), '--no-config', '--timeout', '30000', COMPLETENESS],
+    return spawnSync(process.execPath, [runnerRequire.resolve('mocha/bin/mocha.js'), '--no-config', '--timeout', '30000', COMPLETENESS],
         { cwd: root, encoding: 'utf8', env: cleanEnv() });
 }
 

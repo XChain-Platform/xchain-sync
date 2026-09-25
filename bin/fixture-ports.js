@@ -9,8 +9,7 @@ const REPO = path.join(__dirname, '..');
 const SPECS = Object.freeze({
     'test/e2e/docker-compose.e2e.yml': Object.freeze({
         E2E_DB_PORT: 23306,
-        E2E_REPLICA_DB_PORT: 23307,
-        E2E_SOURCE2_DB_PORT: 23308
+        E2E_REPLICA_DB_PORT: 23307
     }),
     'test/chaos/fixtures/docker-compose.chaos.yml': Object.freeze({
         SOURCE_DIRECT_PORT: 33065,

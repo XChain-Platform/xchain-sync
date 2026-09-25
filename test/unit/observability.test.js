@@ -39,12 +39,12 @@ const {
     installObservability, readObservabilityEnv, routeLabel
 } = require('../../src/observability/index.js');
 
-const { registerMetricsTests } = require('./observability.test/01_metrics.test.js');
+const { registerMetricsTests } = require('./observability.test/helpers/01_metrics.js');
 const {
     registerLogShipperTests, registerTextFormatTests, registerMessageRedactionTests
-} = require('./observability.test/02_log_shipper.test.js');
-const { registerRouteTests } = require('./observability.test/03_routes.test.js');
-const { registerFlushAndHealthTests } = require('./observability.test/04_flush_and_health.test.js');
+} = require('./observability.test/helpers/02_log_shipper.js');
+const { registerRouteTests } = require('./observability.test/helpers/03_routes.js');
+const { registerFlushAndHealthTests } = require('./observability.test/helpers/04_flush_and_health.js');
 
 // A console-shaped sink so tests never write to the mocha output.
 function fakeConsole() {
