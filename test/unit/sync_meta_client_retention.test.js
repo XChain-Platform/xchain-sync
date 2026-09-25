@@ -30,7 +30,7 @@ const mariadbStub = {
 };
 
 const Database        = proxyquire('../../src/db', { 'mariadb': mariadbStub });
-const SyncService     = proxyquire('../../src/SyncService', { './db': Database });
+const SyncService     = proxyquire('../../src/sync_service', { './db': Database });
 const TransparencyLog = require('../../src/server/transparency_log');
 const ClientSync      = require('../../src/client/sync');
 
