@@ -308,6 +308,7 @@ class SyncService {
                 // Sync-owned tables (dbType-aware: indexer = full set, decoder =
                 // sync_halt only); same rationale as the client branch above.
                 await db.verifySyncTables();
+                await db.assertStakeWeightOrderingCollation();
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });

@@ -300,12 +300,14 @@ describe("SyncService", function(){
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
             sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            let collation = sinon.stub(Database.prototype, 'assertStakeWeightOrderingCollation').resolves();
             let startPoller = sinon.stub(service, 'startPollerForChain');
 
             await service.discoverChains();
             let entry = service.databases.get('bitcoin:mainnet:indexer');
             assert.strictEqual(entry.db.host, 'localreplica');
             assert.strictEqual(startPoller.calledOnce, true);
+            assert.strictEqual(collation.calledOnce, true);
         });
 
         it('server mode without REPLICA_DB_HOST connects to the hub-provided coordinates', async function(){
@@ -315,11 +317,13 @@ describe("SyncService", function(){
             sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([indexerCfg()]);
             sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
             sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            let collation = sinon.stub(Database.prototype, 'assertStakeWeightOrderingCollation').resolves();
             sinon.stub(service, 'startPollerForChain');
 
             await service.discoverChains();
             let entry = service.databases.get('bitcoin:mainnet:indexer');
             assert.strictEqual(entry.db.host, 'srchost');
+            assert.strictEqual(collation.calledOnce, true);
         });
     });
 });
