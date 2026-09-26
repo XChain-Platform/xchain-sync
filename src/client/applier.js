@@ -989,9 +989,7 @@ class ClientApplier {
     // in qualifier (the snapshot_block). Keyed on the four alone this DELETE also reaches
     // the OTHER snapshot's row and destroys a reward the source still holds: the exact
     // inverse of the drift the mirror exists to close, and silent, because
-    // validator_rewards declares no hash class (tableLifecycle.js). Both columns are NOT
-    // NULL DEFAULT 0 on both tables, so this predicate is a plain `=` rather than the
-    // NULL-safe `<=>` that nullable round_reference needs.
+    // validator_rewards declares no hash class (tableLifecycle.js).
     // Runs AFTER the insert loop (the log rows of this apply are in place) and INSIDE
     // the apply transaction. The reverse twin is ClientRollback's RB-ANCHOR restore,
     // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`

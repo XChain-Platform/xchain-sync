@@ -154,8 +154,8 @@ function registerApplyBlockCases3(){
         // anchor_reward_reconcile_log pre-images it. Without this predicate the keyed
         // delete ALSO matches the other archive snapshot's reward whenever a hub rebase
         // reissued the MATCH_BATCH_SEQ round_reference, destroying a row the source still
-        // holds. Both columns are NOT NULL DEFAULT 0, so the match is `=`, not `<=>`.
-        assert.ok(/AND d\.round_qualifier = vr\.round_qualifier/.test(del.args[0]),
+        // holds.
+        assert.ok(/AND d\.round_qualifier <=> vr\.round_qualifier/.test(del.args[0]),
             'the mirror delete must carry the full five-column reward identity');
         assert.ok(/WHERE d\.block_index = \?$/.test(del.args[0]), 'scoped to THIS block\'s reconcile rows');
         assert.deepStrictEqual(del.args[1], [961700]);

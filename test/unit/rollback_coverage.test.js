@@ -725,7 +725,7 @@ describe('Rollback coverage guard @regression', function(){
         // calls it by name, so the guard reads both.
         const applier = norm(['../../src/client/applier.js', '../../src/db/validator_rewards.js']
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
-        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier = vr\.round_qualifier/.test(applier),
+        assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier <=> vr\.round_qualifier/.test(applier),
             'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
         // RB-ANCHOR restore parity on that same identity. The source twin
         // (xchain-indexer/src/rollback.js) names round_qualifier in BOTH the INSERT column

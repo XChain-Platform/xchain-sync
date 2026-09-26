@@ -88,7 +88,7 @@ module.exports = {
             "JOIN anchor_reward_reconcile_log d " +
             "  ON d.source_id = vr.source_id AND d.signing_pubkey_id = vr.signing_pubkey_id " +
             " AND d.reward_type = vr.reward_type AND d.round_reference <=> vr.round_reference " +
-            " AND d.round_qualifier = vr.round_qualifier " +
+            " AND d.round_qualifier <=> vr.round_qualifier " +
             "WHERE " + scopeSql,
             scopeArgs);
     },
