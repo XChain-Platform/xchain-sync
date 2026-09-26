@@ -119,7 +119,7 @@ docker info >/dev/null 2>&1 || {
 }
 
 # --- job: ci (XChain-Platform/.github ci-reusable.yml -> npm run ci) -------
-run_tier "ci" npm run ci
+run_tier "ci" env XCHAIN_REQUIRE_SIBLINGS=1 npm run ci
 
 # --- job: e2e ----------------------------------------------------------------
 # GitHub stands up source-db (:23306) and replica-db (:23307) as service
@@ -185,7 +185,7 @@ run_tier "drift-guards: coin consensus-pin conformance" node -e '
 run_tier "identity pin (armed map, vendored coins)" node bin/pin-identity.js --compare bin/pins/identity.json
 
 # --- job: coverage -----------------------------------------------------------
-run_tier "coverage ratchet (coverage:check)" npm run coverage:check
+run_tier "coverage ratchet (coverage:check)" env XCHAIN_REQUIRE_SIBLINGS=1 npm run coverage:check
 
 echo
 # >>> ci-tier summary (generated) >>>
