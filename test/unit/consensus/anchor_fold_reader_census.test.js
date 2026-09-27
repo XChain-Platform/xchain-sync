@@ -37,8 +37,8 @@ describe('anchor fold reader census', function () {
         const relativePath = 'src/client/rollback.js';
         const source = read(relativePath);
 
-        assert.strictEqual(count(source, VERSION_SPLICE), 1,
-            failure(relativePath, 'expected exactly one archive-head version splice'));
+        assert.strictEqual(count(source, "archiveHeadPredicate('p')"), 1,
+            failure(relativePath, 'expected exactly one fold row predicate'));
         assert.strictEqual(count(source, CHUNK_JOIN), 1,
             failure(relativePath, 'expected exactly one invalid_archive v2 chunk join'));
     });
