@@ -24,23 +24,12 @@ describe('state hash archive fold twin', function () {
         const oursPath = path.join(__dirname, '../../../src/consensus/state_hash.js');
         const ours = fs.readFileSync(oursPath, 'utf8');
         const theirs = fs.readFileSync(verdict.path, 'utf8');
-        if (ours === theirs) return;
-
-        if (theirs.includes('function archiveHeadPredicate(')
-            && !ours.includes('function archiveHeadPredicate(')) {
-            // The sync re-vendor is pending.
-            this.skip();
-        }
-
         assert.strictEqual(ours, theirs, oursPath + ' differs from ' + verdict.path);
     });
 
     it('exports the archive fold predicates with their canonical SQL', function () {
         const archiveHeadPredicate = stateHash.archiveHeadPredicate;
         const checkpointSectionPredicate = stateHash.checkpointSectionPredicate;
-        if (typeof archiveHeadPredicate !== 'function'
-            && typeof checkpointSectionPredicate !== 'function') this.skip();
-
         assert.strictEqual(typeof archiveHeadPredicate, 'function');
         assert.strictEqual(typeof checkpointSectionPredicate, 'function');
         assert.strictEqual(archiveHeadPredicate('p'), 'p.match_batch_seq IS NOT NULL AND p.version <> 2');
