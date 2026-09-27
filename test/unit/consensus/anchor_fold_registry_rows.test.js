@@ -17,7 +17,6 @@ const KEYS = [
     'anchor_fold_activation.ANCHOR_FOLD_ACTIVATION',
     'archive_section_verdict_activation.ARCHIVE_SECTION_VERDICT_STATE_HASH_ACTIVATION',
 ];
-const present = KEYS.filter((key) => registry.has(key));
 
 function withEnv(value, fn) {
     const saved = process.env[ENV];
@@ -32,13 +31,11 @@ function withEnv(value, fn) {
 }
 
 describe('consensus anchor fold registry rows', function () {
-    it('carries either both activation rows or neither', function () {
-        assert.ok(present.length === 0 || present.length === 2);
+    it('carries both activation rows', function () {
+        for (const key of KEYS) assert.strictEqual(registry.has(key), true);
     });
 
     it('keeps both activation maps inert by default', function () {
-        // These cases wait for this repo's SHARED-block twin to carry the pair.
-        if (present.length !== 2) this.skip();
         withEnv(undefined, () => {
             for (const key of KEYS) {
                 assert.deepStrictEqual(registry.get(key), {
@@ -51,16 +48,12 @@ describe('consensus anchor fold registry rows', function () {
     });
 
     it('arms both regtest entries from the shared venue variable', function () {
-        // These cases wait for this repo's SHARED-block twin to carry the pair.
-        if (present.length !== 2) this.skip();
         withEnv('armed', () => {
             for (const key of KEYS) assert.strictEqual(registry.get(key).regtest, 0);
         });
     });
 
     it('keeps both rows inactive below the sentinel', function () {
-        // These cases wait for this repo's SHARED-block twin to carry the pair.
-        if (present.length !== 2) this.skip();
         withEnv(undefined, () => {
             for (const key of KEYS) {
                 assert.strictEqual(registry.activeAt(key, 'mainnet', null, 99999999, null), false);
