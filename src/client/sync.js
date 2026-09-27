@@ -34,6 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
+const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -3637,8 +3638,23 @@ class ClientSync {
                 let localState = await this.blockHasher.computeStateHash(
                     event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
                 if(localState !== event.state_hash){
+                    let mismatch = { field: 'state_hash', a: event.state_hash, b: localState };
+                    try {
+                        let preimage = await this.blockHasher.computeStateHashPreimage(
+                            event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
+                        mismatch.local_classes = classDigests(
+                            preimage, data => this.util.getDataHash(data));
+                        for(let detail of mismatch.local_classes){
+                            getLogger().error('state_hash local class ' + detail.class +
+                                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
+                                ' digest=' + detail.digest);
+                        }
+                    } catch(e){
+                        getLogger().error(util.format(
+                            'state_hash local class detail failed at block ' + event.block_index + ':', e));
+                    }
                     await this.haltOnDivergence(event.block_index,
-                        [{ field: 'state_hash', a: event.state_hash, b: localState }],
+                        [mismatch],
                         this.sources.slice(0, 1), 'state-hash-divergence');
                     return; // halted: do not advance lastAppliedBlock
                 }
