@@ -27,6 +27,22 @@ function files(result) {
     return result.tests.map((test) => test.file);
 }
 
+function guardedBlock(script, guard) {
+    const lines = script.split(/\r?\n/);
+    const start = lines.indexOf(guard);
+    assert.notStrictEqual(start, -1);
+
+    let depth = 0;
+    for (let index = start; index < lines.length; index += 1) {
+        const line = lines[index].trim();
+        if (/^if\b.*; then$/.test(line)) depth += 1;
+        if (line !== 'fi') continue;
+        depth -= 1;
+        if (depth === 0) return lines.slice(start, index + 1).join('\n');
+    }
+    assert.fail(`unclosed guard: ${guard}`);
+}
+
 describe('ci fast selector', function () {
     it('maps the CORS helper to its unit test without widening', function () {
         const result = plan(['src/http/cors_origin.js']);
@@ -112,9 +128,12 @@ describe('ci fast selector', function () {
 
     it('keeps the fast selector guarded without removing the e2e tier', function () {
         const script = fs.readFileSync('bin/ci-full.sh', 'utf8');
+        const invocation = 'node bin/ci_fast_select.js --plan';
+        const guard = 'if [ "${CI_TIER:-full}" = "fast" ]; then';
+        const selectorBlock = guardedBlock(script.slice(script.indexOf('FAST_SELECTOR_READY=0')), guard);
 
-        assert.ok(script.includes('ci_fast_select.js --plan'));
-        assert.match(script, /if \[ "\$\{CI_TIER:-full\}" = "fast" \]; then/);
+        assert.strictEqual(script.split(invocation).length - 1, 1);
+        assert.ok(selectorBlock.includes(invocation));
         assert.ok(script.includes('run_tier "e2e: e2e tier (test:e2e:ci)"'));
     });
 });
