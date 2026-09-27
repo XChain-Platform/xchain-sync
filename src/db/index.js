@@ -136,6 +136,7 @@ const MIXIN_FILES = [
     './index_lookups.js',
     './state_checkpoints.js',
     './merkle_epochs.js',
+    './datetime/retype.js',
 ];
 
 function poolOptions(database){
