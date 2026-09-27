@@ -23,7 +23,7 @@
 const path       = require('path');
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
-const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../consensus/state_hash');
+const { archiveHeadPredicate, ARCHIVE_CHUNK_HEIGHT_COL } = require('../consensus/state_hash');
 
 module.exports = {
 
@@ -629,7 +629,7 @@ module.exports = {
             "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
             "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
             "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
+            "WHERE " + archiveHeadPredicate('p') + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
             [from, to], conn);
     },
 

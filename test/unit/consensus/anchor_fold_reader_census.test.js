@@ -50,10 +50,10 @@ describe('anchor fold reader census', function () {
         const methodEnd = source.indexOf('\n    },', methodStart);
         const method = methodStart < 0 || methodEnd < 0 ? '' : source.slice(methodStart, methodEnd);
 
-        assert.strictEqual(count(source, VERSION_SPLICE), 1,
-            failure(relativePath, 'expected exactly one archive-head version splice'));
-        assert.strictEqual(count(method, VERSION_SPLICE), 1,
-            failure(relativePath, 'expected the archive-head version splice inside findInvalidArchiveHeadRows'));
+        assert.strictEqual(count(method, "archiveHeadPredicate('p')"), 1,
+            failure(relativePath, 'expected exactly one fold row predicate inside findInvalidArchiveHeadRows'));
+        assert.strictEqual(count(method, VERSION_SPLICE), 0,
+            failure(relativePath, 'expected no archive-head version splice inside findInvalidArchiveHeadRows'));
     });
 
     it('keeps the updated-rows server layer free of the archive-head SQL reader', function () {
