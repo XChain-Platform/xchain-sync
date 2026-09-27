@@ -113,8 +113,9 @@ export XCHAIN_DECODER_SQL_PATH="${XCHAIN_DECODER_SQL_PATH:-$SIB/xchain-decoder/s
 
 need_sib xchain-indexer xchain-decoder xchain-hub
 
-# The full e2e job needs Docker for its two service containers; fast runs leave
-# the whole stack to the full sweep and must not require a Docker venue.
+# Keep fast runs independent of Docker by leaving the stack to the full sweep;
+# guard full runs up front so database-tier failures remain actionable on the
+# venue that will run them.
 if [ "${CI_TIER:-full}" != "fast" ]; then
   docker info >/dev/null 2>&1 || {
     echo "ci:full: VENUE LACKS DOCKER for e2e job (source-db/replica-db service" >&2
@@ -191,10 +192,11 @@ if [ "${CI_TIER:-full}" = "fast" ]; then
 else
   run_tier "e2e: e2e tier (test:e2e:ci)" npm run test:e2e:ci
 
-  # Independent of the e2e tier above (own DBs, own schema seed); run even if
-  # the e2e tier failed, so a flake there can't mask the integration result.
-  # Reuses source-db (:23306) with the admin credentials, not the e2e
-  # xchain-node user, matching the workflow step exactly.
+  # Run integration independently even if e2e failed, so one red tier cannot
+  # mask the other result.
+
+  # Reuse source-db (:23306) with workflow-matching admin credentials, not the
+  # e2e xchain-node user.
   run_tier "e2e: integration tier (green suites, test:integration:ci)" \
     env TEST_DB_HOST=127.0.0.1 TEST_DB_PORT="$E2E_DB_PORT_RESOLVED" TEST_DB_USER=root TEST_DB_PASS=test \
     npm run test:integration:ci
