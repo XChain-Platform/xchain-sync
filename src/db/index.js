@@ -173,6 +173,11 @@ class Database {
             idleTimeout:        60000,
             insertIdAsNumber:   true,
             bigIntAsNumber:     true,
+            // Pin pooled sessions so NOW(), CURRENT_TIMESTAMP defaults, and the
+            // TIMESTAMP-to-DATETIME retype evaluate in UTC wherever MariaDB runs.
+            // This is safe because every wire-replicated temporal column is a
+            // DATETIME returned as a dateStrings literal.
+            timezone:           'Z',
             // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
             // than JS Dates. JSON.stringify would otherwise emit Date as ISO
             // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
