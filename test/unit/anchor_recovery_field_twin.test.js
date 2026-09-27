@@ -9,6 +9,9 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout');
 
 const lifecycle = require('../../src/table_lifecycle');
 
@@ -18,6 +21,17 @@ const ARCHIVED_QUORUM_TABLES = [
     'state_checkpoints',
     'price_snapshots',
 ];
+
+const TWIN_FILES = [
+    ['src/table_lifecycle.js', 'src/hub/table_lifecycle.js'],
+    ['src/table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
+];
+
+function indexerRoot() {
+    return process.env.XCHAIN_INDEXER_SQL_PATH
+        ? path.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
+        : path.resolve(__dirname, '..', '..', '..', 'xchain-indexer');
+}
 
 describe('anchor recovery registry twin', function () {
 
@@ -33,4 +47,16 @@ describe('anchor recovery registry twin', function () {
         for (const table of ARCHIVED_QUORUM_TABLES)
             assert.ok(recoveryTables.includes(table), table);
     });
+
+    for (const [own, canonical] of TWIN_FILES) {
+        it('keeps ' + own + ' byte-identical to the indexer canonical', function () {
+            const verdict = siblingCheckout(__dirname, indexerRoot());
+            if (!skipOrFail(this, verdict, 'the ' + own + ' twin byte check')) return;
+
+            const copy = fs.readFileSync(path.resolve(__dirname, '..', '..', own));
+            const source = fs.readFileSync(path.join(indexerRoot(), canonical));
+            assert.ok(copy.equals(source), own + ' drifted from xchain-indexer/' + canonical
+                + '; edit the canonical and re-copy it, never hand-edit the twin');
+        });
+    }
 });
