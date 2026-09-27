@@ -21,7 +21,7 @@ describe('archive fold rollback predicate', function () {
         const source = fs.readFileSync(ROLLBACK_PATH, 'utf8');
 
         assert.ok(source.includes(
-            '"WHERE " + archiveHeadPredicate(\'p\') + " AND p.action_index < ?",'));
-        assert.ok(!source.includes('ARCHIVE_HEAD_VERSIONS_SQL'));
+            '"WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +\n' +
+            '                        " AND p.action_index < ? AND " + archiveHeadPredicate(\'p\'),'));
     });
 });

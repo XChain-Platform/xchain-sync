@@ -30,7 +30,7 @@ const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
-const { archiveHeadPredicate } = require('../consensus/state_hash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const util = require('node:util');
 const { getLogger } = require('../observability');
@@ -737,7 +737,8 @@ class ClientRollback {
                         authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = us.id " +
-                        "WHERE " + archiveHeadPredicate('p') + " AND p.action_index < ?",
+                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +
+                        " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
                         [firstActionIndex, firstActionIndex]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
