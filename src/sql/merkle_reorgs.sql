@@ -28,7 +28,7 @@ CREATE TABLE merkle_reorgs (
     end_block    BIGINT NOT NULL,
     old_root     VARCHAR(64) NOT NULL,       -- root committed before the reorg
     new_root     VARCHAR(64) DEFAULT NULL,   -- root after re-commit (NULL until the epoch re-crosses its boundary)
-    detected_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    detected_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
 
 CREATE INDEX merkle_reorgs_epoch ON merkle_reorgs (epoch);
