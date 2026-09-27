@@ -138,6 +138,42 @@ const MIXIN_FILES = [
     './merkle_epochs.js',
 ];
 
+function poolOptions(database){
+    let poolParams = poolSizing.resolvePoolParams(database.dbType);
+    return {
+        host:               database.host,
+        user:               database.user,
+        password:           database.pass,
+        database:           database.dbName,
+        port:               database.port,
+        connectionLimit:    poolParams.connectionLimit,
+        connectTimeout:     poolParams.connectTimeout,
+        acquireTimeout:     poolParams.acquireTimeout,
+        idleTimeout:        60000,
+        insertIdAsNumber:   true,
+        bigIntAsNumber:     true,
+        // Pin pooled sessions so NOW(), CURRENT_TIMESTAMP defaults, and the
+        // TIMESTAMP-to-DATETIME retype evaluate in UTC wherever MariaDB runs.
+        // This is safe because every wire-replicated temporal column is a
+        // DATETIME returned as a dateStrings literal.
+        timezone:           'Z',
+        // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
+        // than JS Dates. JSON.stringify would otherwise emit Date as ISO
+        // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
+        // on re-insert, and BlockHasher.contentDigest / the wire codec would
+        // see a timezone-dependent value. GLOBAL on purpose: it covers every
+        // replicated DATETIME column on BOTH dbTypes, today decoder events.time
+        // and indexer events.time + events.witness_time (indexer `events` rides
+        // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
+        // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
+        // the inventory and this flag. (dispensers.expiration is a BIGINT unix
+        // timestamp, replicated as a number via bigIntAsNumber.)
+        dateStrings:        true,
+        minDelayValidation: 3000,
+        queryTimeout:       poolParams.queryTimeout
+    };
+}
+
 class Database {
 
     constructor(host, port, dbName, user, pass, util, dbType) {
@@ -160,39 +196,7 @@ class Database {
         // streams, the decoder pool replicates 8 narrow tables. Each knob honours
         // DB_POOL_SIZE_<DBTYPE> first, then the legacy global DB_POOL_SIZE, then
         // the per-dbType default.
-        let poolParams = poolSizing.resolvePoolParams(this.dbType);
-        this.connectionPoolParams = {
-            host:               this.host,
-            user:               this.user,
-            password:           this.pass,
-            database:           this.dbName,
-            port:               this.port,
-            connectionLimit:    poolParams.connectionLimit,
-            connectTimeout:     poolParams.connectTimeout,
-            acquireTimeout:     poolParams.acquireTimeout,
-            idleTimeout:        60000,
-            insertIdAsNumber:   true,
-            bigIntAsNumber:     true,
-            // Pin pooled sessions so NOW(), CURRENT_TIMESTAMP defaults, and the
-            // TIMESTAMP-to-DATETIME retype evaluate in UTC wherever MariaDB runs.
-            // This is safe because every wire-replicated temporal column is a
-            // DATETIME returned as a dateStrings literal.
-            timezone:           'Z',
-            // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
-            // than JS Dates. JSON.stringify would otherwise emit Date as ISO
-            // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
-            // on re-insert, and BlockHasher.contentDigest / the wire codec would
-            // see a timezone-dependent value. GLOBAL on purpose: it covers every
-            // replicated DATETIME column on BOTH dbTypes, today decoder events.time
-            // and indexer events.time + events.witness_time (indexer `events` rides
-            // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
-            // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
-            // the inventory and this flag. (dispensers.expiration is a BIGINT unix
-            // timestamp, replicated as a number via bigIntAsNumber.)
-            dateStrings:        true,
-            minDelayValidation: 3000,
-            queryTimeout:       poolParams.queryTimeout
-        };
+        this.connectionPoolParams = poolOptions(this);
 
         Object.assign(this, connectionRetryConfig());
 
