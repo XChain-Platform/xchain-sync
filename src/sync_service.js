@@ -259,8 +259,7 @@ class SyncService {
                 // decoder replicas get only sync_halt (the durable divergence
                 // halt applies to both shapes; the transparency log does not).
                 await db.verifySyncTables();
-                // Sync runs no migrations, so a replica that predates a TIMESTAMP-to-DATETIME
-                // schema change never gets retyped by anything else.
+                // Sync runs no migrations, so legacy timestamp columns must be retyped here.
                 await db.ensureDatetimeColumns({ includeFollowerDerived: true });
                 // Self-heal column drift on a pre-existing replica before any row
                 // data is accepted. Runs regardless of which schema path applied
@@ -311,8 +310,7 @@ class SyncService {
                 // Sync-owned tables (dbType-aware: indexer = full set, decoder =
                 // sync_halt only); same rationale as the client branch above.
                 await db.verifySyncTables();
-                // The server leaves the indexer's own state_tree_roots table to the
-                // indexer, so it never retypes the follower-derived columns here.
+                // Leave the indexer's own table to the indexer by excluding follower-derived columns.
                 await db.ensureDatetimeColumns({ includeFollowerDerived: false });
                 await db.assertStakeWeightOrderingCollation();
             }
