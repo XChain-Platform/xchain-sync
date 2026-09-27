@@ -16,7 +16,7 @@
 
 'use strict';
 
-const { modifyClause, needsRetype } = require('../schema/datetime_columns');
+const { modifyClause, needsRetype } = require('../../schema/datetime_columns');
 
 function rowsByColumn(liveRows){
     const rows = new Map();

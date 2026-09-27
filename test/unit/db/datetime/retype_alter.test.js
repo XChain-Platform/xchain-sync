@@ -15,8 +15,8 @@
 'use strict';
 
 const assert = require('assert');
-const { retypeAlterSql } = require('../../src/db/datetime_retype_alter');
-const { DATETIME_COLUMNS, modifyClause } = require('../../src/schema/datetime_columns');
+const { retypeAlterSql } = require('../../../../src/db/datetime/retype_alter');
+const { DATETIME_COLUMNS, modifyClause } = require('../../../../src/schema/datetime_columns');
 
 const entry = DATETIME_COLUMNS[0];
 
