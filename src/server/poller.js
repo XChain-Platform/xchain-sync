@@ -1078,11 +1078,3 @@ class ServerPoller {
 }
 
 module.exports = ServerPoller;
-
-if(envConfig.npmLifecycleEventFromEnv() === 'ci' && typeof describe === 'function' && typeof it === 'function'){
-    const ciSpecs = [
-        '../../test/chaos/source_tip_read_failclosed.test',
-        '../../test/boundary/consensus_constants.test',
-    ];
-    for(const specPath of ciSpecs) require(specPath);
-}

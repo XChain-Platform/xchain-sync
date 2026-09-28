@@ -34,7 +34,7 @@
     "api": "node ./src/api.js",
     "lint": "eslint .",
     "test": "mocha --require ./test/setup/index.js --timeout 5000 --recursive 'test/unit/**/*.test.js'",
-    "ci": "mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit; u=$?; npm run ci:security; s=$?; [ $u -gt $s ] && exit $u; exit $s",
+    "ci": "mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/unit/**/*.test.js' 'test/chaos/source_tip_read_failclosed.test.js' 'test/boundary/consensus_constants.test.js' --exit; u=$?; npm run ci:security; s=$?; [ $u -gt $s ] && exit $u; exit $s",
     "ci:security": "mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/security/**/*.test.js' --exit",
     "coverage": "c8 --reporter=text --reporter=html --include 'src/**/*.js' --all mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
     "coverage:check": "c8 --check-coverage --lines 93.4 --statements 93.4 --branches 85.3 --functions 91.9 --reporter=text-summary --include 'src/**/*.js' --all mocha --require ./test/setup/index.js --timeout 10000 --recursive 'test/unit/**/*.test.js' --exit",
