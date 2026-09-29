@@ -868,6 +868,21 @@ class ServerPoller {
                             for(let o of payload.data['transaction_outputs'])
                                 if(o.destination_id) ids.push(o.destination_id);
                         }
+                        // A DISPENSER create interns its GET_ADDRESS and oracle address in
+                        // this block, but dispensers never streams, so ship those ids here or
+                        // the replica's MAX(id) cursor passes them and leaves a hole. Its own
+                        // schema-gap guard, so a source without dispensers keeps the tx ids.
+                        let dispenserRows = [];
+                        try {
+                            dispenserRows = await this.db.getTxScopedRows('dispensers', block_index, conn);
+                        } catch(e){
+                            if(!isSchemaGapError(e)) throw e;
+                        }
+                        for(let d of (dispenserRows || [])){
+                            if(d.address_id) ids.push(d.address_id);
+                            if(d.oracle_address_id) ids.push(d.oracle_address_id);
+                            if(d.source_address_id) ids.push(d.source_address_id);
+                        }
                     }
                     if(ids.length > 0){
                         let unique = [...new Set(ids)];

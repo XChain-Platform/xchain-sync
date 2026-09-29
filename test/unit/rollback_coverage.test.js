@@ -78,7 +78,7 @@ function replicatedTables(dbType){
 // row-delete. dispensers: the decoder live-prunes it (soft-expire), so it seeds from the
 // full snapshot and is held in parity by the periodic apply-side reconcile; deleting its
 // rows on a reorg would corrupt that replicated state with no per-block stream to restore
-// them (ClientRollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js:47-49).
+// them (src/client/rollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js:47-49).
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
     dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
 };
@@ -105,6 +105,7 @@ const assertLocal = require('assert');
 const sh = require('../../src/consensus/state_hash');
 const { withDbMixins } = require('../helpers/db_mixins.js');
 const widenSet = require('../../src/schema/utf8mb4_columns');
+const { siblingCheckout } = require('../helpers/sibling_checkout.js');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
@@ -124,11 +125,14 @@ function indexerFile(rel){
 // on the generic CI flag: GitHub sets CI=true in the shared unit `ci` job too, which
 // does not check out the sibling, and hard-failing there would just be noise. Returns
 // false (caller should `return`) when it skipped; throws when required-but-missing.
+// Presence is the shared sibling verdict (test/helpers/sibling_checkout.js), so a lane
+// worktree's symlink into a live main checkout is refused exactly like an absent sibling.
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 function requireSibling(ctx, absPath){
-    if(require('fs').existsSync(absPath)) return true;
+    const verdict = siblingCheckout(__dirname, absPath);
+    if(verdict.usable) return true;
     if(SIBLING_REQUIRED)
-        throw new Error('consensus drift guard cannot run: sibling missing at ' + absPath +
+        throw new Error('consensus drift guard cannot run: ' + verdict.reason +
             ' (check out xchain-indexer or set XCHAIN_INDEXER_SQL_PATH; ci.yml e2e job places it at .xchain-indexer)');
     ctx.skip();
     return false;
@@ -203,7 +207,7 @@ describe('Rollback coverage guard @regression', function(){
                   `\n\nRows would survive a rollback and diverge from the source. Add each to\n` +
                   `ClientRollback (dataTables/blockTables), RECOMPUTED, SPECIAL_CASE, or\n` +
                   `ROLLBACK_EXEMPT (with a reason). This is usually drift from xchain-indexer's\n` +
-                  `rollback set (check src/rollback.js there).\n`
+                  `rollback set (check src/rollback/index.js there).\n`
                 : undefined
         );
     });
@@ -234,7 +238,7 @@ describe('Rollback coverage guard @regression', function(){
         // table the indexer rolls back but sync delivers only via full snapshot
         // (not per-block) never enters their universe and escapes them entirely.
         // This is exactly how the 2026-06 cross-chain table family drifted in undetected.
-        // This guard reads the source's rollback list (xchain-indexer/src/rollback.js)
+        // This guard reads the source's rollback list (xchain-indexer/src/rollback/index.js)
         // DIRECTLY, so any table added there fails this suite until it is either
         // mirrored into ClientRollback or given a deliberate, reasoned exemption here.
         const rbPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
@@ -266,10 +270,10 @@ describe('Rollback coverage guard @regression', function(){
             [],
             uncovered.length
                 ? `\n\nThese tables are rolled back by the source indexer (xchain-indexer/src/\n` +
-                  `rollback.js) but are NOT handled by ClientRollback and not exempted:\n` +
+                  `rollback/index.js) but are NOT handled by ClientRollback and not exempted:\n` +
                   uncovered.map(t => `    - ${t}`).join('\n') +
                   `\n\nReorged rows would survive on every replica. For each, either add it to\n` +
-                  `ClientRollback (dataTables/blockTables) and to replicatedTables.js if it has\n` +
+                  `ClientRollback (dataTables/blockTables) and to src/schema/replicated_tables.js if it has\n` +
                   `an action_index column so it also live-streams, or add it to INDEXER_LOCAL /\n` +
                   `ROLLBACK_EXEMPT in this test with a reason. Classify by understanding the\n` +
                   `table, not by silencing the guard.\n`
@@ -341,7 +345,7 @@ describe('Rollback coverage guard @regression', function(){
 
     // Cross-repo drift guard for the escrow re-derive SQL. The
     // tokens.escrow_action_index re-derive must run the SAME logic on the source
-    // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js),
+    // (xchain-indexer/src/db/rollback/rederive.js) and the replica (xchain-sync/src/client/rollback.js),
     // or a reorg leaves source and replica with different gate values (a silent consensus
     // divergence). Both files carry the SQL between //<ESCROW-REDERIVE-SQL> markers; this
     // guard extracts the backtick SQL literals from each and asserts they are
@@ -360,14 +364,14 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(escrowSql(syncPath), escrowSql(indexerPath),
-            'escrow re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+            'escrow re-derive SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/rederive.js; keep them identical');
     });
 
     // Cross-repo drift guard for the COINPay match-status re-derive. A COINPay match is
     // promoted to `valid` IN PLACE by the settling COINPAY, which is a LATER action, so
     // the reorg delete removes the payment and leaves the promotion on a surviving match
-    // row. Source (xchain-indexer/src/rollback.js) and replica
-    // (xchain-sync/src/ClientRollback.js) must reverse it with the SAME logic, or a reorg
+    // row. Source (xchain-indexer/src/db/rollback/rederive.js) and replica
+    // (xchain-sync/src/client/rollback.js) must reverse it with the SAME logic, or a reorg
     // leaves them holding different match statuses and the valid-only price reads
     // disagree. Both files carry the SQL between //<COINPAY-MATCH-REDERIVE-SQL> markers;
     // this extracts the backtick literals and asserts whitespace-normalised equality.
@@ -384,7 +388,7 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(coinpaySql(syncPath), coinpaySql(indexerPath),
-            'COINPay match re-derive SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+            'COINPay match re-derive SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/rederive.js; keep them identical');
     });
 
     // The replica must actually RUN the re-derive, and must skip it on a truncated
@@ -402,8 +406,8 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
-    // both the source (xchain-indexer/src/rollback.js) and the replica
-    // (xchain-sync/src/ClientRollback.js) locally prune the hub-mirrored
+    // both the source (xchain-indexer/src/db/rollback/sweeps.js) and the replica
+    // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored
     // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
     // staleness window before hub-driven convergence (row:deleted). The predicates must
     // also stay byte-identical to xchain-indexer/src/hub/hub_db_sync.js _applyRetraction so
@@ -424,11 +428,11 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(crossChainSql(syncPath), crossChainSql(indexerPath),
-            'cross-chain mirror reorg delete SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+            'cross-chain mirror reorg delete SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/sweeps.js; keep them identical');
     });
 
     // Cross-repo drift guard for the contract slash reorg-restore. Both the source
-    // (xchain-indexer/src/rollback.js) and the replica (xchain-sync/src/ClientRollback.js)
+    // (xchain-indexer/src/db/rollback/stake_restores.js) and the replica (xchain-sync/src/client/rollback.js)
     // copy back the highest orphaned contract_slash_debits.prev_amount for a mutated stake
     // row. A predicate that picks a different debit on one side restores a different active
     // stake there, and active stake drives staker weighting and quorum eligibility, so the
@@ -452,7 +456,7 @@ describe('Rollback coverage guard @regression', function(){
         assert.ok(/CAST\(e\.prev_amount AS DECIMAL\(60,18\)\) > CAST\(d\.prev_amount AS DECIMAL\(60,18\)\)/.test(sql),
             'the restore must pick the highest orphaned prev_amount; the position columns invert under a nested EXECUTE');
         assert.strictEqual(sql, slashRestoreSql(indexerPath),
-            'contract slash-restore SQL drifted between xchain-sync/ClientRollback.js and xchain-indexer/rollback.js; keep them identical');
+            'contract slash-restore SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/stake_restores.js; keep them identical');
     });
 
     // Cross-repo drift guard for the light-client stakes_root query (SPV spec sec.4.1).
@@ -507,7 +511,7 @@ describe('Rollback coverage guard @regression', function(){
     // in-place reset on SURVIVING credits/unstakes/contract_unstakes rows. Those tables are
     // already in both rollback lists, so the table-membership guard above structurally cannot
     // catch an unmirrored reset (this is exactly how the gap reached HEAD undetected).
-    // Assert both rollback.js (source) and ClientRollback.js (replica) carry all four operations
+    // Assert both xchain-indexer src/rollback/ (source) and src/client/rollback.js (replica) carry all four operations
     // the source added in 309fec7. If you add a new in-place reorg reset to one file, mirror it
     // in the other and extend this guard.
     it('cooldown-maturity reversal is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
@@ -522,7 +526,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'unstakes status reset',           re: /UPDATE unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
             { name: 'contract_unstakes status reset',  re: /UPDATE contract_unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
         ];
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             // Normalise away the two ways the same SQL is spelled: the source uses backtick
             // template literals; the replica concatenates double-quoted strings with `+`. Strip
             // quotes/backticks and the string-concat `+`, then collapse whitespace, so both reduce
@@ -563,7 +567,7 @@ describe('Rollback coverage guard @regression', function(){
         const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
         assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
             'SWEEP_RES keys must equal the registry\'s replica-flagged ORPHAN_SWEEPS tables; add/remove the regex alongside the flag');
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const norm = readSourceText(p)
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
@@ -598,7 +602,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'two-orientation markets delete',
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const norm = readSourceText(p)
                 .replace(/[`"']/g, ' ')
                 .replace(/\s+\+\s+/g, ' ')
@@ -613,7 +617,7 @@ describe('Rollback coverage guard @regression', function(){
     // above removes the refund credit on reorg, but the FORWARD path must stream that same
     // credit to followers in the first place, keyed by maturity block, since its backdated
     // action_index escapes every action-scoped channel. The selection lives in
-    // cooldownCredits.js and MUST mirror the reverse join keys / cooldown_end_block predicate,
+    // cooldown_credits.js and MUST mirror the reverse join keys / cooldown_end_block predicate,
     // or source and follower diverge. If you change one side, change the other and this guard.
     it('forward cooldown-credit selection mirrors the reverse delete keys (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
@@ -629,7 +633,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'contract maturity-block + completed predicate',           re: /WHERE cu\.status_id = \? AND cu\.cooldown_end_block BETWEEN \? AND \?/ },
         ];
         for(const op of FWD_OPS){
-            assert.ok(op.re.test(fwd), `cooldownCredits.js is missing the forward ${op.name}; it must mirror ClientRollback's reverse delete keys`);
+            assert.ok(op.re.test(fwd), `cooldown_credits.js is missing the forward ${op.name}; it must mirror ClientRollback's reverse delete keys`);
         }
         // Both forward channels (live per-block + incremental snapshot) must actually invoke it,
         // or one of them silently re-opens the gap for its replication path.
@@ -641,7 +645,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // The maturity event has TWO forward effects that must both be replicated: the refund
-    // credit (above, via cooldownCredits.js) AND the in-place status_id flip to 'completed'
+    // credit (above, via cooldown_credits.js) AND the in-place status_id flip to 'completed'
     // on the surviving unstake row. The credit rides the credits channel; the status flip
     // must ride the updated_rows channel keyed by cooldown_end_block (the forward twin of
     // ClientRollback's reverse status reset). Without it the follower keeps a stale 'valid'
@@ -657,12 +661,12 @@ describe('Rollback coverage guard @regression', function(){
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE cooldown_end_block BETWEEN \? AND \?/.test(src),
-            'updatedRows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
+            'updated_rows.js must select the cooldown status flip by cooldown_end_block (the maturity-block key the reverse reset and the forward credit select share)');
     });
 
     // Forward parity for recovery-redriven validator rewards: a reorg re-drain
     // re-materializes a survivor reward at block_index = earn-block E < B, which escapes
-    // the block-scoped forward channels. recoveryRewards.js must select it by applied_block
+    // the block-scoped forward channels. recovery_rewards.js must select it by applied_block
     // (the re-drain point B, the forward analogue of ClientRollback's block_index >= B
     // delete), guard to genuine survivors (vr.block_index < applied_block), and be invoked
     // by BOTH forward channels. The rollback re-arm must reset applied_block so a later
@@ -681,7 +685,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'survivors-only backdating guard',             re: /vr\.block_index < rpr\.applied_block/ },
         ];
         for(const op of FWD_OPS){
-            assert.ok(op.re.test(fwd), `recoveryRewards.js is missing the forward ${op.name}; it must mirror the rollback re-drain keys`);
+            assert.ok(op.re.test(fwd), `recovery_rewards.js is missing the forward ${op.name}; it must mirror the rollback re-drain keys`);
         }
         // Both forward channels (live per-block + incremental snapshot) must invoke it.
         for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js']){
@@ -695,13 +699,13 @@ describe('Rollback coverage guard @regression', function(){
         if(!requireSibling(this, rbPath)) return;
         const rb = norm(readSourceText(rbPath));
         assert.ok(/SET applied=0, source_id=NULL, applied_block=NULL/.test(rb),
-            'rollback.js re-arm must reset applied_block=NULL alongside applied=0 and source_id=NULL');
+            'xchain-indexer src/rollback/ re-arm must reset applied_block=NULL alongside applied=0 and source_id=NULL');
     });
 
     // Forward parity for DERIVED anchor/archive validator rewards: the BTC-side derivation
     // stamps block_index = SNAPSHOT_BLOCK E with derive_block_index = the minting block B,
     // and ClientRollback's reverse delete already keys on derive_block_index >= B. The
-    // forward channels must key on the same column (derivedRewards.js) and BOTH forward
+    // forward channels must key on the same column (derived_rewards.js) and BOTH forward
     // channels must invoke it, or a continuously-live follower never receives a derived
     // reward (#5605). The source's winner-collapse DELETE must be mirrored forward from the
     // replicated reconcile-log pre-images, the twin of the RB-ANCHOR restore.
@@ -712,10 +716,10 @@ describe('Rollback coverage guard @regression', function(){
         // it by name, so the guard reads both: the keys it pins are the contract, not the file.
         const fwd = norm(['../../src/server/derived_rewards.js', '../../src/db/validator_rewards.js']
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
-        assert.ok(/vr\.derive_block_index BETWEEN \? AND \?/.test(fwd), 'derivedRewards.js must key on derive_block_index (the materialization window)');
-        assert.ok(/vr\.block_index < vr\.derive_block_index/.test(fwd), 'derivedRewards.js must restrict to backdated rows (earn-block below the materialization block)');
+        assert.ok(/vr\.derive_block_index BETWEEN \? AND \?/.test(fwd), 'derived_rewards.js must key on derive_block_index (the materialization window)');
+        assert.ok(/vr\.block_index < vr\.derive_block_index/.test(fwd), 'derived_rewards.js must restrict to backdated rows (earn-block below the materialization block)');
         const rbSync = norm(fs.readFileSync(pathMod.resolve(__dirname, '../../src/client/rollback.js'), 'utf8'));
-        assert.ok(/DELETE FROM validator_rewards WHERE derive_block_index >= \?/.test(rbSync), 'ClientRollback.js must keep the derive_block_index reverse delete the forward collector twins');
+        assert.ok(/DELETE FROM validator_rewards WHERE derive_block_index >= \?/.test(rbSync), 'src/client/rollback.js must keep the derive_block_index reverse delete the forward collector twins');
         for(const f of ['../../src/server/poller.js', '../../src/server/snapshot_builder.js']){
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
             assert.ok(/collectDerivedAnchorRewards\s*\(/.test(src),
@@ -726,14 +730,14 @@ describe('Rollback coverage guard @regression', function(){
         const applier = norm(['../../src/client/applier.js', '../../src/db/validator_rewards.js']
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assert.ok(/DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d ON d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id AND d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference AND d\.round_qualifier <=> vr\.round_qualifier/.test(applier),
-            'ClientApplier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
+            'src/client/applier.js must mirror the reconcile DELETE from the replicated pre-image log (forward twin of the RB-ANCHOR restore) on the FULL five-column reward identity; without round_qualifier the keyed delete also reaches the other archive snapshot\'s surviving reward');
         // RB-ANCHOR restore parity on that same identity. The source twin
-        // (xchain-indexer/src/rollback.js) names round_qualifier in BOTH the INSERT column
+        // (xchain-indexer/src/db/rollback/purge.js) names round_qualifier in BOTH the INSERT column
         // list and the projection, so the replica must too: without it the restored loser
         // lands under the schema default 0, a different row from the one the reconcile
         // deleted, and INSERT IGNORE either swallows it or lands a wrong-identity duplicate.
         assert.ok(/INSERT IGNORE INTO validator_rewards \(source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier, amount, block_index, derive_block_index\) SELECT .*d\.round_qualifier/.test(rbSync),
-            'ClientRollback.js RB-ANCHOR restore must carry round_qualifier in both the column list and the projection, mirroring xchain-indexer/src/rollback.js');
+            'src/client/rollback.js RB-ANCHOR restore must carry round_qualifier in both the column list and the projection, mirroring xchain-indexer/src/db/rollback/purge.js');
         // The four JS payload-merge dedup keys ride the same identity: a four-column key
         // treats two distinct archive rewards as one and drops the second from the payload
         // before it ever reaches a replica.
@@ -750,7 +754,7 @@ describe('Rollback coverage guard @regression', function(){
     // chunk of a chunked archive batch is orphaned by a reorg, the parent v1 (in a surviving
     // earlier block) was stamped 'invalid_archive' IN PLACE by that chunk's apply; deleting
     // the chunk row leaves the parent stuck 'invalid_archive' on both source and replica until
-    // a from-genesis replay. Both rollback.js (source) and ClientRollback.js (replica) must
+    // a from-genesis replay. Both xchain-indexer src/rollback/ (source) and src/client/rollback.js (replica) must
     // carry the self-join UPDATE that resets the parent to 'unverified'. If you change one,
     // change the other and extend this guard.
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
@@ -766,7 +770,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor reset to unverified',          re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = us\.id/ },
             // The parent predicate must select the FULL archive-head version set
-            // (currently just v1) via the shared stateHash.js constant, on both sides,
+            // (currently just v1) via the shared state_hash.js constant, on both sides,
             // rather than a hardcoded literal that drifts from it. Matches the indexer's
             // template-literal splice (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's
             // string concat.
@@ -778,7 +782,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'publisher author-scope splice',
               re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
         ];
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
             for(const op of ANCHOR_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the anchor ${op.name}; source and replica must both reverse the invalid_archive stamp on reorg`);
@@ -817,7 +821,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'head predicate (v5, chunk 0, below the orphaned range)',
               re: /WHERE p\.version = ATTEST_BATCH_HEAD_VERSION AND p\.batch_chunk_index = 0 AND p\.action_index < \?/ },
         ];
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
             for(const op of ATTEST_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the ATTEST batch-head ${op.name}; source and replica must both reverse the completion stamp on reorg`);
@@ -836,7 +840,7 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const norm = s => s.replace(/[`"']/g, ' ').replace(/\+/g, ' ').replace(/\s+/g, ' ');
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
             assert.ok(/UPDATE delegations SET deactivation_block = NULL WHERE deactivation_block IS NOT NULL AND deactivation_block >= \?/.test(src),
                 `${label} is missing the delegations threshold reset; a post-flag-day revoke leaves the parent stamped`);
@@ -898,7 +902,7 @@ describe('Rollback coverage guard @regression', function(){
         assert.strictEqual(isArchiveRollbackAuthorScopeActive(1000000000, 'regtest'), false);
     });
 
-    // The archive-head version set is defined ONCE (stateHash.js, twinned across
+    // The archive-head version set is defined ONCE (state_hash.js, twinned across
     // repos) and consumed by every parent-selecting predicate. Pin its value and the SQL
     // fragment shape, and pin the forward updatedRows class to the same constant so an
     // archive parent's invalid_archive stamp keeps replicating to followers.
@@ -916,7 +920,7 @@ describe('Rollback coverage guard @regression', function(){
         const ur = norm(['../../src/server/updated_rows.js', '../../src/db/tables.js']
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n'));
         assertLocal.ok(/WHERE p\.version ARCHIVE_HEAD_VERSIONS_SQL AND ARCHIVE_CHUNK_HEIGHT_COL BETWEEN \? AND \?/.test(ur),
-            'updatedRows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
+            'updated_rows.js anchor class must select archive-head parents via ARCHIVE_HEAD_VERSIONS_SQL, ' +
             'scoped by the shared ARCHIVE_CHUNK_HEIGHT_COL');
         // The completing chunk's height key is the shared constant, never a literal
         // `c.block_index`: that column is NULL on every v2 continuation row, so the
@@ -924,7 +928,7 @@ describe('Rollback coverage guard @regression', function(){
         assertLocal.strictEqual(sh.ARCHIVE_CHUNK_HEIGHT_COL, 'c.block_index_doge',
             'ARCHIVE_CHUNK_HEIGHT_COL must be c.block_index_doge (block_index is NULL on v2 chunks)');
         assertLocal.ok(!/AND c\.block_index BETWEEN/.test(ur),
-            'updatedRows.js must not regress to the never-populated c.block_index key');
+            'updated_rows.js must not regress to the never-populated c.block_index key');
         // Twin-parity: the indexer state_hash.js copy (when the sibling checkout exists)
         // must carry the identical constant, or the two repos disagree on the parent set.
         const indexerPath = indexerFile('src/consensus/state_hash.js');
@@ -937,8 +941,8 @@ describe('Rollback coverage guard @regression', function(){
 
     // Bespoke-logic parity: VOTE polls re-open reset. An orphaned VOTE v2 finalization
     // flipped a surviving polls row terminal IN PLACE; the generic action_index delete
-    // drops the v2's poll_results rows but cannot re-open the poll. Both rollback.js
-    // (source) and ClientRollback.js (replica) must carry the reset UPDATE keyed on
+    // drops the v2's poll_results rows but cannot re-open the poll. Both xchain-indexer
+    // src/rollback/ (source) and src/client/rollback.js (replica) must carry the reset UPDATE keyed on
     // resolved_block, or a reorged replica keeps serving a terminal poll the source
     // re-opened. If you change one side, change the other and extend this guard.
     it('VOTE polls re-open reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
@@ -954,7 +958,7 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'summary re-open (full column list)', re: /UPDATE polls SET poll_status = open , winning_option = NULL, total_weight = NULL, total_voters = NULL, quorum_met = NULL, min_voters_met = NULL, fail_reason = NULL, decided_early = NULL, effective_close_block = NULL, finalized_action_index = NULL, resolved_block = NULL, deposit_resolved = NULL, callback_execute_action_index = NULL, callback_due_block = NULL WHERE poll_status IN \( finalized , failed_quorum \) AND resolved_block >= \?/ },
             { name: 'timelock re-fire reset (orphaned due block, surviving finalization)', re: /UPDATE polls SET callback_execute_action_index = NULL WHERE poll_status IN \( finalized , failed_quorum \) AND callback_due_block >= \? AND callback_execute_action_index IS NOT NULL/ },
         ];
-        for(const [label, p] of [['ClientRollback.js (replica)', syncPath], ['rollback.js (source)', indexerPath]]){
+        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
             for(const op of POLL_OPS){
                 assert.ok(op.re.test(src), `${label} is missing the polls ${op.name}; source and replica must both re-open finalized polls on reorg`);
@@ -965,7 +969,7 @@ describe('Rollback coverage guard @regression', function(){
     // Forward parity for the polls finalization flip: the reverse re-open above needs a
     // forward twin or a follower never learns a poll went terminal (the flip mutates a
     // surviving row the action-scoped stream cannot reach). Pin the class table list and
-    // its resolved_block window predicate in updatedRows.js.
+    // its resolved_block window predicate in updated_rows.js.
     it('updated_rows carries the VOTE poll finalization flip keyed by resolved_block', function(){
         const { POLL_FINALIZE_TABLES } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(POLL_FINALIZE_TABLES, ['polls'],
@@ -976,11 +980,11 @@ describe('Rollback coverage guard @regression', function(){
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/WHERE resolved_block BETWEEN \? AND \?/.test(src),
-            'updatedRows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
+            'updated_rows.js must select the poll finalization flip by resolved_block (the same key the reverse re-open resets)');
         // Second key: the deferred binding-callback fire stamp lands at the due block
         // (above the finalize window), the forward twin of the timelock re-fire reset.
         assert.ok(/OR \(callback_due_block BETWEEN \? AND \? AND callback_execute_action_index IS NOT NULL\)/.test(src),
-            'updatedRows.js must also select polls by callback_due_block with a fired stamp (the deferred callback fire is an in-place UPDATE at the due block)');
+            'updated_rows.js must also select polls by callback_due_block with a fired stamp (the deferred callback fire is an in-place UPDATE at the due block)');
     });
 
     // Forward parity for DELEGATE v1 signing-key rotations: the materialization sweep
@@ -988,7 +992,7 @@ describe('Rollback coverage guard @regression', function(){
     // sits below the window, so only the contract_delegation_rotations journal pins the
     // rewrite to a block. Dropping a table or the journal join silently stops replicating
     // the rotation and a follower hands contracts a stale staker set. Pin the class table
-    // list and its journal-window predicate in updatedRows.js.
+    // list and its journal-window predicate in updated_rows.js.
     it('updated_rows carries the DELEGATE v1 rotation rewrite keyed by the rotations journal window', function(){
         const { ROTATION_TABLES } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(ROTATION_TABLES, ['contract_stakes', 'contract_unstakes'],
@@ -999,14 +1003,14 @@ describe('Rollback coverage guard @regression', function(){
             .map((f) => fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/JOIN contract_delegation_rotations r ON r\.stake_action_index = t\.action_index WHERE r\.target_table = \? AND r\.block_index BETWEEN \? AND \?/.test(src),
-            'updatedRows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
+            'updated_rows.js must select rotated stake rows through the contract_delegation_rotations journal keyed by target_table and block_index window (the same journal ClientRollback restores from)');
     });
 
     // Forward parity for the BET in-place flips: the closed latch, the terminal flip and
     // settlement each mutate a surviving bet_feeds / bets row the action-scoped stream
     // cannot reach, stamping a block column. Dropping a stamp silently stops replicating
     // that flip and a follower keeps a stale feed or bet status. Pin the class spec list
-    // and the per-stamp window predicate it drives in updatedRows.js.
+    // and the per-stamp window predicate it drives in updated_rows.js.
     it('updated_rows carries the BET status flips keyed by their stamp columns', function(){
         const { BET_STATUS_SPECS } = require('../../src/server/updated_rows');
         assert.deepStrictEqual(BET_STATUS_SPECS, [
@@ -1017,11 +1021,11 @@ describe('Rollback coverage guard @regression', function(){
         const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/server/updated_rows.js'), 'utf8')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         assert.ok(/for\(let spec of BET_STATUS_SPECS\)\{ try \{ let where = spec\.stamps\.map\(col => col BETWEEN \? AND \? \)\.join\( OR \);/.test(src),
-            'updatedRows.js must select each BET class by every stamp column landing in the window, OR-joined so a feed that latches and goes terminal in one window is still carried');
+            'updated_rows.js must select each BET class by every stamp column landing in the window, OR-joined so a feed that latches and goes terminal in one window is still carried');
     });
 
     // The state_hash (replication-integrity 4th hash) is computed on BOTH sides from
-    // src/stateHash.js: the indexer stores it at index-time, the follower recomputes it
+    // src/consensus/state_hash.js: the indexer stores it at index-time, the follower recomputes it
     // apply-time and halts on mismatch. The two copies are a byte-aligned twin (separate
     // npm packages, no cross-dep); any drift silently turns a divergence detector into a
     // false-halt generator. Lock them identical (skip if the sibling indexer repo absent).
@@ -1031,7 +1035,7 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile('src/consensus/state_hash.js');
         if(!requireSibling(this, indexerPath)) return;
         assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
-            'stateHash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+            'src/consensus/state_hash.js drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
     });
 
     // ServerPoller must stream a block's FULL index_addresses set, not just the addresses
@@ -1056,10 +1060,10 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // Light-client state commitment (SPV spec sec.4-5): merkle.js (the SMT + leaf
-    // encoders) and state_commitment_activation.js (the flag-day map) are copied
+    // encoders) and state_commitment_gate.js (the flag-day gate) are copied
     // VERBATIM from xchain-indexer. The follower recomputes the per-block roots from
     // these and HALTs on divergence, so any drift turns the divergence detector into
-    // a false-halt generator. tableLifecycle.js is the table-lifecycle registry that
+    // a false-halt generator. table_lifecycle.js is the table-lifecycle registry that
     // GENERATES the replicated topology and both rollback table sets; a drifted copy
     // would silently re-open the very source<->replica divergence it exists to close.
     // Lock them byte-identical (skip if the sibling repo absent).
@@ -1071,7 +1075,7 @@ describe('Rollback coverage guard @regression', function(){
     // It is inert today, but it decides on BOTH sides which sub-roots stop being
     // EMPTY at an armed height; a drifted copy forks state_root the moment a slot
     // arms, or halts every follower before it.
-    // contractStateSubtree.js is the contract_state_root DERIVATION (SPV sub-tree
+    // contract_state_subtree.js is the contract_state_root DERIVATION (SPV sub-tree
     // spec §3 Stage A): the row-to-leaf mapping, the touched-key query and the
     // incremental-vs-full-build decision. It deliberately owns no SMT engine and
     // no db handle so it CAN be byte-identical, because the source and the
@@ -1261,7 +1265,7 @@ describe('Rollback coverage guard @regression', function(){
     // deliberately NOT in the named mutation-class arrays: it rides its own
     // ledger-driven pass in collectUpdatedRows (ticks touched by credits/debits/
     // escrows in the window), and since 2026-07-07 that pass has a state_hash twin
-    // (the flag-day-gated token_supply class in stateHash.js), closing the original
+    // (the flag-day-gated token_supply class in state_hash.js), closing the original
     // F-1 hash gap. Pin the array design by value: a table added to one of these
     // arrays is a deliberate, visible change, not drift.
     it('F-1: tokens is not in any updatedRows mutation-class array (supply rides the ledger-driven pass + token_supply hash class)', function(){
@@ -1429,7 +1433,7 @@ describe('dispensers convergence wording does not drift back', function(){
         './rollback_coverage.test.js',
     ];
     // Deliberately narrow. A bare /full snapshot only/ scan would false-positive on
-    // SnapshotBuilder.js, where unscoped tables legitimately "ride along in the full
+    // snapshot_builder.js, where unscoped tables legitimately "ride along in the full
     // snapshot only" and that phrasing is about other tables entirely.
     const STALE = /converges?\s+(?:via|through)\s+the\s+full\s+snapshot\s+only/i;
 
@@ -1455,7 +1459,7 @@ describe('dispensers convergence wording does not drift back', function(){
         const abs = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const src = fs.readFileSync(abs, 'utf8');
         const idx = src.indexOf('this.decoderTxScopedTables');
-        assert.ok(idx > 0, 'decoderTxScopedTables assignment not found in ClientRollback.js');
+        assert.ok(idx > 0, 'decoderTxScopedTables assignment not found in src/client/rollback.js');
         // The comment block immediately above the assignment is what a rollback author reads.
         const block = src.slice(Math.max(0, idx - 1200), idx);
         assert.ok(/reconcile/i.test(block),

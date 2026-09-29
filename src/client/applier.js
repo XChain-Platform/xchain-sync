@@ -104,7 +104,7 @@ class ClientApplier {
             'merkle_epochs',
             // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
             // reward_type, round_reference, round_qualifier). The recovery-redriven collector
-            // (recoveryRewards.js) can re-inject a backdated survivor row via BOTH the
+            // (src/server/recovery_rewards.js) can re-inject a backdated survivor row via BOTH the
             // live per-block and incremental-snapshot channels when their windows overlap;
             // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
             // (each row streams once in its earn-block; mirrors createValidatorReward's
@@ -989,7 +989,7 @@ class ClientApplier {
     // in qualifier (the snapshot_block). Keyed on the four alone this DELETE also reaches
     // the OTHER snapshot's row and destroys a reward the source still holds: the exact
     // inverse of the drift the mirror exists to close, and silent, because
-    // validator_rewards declares no hash class (tableLifecycle.js).
+    // validator_rewards declares no hash class (src/table_lifecycle.js).
     // Runs AFTER the insert loop (the log rows of this apply are in place) and INSIDE
     // the apply transaction. The reverse twin is ClientRollback's RB-ANCHOR restore,
     // which re-INSERTs these pre-images when the reconcile block is orphaned. `scopeSql`

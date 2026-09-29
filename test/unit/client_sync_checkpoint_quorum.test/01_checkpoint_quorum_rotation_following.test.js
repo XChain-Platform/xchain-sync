@@ -246,3 +246,61 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         assert.strictEqual(sync.isHalted(), false, 'a range transport fault is not a divergence');
     });
 });
+
+describe('ClientSync: checkpoint-quorum rotation range source @regression', function(){
+    registerHooks();
+
+    // Build the happy-path rotation scenario and return the served checkpoint.
+    function rotatedScenario(){
+        const launch = makeSigner(), s1 = makeSigner(); pin(launch);
+        const SR0 = 'b0'.repeat(32), SR1 = 'b1'.repeat(32);
+        setSeed({ block_index: 90, snapshot_block: 84, state_root: SR0 });
+        const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
+        rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
+        rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
+        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        return cp;
+    }
+    function rangeUrls(){
+        return getStub.getCalls().map(c => c.args[0]).filter(u => u.includes('/range'));
+    }
+
+    it('fetches the rotation range from CHECKPOINT_ANCHOR_URL, not the audited source', async function(){
+        sync.config['CHECKPOINT_ANCHOR_URL'] = 'http://hub-anchor:9000';
+        const cp = rotatedScenario();
+        route(cp, [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), false);
+        const urls = rangeUrls();
+        assert.ok(urls.length > 0, 'walked the checkpoint range');
+        assert.ok(urls.every(u => u.startsWith('http://hub-anchor:9000/')),
+            'every /range fetch must go to the out-of-band anchor, got ' + urls.join(', '));
+        assert.ok(!urls.some(u => u.startsWith('http://a:3006')), 'the audited source must not serve the range');
+    });
+
+    it('falls back to the primary source for the range when no anchor is configured', async function(){
+        const cp = rotatedScenario();
+        route(cp, [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        const urls = rangeUrls();
+        assert.ok(urls.length > 0, 'walked the checkpoint range');
+        assert.ok(urls.every(u => u.startsWith('http://a:3006/')), 'fallback range source is sources[0]');
+    });
+
+    it('warns, and does NOT halt, when the range comes back empty (withheld rotation chain)', async function(){
+        const warn = sinon.stub(console, 'warn');
+        const cp = rotatedScenario();
+        route(cp, []);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), false, 'a withheld range is not a divergence');
+        const msgs = warn.getCalls().map(c => c.args.join(' '));
+        assert.ok(msgs.some(m => /cannot follow validator rotation/.test(m) && /empty checkpoint range/.test(m)),
+            'a stalled rotation walk must log a warn naming the reason, got: ' + msgs.join(' | '));
+    });
+});

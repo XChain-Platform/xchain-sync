@@ -34,6 +34,9 @@
  *   5. utility jsonStringify + getDataHash (the shared preimage serializer)
  *   6. reportOrphanStats (documented byte-identical twin; compared RAW, header
  *      comment included; the indexer copy is src/state_commitment/persistent_smt.js)
+ *   7. the state_key collation flag-day gate in all three copies (the
+ *      STATE_KEY_COLLATION_KEY value, the activeAt call shape, the ' COLLATE
+ *      utf8_bin' splice value and where it is spliced), which item 2 cannot see
  *
  * A one-sided edit to any of these forks every sync validator's recomputed
  * hash on the next real block (durable divergence halt fleet-wide). The
@@ -47,94 +50,11 @@
 
 const assert  = require('assert');
 const fs      = require('fs');
-const path    = require('path');
 
-// Sibling resolution + hard-fail policy: same conventions as
-// rollback-coverage.test.js (see the comments there). Skip when the sibling
-// checkout is absent, throw where XCHAIN_REQUIRE_SIBLINGS=1 makes
-// green-by-skip impossible (bin/ci-all.sh and the sibling-checkout CI job).
-const SYNC_ROOT    = path.join(__dirname, '../..');
-const INDEXER_ROOT = process.env.XCHAIN_INDEXER_SQL_PATH
-    ? path.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
-    : path.join(__dirname, '../../../xchain-indexer');
-const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
-function requireSibling(ctx, absPath){
-    if(fs.existsSync(absPath)) return true;
-    if(SIBLING_REQUIRED)
-        throw new Error('consensus drift guard cannot run: sibling missing at ' + absPath +
-            ' (check out xchain-indexer or set XCHAIN_INDEXER_SQL_PATH)');
-    ctx.skip();
-    return false;
-}
-
-// ---- extraction helpers -----------------------------------------------------
-
-// Cut unquoted // comments (tracking ' " ` quote state per line) so the two
-// sides compare on code, not on their independently-worded comments.
-function stripComments(src){
-    return src.split('\n').map(line => {
-        let q = null;
-        for(let i = 0; i < line.length; i++){
-            const ch = line[i];
-            if(q){ if(ch === q && line[i-1] !== '\\') q = null; continue; }
-            if(ch === "'" || ch === '"' || ch === '`'){ q = ch; continue; }
-            if(ch === '/' && line[i+1] === '/') return line.slice(0, i);
-        }
-        return line;
-    }).join('\n');
-}
-
-// Comment-stripped, string-concat-joined, whitespace-collapsed form. The `+`
-// collapse keeps a template literal split by concatenation (the flag-day
-// stateKeyCollate splice) comparable across formatting choices.
-function normalize(src){
-    return stripComments(src).replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-// Slice a balanced-brace function/method starting at the first match of sigRe.
-// Tracks quote state so braces inside string/template literals don't count.
-function extractFunction(src, sigRe, from){
-    const m = src.match(sigRe);
-    assert.ok(m, 'signature not found in ' + from + ': ' + sigRe);
-    let depth = 0, q = null;
-    for(let j = src.indexOf('{', m.index); j < src.length; j++){
-        const ch = src[j];
-        if(q){
-            if(ch === '\\'){ j++; continue; }
-            if(ch === q) q = null;
-            continue;
-        }
-        if(ch === "'" || ch === '"' || ch === '`'){ q = ch; continue; }
-        if(ch === '/' && src[j+1] === '/'){ j = src.indexOf('\n', j); continue; }
-        if(ch === '{') depth++;
-        if(ch === '}'){ depth--; if(depth === 0) return src.slice(m.index, j + 1); }
-    }
-    assert.fail('unbalanced braces extracting ' + sigRe + ' from ' + from);
-}
-
-// Ordered whitespace-collapsed template-literal list inside a function slice.
-// A query spliced by concatenation yields one fragment per literal piece; both
-// sides splice identically, so the fragment lists still compare pairwise.
-function sqlLiterals(fnSrc){
-    const out = [];
-    const re = /`([^`]*)`/g;
-    let m;
-    while((m = re.exec(fnSrc)) !== null) out.push(m[1].replace(/\s+/g, ' ').trim());
-    return out;
-}
+const { stripComments, normalize, extractFunction, sqlLiterals, syncFile, loadPair } =
+    require('./blockhash_conformance_twin.test/helpers/twin_sources.js');
 
 const indexerGatheringSource = require('./blockhash_conformance_twin.test/helpers/indexer_gathering.js').make({ assert, stripComments, extractFunction, sqlLiterals });
-function syncFile(rel){ return path.join(SYNC_ROOT, rel); }
-function indexerFile(rel){ return path.join(INDEXER_ROOT, rel); }
-
-function loadPair(ctx, syncRel, indexerRel){
-    if(!requireSibling(ctx, indexerFile(indexerRel))) return null;
-    return {
-        sync:    fs.readFileSync(syncFile(syncRel), 'utf8'),
-        indexer: fs.readFileSync(indexerFile(indexerRel), 'utf8')
-    };
-}
-
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db/shared.js', function(){
         // The indexer split src/db.js into src/db/index.js plus per-feature mixins. The
@@ -396,5 +316,52 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
             'putBatch differs between xchain-sync and xchain-indexer by more than the declared ' +
             'node-cache seeding. Port the change, or extend the DECLARED DIVERGENCE paragraph in ' +
             'xchain-sync/src/state_commitment/index.js to say what else may differ');
+    });
+});
+// The follower header declares a SECOND divergence: the indexer's buildStakesRoot
+// patches its predecessor's stakes tree when the stake set changed, where the
+// follower rebuilds. This case makes that declaration binding the same way the
+// node-cache case does. Subtract the patch (and the helper renames it needs)
+// from the INDEXER's function and it must equal the follower's code-for-code, so
+// it fails if the indexer drops the patch, if the follower gains one, or if the
+// two drift anywhere else (the continuity guard, the store-presence floor, the
+// buildFull fallback). Every substitution asserts it FIRED.
+describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
+    it('buildStakesRoot divergence is exactly the indexer incremental patch (declared, not drift)', function(){
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/stakes_root.js');
+        if(!pair) return;
+        const sig = /async function buildStakesRoot\(smt, chain, network, blockIndex, entries\)\{/;
+        const syncFn    = normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/state_commitment/index.js'));
+        const indexerFn = normalize(extractFunction(pair.indexer, sig, 'xchain-indexer/src/state_commitment/stakes_root.js'));
+        assert.ok(!syncFn.includes('smt.update('),
+            'xchain-sync buildStakesRoot now patches the stakes tree with smt.update. If the ' +
+            'incremental patch was deliberately ported, rewrite DECLARED DIVERGENCE 2 in ' +
+            'xchain-sync/src/state_commitment/index.js and replace this case with a full comparison');
+        const patch =
+            'let root = memo.root; if(memo.digest !== digest){ ' +
+            'for(const key of memo.entries.keys()){ if(!entriesByKey.has(key)) root = await smt.update(root, M.toBuf(key), null); } ' +
+            'for(const [key, leaf] of entriesByKey){ if(memo.entries.get(key) !== leaf) root = await smt.update(root, M.toBuf(key), leaf); } } ' +
+            'stakesMemo = { chain, network, blockIndex, digest, root, entries: entriesByKey }; return root; }';
+        let out = indexerFn;
+        for(const [find, replace] of [
+            ['const entriesByKey = stakeEntriesMap(entries); const digest = stakeEntriesDigest(entriesByKey);',
+             'const digest = _stakeEntriesDigest(entries);'],
+            ['const memo = stakesMemo;', 'const memo = _stakesMemo;'],
+            ['memo.blockIndex === blockIndex - 1){', 'memo.blockIndex === blockIndex - 1 && memo.digest === digest){'],
+            [patch, '_stakesMemo = { chain, network, blockIndex, digest, root: memo.root }; return memo.root; }'],
+            ['stakesMemo = { chain, network, blockIndex, digest, root, entries: entriesByKey }; return root; }',
+             '_stakesMemo = { chain, network, blockIndex, digest, root }; return root; }']
+        ]){
+            assert.ok(out.includes(find),
+                'the indexer stakes patch no longer has the shape this guard subtracts, in ' +
+                'xchain-indexer/src/state_commitment/stakes_root.js. Missing: ' + find +
+                '\nRe-derive the subtraction and DECLARED DIVERGENCE 2 in ' +
+                'xchain-sync/src/state_commitment/index.js before trusting this guard again.');
+            out = out.replace(find, replace);
+        }
+        assert.strictEqual(syncFn, out,
+            'buildStakesRoot differs between xchain-sync and xchain-indexer by more than the ' +
+            'declared incremental stakes patch. Port the change, or extend DECLARED DIVERGENCE 2 ' +
+            'in xchain-sync/src/state_commitment/index.js to say what else may differ');
     });
 });

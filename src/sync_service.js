@@ -33,6 +33,7 @@ const HashVerifier    = require('./client/hash_verifier');
 const stateCommitment = require('./state_commitment');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
+const { coinTicker }  = require('./consensus-constants');
 const Utility         = require('./util');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
@@ -458,7 +459,8 @@ class SyncService {
                         finally { try { await c.release(); } catch(_){} }
                     };
                     try {
-                        const stats = await stateCommitment.reportOrphanStats(query, cfg.coin, cfg.network);
+                        // Pass the ticker: state_tree_roots rows carry it, so the hub's full name matches none
+                        const stats = await stateCommitment.reportOrphanStats(query, coinTicker(cfg.coin), cfg.network);
                         if(stats.totalNodes === 0) continue;
                         getLogger().info('[METRIC] ' + JSON.stringify({
                             metric: 'state_tree_orphan_nodes', component: 'sync', key: key,

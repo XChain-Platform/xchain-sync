@@ -51,8 +51,8 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 // unless someone also hand-edited this Set. The three names appended
 // after the spread have no registry entry (mempool_transactions is a
 // decoder-DB table; sync_halt / sync_state are replica-created control
-// tables) and are the ONLY permitted non-registry members; rollback-coverage
-// F-5 pins both directions against the registry.
+// tables) and are the ONLY permitted non-registry members; F-5 in
+// test/unit/rollback_coverage.test.js pins both directions against the registry.
 //
 // Why the registry-derived members are excluded:
 //  - icons, pending_hub_pushes, cross_chain_call_rejections ('local'): operator-local
@@ -63,7 +63,7 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 //    must not ride snapshots (a follower has no recovery in progress, so its count
 //    legitimately differs).
 //  - Hub-mirrored tables: every registry entry with replication 'hub-mirror', which
-//    tableLifecycle.js defines and this comment only reads (today oracle_prices,
+//    table_lifecycle.js defines and this comment only reads (today oracle_prices,
 //    price_snapshots, capability_snapshots, cross_chain_calls, cross_chain_matches,
 //    state_checkpoints, anchor_reward_attestations). They are pushed/retracted by
 //    hub_db_sync out-of-band with block apply, so they vary by WS arrival timing and

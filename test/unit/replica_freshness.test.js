@@ -21,6 +21,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const { applyReplicaFreshness } = require('../../src/api');
 const config = require('../../src/config');
+const { getLogger } = require('../../src/observability');
 
 function baseRow(){
     return { block_height: 100, source_height: 100, lag_blocks: 0 };
@@ -103,6 +104,44 @@ describe('per-chain rollback depth', function(){
 
     it('preserves an explicit operator override', function(){
         assert.strictEqual(config.resolveMaxRollbackDepth('litecoin', 'testnet', 250, true), 250);
+    });
+
+    it('names the source reorg ceiling per chain, in ticker or full-name form', function(){
+        assert.strictEqual(config.rollbackDepthSafeCeiling('litecoin', 'testnet'), 5006);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('LTC', 'testnet'), 5006);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('LTC', 'mainnet'), 126);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('bitcoin', 'testnet'), 126);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('dogecoin', 'regtest'), 126);
+    });
+
+    // Capture the config logger's error calls for one resolve, restoring it after.
+    function resolveCapturingErrors(chain, network, depth, explicit){
+        const logger = getLogger();
+        const errorStub = sinon.stub(logger, 'error');
+        try {
+            const value = config.resolveMaxRollbackDepth(chain, network, depth, explicit);
+            return { value, errors: errorStub.getCalls().map(c => String(c.args[0])) };
+        } finally {
+            errorStub.restore();
+        }
+    }
+
+    it('warns, without clamping, when an override exceeds the source reorg ceiling', function(){
+        const btc = resolveCapturingErrors('bitcoin', 'mainnet', 1000, true);
+        assert.strictEqual(btc.value, 1000, 'the override is an operator knob and is never clamped');
+        assert.ok(btc.errors.some(m => /above the source reorg ceiling \(126/.test(m)), btc.errors.join(' | '));
+        const ltc = resolveCapturingErrors('litecoin', 'testnet', 6000, true);
+        assert.strictEqual(ltc.value, 6000);
+        assert.ok(ltc.errors.some(m => /above the source reorg ceiling \(5006/.test(m)), ltc.errors.join(' | '));
+    });
+
+    it('stays silent for the defaults and for an in-range override', function(){
+        for(const args of [['bitcoin', 'mainnet', 100, false], ['litecoin', 'testnet', 100, false],
+                           ['litecoin', 'testnet', 250, true], ['bitcoin', 'mainnet', 126, true]]){
+            const r = resolveCapturingErrors(...args);
+            assert.deepStrictEqual(r.errors, [], 'no warning for ' + args.join(','));
+        }
+        assert.strictEqual(resolveCapturingErrors('litecoin', 'testnet', 100, false).value, 5000);
     });
 });
 
