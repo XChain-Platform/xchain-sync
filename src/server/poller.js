@@ -42,12 +42,10 @@ const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const logger = getLogger();
 
-// How many recently broadcast block hashes to retain in memory for the
-// net-forward reorg walk-back. Comfortably above the source indexer's
-// MAX_ROLLBACK_DEPTH (100), so a deep same-interval reorg can be walked back one
-// height per poll against the pre-reorg hash we recorded, rather than against a
-// fresh (post-reorg) source read that always matches.
-const RECENT_HASH_CAP = 256;
+// Retain at least this many broadcast hashes for the reorg walk-back, raised per chain to the
+// source reorg ceiling plus a margin so every reorg an honest source emits resolves (recentHashCap).
+const RECENT_HASH_CAP_FLOOR = 256;
+const RECENT_HASH_CAP_MARGIN = 16;
 
 // A per-table read in buildBlockPayload may legitimately fail because the source
 // runs an older schema that lacks the table/column (errno 1146 missing table, 1054
@@ -102,8 +100,10 @@ class ServerPoller {
         // seeds lastPolledBlockHash from the PRE-reorg hash recorded here, so a
         // reorg deeper than one block keeps walking back over subsequent polls. This
         // works for both dbTypes (the decoder has no sync_meta to read a recorded
-        // hash from). Capped to the last RECENT_HASH_CAP heights.
+        // hash from). Capped to the last recentHashCap heights.
         this.recentBroadcastHashes = new Map();
+        this.recentHashCap = Math.max(RECENT_HASH_CAP_FLOOR,
+            envConfig.rollbackDepthSafeCeiling(chain, network) + RECENT_HASH_CAP_MARGIN);
         this.running = false;
 
         // Per-block replicated table topology (single source of truth shared with
@@ -285,7 +285,7 @@ class ServerPoller {
                 // kept stale lower blocks, and its chained recompute diverged. Resolving
                 // the full depth in one poll closes that window: one deep reorg is
                 // broadcast and the forward loop below re-streams every orphaned block
-                // fresh. Bounded by the recorded-hash window (RECENT_HASH_CAP); a fork
+                // fresh. Bounded by the recorded-hash window (recentHashCap); a fork
                 // below it stops at the deepest recorded height (cold-start fallback,
                 // same as before), where the follower's recompute/remediation is the net.
                 let forkBlock = await this.resolveForkPoint(this.lastPolledBlock);
@@ -423,8 +423,8 @@ class ServerPoller {
                         // Record it for the net-forward walk-back so a deeper reorg can
                         // be detected against this pre-reorg hash on a later poll.
                         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
-                        if(nextBlock > RECENT_HASH_CAP)
-                            this.recentBroadcastHashes.delete(nextBlock - RECENT_HASH_CAP - 1);
+                        if(nextBlock > this.recentHashCap)
+                            this.recentBroadcastHashes.delete(nextBlock - this.recentHashCap - 1);
                     } else {
                         // No payload (block vanished mid-poll): disable the hash check for this
                         // step rather than compare against a stale hash next poll.
@@ -469,17 +469,22 @@ class ServerPoller {
     // height to the TRUE fork point: descend while the height below still exists
     // on the source with a content hash different from the one WE broadcast for
     // it. Shared by the net-forward and height-drop reorg paths; bounded by the
-    // recorded-hash window (RECENT_HASH_CAP). A fork below the window stops at
+    // recorded-hash window (recentHashCap). A fork below the window stops at
     // the deepest recorded height (cold-start fallback), where the follower's
     // recompute/remediation is the net.
     async resolveForkPoint(forkBlock){
+        let start = forkBlock;
         while(forkBlock - 1 >= 1 && this.recentBroadcastHashes.has(forkBlock - 1)){
             let belowSrc = await this.sourceBlockHash(forkBlock - 1);
             if(belowSrc !== null && belowSrc !== this.recentBroadcastHashes.get(forkBlock - 1))
                 forkBlock = forkBlock - 1;   // this height also changed; fork is deeper
             else
-                break;                       // forkBlock-1 unchanged: true fork point
+                return forkBlock;            // forkBlock-1 unchanged: true fork point
         }
+        // Warn when recorded hashes ran out before an unchanged height confirmed the fork point.
+        if(forkBlock - 1 >= 1)
+            logger.warn('Reorg fork point for ' + this.chain + '/' + this.network + '/' + this.dbType + ' may be too shallow: '
+                + 'no recorded hash below block ' + forkBlock + ' after walking ' + (start - forkBlock) + ' height(s)');
         return forkBlock;
     }
 

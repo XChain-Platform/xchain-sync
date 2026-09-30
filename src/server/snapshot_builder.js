@@ -63,9 +63,8 @@ const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 //    must not ride snapshots (a follower has no recovery in progress, so its count
 //    legitimately differs).
 //  - Hub-mirrored tables: every registry entry with replication 'hub-mirror', which
-//    table_lifecycle.js defines and this comment only reads (today oracle_prices,
-//    price_snapshots, capability_snapshots, cross_chain_calls, cross_chain_matches,
-//    state_checkpoints, anchor_reward_attestations). They are pushed/retracted by
+//    table_lifecycle.js defines and this comment only reads (the rows live in
+//    table_lifecycle/block_and_special_tables.js). They are pushed/retracted by
 //    hub_db_sync out-of-band with block apply, so they vary by WS arrival timing and
 //    must not appear in consensus snapshots. price_snapshots is the one to notice: it
 //    is quorum-class hashed (its registry entry's hashed.classes) and feeds
@@ -265,8 +264,8 @@ function orderSnapshotTables(allTables){
 //   applies all incremental rows with INSERT IGNORE (existing ids are no-ops).
 //
 // dispensers is skipped here for the same reason it is not per-block
-// streamed: the decoder soft-expires dispensers (UPDATE expired_block_index)
-// and defers the hard-purge to purgeExpiredDispensers. An insert-only
+// streamed: the decoder mutates and deletes dispensers rows off the stream
+// (the five writes are listed in src/schema/replicated_tables.js). An insert-only
 // incremental delta (the tx_index->block_index join) would re-introduce the
 // count divergence on any follower that catches up incrementally, and a plain
 // re-dump would collide on the (tx_index, address_id) PK (dispensers is not in

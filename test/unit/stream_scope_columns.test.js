@@ -176,3 +176,33 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
                   'the incremental catch-up branch still carries the hard-coded block_index range');
     });
 });
+
+// Return the generically rolled-back entries that declare a non-default blockKey.
+function genericRollbackKeyViolations(entries){
+    return entries.filter(t => (t.rollback === 'block' || t.rollback === 'index') &&
+                               t.blockKey && t.blockKey !== 'block_index');
+}
+
+describe('streamScopeColumns: generic rollback rows are scoped by block_index @regression', function(){
+
+    it('keeps every non-default blockKey out of the generic rollback loops', function(){
+        const bad = genericRollbackKeyViolations(lifecycle.allTables());
+        assert.deepStrictEqual(bad.map(t => t.table + ':' + t.blockKey), [],
+            'the generic rollback loops delete by block_index and the replica swallows 1054, so these ' +
+            'rows would never roll back on a replica; classify them rollback/replicaRollback special ' +
+            'with a delete on the declared column, as rollcalls does');
+        assert.ok(lifecycle.tablesWhere(t => t.rollback === 'block').length > 0, 'no rollback block rows were visited');
+        const keyed = lifecycle.allTables().filter(t => t.blockKey && t.blockKey !== 'block_index');
+        assert.ok(keyed.length >= 3, 'expected the close_block tables to declare a blockKey');
+        for(const t of keyed)
+            assert.deepStrictEqual([t.rollback, t.replicaRollback], ['special', 'special'], t.table);
+    });
+
+    it('flags a generically rolled-back row with a non-default blockKey', function(){
+        const row = { table: 'synthetic_close_keyed', replication: 'stream:block', replicaRollback: 'mirror' };
+        assert.strictEqual(genericRollbackKeyViolations([{ ...row, rollback: 'block', blockKey: 'close_block' }]).length, 1);
+        assert.strictEqual(genericRollbackKeyViolations([{ ...row, rollback: 'index', blockKey: 'close_block' }]).length, 1);
+        assert.strictEqual(genericRollbackKeyViolations([{ ...row, rollback: 'block', blockKey: 'block_index' }]).length, 0);
+        assert.strictEqual(genericRollbackKeyViolations([{ ...row, rollback: 'special', blockKey: 'close_block' }]).length, 0);
+    });
+});

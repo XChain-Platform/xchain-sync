@@ -52,4 +52,4 @@ function registerHooks(setContext){
     afterEach(function(){ sinon.restore(); });
 }
 
-module.exports = { registerHooks };
+module.exports = { registerHooks, createMockDb };

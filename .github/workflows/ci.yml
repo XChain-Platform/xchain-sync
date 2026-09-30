@@ -227,5 +227,9 @@ jobs:
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+      # Run strict so a sibling guard that cannot find its sibling fails this job instead of
+      # reporting pending; the GitHub twin of bin/ci-full.sh's strict `npm run ci`.
       - name: Coverage thresholds (c8 --check-coverage)
+        env:
+          XCHAIN_REQUIRE_SIBLINGS: "1"
         run: npm run coverage:check

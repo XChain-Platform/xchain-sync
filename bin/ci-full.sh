@@ -183,7 +183,8 @@ run_tier "e2e: cross-repo consensus drift guards" \
     test/unit/blockhash_conformance_twin.test.js \
     test/unit/protocol_address_roles_twin.test.js \
     test/unit/stakes_validator_set_parity.test.js \
-    test/unit/generated_columns.test.js
+    test/unit/generated_columns.test.js \
+    test/unit/decoder_table_classification.test.js
 
 if [ "${CI_TIER:-full}" = "fast" ]; then
   fast_defer "e2e: e2e tier (test:e2e:ci)"
