@@ -30,14 +30,14 @@ const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
-const { ARCHIVE_HEAD_VERSIONS_SQL } = require('../consensus/state_hash');
+const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
 // ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
-// updatedRows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
-// updatedRows.js requires only stateHash.js, so this introduces no cycle.
+// src/server/updated_rows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
+// updated_rows.js requires only src/consensus/state_hash.js, so this introduces no cycle.
 const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
         ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows');
 
@@ -159,7 +159,7 @@ class ClientRollback {
         // indexTables sweeps run unconditionally and commit, so the swallowed fault would
         // commit a PARTIAL ledger rollback. Throwing here aborts before any delete and lets
         // ClientSync's reorg-rollback-failed catch record the durable halt. The source twin
-        // carries the same note (xchain-indexer/src/rollback.js).
+        // carries the same note (xchain-indexer/src/rollback/read_phase.js).
         let firstActionIndex = await this.db.getFirstActionIndex(block_index, null, { rethrow: true });
 
         // Truncation floor, read BEFORE the transaction opens (getSyncState may run its
@@ -178,7 +178,7 @@ class ClientRollback {
 
         // Pairs whose orders/matches this rollback is about to orphan, collected BEFORE
         // the dataTables delete removes those rows (mirror of the `markets` array the
-        // source builds in xchain-indexer/src/rollback.js). Consumed by the IDX-2 sweep
+        // source builds in xchain-indexer/src/rollback/read_phase.js). Consumed by the IDX-2 sweep
         // further down. A NULL tick id is the side that IS the native coin; it maps to
         // the 0 sentinel `markets` keys it under rather than being dropped, because the
         // source collects those pairs and the two sets have to agree.
@@ -232,7 +232,7 @@ class ClientRollback {
                 }
             }
 
-            // ── In-place column resets (mirror xchain-indexer/src/rollback.js) ──
+            // ── In-place column resets (mirror xchain-indexer/src/rollback/in_place_flips.js) ──
             // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows
             // (action_index < firstActionIndex) to undo stamps that orphaned actions
             // wrote on them. The DELETE loops below only drop orphaned-RANGE rows, so
@@ -250,7 +250,7 @@ class ClientRollback {
             // and mirrors all four resets below.
             if(firstActionIndex !== null){
                 // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
-                // AFTER the dataTables delete (mirror of xchain-indexer rollback.js), a range
+                // AFTER the dataTables delete (mirror of xchain-indexer/src/rollback/rederive.js), a range
                 // reset here would only handle the SET direction (offer orphaned), not the CLEAR
                 // direction (a surviving offer whose release was orphaned).
 
@@ -294,7 +294,7 @@ class ClientRollback {
                 // rows, but cannot re-open the surviving polls row. Reset it (keyed on
                 // resolved_block, which the finalize sweep stamps) so the replica matches
                 // the source's re-opened poll and a re-streamed finalization upserts
-                // cleanly. Mirrors xchain-indexer/src/rollback.js's polls re-open block.
+                // cleanly. Mirrors xchain-indexer/src/rollback/in_place_flips.js's polls re-open block.
                 try {
                     await this.db.doQuery(
                         "UPDATE polls SET poll_status = 'open', winning_option = NULL, total_weight = NULL, " +
@@ -322,7 +322,7 @@ class ClientRollback {
                 // so the source's sweep re-fires deterministically when the due block
                 // replays and the re-carried updated_rows row upserts cleanly. The stamped
                 // callback_due_block itself is derived state (resolved_block + delay) from
-                // a surviving v2, so it stays. Mirrors xchain-indexer/src/rollback.js.
+                // a surviving v2, so it stays. Mirrors xchain-indexer/src/rollback/in_place_flips.js.
                 try {
                     await this.db.doQuery(
                         "UPDATE polls SET callback_execute_action_index = NULL " +
@@ -339,7 +339,7 @@ class ClientRollback {
                 // BET in-place flip resets ( P4): the updated_rows BET classes
                 // carried surviving bet_feeds / bets rows latched, terminal-flipped or
                 // settled in the now-orphaned range; the action-scoped delete below
-                // cannot un-flip them. Mirrors xchain-indexer/src/rollback.js's BET
+                // cannot un-flip them. Mirrors xchain-indexer/src/rollback/in_place_flips.js's BET
                 // reset block byte-for-byte in predicate order: (a) terminal feeds
                 // whose latch survives go back to 'closed'; (b) terminal feeds with
                 // no surviving latch go back to 'open'; (c) orphaned latches clear
@@ -432,7 +432,7 @@ class ClientRollback {
                 // re-streams the surviving mutated row, so the replica would keep the rotated
                 // key while the source reverts to the original, and the key on that row is what
                 // the VM stake snapshot, the UNSTAKE aggregate and the SLASH deduction all read.
-                // Mirror the source restore (xchain-indexer rollback.js): copy back the EARLIEST
+                // Mirror the source restore (xchain-indexer/src/db/rollback/stake_restores.js): copy back the EARLIEST
                 // orphaned rotation's `prev_signing_pubkey_id` per row, tiebreaking a same-block
                 // pair on delegation_action_index (replay-stable) and NEVER on the
                 // AUTO_INCREMENT `id`. Pure id copy, byte-identical to the source.
@@ -464,7 +464,7 @@ class ClientRollback {
                 // of the contract restore above. An orphaned SLASH burned stakes/unstakes.amount
                 // IN PLACE on surviving rows; copy back the EARLIEST orphaned debit's verbatim
                 // prev_amount per row. Same shape/keys as the contract path; mirrors the source
-                // indexer (xchain-indexer rollback.js).
+                // indexer (xchain-indexer/src/db/rollback/stake_restores.js).
                 //
                 // Same-block tiebreak is slash_action_index (the deterministic, replay-stable
                 // wire-SLASH action_index), NOT AUTO_INCREMENT `id`; must byte-match the source
@@ -500,7 +500,7 @@ class ClientRollback {
                 // whose only reward work was a derive-side reconcile leaves firstActionIndex
                 // null and would skip the restore while the deletes below still ran.
 
-                // deactivation_block re-NULL, mirror of xchain-indexer/src/rollback.js.
+                // deactivation_block re-NULL, mirror of xchain-indexer/src/rollback/in_place_flips.js.
                 // Orphaned UNSTAKE / DELEGATE-revoke actions stamped deactivation_block =
                 // actionBlock + activationDelay IN PLACE on surviving parent stake/delegation
                 // rows (created by a much earlier STAKE/DELEGATE in a surviving block). The
@@ -541,7 +541,7 @@ class ClientRollback {
                 }
 
                 // delegations ← orphaned DELEGATE-revoke and ROLLCALL-eviction stamps, mirror of
-                // xchain-indexer/src/rollback.js. The revoke stopped writing a child delegations
+                // xchain-indexer/src/rollback/in_place_flips.js. The revoke stopped writing a child delegations
                 // row at the DELEGATE_REVOKE_NO_REINSERT flag-day (actions/delegate.js), and a
                 // ROLLCALL eviction never wrote one, so the old self-join on that child matched
                 // nothing and the surviving parent kept its stamp. Key on the value threshold
@@ -612,7 +612,7 @@ class ClientRollback {
             }
 
             // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
-            // xchain-indexer/src/rollback.js. An orphaned anchor reconcile DELETEd loser
+            // xchain-indexer/src/rollback/purge.js. An orphaned anchor reconcile DELETEd loser
             // validator_rewards rows from earlier SURVIVING blocks (block_index =
             // SNAPSHOT_BLOCK) and pre-imaged them in the replicated anchor_reward_reconcile_log
             // keyed to the reconcile's (ANCHOR) block. The generic block delete below drops the
@@ -625,7 +625,7 @@ class ClientRollback {
             // orphaned range is NOT restored: its earn-block survives, but a replay to
             // reorg_block-1 never derived it, so restoring it would mint an orphan.
             // round_qualifier rides the pre-image like every other key column (the twin
-            // at xchain-indexer/src/rollback.js carries it in both the column list and the
+            // at xchain-indexer/src/db/rollback/purge.js carries it in both the column list and the
             // projection): it is part of the reward's UNIQUE identity, snapshot_block for
             // the archive leg whose round_reference is a reissuable hub counter. Dropped,
             // the restore re-INSERTs the loser under the schema default 0, a DIFFERENT row
@@ -663,7 +663,7 @@ class ClientRollback {
             }
 
             // Reverse orphaned cooldown-maturity completions, mirror of
-            // xchain-indexer/src/rollback.js reverseCooldownMaturities. When a capability/contract
+            // xchain-indexer/src/rollback/cooldown_maturities.js reverseCooldownMaturities. When a capability/contract
             // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit carrying
             // the unstake's OWN (earlier-block) action_index and flips the surviving unstake row's
             // status_id to 'completed' IN PLACE. Both effects live on rows whose action_index <
@@ -712,8 +712,8 @@ class ClientRollback {
             }
 
             // Reset an anchor batch's surviving archive-head parent (v1/v6,
-            // ARCHIVE_HEAD_VERSIONS in stateHash.js) stamped 'invalid_archive' by an
-            // orphaned final chunk, mirror of xchain-indexer rollback.js. When the last v2
+            // ARCHIVE_HEAD_VERSIONS in state_hash.js) stamped 'invalid_archive' by an
+            // orphaned final chunk, mirror of xchain-indexer/src/rollback/batch_heads.js. When the last v2
             // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
             // check, the source stamps the parent (in an earlier, surviving block)
             // 'invalid_archive' IN PLACE. If that completing chunk is in the orphaned range,
@@ -737,7 +737,8 @@ class ClientRollback {
                         authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = us.id " +
-                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND p.action_index < ?",
+                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +
+                        " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
                         [firstActionIndex, firstActionIndex]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
@@ -747,7 +748,7 @@ class ClientRollback {
             }
 
             // Restore an ATTEST v5 batch head that an orphaned v6 continuation flipped IN
-            // PLACE on a surviving row, mirror of xchain-indexer/src/rollback.js. The exact
+            // PLACE on a surviving row, mirror of xchain-indexer/src/rollback/batch_heads.js. The exact
             // shape of the archive reset above, on the batch rail, for the same reason: the
             // completing chunk reassembles the window and, on a body or quorum failure, stamps
             // the verdict on the head (a row created in an earlier, surviving block). Deleting
@@ -755,7 +756,7 @@ class ClientRollback {
             // verdict: the batch-chunk reader accepts status 'valid' only, so the head goes
             // missing from its OWN chunk set, a re-mined continuation rejoins a headless batch,
             // and the window is permanently dead on this replica. The forward channel
-            // (updatedRows.js class 5b) actively ships the stamp to every follower, so without
+            // (updated_rows.js class 5b) actively ships the stamp to every follower, so without
             // this reset every follower that reorgs across a completing chunk diverges.
             //
             // ONLY A MARKED STAMP IS RESTORED, and that is the whole safety argument. A blanket
@@ -776,9 +777,9 @@ class ClientRollback {
             // no equality matches, so it authenticates nothing rather than everything.
             //
             // Runs BEFORE the dataTables delete, while both rows are still present. The three
-            // version/stamp constants are imported from updatedRows.js so the forward carry and
+            // version/stamp constants are imported from updated_rows.js so the forward carry and
             // this reverse reset cannot drift apart; the twin to change in lockstep is
-            // xchain-indexer/src/rollback.js.
+            // xchain-indexer/src/db/rollback/batch_heads.js.
             if(firstActionIndex !== null){
                 try {
                     await this.db.doQuery(
@@ -831,13 +832,13 @@ class ClientRollback {
                 }
 
                 // Re-derive tokens.escrow_action_index AFTER the dataTables delete (mirror of
-                // xchain-indexer rollback.js). Orphaned offers + their append-only status rows
+                // xchain-indexer/src/rollback/rederive.js). Orphaned offers + their append-only status rows
                 // (order_statuses/swap_statuses/dispenser_statuses) are now gone, so a surviving
                 // GIVE_OWNERSHIP offer whose release was orphaned has reverted to its latest
                 // surviving status. Set the gate to that offer's action_index (or NULL if none
                 // survives). The SQL between the ESCROW-REDERIVE-SQL markers is kept logically
-                // identical with xchain-indexer/src/rollback.js (cross-repo drift guard in
-                // rollback-coverage.test.js) so source + replica derive byte-identical values.
+                // identical with xchain-indexer/src/db/rollback/rederive.js (cross-repo drift guard in
+                // test/unit/rollback_coverage.test.js) so source + replica derive byte-identical values.
                 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
                 // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
                 try {
@@ -852,7 +853,7 @@ class ClientRollback {
                 }
 
                 // Reverse an orphaned COINPAY's in-place match promotion, mirroring the
-                // source (xchain-indexer/src/rollback.js). Skipped on a truncated replica
+                // source (xchain-indexer/src/rollback/rederive.js). Skipped on a truncated replica
                 // for the same reason the pair-scoped market sweep is: the payment history
                 // this derives from may sit below the local floor.
                 if(!truncatedReplica){
@@ -868,7 +869,7 @@ class ClientRollback {
             // reorged token rows. icons is keyed by token_id (FK to tokens), so
             // icons for reorged tokens become orphans; the next full snapshot would
             // eventually overwrite them, but serving stale icon state for a token
-            // that no longer exists is misleading. Mirrors xchain-indexer rollback.js.
+            // that no longer exists is misleading. Mirrors xchain-indexer/src/rollback/rederive.js.
             try {
                 await this.db.doQuery('DELETE FROM icons WHERE token_id NOT IN (SELECT id FROM tokens)', []);
             } catch(e){
@@ -890,7 +891,7 @@ class ClientRollback {
             }
 
             // validator_rewards MATERIALIZATION-block delete, mirror of
-            // xchain-indexer/src/rollback.js. The loop above scopes on block_index,
+            // xchain-indexer/src/rollback/purge.js. The loop above scopes on block_index,
             // which for a reward is its EARN block. The BTC-side anchor/archive
             // derivation earns at the checkpoint's SNAPSHOT_BLOCK but writes the row while
             // processing a later BTC block, stamped derive_block_index, so a reorg into that
@@ -909,7 +910,7 @@ class ClientRollback {
             }
 
             // Roll back the index id lookups (index_addresses / index_tickers), mirroring
-            // the source indexer's rollback (xchain-indexer/src/rollback.js). These tables
+            // the source indexer's rollback (xchain-indexer/src/rollback/purge.js). These tables
             // are replicated VERBATIM by id (ClientApplier copies the server's ids), so the
             // replica must delete the same orphaned-block id rows the source deletes; the
             // forward stream then re-introduces them under their reproduced ids. Once an
@@ -934,7 +935,7 @@ class ClientRollback {
             // Mirror the source indexer's orphan sweep of the two derived tables that
             // reference a rolled-back index id but are neither action_index/block_index
             // deleted above nor recomputed: markets (tick1_id/tick2_id) and pubkeys
-            // (address_id). The source (xchain-indexer/src/rollback.js) deletes these when
+            // (address_id). The source (xchain-indexer/src/rollback/sweeps.js) deletes these when
             // their index id no longer resolves; the replica's replication NEVER propagates
             // a deletion for them (markets upserts on the full-dump, pubkeys is INSERT
             // IGNORE), so without mirroring the sweep the source row is gone but the replica
@@ -959,7 +960,7 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
-            // IDX-2 (mirror of xchain-indexer/src/rollback.js): the dangling-tick sweep
+            // IDX-2 (mirror of xchain-indexer/src/rollback/sweeps.js): the dangling-tick sweep
             // above misses a market whose pair was FIRST traded only in the orphaned range
             // while both its ticks survive (issued in earlier surviving blocks). The source
             // deletes that markets row, and no replication channel can remove it from a
@@ -1025,7 +1026,7 @@ class ClientRollback {
             // replacement. The price_snapshots delete exists because a from-genesis
             // replay never regenerates orphaned rounds, so hub re-mirror alone
             // cannot close the divergence window on this table.
-            // PRICE-SNAP-1 (mirror of xchain-indexer rollback.js): reference_block is always a BTC
+            // PRICE-SNAP-1 (mirror of xchain-indexer/src/rollback/sweeps.js): reference_block is always a BTC
             // anchor height regardless of the publishing chain, so only the BTC replica can prune
             // BTC-published rounds by it. Qualify by reference_chain and run only on the BTC replica so
             // a BTC reorg never deletes an off-BTC-published round the hub still keeps (price_snapshots
@@ -1083,7 +1084,7 @@ class ClientRollback {
             // the orphaned range here closes the staleness window before hub-driven
             // convergence (row:deleted) catches up. cross_chain_matches is two-sided: a
             // match drops when EITHER leg on this chain was rolled back. Predicates are
-            // byte-identical to xchain-indexer rollback.js (drift-guarded by the markers).
+            // byte-identical to xchain-indexer/src/db/rollback/sweeps.js (drift-guarded by the markers).
             if(firstActionIndex !== null){
                 let crossChainFrom = firstActionIndex;
                 //<CROSS-CHAIN-MIRROR-REORG-DELETE>
@@ -1099,7 +1100,7 @@ class ClientRollback {
                     // src_chain/src_action_index) is what a reorg takes away, so one column pair
                     // names the range. Kept LAST inside this try: a replica predating the bridge
                     // tables raises errno 1146 here, and the skip must not cost the two deletes
-                    // above it. Byte-identical to xchain-indexer/src/rollback.js (marker-guarded).
+                    // above it. Byte-identical to xchain-indexer/src/db/rollback/sweeps.js (marker-guarded).
                     await this.db.doQuery(
                         `DELETE FROM bridge_transfers WHERE src_chain = ? AND src_action_index >= ?`,
                         [this.coin, crossChainFrom]);
@@ -1284,7 +1285,7 @@ class ClientRollback {
 // after orphaned offers/statuses are deleted) and ClientApplier (forward-apply
 // path, after the block's offers/statuses are inserted) so both derive
 // byte-identical gate values. The SQL between the //<ESCROW-REDERIVE-SQL> markers
-// is kept logically identical with xchain-indexer/src/rollback/rederive.js (cross-repo
+// is kept logically identical with xchain-indexer/src/db/rollback/rederive.js (cross-repo
 // drift guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
@@ -1320,7 +1321,7 @@ async function rederiveEscrowGate(db){
 
 // Re-derive order_matches.status for COINPay matches from the already-replicated
 // coinpay_statuses rows. Replica mirror of the re-derive in
-// xchain-indexer/src/rollback.js: a COINPay match is written `pending_coinpay` and
+// xchain-indexer/src/rollback/rederive.js: a COINPay match is written `pending_coinpay` and
 // promoted IN PLACE to `valid` by the settling COINPAY, which is a LATER action, so the
 // reorg delete removes the payment and leaves the promotion standing on a surviving
 // match row. Without this the replica keeps a `valid` match a from-genesis replay reads
@@ -1330,7 +1331,7 @@ async function rederiveEscrowGate(db){
 // coinpay_action_index IS the match's action_index. Both statements touch only rows whose
 // status disagrees and no-op when the target status has never been minted locally, so
 // neither can blank a status_id. The SQL between the //<COINPAY-MATCH-REDERIVE-SQL>
-// markers is kept logically identical with xchain-indexer/src/rollback/rederive.js
+// markers is kept logically identical with xchain-indexer/src/db/rollback/rederive.js
 // (cross-repo drift guard in test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins
 // whatever transaction the caller already opened.
 //

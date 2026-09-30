@@ -76,13 +76,33 @@ function bootstrapDepthKey(chain, network){
     return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
 }
 
+// Source reorg ceiling: the decoder aborts reorg recovery past its dispenser-expiry
+// safe depth, so no honest source emits a deeper REORG. Mirrors xchain-decoder's
+// DISPENSER_EXPIRE_SAFE_DEPTH and xchain-utxo-tracker's undo_blocks.js; change together.
+const SOURCE_SAFE_REORG_DEPTH = 126
+const LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
+
+// Return the source reorg ceiling for a chain, in ticker or full-name form.
+function rollbackDepthSafeCeiling(chain, network){
+    return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
+        ? LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH
+        : SOURCE_SAFE_REORG_DEPTH
+}
+
 function resolveMaxRollbackDepth(chain, network, configuredDepth, explicitOverride){
     const configured = parseIntMin1(configuredDepth, 100)
-    if(explicitOverride === true) return configured
-    if(explicitOverride !== false) return configured
-    return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
-        ? 5000
-        : configured
+    let resolved = configured
+    if(explicitOverride === false && coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet')
+        resolved = 5000
+    // Warn loudly, but never clamp: the override is a deliberate operator knob, as in the tracker
+    const ceiling = rollbackDepthSafeCeiling(chain, network)
+    if(resolved > ceiling){
+        logger.error('WARNING: MAX_ROLLBACK_DEPTH for ' + chain + '/' + network + ' resolves to ' + resolved +
+            ', above the source reorg ceiling (' + ceiling + ', the decoder dispenser-expiry safe depth). ' +
+            'This replica will accept REORG events deeper than the decoder can recover, weakening the ' +
+            'fail-closed reorg-depth guard. Lower MAX_ROLLBACK_DEPTH, or raise DISPENSER_EXPIRE_SAFE_DEPTH to match.')
+    }
+    return resolved
 }
 
 // Canonical key for a SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK> env name, or null when
@@ -161,6 +181,9 @@ module.exports = {
     /** The raw concurrent-snapshot cap, NaN when unset; the caller derives one from the pool. */
     maxConcurrentSnapshotsFromEnv: () => parseInt(process.env.MAX_CONCURRENT_SNAPSHOTS),
 
+    /** The npm lifecycle event active for this process, undefined when npm did not launch it. */
+    npmLifecycleEventFromEnv: () => process.env.npm_lifecycle_event,
+
     /** The key a hub call carries: the config-secrets key when set, else the bulk key. */
     hubApiKeyFromEnv: () => process.env.HUB_CONFIG_SECRETS_API_KEY || process.env.HUB_API_KEY,
 
@@ -188,6 +211,7 @@ module.exports = {
     unmatchedBootstrapDepthKeys,
     assertBootstrapDepthChains,
     resolveMaxRollbackDepth,
+    rollbackDepthSafeCeiling,
 
     getConfig: function(){
         let config = {};
@@ -466,7 +490,7 @@ module.exports = {
         config['INDEX_MAP_PARITY_CHECK'] = (process.env.INDEX_MAP_PARITY_CHECK || '').toLowerCase() === 'true';
 
         // TABLE_CONTENT_PARITY_CHECK: advisory per-table CONTENT parity over
-        // every replicated table the registry declares covered (src/tableLifecycle.js
+        // every replicated table the registry declares covered (src/table_lifecycle.js
         // CONTENT_PARITY_*). Same posture as INDEX_MAP_PARITY_CHECK and for the same
         // reason, one scope wider: the row counts published beside it prove only
         // cardinality, so an equal-count content substitution in a table no consensus
@@ -529,6 +553,8 @@ module.exports = {
         // older checkpoint, or 404, so a forged tail past the last served checkpoint is
         // never anchored. Point this at the hub/federation (a different endpoint than the
         // streaming source) to close that withholding gap. Unset = fall back to sources[0].
+        // The endpoint must serve both /checkpoint/indexer/<chain>/<network>/latest and
+        // .../range, since the validator-rotation walk fetches its range from it too.
         config['CHECKPOINT_ANCHOR_URL'] = process.env.CHECKPOINT_ANCHOR_URL || null;
 
         // Freshness bound (in applied blocks) for the checkpoint anchor. When the newest

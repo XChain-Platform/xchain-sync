@@ -28,9 +28,9 @@ async function collectTokenSupplyRows(db, from, to, conn, acc){
     // 6. tokens.supply refresh on surviving token rows. The indexer materialises
     //    tokens.supply as an in-place UPDATE (db.createToken on DEPLOY/ISSUE/MINT and
     //    db.updateTokens after order/swap/dispense settlement and STAKE rebalances). The
-    //    row's action_index stays at the DEPLOY action, and last_action_index is also
-    //    written back to that same DEPLOY index (createToken sets both from the first
-    //    valid issuance), so BOTH columns sit below the catch-up cursor: the
+    //    row's action_index stays at the DEPLOY action, and last_action_index sits on the
+    //    tick's last valid ISSUE (the DEPLOY when never edited), which a supply-only change
+    //    does not move, so BOTH columns sit below the catch-up cursor: the
     //    action-scoped stream keyed on action_index never carries the later supply bump.
     //    Followers therefore served a stale supply (invisible to /status counts and not
     //    covered by any hash). Supply changes exactly when a credit / debit / escrow row
@@ -71,10 +71,10 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    `issues` history (issue/settle.js -> createToken, then updateTokens ->
     //    getTokenInfo's replay), so an ISSUE that EDITS an existing tick is an in-place
     //    UPDATE of owner_id, description, the seven locks, the callback and list fields,
-    //    the mint window and the bridge opt-in. action_index and last_action_index both
-    //    stay pinned at the FIRST issuance, so - exactly as with supply - the
-    //    action-scoped stream carries the new `issues` row but never the edited `tokens`
-    //    row it produced.
+    //    the mint window and the bridge opt-in. action_index stays pinned at the FIRST
+    //    issuance while the edit's UPDATE moves last_action_index to the editing ISSUE, and
+    //    the action-scoped stream keys on action_index, so - exactly as with supply - it
+    //    carries the new `issues` row but never the edited `tokens` row it produced.
     //
     //    Class 6 hid this for every edit that also moves a balance (its ledger-touched
     //    tick set catches those), which is why it surfaced as an intermittent bug rather

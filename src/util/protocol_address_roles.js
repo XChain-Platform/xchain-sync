@@ -8,8 +8,8 @@
 
 // CONSENSUS-CRITICAL: protocol special-address canonicalization for the block
 // hash preimage. Frozen, byte-identical mirror of the canonical source in
-// xchain-indexer/src/consensus/protocolAddressRoles.js (which derives this same map from
-// src/configs/*.js and asserts equality in its unit suite).
+// xchain-indexer/src/consensus/protocol_address_roles.js (which derives this same map from
+// src/coins/*.js and asserts equality in its unit suite).
 //
 // BlockHasher recomputes the ledger/actions/contracts hashes from replicated
 // rows. The indexer hashes a protocol special address (BURN / GAS / DONATE1 /

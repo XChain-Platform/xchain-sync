@@ -7,6 +7,8 @@ const {
     assert,
     sinon,
     Database,
+    FIXTURE_HOST,
+    FIXTURE_PORT,
     makeUtil,
     makeDb,
     silenceConsole,
@@ -36,7 +38,7 @@ describe('Database constructor: dbType default', function () {
 
     it('defaults dbType to "indexer" when not provided', async function () {
         silenceConsole();
-        let db = new Database('localhost', 3306, 'db', 'u', 'p', makeUtil());
+        let db = new Database(FIXTURE_HOST, FIXTURE_PORT, 'db', 'u', 'p', makeUtil());
         assert.strictEqual(db.dbType, 'indexer');
         await db.close();
     });

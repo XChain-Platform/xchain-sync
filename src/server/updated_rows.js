@@ -29,7 +29,7 @@
  * UPDATE (see ClientApplier.upsertRows), so re-sending a row already current is
  * a harmless no-op. The detection mirrors (in the forward direction) the exact
  * reorg-reset predicates ClientRollback already runs (which themselves mirror
- * xchain-indexer/src/rollback.js), so source and follower converge byte-for-byte.
+ * xchain-indexer/src/rollback/), so source and follower converge byte-for-byte.
  *
  * Covered in-place mutation classes (all indexer-only):
  *   - deactivation_block stamp on stakes / delegations / contract_stakes /
@@ -64,17 +64,19 @@
  *     so the action-scoped stream carries the chunk but not the head's flipped status;
  *     keyed by the completing continuation's block_index and scoped to one author.
  *   - supply refresh on a surviving tokens row (the indexer UPDATEs tokens.supply in
- *     place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). Both
- *     action_index and last_action_index stay pinned at the DEPLOY action, below the
- *     cursor, so the action-scoped stream misses every later supply bump. Found via
+ *     place on DEPLOY / ISSUE / MINT / settlement / STAKE-rebalance). action_index
+ *     stays pinned at the DEPLOY action and last_action_index at the last valid ISSUE,
+ *     which a supply bump does not move, so both sit below the cursor and the
+ *     action-scoped stream misses every later supply bump. Found via
  *     the ticks touched by a credit / debit / escrow row in this window, since those
  *     ledger tables are action-scoped and pin the supply change to a block.
  *   - metadata refresh on a surviving tokens row (the indexer re-derives every
  *     derived token column from the `issues` history on each valid ISSUE, so an
  *     EDIT of an existing tick - ownership TRANSFER, description, the locks, the
- *     callback and list fields, the bridge opt-in - is an in-place UPDATE). Both
- *     action_index and last_action_index stay pinned at the first issuance, below
- *     the cursor, so the action-scoped stream misses the edit. Found via the
+ *     callback and list fields, the bridge opt-in - is an in-place UPDATE). Only
+ *     action_index stays pinned at the first issuance, below the cursor; the edit
+ *     moves last_action_index to the editing ISSUE, but the action-scoped stream keys
+ *     on action_index, so it misses the edit. Found via the
  *     ticks carrying a valid `issues` row in this window, since `issues` is
  *     action-scoped and pins the edit to a block.
  *
@@ -263,7 +265,7 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     needed the block_index_doge key.
     //
     //     Predicate mirrors, in the forward direction, the indexer's reverse restore
-    //     (xchain-indexer/src/rollback.js, the head -> 'valid' reset): head at
+    //     (xchain-indexer/src/db/rollback/batch_heads.js, the head -> 'valid' reset): head at
     //     batch_chunk_index = 0, a status carrying the completion marker (which is what
     //     separates an after-the-fact stamp from a head that was terminal when written), a
     //     VALID continuation of the same batch key, and the SAME AUTHOR on both rows via

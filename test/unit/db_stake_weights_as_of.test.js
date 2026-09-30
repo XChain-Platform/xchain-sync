@@ -23,7 +23,7 @@
 
 const assert     = require('assert');
 const sinon      = require('sinon');
-const Database   = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const ClientSync = require('../../src/client/sync');
 const Utility = require('../../src/util');
 const HashVerifier = require('../../src/client/hash_verifier');
@@ -37,7 +37,7 @@ function makeUtil(){
     };
 }
 function makeDb(){
-    return new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+    return makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
 }
 
 const STAKE_WEIGHTS_AS_OF_TITLE = 'Database.getStakeWeightsByCapabilityAsOf (#4927)';
@@ -168,5 +168,38 @@ describe('ClientSync.oraclePublishSetAt uses the as-of reconstruction (#4927)', 
         assert.strictEqual(db.getStakeWeightsByCapability.called, false, 'must NOT use the slash-mutated live query');
         assert.strictEqual(db.getStakeWeightsByCapabilityAsOf.firstCall.args[1], 106, 'queried at the snapshot block');
         assert.deepStrictEqual(set, [{ pubkey: 'AA', weight: '6000.00000000', source: 'addr1' }]);
+    });
+});
+
+// Production builds ClientSync with the hub's full coin name ('bitcoin'); the gates
+// are keyed '<TICKER>:<network>', so the full name silently selected the uncapped set.
+describe('ClientSync.oraclePublishSetAt gates on the coin ticker, not the full name @regression', function(){
+
+    let queries;
+    function makeProductionSync(){
+        let rdb = makeDb();
+        sinon.stub(rdb, 'getStatusId').resolves(1);
+        queries = [];
+        sinon.stub(rdb, 'doQueryStrict').callsFake(async (query) => { queries.push(query); return []; });
+        const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true };
+        return new ClientSync('bitcoin', 'testnet', rdb, { applyBlock: sinon.stub().resolves() },
+            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
+    }
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn'); });
+    afterEach(function(){ sinon.restore(); });
+
+    it('passes the BTC ticker as the coin argument', async function(){
+        let sync = makeProductionSync();
+        let spy = sinon.spy(sync.db, 'getStakeWeightsByCapabilityAsOf');
+        await sync.oraclePublishSetAt(106);
+        assert.strictEqual(spy.firstCall.args[4], 'BTC');
+        assert.strictEqual(spy.firstCall.args[5], 'testnet');
+    });
+
+    it('selects the source-capped set on BTC testnet, where the cap is active from genesis', async function(){
+        let sync = makeProductionSync();
+        await sync.oraclePublishSetAt(106);
+        assert.strictEqual(queries.length, 1, 'one stake-weight query');
+        assert.ok(/DENSE_RANK\(\)/.test(queries[0]), 'capped (windowed) query, not the legacy LIMIT path');
     });
 });

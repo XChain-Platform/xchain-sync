@@ -22,12 +22,12 @@
 const assert = require('assert');
 const sinon  = require('sinon');
 
-const Database      = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const utf8mb4Columns = require('../../src/schema/utf8mb4_columns');
 
 function makeDb(dbType){
     const util = { isNull: (v) => v === null || v === undefined, logError: () => {} };
-    return new Database('localhost', 3306, 'replica_db', 'u', 'p', util, dbType || 'indexer');
+    return makeTestDatabase('replica_db', 'u', 'p', util, dbType || 'indexer');
 }
 
 // information_schema rows for `table`, reporting every column in the widen set as

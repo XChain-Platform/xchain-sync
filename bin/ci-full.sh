@@ -76,17 +76,25 @@ ci_tier_deferred() {
   return 1
 }
 # <<< ci-tier <<<
+# >>> ci-tier timer (generated block; re-run the tier wirer to update) >>>
 run_tier() {
   ci_tier_deferred "$1" && return 0  # ci-tier guard (generated)
   local name="$1"; shift
+  local __ci_tier_t0=$SECONDS
   echo; echo "ci:full ===== $name ====="
   if "$@"; then
-    echo "ci:full ----- $name PASS"
+    echo "ci:full ----- $name PASS ($(( SECONDS - __ci_tier_t0 ))s)"
   else
     FAILED="$FAILED [$name]"
-    echo "ci:full ----- $name FAIL"
+    echo "ci:full ----- $name FAIL ($(( SECONDS - __ci_tier_t0 ))s)"
   fi
 }
+# <<< ci-tier timer <<<
+fast_defer() {
+  DEFERRED="$DEFERRED [$1]"
+  echo; echo "ci:full ===== $1 DEFERRED (CI_TIER=fast, runs in the full sweep) ====="
+}
+
 need_sib() {
   local s
   for s in "$@"; do
@@ -105,18 +113,44 @@ export XCHAIN_DECODER_SQL_PATH="${XCHAIN_DECODER_SQL_PATH:-$SIB/xchain-decoder/s
 
 need_sib xchain-indexer xchain-decoder xchain-hub
 
-# The e2e job (below) needs Docker for its two service containers; guard once,
-# up front, so a docker-less venue fails loud instead of every DB-backed tier
-# failing separately with a confusing connection-refused error.
-docker info >/dev/null 2>&1 || {
-  echo "ci:full: VENUE LACKS DOCKER for e2e job (source-db/replica-db service" >&2
-  echo "ci:full: containers, e2e tier, integration tier); pin a docker venue" >&2
-  echo "ci:full: with CI_VENUES=..." >&2
-  exit 1
-}
+# Keep fast runs independent of Docker by leaving the stack to the full sweep;
+# guard full runs up front so database-tier failures remain actionable on the
+# venue that will run them.
+if [ "${CI_TIER:-full}" != "fast" ]; then
+  docker info >/dev/null 2>&1 || {
+    echo "ci:full: VENUE LACKS DOCKER for e2e job (source-db/replica-db service" >&2
+    echo "ci:full: containers, e2e tier, integration tier); pin a docker venue" >&2
+    echo "ci:full: with CI_VENUES=..." >&2
+    exit 1
+  }
+fi
+
+FAST_SELECTOR_READY=0
+FAST_CONSENSUS=1
+if [ "${CI_TIER:-full}" = "fast" ]; then
+  if [ ! -f bin/ci_fast_select.js ]; then
+    echo "ci:full: fast selector unavailable (helper missing); running the full unit tier"
+  elif FAST_PLAN="$(node bin/ci_fast_select.js --plan 2>&1)"; then
+    case "$FAST_PLAN" in
+      "consensus 0"|"consensus 0"$'\n'*) FAST_CONSENSUS=0; FAST_SELECTOR_READY=1 ;;
+      "consensus 1"|"consensus 1"$'\n'*) FAST_CONSENSUS=1; FAST_SELECTOR_READY=1 ;;
+      *) echo "ci:full: fast selector unavailable (invalid plan output); running the full unit tier" ;;
+    esac
+    [ "$FAST_SELECTOR_READY" -eq 0 ] || printf '%s\n' "$FAST_PLAN"
+  else
+    printf '%s\n' "$FAST_PLAN"
+    FAST_WHY="${FAST_PLAN##*$'\n'}"
+    echo "ci:full: fast selector unavailable ($FAST_WHY); running the full unit tier"
+  fi
+fi
 
 # --- job: ci (XChain-Platform/.github ci-reusable.yml -> npm run ci) -------
-run_tier "ci" npm run ci
+if [ "${CI_TIER:-full}" != "fast" ] || [ "$FAST_SELECTOR_READY" -eq 0 ] || [ "$FAST_CONSENSUS" -eq 1 ]; then
+  run_tier "ci" env XCHAIN_REQUIRE_SIBLINGS=1 npm run ci
+else
+  run_tier "ci (changed tests)" env XCHAIN_REQUIRE_SIBLINGS=1 node bin/ci_fast_select.js --run
+  fast_defer "ci"
+fi
 
 # --- job: e2e ----------------------------------------------------------------
 # GitHub stands up source-db (:23306) and replica-db (:23307) as service
@@ -125,13 +159,17 @@ run_tier "ci" npm run ci
 # helper already defaults to those ports and credentials, so no env override
 # is needed once the stack is up.
 E2E_COMPOSE="test/e2e/docker-compose.e2e.yml"
-E2E_DB_PORT_RESOLVED="$(node bin/fixture-ports.js port E2E_DB_PORT)" || exit 1
 e2e_compose_down() {
   node bin/fixture-ports.js compose "$E2E_COMPOSE" down -v >/dev/null 2>&1
 }
-trap e2e_compose_down EXIT
-run_tier "e2e: bring up service containers (source-db, replica-db)" \
-  node bin/fixture-ports.js compose "$E2E_COMPOSE" up -d --wait
+if [ "${CI_TIER:-full}" = "fast" ]; then
+  fast_defer "e2e: bring up service containers (source-db, replica-db)"
+else
+  E2E_DB_PORT_RESOLVED="$(node bin/fixture-ports.js port E2E_DB_PORT)" || exit 1
+  trap e2e_compose_down EXIT
+  run_tier "e2e: bring up service containers (source-db, replica-db)" \
+    node bin/fixture-ports.js compose "$E2E_COMPOSE" up -d --wait
+fi
 
 # Cross-repo consensus drift guards (rollback-coverage and friends) live in
 # the unit tier but the shared `ci` job never checks out a sibling, so they
@@ -147,18 +185,25 @@ run_tier "e2e: cross-repo consensus drift guards" \
     test/unit/stakes_validator_set_parity.test.js \
     test/unit/generated_columns.test.js
 
-run_tier "e2e: e2e tier (test:e2e:ci)" npm run test:e2e:ci
+if [ "${CI_TIER:-full}" = "fast" ]; then
+  fast_defer "e2e: e2e tier (test:e2e:ci)"
+  fast_defer "e2e: integration tier (green suites, test:integration:ci)"
+  fast_defer "e2e: tear down service containers"
+else
+  run_tier "e2e: e2e tier (test:e2e:ci)" npm run test:e2e:ci
 
-# Independent of the e2e tier above (own DBs, own schema seed); run even if
-# the e2e tier failed, so a flake there can't mask the integration result.
-# Reuses source-db (:23306) with the admin credentials, not the e2e
-# xchain-node user, matching the workflow step exactly.
-run_tier "e2e: integration tier (green suites, test:integration:ci)" \
-  env TEST_DB_HOST=127.0.0.1 TEST_DB_PORT="$E2E_DB_PORT_RESOLVED" TEST_DB_USER=root TEST_DB_PASS=test \
-  npm run test:integration:ci
+  # Run integration independently even if e2e failed, so one red tier cannot
+  # mask the other result.
 
-run_tier "e2e: tear down service containers" e2e_compose_down
-trap - EXIT
+  # Reuse source-db (:23306) with workflow-matching admin credentials, not the
+  # e2e xchain-node user.
+  run_tier "e2e: integration tier (green suites, test:integration:ci)" \
+    env TEST_DB_HOST=127.0.0.1 TEST_DB_PORT="$E2E_DB_PORT_RESOLVED" TEST_DB_USER=root TEST_DB_PASS=test \
+    npm run test:integration:ci
+
+  run_tier "e2e: tear down service containers" e2e_compose_down
+  trap - EXIT
+fi
 
 # --- job: drift-guards -------------------------------------------------------
 # Run FROM the parent so sync-coins.sh sees the canonical + vendored pair the
@@ -182,7 +227,7 @@ run_tier "drift-guards: coin consensus-pin conformance" node -e '
 run_tier "identity pin (armed map, vendored coins)" node bin/pin-identity.js --compare bin/pins/identity.json
 
 # --- job: coverage -----------------------------------------------------------
-run_tier "coverage ratchet (coverage:check)" npm run coverage:check
+run_tier "coverage ratchet (coverage:check)" env XCHAIN_REQUIRE_SIBLINGS=1 npm run coverage:check
 
 echo
 # >>> ci-tier summary (generated) >>>

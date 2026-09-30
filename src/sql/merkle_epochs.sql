@@ -19,5 +19,5 @@ CREATE TABLE merkle_epochs (
     end_block   BIGINT NOT NULL,
     merkle_root VARCHAR(64) NOT NULL,
     leaf_count  INT NOT NULL,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );

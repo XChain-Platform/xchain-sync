@@ -12,10 +12,10 @@
 //
 // The other two table universes on this seam are already structurally proven
 // against their schema directory: the indexer topology is GENERATED from
-// src/tableLifecycle.js and rollback-coverage.test.js reads
+// src/table_lifecycle.js and rollback_coverage.test.js reads
 // xchain-indexer/src/sql, and the sync-owned set is checked by
-// syncTableClassification.test.js against xchain-sync/src/sql. The decoder
-// topology is a hand-written literal (replicatedTables.js TOPOLOGY.decoder)
+// sync_table_classification.test.js against xchain-sync/src/sql. The decoder
+// topology is a hand-written literal (src/schema/replicated_tables.js TOPOLOGY.decoder)
 // and nothing read the decoder schema directory to prove it exhaustive.
 //
 // Every decoder channel trusts that literal: the per-block stream
@@ -25,9 +25,9 @@
 // to the literal is never streamed, never counted, never rolled back and never
 // parity-checked, with nothing turning red. That is the merkle_reorgs failure
 // class the sync-owned guard was written to close (see the header of
-// syncTableClassification.test.js).
+// sync_table_classification.test.js).
 //
-// The by-value pin in replicatedTables.test.js is NOT this guard: it compares
+// The by-value pin in replicated_tables.test.js is NOT this guard: it compares
 // the literal against another literal, so it makes an EDIT to the literal
 // deliberate while staying blind to a schema file nobody ever declared.
 //

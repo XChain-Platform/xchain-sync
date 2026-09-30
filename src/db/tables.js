@@ -23,7 +23,14 @@
 const path       = require('path');
 const lifecycle = require('../table_lifecycle');
 const { assertValidIdentifier } = require('./shared.js');
-const { ARCHIVE_HEAD_VERSIONS_SQL, ARCHIVE_CHUNK_HEIGHT_COL } = require('../consensus/state_hash');
+const {
+    archiveHeadPredicate,
+    ARCHIVE_HEAD_VERSIONS_SQL,
+    ARCHIVE_CHUNK_HEIGHT_COL
+} = require('../consensus/state_hash');
+
+const ARCHIVE_HEAD_VERSION_WINDOW_SQL =
+    "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?";
 
 module.exports = {
 
@@ -624,12 +631,14 @@ module.exports = {
      * @returns {Promise<object[]>} the driver's row array
      */
     async findInvalidArchiveHeadRows(from, to, conn){
+        const where = "WHERE " + archiveHeadPredicate('p') + " AND " +
+            ARCHIVE_HEAD_VERSION_WINDOW_SQL.slice("WHERE ".length);
         return await this.doQuery(
             "SELECT DISTINCT p.* FROM anchor_actions p " +
             "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
             "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
             "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL + " AND " + ARCHIVE_CHUNK_HEIGHT_COL + " BETWEEN ? AND ?",
+            where,
             [from, to], conn);
     },
 

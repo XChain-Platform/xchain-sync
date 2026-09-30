@@ -10,7 +10,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const Database = require('../../../src/db');
+const { makeTestDatabase } = require('../support/fake_db');
 const fs = require('fs');
 const path = require('path');
 
@@ -18,7 +18,7 @@ const path = require('path');
 // below) and the pure validation helpers, so util is never exercised here.
 function makeDb(){
     let util = { isNull: (v) => v === null || v === undefined };
-    return new Database('localhost', 3306, 'replica_db', 'u', 'p', util, 'indexer');
+    return makeTestDatabase('replica_db', 'u', 'p', util, 'indexer');
 }
 
 let db;
@@ -185,7 +185,7 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
     });
 
     it('does nothing on a decoder replica (early return, no queries)', async function(){
-        let decoderDb = new Database('localhost', 3306, 'replica_db', 'u', 'p', { isNull: (v) => v === null || v === undefined }, 'decoder');
+        let decoderDb = makeTestDatabase('replica_db', 'u', 'p', { isNull: (v) => v === null || v === undefined }, 'decoder');
         let called = false;
         sinon.stub(decoderDb, 'doQuery').callsFake(async () => { called = true; return []; });
 

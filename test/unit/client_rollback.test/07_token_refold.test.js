@@ -142,8 +142,9 @@ async function sourceFold(root, issues){
     return out;
 }
 
-async function reorg(edit, rowAfterEdit){
-    let { db, world } = replica([GENESIS, SURVIVING_EDIT, edit], rowAfterEdit, 500);
+// Rolls back from action 500, orphaning `edit`; `surviving` is the history the reorg keeps.
+async function reorg(edit, rowAfterEdit, surviving = [GENESIS, SURVIVING_EDIT]){
+    let { db, world } = replica(surviving.concat([edit]), rowAfterEdit, 500);
     await new ClientRollback(db, new Utility(), 'BTC', 'regtest').rollback(1000);
     return world;
 }
@@ -189,6 +190,44 @@ describe('ClientRollback token refold (reverse leg of updated_rows class 7)', fu
             let [edit, row] = SCENARIOS[name];
             let world = await reorg(edit, row);
             let source = await sourceFold(root, [GENESIS, SURVIVING_EDIT]);
+            assert.deepStrictEqual(stored(world.token), stored(source));
+        });
+    }
+});
+
+describe('ClientRollback token refold: list detach sentinel', function(){
+
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    // A list detach (value 0) must sit in the SURVIVING history to reach either fold:
+    // the orphaned edit at 500 is deleted before the refold reads anything.
+    const ORPHANED_TRANSFER = issue(500, { transfer_addr_id: 2 });
+    const DETACH_SCENARIOS = {
+        'allow-list detach': [
+            [GENESIS, SURVIVING_EDIT, issue(400, { allow_list: 0 })],
+            editedRow({ owner_id: 2, allow_list: null, last_action_index: 500 }),
+            editedRow({ allow_list: null, last_action_index: 400 })],
+        'block-list detach': [
+            [GENESIS, SURVIVING_EDIT, issue(350, { block_list: 7 }), issue(400, { block_list: '0' })],
+            editedRow({ owner_id: 2, block_list: null, last_action_index: 500 }),
+            editedRow({ block_list: null, last_action_index: 400 })],
+    };
+
+    for(let name of Object.keys(DETACH_SCENARIOS)){
+        it('a reorg over a surviving ' + name + ' refolds the list to NULL, not 0', async function(){
+            let [surviving, row, expected] = DETACH_SCENARIOS[name];
+            let world = await reorg(ORPHANED_TRANSFER, row, surviving);
+            assert.strictEqual(world.updates, 1);
+            assert.deepStrictEqual(stored(world.token), stored(expected));
+        });
+
+        it('a reorg over a surviving ' + name + ' matches the xchain-indexer fold byte for byte', async function(){
+            let root = indexerOrSkip(this);
+            if(!root) return;
+            let [surviving, row] = DETACH_SCENARIOS[name];
+            let world = await reorg(ORPHANED_TRANSFER, row, surviving);
+            let source = await sourceFold(root, surviving);
             assert.deepStrictEqual(stored(world.token), stored(source));
         });
     }
@@ -247,6 +286,28 @@ describe('foldIssueRows', function(){
         assert.strictEqual(out.max_supply, '5.00000000');
         assert.strictEqual(out.last_action_index, 2);
     });
+
+    // Fold one tick's issues and return its column set.
+    function fold(rows){ return tokenRefold.foldIssueRows(rows).get(String(TICK)); }
+
+    for(let [col, id] of [['allow_list', 42], ['block_list', 7]]){
+        it('reads a ' + col + ' of 0 (number, string or BigInt) as a detach to NULL', function(){
+            for(let zero of [0, '0', 0n]){
+                let out = fold([issue(1, { decimals: '8', [col]: id }), issue(2, { [col]: zero })]);
+                assert.strictEqual(out[col], null, col + ' after a detach of ' + typeof zero);
+            }
+        });
+
+        it('keeps a detached ' + col + ' NULL through later empty issues', function(){
+            let out = fold([issue(1, { decimals: '8', [col]: id }), issue(2, { [col]: 0 }), issue(3, { description: 'x' })]);
+            assert.strictEqual(out[col], null);
+        });
+
+        it('lets a later ' + col + ' re-attach after a detach', function(){
+            let out = fold([issue(1, { decimals: '8', [col]: id }), issue(2, { [col]: 0 }), issue(3, { [col]: 55 })]);
+            assert.strictEqual(out[col], 55);
+        });
+    }
 });
 
 describe('BlockHasher.computeTokenFoldChecksum (advisory token fold parity)', function(){

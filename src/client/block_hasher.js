@@ -147,7 +147,7 @@ class BlockHasher {
         // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
         // issuance fee credited to DONATE1) would otherwise leak the chain's address
         // encoding into the hash, so the replica's recomputed hash must apply the same
-        // substitution to match the source. See protocolAddressRoles.js.
+        // substitution to match the source. See src/util/protocol_address_roles.js.
         for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
         for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
@@ -274,15 +274,15 @@ class BlockHasher {
 
     // Recompute the replication-integrity state_hash for a block from the replicated
     // raw rows (the fourth hash covering the in-place mutations + backdated refund
-    // credits the three consensus hashes structurally cannot see (see stateHash.js).
+    // credits the three consensus hashes structurally cannot see (see src/consensus/state_hash.js).
     // Conformance twin of xchain-indexer/src/db/actions.js getBlockHashes' state_hash branch:
     // both call the byte-identical buildStateHashData + the shared getDataHash. The
     // caller MUST invoke this APPLY-TIME (tip = block_index), never via a historical
     // recompute, where the in-place-mutated rows have since moved on (see ClientSync).
     // activationDelay is the frozen per-chain ACTIVATION_DELAY_BLOCKS; gasTick defaults
     // to the consensus GAS constant.
-    async computeStateHash(block_index, activationDelay, gasTick, network, coin){
-        let stateData = await buildStateHashData(this.db, block_index, {
+    async computeStateHashPreimage(block_index, activationDelay, gasTick, network, coin){
+        return buildStateHashData(this.db, block_index, {
             activationDelay: activationDelay,
             gasTick:         (gasTick !== undefined) ? gasTick : gasTickSymbol(),
             // network gates the additive index-map class (id-determinism P4); coin extends
@@ -293,6 +293,11 @@ class BlockHasher {
             network:         network,
             coin:            coin
         });
+    }
+
+    async computeStateHash(block_index, activationDelay, gasTick, network, coin){
+        let stateData = await this.computeStateHashPreimage(
+            block_index, activationDelay, gasTick, network, coin);
         return this.util.getDataHash(stateData);
     }
 
@@ -362,7 +367,7 @@ class BlockHasher {
     // THIS method over the bound the SOURCE published, so they agree by construction.
     //
     // Per-table content checksums over a bounded window, for every replicated table
-    // the registry declares content-parity-covered (src/tableLifecycle.js
+    // the registry declares content-parity-covered (src/table_lifecycle.js
     // CONTENT_PARITY_*, resolved by replicatedTables.contentParityPlan). This is the
     // only signal that catches an equal-COUNT content substitution in a table no
     // consensus hash reads: the three block hashes cover the ledger/actions/contract

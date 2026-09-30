@@ -13,7 +13,7 @@
  ********************************************************************
  * test/unit/stream_scope_columns.test.js
  *
- * Binds every streaming declaration in src/tableLifecycle.js to the DDL of the
+ * Binds every streaming declaration in src/table_lifecycle.js to the DDL of the
  * table it declares. A 'stream:block' entry must own its blockKey column, a
  * 'stream:action' entry must own action_index, and a 'stream:index' entry must
  * own the id cursor replicatedTables.lookupCursorColumn pages by.
@@ -43,7 +43,7 @@ const replicatedTables = require('../../src/schema/replicated_tables');
 
 // The registry declares indexer-schema tables plus the handful xchain-sync owns,
 // so those are the two DDL trees to scan. The decoder topology is declared
-// literally in replicatedTables.js and is not generated from this registry.
+// literally in src/schema/replicated_tables.js and is not generated from this registry.
 //
 // The indexer half is a sibling checkout, resolved the way generatedColumns.test.js
 // resolves it: absent in a standalone checkout, and XCHAIN_REQUIRE_SIBLINGS=1 turns
@@ -164,7 +164,7 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
                   'tables it cannot read stay reported as covered');
 
         // Only the INDEXER branch: the decoder topology is declared literally in
-        // replicatedTables.js, not generated from this registry, so its block_index
+        // src/schema/replicated_tables.js, not generated from this registry, so its block_index
         // range is correct as written and must not be swept up by this assertion.
         const snapshot = read('src/server/snapshot_builder.js');
         const start    = snapshot.indexOf('if(indexerBlockScoped.has(table)){');

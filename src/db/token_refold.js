@@ -21,7 +21,7 @@
  *   xchain-indexer/src/rollback/index.js:165   collectAffectedEntities (issues read
  *                                              at src/db/rollback/read_phase.js:136)
  *   xchain-indexer/src/rollback/commit.js:60   updateTokens(tickers, true)
- *   xchain-indexer/src/db/database/ledger_checks.js:130  updateTokenInfo
+ *   xchain-indexer/src/db/database/ledger_checks.js:132  updateTokenInfo
  *   xchain-indexer/src/db/issues/token_info.js:29        getTokenInfo, whose replay is
  *       rowsQuery (:84), rowValues (:131) and foldRow (:169)
  *   xchain-indexer/src/db/tokens/token_writer.js:26      createToken, via
@@ -37,8 +37,9 @@
  * must run AFTER this (it reads tokens.decimals). `bridged`, `escrow_action_index`,
  * `coin_price` and `coin_floor` are not fold output and are never touched.
  *
- * test/unit/token_refold.test.js runs the indexer's own getTokenInfo + createToken
- * beside this port over the same issue rows when the sibling checkout is present.
+ * test/unit/client_rollback.test/07_token_refold.test.js runs the indexer's own
+ * getTokenInfo + createToken beside this port over the same issue rows when the
+ * sibling checkout is present.
  *
  ********************************************************************/
 
@@ -107,8 +108,9 @@ function rowValues(row){
     };
 }
 
-// foldRow, verbatim in effect: a set LOCK_ never unsets, DECIMALS never drops, an empty
-// value inherits. ACTION_INDEX is overwritten by every row (the source's first-issuance
+// foldRow, verbatim in effect: a set LOCK_ never unsets, DECIMALS never drops, a list
+// value of 0 (the ISSUE detach sentinel) resets that list to null, an empty value
+// inherits. ACTION_INDEX is overwritten by every row (the source's first-issuance
 // branch does not `continue`), so it ends on the LAST valid issue, which is the value the
 // source's UPDATE writes to last_action_index.
 function foldRow(data, arr){
@@ -117,6 +119,8 @@ function foldRow(data, arr){
         if(key === 'ACTION_INDEX' && isNull(data[key])) data[key] = value;
         if(key.substr(0, 5) === 'LOCK_' && data[key] == 1) continue;
         if(key === 'DECIMALS' && data[key] > value) continue;
+        // Treat the detach sentinel as no list, ungated like the source (number, string or BigInt 0)
+        if((key === 'ALLOW_LIST' || key === 'BLOCK_LIST') && String(value) === '0'){ data[key] = null; continue; }
         if(isNull(value)) continue;
         data[key] = value;
     }

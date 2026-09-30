@@ -40,4 +40,9 @@ describe('coverage ratchet floors', () => {
   it('fails the job on a shortfall rather than only reporting it', () => {
     assert.match(pkg.scripts['coverage:check'], /--check-coverage/);
   });
+
+  it('runs --all in coverage and coverage:check, so a file no test ever requires cannot hide from the denominator', () => {
+    assert.match(pkg.scripts.coverage, /(^|\s)--all(\s|$)/, 'coverage does not pass --all');
+    assert.match(pkg.scripts['coverage:check'], /(^|\s)--all(\s|$)/, 'coverage:check does not pass --all');
+  });
 });

@@ -10,6 +10,9 @@
   ],
   "coverageAnalysis": "perTest",
   "mochaOptions": {
+    "require": [
+      "./test/setup/index.js"
+    ],
     "spec": [
       "test/unit/**/*.test.js"
     ],

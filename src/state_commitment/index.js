@@ -35,15 +35,19 @@
  *     ClientSync now verifies balances_root + block_merkle_root + state_root (the
  *     last folds stakes_root). The stake-weight query is a consensus surface, so
  *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
- *     drift guard in test/unit/rollback-coverage.test.js.
+ *     drift guard in test/unit/rollback_coverage.test.js.
  *
  * DbNodeStore, MemoryNodeStore, PersistentSMT.update / buildFull / prove, the leaf
  * encoders, buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to
  * the indexer; merkle.js itself is a verbatim copy. The golden vectors + the
  * persistent-vs-reference fuzz test lock the equality, and the twin cases in
- * test/unit/blockhash-conformance-twin.test.js pin the bytes.
+ * test/unit/blockhash_conformance_twin.test.js pin the bytes.
  *
- * ONE DECLARED DIVERGENCE, and it is the only one: the indexer's PersistentSMT
+ * TWO DECLARED DIVERGENCES, and they are the only ones. Each is root-neutral, each
+ * is pinned by its own case in test/unit/blockhash_conformance_twin.test.js, and
+ * each case fails on a move in either direction and points back here.
+ *
+ * DECLARED DIVERGENCE 1, the node cache: the indexer's PersistentSMT
  * carries a bounded read-through node cache (SMT_NODE_CACHE_MAX, _nodeCache,
  * cacheGet/cachePut, wired into descend's read and putBatch's write) that this
  * copy does not. It is a transport fix on the indexer's own hot path, and it is
@@ -57,8 +61,23 @@
  * follower apply path, which nobody has measured on follower hardware. Do not
  * silently widen this divergence and do not silently close it: the shape is pinned
  * by 'PersistentSMT divergence is exactly the indexer node cache' in
- * test/unit/blockhash-conformance-twin.test.js, which fails on either move and
+ * test/unit/blockhash_conformance_twin.test.js, which fails on either move and
  * points back at this paragraph.
+ *
+ * DECLARED DIVERGENCE 2, the stakes-tree patch: the indexer's buildStakesRoot
+ * (xchain-indexer/src/state_commitment/stakes_root.js) also reuses its predecessor's
+ * tree when the stake set CHANGED, deleting the keys that left the set and writing
+ * the changed leaves through PersistentSMT.update; this copy rebuilds with buildFull
+ * on any change. It is root-neutral because update and buildFull are the
+ * byte-identical root-bearing surface above, a deleted key's path hashes back to the
+ * canonical EMPTY[h] chain, and so the tree is a pure function of its leaf set.
+ * Porting the patch here is an open decision, NOT an oversight: the full rebuild
+ * recomputes the indexer's patched root independently, and a follower cache may
+ * only fail toward the slow correct answer.
+ * Pinned by 'buildStakesRoot divergence is exactly the indexer incremental patch' in
+ * test/unit/blockhash_conformance_twin.test.js, and per-block root equality over a
+ * changing stake set by
+ * test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js.
  *
  ********************************************************************/
 
@@ -579,7 +598,7 @@ async function gatherStakeEntries(db, chain, network, blockIndex){
 //
 // The memo is sound because buildFull is a PURE function of its entries: the node
 // store is content-addressed, so the same entry set always yields the same root.
-// stateCommitment.test.js pins both halves of that - equality with the merkle.js
+// test/unit/state_commitment.test.js pins both halves of that - equality with the merkle.js
 // reference, and insert-order independence.
 //
 // Every way this can be wrong is a way it rebuilds. It shortcuts ONLY when the

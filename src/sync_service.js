@@ -33,6 +33,7 @@ const HashVerifier    = require('./client/hash_verifier');
 const stateCommitment = require('./state_commitment');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
+const { coinTicker }  = require('./consensus-constants');
 const Utility         = require('./util');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
@@ -259,6 +260,8 @@ class SyncService {
                 // decoder replicas get only sync_halt (the durable divergence
                 // halt applies to both shapes; the transparency log does not).
                 await db.verifySyncTables();
+                // Sync runs no migrations, so legacy timestamp columns must be retyped here.
+                await db.ensureDatetimeColumns({ includeFollowerDerived: true });
                 // Self-heal column drift on a pre-existing replica before any row
                 // data is accepted. Runs regardless of which schema path applied
                 // above (direct replicateSchema or, when the source DB is
@@ -308,6 +311,9 @@ class SyncService {
                 // Sync-owned tables (dbType-aware: indexer = full set, decoder =
                 // sync_halt only); same rationale as the client branch above.
                 await db.verifySyncTables();
+                // Leave the indexer's own table to the indexer by excluding follower-derived columns.
+                await db.ensureDatetimeColumns({ includeFollowerDerived: false });
+                await db.assertStakeWeightOrderingCollation();
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
@@ -453,7 +459,8 @@ class SyncService {
                         finally { try { await c.release(); } catch(_){} }
                     };
                     try {
-                        const stats = await stateCommitment.reportOrphanStats(query, cfg.coin, cfg.network);
+                        // Pass the ticker: state_tree_roots rows carry it, so the hub's full name matches none
+                        const stats = await stateCommitment.reportOrphanStats(query, coinTicker(cfg.coin), cfg.network);
                         if(stats.totalNodes === 0) continue;
                         getLogger().info('[METRIC] ' + JSON.stringify({
                             metric: 'state_tree_orphan_nodes', component: 'sync', key: key,

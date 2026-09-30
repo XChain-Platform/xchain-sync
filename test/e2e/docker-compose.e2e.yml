@@ -47,26 +47,6 @@ services:
     networks:
       - e2e-net
 
-  source-db-2:
-    image: mariadb:11.4
-    environment:
-      MARIADB_ROOT_PASSWORD: test
-      MARIADB_USER: xchain-node
-      MARIADB_PASSWORD: xchain-fixture-throwaway
-    ports:
-      - "${E2E_SOURCE2_DB_PORT:-23308}:3306"
-    tmpfs:
-      - /var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 3s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-net
-    profiles:
-      - cross-source
-
 networks:
   e2e-net:
     driver: bridge

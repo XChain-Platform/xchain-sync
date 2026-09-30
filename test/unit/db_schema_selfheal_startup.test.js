@@ -17,7 +17,7 @@
 
 const assert = require('assert');
 const sinon  = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 
 function makeUtil() {
     return {
@@ -117,7 +117,7 @@ describe('Database schema self-heal: one startup completes columns then key rebu
         sinon.stub(console, 'error');
         sinon.stub(console, 'warn');
         state = deferredReplica();
-        db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+        db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
         layer = fakeQueryLayer(state);
         sinon.stub(db, 'doQuery').callsFake(layer.fake);
         sinon.stub(db, 'doQueryStrict').callsFake(layer.fake);
@@ -160,7 +160,7 @@ describe('Database schema self-heal: one startup completes columns then key rebu
         sinon.stub(console, 'error');
         sinon.stub(console, 'warn');
         state = deferredReplica();
-        db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+        db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
         layer = fakeQueryLayer(state);
         sinon.stub(db, 'doQuery').callsFake(layer.fake);
         sinon.stub(db, 'doQueryStrict').callsFake(layer.fake);
@@ -184,7 +184,7 @@ describe('Database schema self-heal: one startup completes columns then key rebu
         sinon.stub(console, 'error');
         sinon.stub(console, 'warn');
         state = deferredReplica();
-        db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+        db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
         layer = fakeQueryLayer(state, { failAddColumn: true });
         sinon.stub(db, 'doQuery').callsFake(layer.fake);
         sinon.stub(db, 'doQueryStrict').callsFake(layer.fake);

@@ -34,6 +34,8 @@ const ServerProcess = require('../../e2e/helpers/serverProcess');
 const ClientProcess = require('../../e2e/helpers/clientProcess');
 const fixturePorts = require('../../../bin/fixture-ports.js');
 
+if (!process.env.CHAOS_HOST_IP) process.env.CHAOS_HOST_IP = 'host.docker.internal';
+
 // Connection constants: proxied ports from docker-compose.chaos.yml
 const CHAOS_DB_HOST      = process.env.CHAOS_DB_HOST || '127.0.0.1';
 const SOURCE_PROXY_PORT  = fixturePorts.port('SOURCE_PROXY_PORT');

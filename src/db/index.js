@@ -71,10 +71,53 @@ const KEY_REBUILD_PRECONDITION_COLUMNS = [
       definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' }
 ];
 
-// Delay between attempts in the infinite DB-connection retry loops
-// (verifyDatabase / createDatabase). Named so the cadence lives in one place
-// and is not confused with the unrelated connectTimeout in the pool config.
 const DB_RETRY_DELAY_MS = 5000;
+const DB_CONNECT_RETRY_MAX_ATTEMPTS = 12;
+const DB_CONNECT_RETRY_TIMEOUT_MS = 60000;
+
+function positiveInteger(raw, fallback){
+    let parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function connectionRetryConfig(){
+    let env = envConfig.envSource();
+    return {
+        connectionRetryMaxAttempts: positiveInteger(
+            env.DB_CONNECT_RETRY_MAX_ATTEMPTS,
+            DB_CONNECT_RETRY_MAX_ATTEMPTS
+        ),
+        connectionRetryTimeoutMs: positiveInteger(
+            env.DB_CONNECT_RETRY_TIMEOUT_MS,
+            DB_CONNECT_RETRY_TIMEOUT_MS
+        )
+    };
+}
+
+async function connectWithRetry(database, connectionParams, operation, errorMessage, timeoutMessage){
+    let deadline = Date.now() + database.connectionRetryTimeoutMs;
+    let lastError;
+    for(let attempt = 1; attempt <= database.connectionRetryMaxAttempts; attempt++){
+        let remaining = deadline - Date.now();
+        if(remaining <= 0) break;
+        try {
+            let params = Object.assign({}, connectionParams, {
+                connectTimeout: Math.min(database.connectionPoolParams.connectTimeout, remaining)
+            });
+            let db = await mariadb.createConnection(params);
+            return await operation(db);
+        } catch(e){
+            lastError = e;
+            logger.error(util.format(errorMessage, e));
+            if(e && e.code === 'ER_ACCESS_DENIED_ERROR') throw e;
+            if(attempt >= database.connectionRetryMaxAttempts) throw e;
+            remaining = deadline - Date.now();
+            if(remaining <= 0) throw e;
+            await database.util.sleep(Math.min(DB_RETRY_DELAY_MS, remaining));
+        }
+    }
+    throw lastError || new Error(timeoutMessage);
+}
 
 // One mixin per table family, keyed to the DDL files in src/sql/ where the
 // table has one. Required by computed path, so nothing here names a mixin as a
@@ -93,7 +136,44 @@ const MIXIN_FILES = [
     './index_lookups.js',
     './state_checkpoints.js',
     './merkle_epochs.js',
+    './datetime/retype.js',
 ];
+
+function poolOptions(database){
+    let poolParams = poolSizing.resolvePoolParams(database.dbType);
+    return {
+        host:               database.host,
+        user:               database.user,
+        password:           database.pass,
+        database:           database.dbName,
+        port:               database.port,
+        connectionLimit:    poolParams.connectionLimit,
+        connectTimeout:     poolParams.connectTimeout,
+        acquireTimeout:     poolParams.acquireTimeout,
+        idleTimeout:        60000,
+        insertIdAsNumber:   true,
+        bigIntAsNumber:     true,
+        // Pin pooled sessions so NOW(), CURRENT_TIMESTAMP defaults, and the
+        // TIMESTAMP-to-DATETIME retype evaluate in UTC wherever MariaDB runs.
+        // This is safe because every wire-replicated temporal column is a
+        // DATETIME returned as a dateStrings literal.
+        timezone:           'Z',
+        // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
+        // than JS Dates. JSON.stringify would otherwise emit Date as ISO
+        // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
+        // on re-insert, and BlockHasher.contentDigest / the wire codec would
+        // see a timezone-dependent value. GLOBAL on purpose: it covers every
+        // replicated DATETIME column on BOTH dbTypes, today decoder events.time
+        // and indexer events.time + events.witness_time (indexer `events` rides
+        // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
+        // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
+        // the inventory and this flag. (dispensers.expiration is a BIGINT unix
+        // timestamp, replicated as a number via bigIntAsNumber.)
+        dateStrings:        true,
+        minDelayValidation: 3000,
+        queryTimeout:       poolParams.queryTimeout
+    };
+}
 
 class Database {
 
@@ -117,34 +197,9 @@ class Database {
         // streams, the decoder pool replicates 8 narrow tables. Each knob honours
         // DB_POOL_SIZE_<DBTYPE> first, then the legacy global DB_POOL_SIZE, then
         // the per-dbType default.
-        let poolParams = poolSizing.resolvePoolParams(this.dbType);
-        this.connectionPoolParams = {
-            host:               this.host,
-            user:               this.user,
-            password:           this.pass,
-            database:           this.dbName,
-            port:               this.port,
-            connectionLimit:    poolParams.connectionLimit,
-            connectTimeout:     poolParams.connectTimeout,
-            acquireTimeout:     poolParams.acquireTimeout,
-            idleTimeout:        60000,
-            insertIdAsNumber:   true,
-            bigIntAsNumber:     true,
-            // Return DATETIME/TIMESTAMP columns as MariaDB-format strings rather
-            // than JS Dates. JSON.stringify would otherwise emit Date as ISO
-            // ('2023-11-15T06:13:21.000Z'), which MariaDB strict mode rejects
-            // on re-insert, and BlockHasher.contentDigest / the wire codec would
-            // see a timezone-dependent value. GLOBAL on purpose: it covers every
-            // replicated DATETIME column on BOTH dbTypes, today decoder events.time
-            // and indexer events.time + events.witness_time (indexer `events` rides
-            // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
-            // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
-            // the inventory and this flag. (dispensers.expiration is a BIGINT unix
-            // timestamp, replicated as a number via bigIntAsNumber.)
-            dateStrings:        true,
-            minDelayValidation: 3000,
-            queryTimeout:       poolParams.queryTimeout
-        };
+        this.connectionPoolParams = poolOptions(this);
+
+        Object.assign(this, connectionRetryConfig());
 
         this.pool = mariadb.createPool(this.connectionPoolParams);
         this.transactionConnection = null;
@@ -163,17 +218,12 @@ class Database {
             password: this.pass,
             port:     this.port
         };
-        while(true){
-            try {
-                let db      = await mariadb.createConnection(connectionParams);
-                let results = await db.query("SELECT * FROM information_schema.schemata WHERE schema_name = ?", [this.dbName]);
-                await db.end();
-                return results.length > 0;
-            } catch (e){
-                logger.error(util.format('Error checking if database ' + this.dbName + ' exists:', e))
-                await this.util.sleep(DB_RETRY_DELAY_MS);
-            }
-        }
+        return connectWithRetry(this, connectionParams, async(db) => {
+            let results = await db.query("SELECT * FROM information_schema.schemata WHERE schema_name = ?", [this.dbName]);
+            await db.end();
+            return results.length > 0;
+        }, 'Error checking if database ' + this.dbName + ' exists:',
+            'Timed out checking if database ' + this.dbName + ' exists');
     }
 
     // Single-attempt existence check that THROWS on failure instead of retrying
@@ -209,17 +259,12 @@ class Database {
         if(!dbCheck.valid)
             throw new Error('Invalid database name: ' + this.dbName + ' (' + dbCheck.reason + ')');
         logger.info("Creating " + this.dbName + " database!");
-        while(true){
-            try {
-                let db = await mariadb.createConnection(connectionParams);
-                await db.query("CREATE DATABASE IF NOT EXISTS `" + this.dbName + "`");
-                await db.end();
-                return true;
-            } catch(e){
-                logger.error(util.format('Error creating database ' + this.dbName + ':', e))
-                await this.util.sleep(DB_RETRY_DELAY_MS);
-            }
-        }
+        return connectWithRetry(this, connectionParams, async(db) => {
+            await db.query("CREATE DATABASE IF NOT EXISTS `" + this.dbName + "`");
+            await db.end();
+            return true;
+        }, 'Error creating database ' + this.dbName + ':',
+            'Timed out creating database ' + this.dbName);
     }
 
     // Verify sync-service-owned tables exist (replicated tables are created

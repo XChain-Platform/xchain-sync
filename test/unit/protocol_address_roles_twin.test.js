@@ -11,8 +11,8 @@
 // The block-hash preimage substitutes a protocol special address (BURN / GAS /
 // DONATE1 / DONATE2 / REWARD) for its chain-independent role token so identical
 // actions hash identically on every chain. The indexer DERIVES that map from
-// src/configs/*.js; this replica has no per-coin config, so it vendors a FROZEN
-// snapshot in src/protocolAddressRoles.js. If the snapshot ever drifts from the
+// src/coins/*.js; this replica has no per-coin config, so it vendors a FROZEN
+// snapshot in src/util/protocol_address_roles.js. If the snapshot ever drifts from the
 // indexer's derived map (a config edit adds/changes a special address and the
 // snapshot is not updated), BlockHasher recomputes a mismatching hash and the
 // divergence breaker halts the follower. The local indexer-coverage test cannot

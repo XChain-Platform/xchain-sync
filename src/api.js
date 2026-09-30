@@ -32,9 +32,9 @@ const http        = require('http');
 const WebSocket   = require('ws');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config      = require('./config');
-const { computeArmedMapFingerprintV2 } = require('./consensus/armed_map/fingerprint');
+const { computeArmedMapFingerprint } = require('./consensus/armed_map/fingerprint');
 const { carrierLogicDigest } = require('./health/carrier_logic');
-const SyncService = require('./SyncService');
+const SyncService = require('./sync_service');
 const Utility     = require('./util');
 const BlockHasher = require('./client/block_hasher');
 const { createApiKeyMiddleware, safeEqual } = require('./http/middleware');
@@ -50,7 +50,7 @@ const statusUtil = new Utility();
 // The armed-map identity every /health body carries: fingerprint v2 in the legacy field,
 // the version that names the algorithm, and the logic digest beside it. The _v2 alias of
 // the W1 to W4 window is gone since W5 (activation-registry C4).
-function consensusIdentityFields(){ return { armed_map_fingerprint: computeArmedMapFingerprintV2().hex, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
+function consensusIdentityFields(){ return { armed_map_fingerprint: computeArmedMapFingerprint().hex, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
 
 dotenv.config();
 
@@ -69,7 +69,7 @@ const cfg = config.getConfig();
 // process; it runs from the entry-point guard at the bottom instead.
 function checkStartupEnv(){
     for(const key of REQUIRED_ENV){
-        if(!process.env[key]){
+        if(!config.readEnvNow(key)){
             console.error('Missing required environment variable: ' + key);
             process.exit(1);
         }
@@ -124,7 +124,7 @@ function createRateLimiters(cfg){
     // unaffected; override with SYNC_RATE_LIMIT_RPM.
     const backstopLimiter = rateLimit({
         windowMs:        60 * 1000,
-        limit:           parseInt(process.env.SYNC_RATE_LIMIT_RPM, 10) || 500,
+        limit:           parseInt(config.readEnvNow('SYNC_RATE_LIMIT_RPM'), 10) || 500,
         standardHeaders: true,
         legacyHeaders:   false,
         message:         { error: 'Too many requests', code: 'RATE_LIMITED' },
@@ -506,19 +506,12 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
     return row;
 }
 
-async function startApi(){
+// The REST surface, built over a SyncService-shaped provider and a config so the
+// running service and the e2e harness mount the same middleware order, limiters
+// and routes. Listening, the WebSocket upgrade path and process lifecycle stay in
+// startApi.
+function createApp(syncService, cfg, app = express()){
 
-    // Verify the bundled coin files against CONSENSUS_CONFIG_PIN before any port,
-    // poller or source-DB handle exists. Sync recomputes state and halts on
-    // divergence, so a coin bundle that drifted on THIS host must fail closed with
-    // the pin-mismatch error instead of surfacing later as an opaque
-    // local-recompute divergence. CI hashes the checkout, never the running
-    // artifact. All networks (the XChainHub.start form) because sync serves every
-    // chain the hub hands it, so no single network key is known at boot. A null pin
-    // (mainnet, pre-arm) skips; a mismatch on an armed network throws, uncaught.
-    for(const net of coins.NETWORKS) coins.verifyConsensusPin(net);
-
-    const app = express();
     // Must precede every limiter: they read req.ip, which express only derives
     // from X-Forwarded-For once this is set. Left unset (the state this service
     // shipped in), every request behind Apache resolves to 127.0.0.1 and the
@@ -534,8 +527,6 @@ async function startApi(){
             transparencyLimiter, heartbeatLimiter } = createRateLimiters(cfg);
 
     app.use(backstopLimiter);
-
-    const syncService = new SyncService(cfg);
 
     // REST Routes (server mode only, but status works in client mode too)
     //
@@ -1122,6 +1113,24 @@ async function startApi(){
         }
     });
 
+    return app;
+}
+
+async function startApi(){
+
+    // Verify the bundled coin files against CONSENSUS_CONFIG_PIN before any port,
+    // poller or source-DB handle exists. Sync recomputes state and halts on
+    // divergence, so a coin bundle that drifted on THIS host must fail closed with
+    // the pin-mismatch error instead of surfacing later as an opaque
+    // local-recompute divergence. CI hashes the checkout, never the running
+    // artifact. All networks (the XChainHub.start form) because sync serves every
+    // chain the hub hands it, so no single network key is known at boot. A null pin
+    // (mainnet, pre-arm) skips; a mismatch on an armed network throws, uncaught.
+    for(const net of coins.NETWORKS) coins.verifyConsensusPin(net);
+
+    const syncService = new SyncService(cfg);
+    const app = express();
+    createApp(syncService, cfg, app);
     const server = http.createServer(app);
 
     const wss = new WebSocket.Server({ noServer: true });
@@ -1287,4 +1296,4 @@ if(require.main === module){
 }
 
 module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
-                   buildHealthEntry, healthEntryDegraded, buildStatusRow, startApi };
+                   buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, startApi };

@@ -25,7 +25,7 @@
 
 const assert   = require('assert');
 const sinon    = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 const swqCap   = require('../../src/consensus/gates/swq_source_cap_gate');
 const swc      = require('../../src/consensus/gates/stake_weight_collation_gate');
 
@@ -54,7 +54,7 @@ function makeUtil() {
 }
 
 function dbFor(rows) {
-    const db = new Database('localhost', 3306, 'replica_db', 'u', 'p', makeUtil(), 'indexer');
+    const db = makeTestDatabase('replica_db', 'u', 'p', makeUtil(), 'indexer');
     const calls = [];
     sinon.stub(console, 'warn');
     sinon.stub(db, 'getStatusId').resolves(1);

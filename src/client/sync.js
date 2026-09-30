@@ -34,6 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
+const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -2209,12 +2210,20 @@ class ClientSync {
     // Returns the shortfall rows it found (an ARRAY, possibly empty) when the check
     // completed, and null when it could not run or errored, so the periodic caller can
     // tell "no gaps" from "no reading" before aging its persistent-gap state.
-    async verifyDecoderCompleteness(source, blockHeight, excludeTables){
+    // opts.requireEqualHeight (periodic sweep only): a source that moved past
+    // blockHeight is "no reading", since its counts would read as a hole to repair.
+    async verifyDecoderCompleteness(source, blockHeight, excludeTables, opts){
         if(this.dbType !== 'decoder') return null;
         try {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
+            if(opts && opts.requireEqualHeight && remoteStatus && remoteStatus.block_height != null &&
+               Number(remoteStatus.block_height) !== Number(blockHeight)){
+                getLogger().info('Decoder completeness sweep skipped: source at ' + remoteStatus.block_height +
+                    ', replica at ' + blockHeight);
+                return null;
+            }
 
             // On a truncated replica the block-windowed tables (blocks, transactions,
             // transaction_outputs) hold only [base..tip], so comparing their local
@@ -2360,6 +2369,27 @@ class ClientSync {
         return mismatches;
     }
 
+    // Re-page the short append-only lookups from id 0 and return the Set it tried.
+    // The ordinary pager seeds at MAX(id), so a hole below the high-water mark
+    // survives every sweep (see the HOLE note in syncLookupTablesPaged); detecting it
+    // and never acting is what let the BTC mainnet index_transactions gap sit for
+    // four weeks. INSERT IGNORE makes a re-page idempotent, a table short for another
+    // reason comes back short next sweep, and operational logs never converge, so
+    // they are never re-paged. Advisory: a failed pass logs and never throws.
+    async repairShortLookups(source, shortfalls){
+        let lookups = new Set(replicatedTables.getTopology(this.dbType).index || []);
+        let shortLookups = new Set((shortfalls || []).map(m => m && m.table)
+            .filter(t => lookups.has(t) && !OPERATIONAL_LOG_TABLES.has(t)));
+        if(!shortLookups.size) return shortLookups;
+        try {
+            await this.syncLookupTablesPaged(source, { fromZero: shortLookups });
+        } catch(repairErr){
+            getLogger().error(util.format('Lookup repair pass failed against ' + source + ':',
+                repairErr.message || repairErr));
+        }
+        return shortLookups;
+    }
+
     // Periodic replica-completeness sweep against the PRIMARY source: the row-count
     // comparison is the only check that sees a follower short rows the consensus hashes
     // structurally cannot cover, since those hashes describe the source's computation
@@ -2392,17 +2422,19 @@ class ClientSync {
                 // counts need. dispensers converges only on a reconcile cycle, so it is
                 // excluded here or every sweep reports drift.
                 let decoderShortfalls = await this.verifyDecoderCompleteness(
-                    source, this.lastAppliedBlock, new Set(['dispensers']));
-                // Age the decoder shortfalls too, but ONLY from this periodic
+                    source, this.lastAppliedBlock, new Set(['dispensers']), { requireEqualHeight: true });
+                // Age and repair the decoder shortfalls too, but ONLY from this periodic
                 // equal-height path: the bootstrap caller runs the same check while the
                 // replica is legitimately mid-dump, and folding those sweeps in would
                 // escalate a gap that the next snapshot page closes. A null return means
-                // the check could not complete (unreachable source, wrong dbType), which
-                // is not evidence the gaps closed.
-                if(Array.isArray(decoderShortfalls))
+                // the check could not complete (unreachable source, wrong dbType, source
+                // moved on), which is not evidence the gaps closed.
+                if(Array.isArray(decoderShortfalls)){
+                    let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
                     await this.trackReplicaGaps(decoderShortfalls, {
-                        source: source, blockIndex: this.lastAppliedBlock
+                        source: source, blockIndex: this.lastAppliedBlock, repaired: decoderRepairTried
                     });
+                }
                 return;
             }
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
@@ -2421,27 +2453,7 @@ class ClientSync {
                 getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
                     '; follower may be missing replicated rows:');
                 getLogger().error(JSON.stringify(shortfalls));
-                // A short append-only lookup is the one shortfall shape this client can
-                // repair by itself, and until now it did not: the ordinary pager seeds
-                // at MAX(id), so a hole below the high-water mark survived every sweep
-                // (see the HOLE note in syncLookupTablesPaged). Detecting the shortfall
-                // and then never acting on it is what let the BTC mainnet
-                // index_transactions gap sit for four weeks while this very check
-                // reported it on every pass. Re-page exactly the short lookups from
-                // zero; INSERT IGNORE makes it idempotent, and a table that is short for
-                // some other reason simply comes back short and reports again next sweep.
-                let lookups = new Set(replicatedTables.getTopology(this.dbType).index || []);
-                let shortLookups = new Set(shortfalls.map(m => m.table).filter(t => lookups.has(t)));
-                if(shortLookups.size){
-                    repairTried = shortLookups;
-                    try {
-                        await this.syncLookupTablesPaged(source, { fromZero: shortLookups });
-                    } catch(repairErr){
-                        // Advisory: the sweep must not fault on a repair attempt.
-                        getLogger().error(util.format('Lookup repair pass failed against ' + source + ':',
-                            repairErr.message || repairErr));
-                    }
-                }
+                repairTried = await this.repairShortLookups(source, shortfalls);
             }
             if(ahead.length){
                 getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
@@ -3340,9 +3352,9 @@ class ClientSync {
         let attempts = opts.failClosed ? 3 : 1;
         for(let attempt = 1; attempt <= attempts; attempt++){
             try {
-                // chain/network drive the state_key collation flag-day so the replica
-                // gates identically to the source indexer (state_key_collation_activation.js).
-                computed = await this.blockHasher.computeBlockHashes(event.block_index, this.network, this.chain);
+                // Pass the ticker: the state_key collation gate is keyed '<TICKER>:<network>'
+                // as the source indexer keys it, and the full name misses it (reads OFF).
+                computed = await this.blockHasher.computeBlockHashes(event.block_index, this.network, this.coinTicker);
                 break;
             } catch(e){
                 if(attempt < attempts){
@@ -3637,8 +3649,23 @@ class ClientSync {
                 let localState = await this.blockHasher.computeStateHash(
                     event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
                 if(localState !== event.state_hash){
+                    let mismatch = { field: 'state_hash', a: event.state_hash, b: localState };
+                    try {
+                        let preimage = await this.blockHasher.computeStateHashPreimage(
+                            event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
+                        mismatch.local_classes = classDigests(
+                            preimage, data => this.util.getDataHash(data));
+                        for(let detail of mismatch.local_classes){
+                            getLogger().error('state_hash local class ' + detail.class +
+                                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
+                                ' digest=' + detail.digest);
+                        }
+                    } catch(e){
+                        getLogger().error(util.format(
+                            'state_hash local class detail failed at block ' + event.block_index + ':', e));
+                    }
                     await this.haltOnDivergence(event.block_index,
-                        [{ field: 'state_hash', a: event.state_hash, b: localState }],
+                        [mismatch],
                         this.sources.slice(0, 1), 'state-hash-divergence');
                     return; // halted: do not advance lastAppliedBlock
                 }
@@ -3840,7 +3867,7 @@ class ClientSync {
         if(!q.valid){
             let seed = getPinnedCheckpoint(this.chain, this.network);
             if(seed){
-                let r = await this.followCheckpointForward(cp, seed);
+                let r = await this.followCheckpointForward(cp, seed, source);
                 if(r.verdict === 'ok'){
                     this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
                     getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
@@ -3852,7 +3879,12 @@ class ClientSync {
                         this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
                     return;
                 }
-                return;                                          // 'wait': cannot anchor across rotation yet
+                // 'wait': cannot anchor across rotation yet. Log it like the other withholding
+                // paths, so a source stalling the rotation walk is visible, never silent.
+                getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
+                    this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
+                    ': ' + (r.reason || 'inconclusive') + '; anchor not refreshed this cycle');
+                return;
             }
             await this.haltOnDivergence(cp.block_index,
                 [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
@@ -3907,7 +3939,8 @@ class ClientSync {
     async oraclePublishSetAt(snapshotBlock){
         const caps = btcStakeCapabilities();
         const cap  = 'oracle_publish';
-        const rows = await this.db.getStakeWeightsByCapabilityAsOf(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT, this.chain, this.network);
+        // Pass the ticker: the source-cap and collation gates are keyed '<TICKER>:<network>'.
+        const rows = await this.db.getStakeWeightsByCapabilityAsOf(cap, snapshotBlock, caps[cap], VALIDATOR_QUERY_LIMIT, this.coinTicker, this.network);
         const set  = [], ZERO = M.canonicalAmount('0');
         for(const r of (rows || [])){
             if(!r || r.pubkey == null) continue;
@@ -3923,7 +3956,7 @@ class ClientSync {
     //   { verdict: 'ok' }                 cp's quorum verified against the forward-
     //                                     followed authoritative set AND its committed
     //                                     roots equal the replica's recompute.
-    //   { verdict: 'wait' }               inconclusive (transport / incomplete range /
+    //   { verdict: 'wait', reason }       inconclusive (transport / incomplete range /
     //                                     a step whose signer set is not yet attested /
     //                                     a height not yet recomputed here). No halt.
     //   { verdict: 'divergence', mismatches }
@@ -3935,57 +3968,89 @@ class ClientSync {
     // already-adopted checkpoint whose committed state_root == the recompute). Trust
     // flows forward from the pinned seed; the set that signs N+1 is the one committed
     // in the previous trusted checkpoint's (attested) state, never N+1's own.
-    async followCheckpointForward(cp, seed){
-        if(this.chain !== 'BTC') return { verdict: 'wait' };     // stakes (signer sets) are BTC-only
-        if(!seed || seed.state_root == null || typeof seed.block_index !== 'number') return { verdict: 'wait' };
-        if(cp.block_index <= seed.block_index) return { verdict: 'wait' };
+    // Fetch the range from the same out-of-band anchor as /latest (`source`), so the
+    // audited source cannot withhold the rotation chain either.
+    async followCheckpointForward(cp, seed, source){
+        let rangeSource = source || this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
+        // Signer sets live only in BTC's stakes, so other chains cannot follow rotation
+        if(this.chain !== 'BTC') return { verdict: 'wait', reason: 'rotation following is BTC-only' };
+        if(!seed || seed.state_root == null || typeof seed.block_index !== 'number')
+            return { verdict: 'wait', reason: 'pinned seed checkpoint is malformed' };
+        if(cp.block_index <= seed.block_index) return { verdict: 'wait', reason: 'checkpoint is not past the pinned seed' };
 
         // Bootstrap: the seed is the out-of-band trust root; the replica's own recompute
         // at seed.block_index must match it, else the replica is on a different chain.
         let seedCmp = await this.checkpointRootsMatchLocal(seed);
-        if(seedCmp.status === 'missing') return { verdict: 'wait' };
+        if(seedCmp.status === 'missing')
+            return { verdict: 'wait', reason: 'seed height ' + seed.block_index + ' not recomputed locally yet' };
         if(seedCmp.status === 'mismatch') return { verdict: 'divergence', mismatches: seedCmp.mismatches };
 
         let trusted = seed, from = seed.block_index + 1, guard = 0;
         while(trusted.block_index < cp.block_index){
-            if(++guard > 10000) return { verdict: 'wait' };      // runaway guard
-            let chain;
-            try {
-                let url = this.sources[0] + '/checkpoint/indexer/' + this.chain + '/' + this.network +
-                          '/range?from=' + from + '&to=' + cp.block_index;
-                let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-                chain = resp && resp.data && resp.data.checkpoints;
-            } catch(e){ return { verdict: 'wait' }; }            // transport: not a divergence
-            if(!Array.isArray(chain) || !chain.length) return { verdict: 'wait' };   // cannot reach cp
+            if(++guard > 10000) return { verdict: 'wait', reason: 'runaway guard tripped' };
+            let fetched = await this.fetchCheckpointRange(rangeSource, from, cp.block_index);
+            if(fetched.verdict) return fetched;
 
             let advanced = false;
-            for(let next of chain){
+            for(let next of fetched.chain){
                 if(typeof next.block_index !== 'number' || next.block_index <= trusted.block_index) continue;
-                if(next.block_index > this.lastAppliedBlock) return { verdict: 'wait' };   // not recomputed here yet
-                if(next.state_root == null) return { verdict: 'wait' };                    // pre-commitment in range
-                // The set that signs `next` is the oracle_publish set at next.snapshot_block;
-                // trust it only once that height is attested by the current trust root.
-                if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
-                    return { verdict: 'wait' };
-                let vset = await this.oraclePublishSetAt(next.snapshot_block);
-                if(!checkpointVerifier.verifyCheckpoint(next, vset).valid)
-                    return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum',
-                        a: 'quorum-signed (federation)',
-                        b: 'INVALID at block ' + next.block_index + ' under the authoritative oracle_publish set at snapshot ' + next.snapshot_block }] };
-                // Attest `next` so its rows extend the trusted frontier for the next step.
-                let cmp = await this.checkpointRootsMatchLocal(next);
-                if(cmp.status === 'missing') return { verdict: 'wait' };
-                if(cmp.status === 'mismatch') return { verdict: 'divergence', mismatches: cmp.mismatches };
+                let stop = await this.attestRotationStep(next, trusted);
+                if(stop) return stop;
                 trusted = next; from = next.block_index + 1; advanced = true;
                 if(trusted.block_index >= cp.block_index) break;
             }
-            if(!advanced) return { verdict: 'wait' };            // range had nothing usable past `trusted`
+            // Stop when the range held nothing usable past the trusted frontier
+            if(!advanced) return { verdict: 'wait', reason: 'range had nothing usable past block ' + trusted.block_index };
         }
 
         if(trusted.block_index === cp.block_index
                 && String(trusted.state_root).toLowerCase() === String(cp.state_root).toLowerCase())
             return { verdict: 'ok' };
-        return { verdict: 'wait' };
+        return { verdict: 'wait', reason: 'walk ended at block ' + trusted.block_index + ', short of the checkpoint' };
+    }
+
+    // Fetch the signed-checkpoint chain over [from, to] from the anchor source.
+    // Returns { chain } with at least one row, or a 'wait' verdict (never a divergence).
+    async fetchCheckpointRange(rangeSource, from, to){
+        let chain;
+        try {
+            let url = rangeSource + '/checkpoint/indexer/' + this.chain + '/' + this.network +
+                      '/range?from=' + from + '&to=' + to;
+            let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+            chain = resp && resp.data && resp.data.checkpoints;
+        } catch(e){                                              // transport: not a divergence
+            return { verdict: 'wait', reason: 'range fetch failed (' + e.message + ')' };
+        }
+        // An empty range cannot reach the checkpoint (the source may be withholding it)
+        if(!Array.isArray(chain) || !chain.length)
+            return { verdict: 'wait', reason: 'empty checkpoint range from ' + from };
+        return { chain };
+    }
+
+    // Verify one rotation step `next` against the current trust root `trusted`.
+    // Returns null when `next` is attested and extends the frontier, else the verdict to stop on.
+    async attestRotationStep(next, trusted){
+        // Stop at a checkpoint past the replica tip, since it is not recomputed here yet
+        if(next.block_index > this.lastAppliedBlock)
+            return { verdict: 'wait', reason: 'range checkpoint ' + next.block_index + ' is past the replica tip' };
+        // Stop at a rootless (pre-commitment) checkpoint, since it anchors nothing
+        if(next.state_root == null)
+            return { verdict: 'wait', reason: 'pre-commitment checkpoint ' + next.block_index + ' in range' };
+        // The set that signs `next` is the oracle_publish set at next.snapshot_block;
+        // trust it only once that height is attested by the current trust root.
+        if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
+            return { verdict: 'wait', reason: 'signer set at snapshot ' + next.snapshot_block + ' not yet attested' };
+        let vset = await this.oraclePublishSetAt(next.snapshot_block);
+        if(!checkpointVerifier.verifyCheckpoint(next, vset).valid)
+            return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum',
+                a: 'quorum-signed (federation)',
+                b: 'INVALID at block ' + next.block_index + ' under the authoritative oracle_publish set at snapshot ' + next.snapshot_block }] };
+        // Attest `next` so its rows extend the trusted frontier for the next step.
+        let cmp = await this.checkpointRootsMatchLocal(next);
+        if(cmp.status === 'missing')
+            return { verdict: 'wait', reason: 'step height ' + next.block_index + ' not recomputed locally yet' };
+        if(cmp.status === 'mismatch') return { verdict: 'divergence', mismatches: cmp.mismatches };
+        return null;
     }
 
     async handleReorg(event){

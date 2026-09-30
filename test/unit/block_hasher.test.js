@@ -24,6 +24,7 @@ const assert  = require('assert');
 const path    = require('path');
 const BlockHasher = require('../../src/client/block_hasher');
 const Utility = require('../../src/util');
+const { makeTestDatabase } = require('./support/fake_db');
 const vectors = require('../fixtures/block-hash-vectors.json');
 
 // A BlockHasher whose strict reader returns the canned result-sets in CALL ORDER.
@@ -87,24 +88,24 @@ describe('BlockHasher: independent recompute conformance @regression', function(
     });
 });
 
+// Capture emitted SQL while feeding empty result-sets.
+function capturingHasher(calls){
+    const capture = async (sql) => { calls.push(sql); return []; };
+    const db = { doQuery: capture, doQueryStrict: capture };
+    return new BlockHasher(db, new Utility());
+}
+const stateQueryOf = (calls) => {
+    const hit = calls.find(q => /FROM contract_state cs/.test(q));
+    assert.ok(hit, 'contract-state gather query not emitted');
+    return hit.replace(/\s+/g, ' ');
+};
+
 describe('BlockHasher: independent recompute conformance @regression', function(){
     // state_key collation flag-day (state_key_collation_activation.js twin):
     // the contract-state gather must pin COLLATE utf8_bin exactly when the gate
     // is active, byte-for-byte with the indexer's getBlockHashes, or the
     // recompute halts diverge from the source at/after an armed height.
     describe('state_key collation gate (contract-state gather SQL)', function(){
-
-        // Capture emitted SQL while feeding empty result-sets.
-        function capturingHasher(calls){
-            const capture = async (sql) => { calls.push(sql); return []; };
-            const db = { doQuery: capture, doQueryStrict: capture };
-            return new BlockHasher(db, new Utility());
-        }
-        const stateQueryOf = (calls) => {
-            const hit = calls.find(q => /FROM contract_state cs/.test(q));
-            assert.ok(hit, 'contract-state gather query not emitted');
-            return hit.replace(/\s+/g, ' ');
-        };
 
         it('legacy folding collation when network/coin are omitted (pre-activation callers)', async function(){
             const calls = [];
@@ -126,4 +127,34 @@ describe('BlockHasher: independent recompute conformance @regression', function(
             assert.match(q, /ORDER BY cs\.contract_index ASC, cs\.state_key COLLATE utf8_bin ASC/);
         });
     });
+});
+
+// Capture the SQL getBlockLeafRows emits, the third copy of this gather.
+async function leafRowsCalls(block_index, network, coin){
+    const calls = [];
+    const db = makeTestDatabase('idx', 'u', 'p', { isNull: x => x == null }, 'indexer');
+    const capture = async (sql) => { calls.push(sql); return []; };
+    db.doQuery = capture;
+    db.doQueryStrict = capture;
+    await db.getBlockLeafRows(block_index, undefined, network, coin);
+    return calls;
+}
+
+describe('BlockHasher: contract_state gather parity with getBlockLeafRows @regression', function(){
+    // A one-sided gate or splice edit forks block_merkle_root against the recompute.
+    for(const [label, args, armed] of [['armed (regtest)', [1, 'regtest', 'BTC'], true],
+                                       ['unarmed (mainnet placeholder)', [900000, 'mainnet', 'BTC'], false],
+                                       ['no network/coin', [1], false]]){
+        it('getBlockLeafRows emits the same contract_state SQL as BlockHasher, ' + label, async function(){
+            const hashCalls = [];
+            await capturingHasher(hashCalls).computeBlockHashes(...args);
+            const leafQ = stateQueryOf(await leafRowsCalls(...args));
+            const hashQ = stateQueryOf(hashCalls);
+            assert.strictEqual(leafQ.trim(), hashQ.trim(),
+                'db.getBlockLeafRows and BlockHasher.computeBlockHashes emit different contract_state SQL');
+            const collated = (hashQ.match(/state_key COLLATE utf8_bin/g) || []).length;
+            assert.strictEqual(collated, armed ? 2 : 0,
+                'expected COLLATE utf8_bin on ' + (armed ? 'both' : 'neither') + ' state_key uses, got ' + collated);
+        });
+    }
 });

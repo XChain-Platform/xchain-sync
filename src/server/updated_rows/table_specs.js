@@ -63,7 +63,8 @@ const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 // earlier block. Byte-identical copies of the indexer's own values
 // (xchain-indexer/src/actions/attest/attest_batch_wire.js for the versions,
 // xchain-indexer/src/actions/attest/index.js for the marker, which
-// xchain-indexer/src/rollback.js already keeps a second copy of); keep all copies in step.
+// xchain-indexer/src/db/rollback/batch_heads.js already keeps a second copy of); keep all
+// copies in step.
 const ATTEST_BATCH_HEAD_VERSION         = 5;
 const ATTEST_BATCH_CONTINUATION_VERSION = 6;
 const ATTEST_BATCH_COMPLETION_STAMP     = ' (stamped on batch completion)';

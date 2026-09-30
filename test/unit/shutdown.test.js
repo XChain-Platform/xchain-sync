@@ -15,7 +15,7 @@
 
 const assert = require('assert');
 const { createShutdown, createSyncDrain, closeServer, resolveTimeoutMs, DEFAULT_SHUTDOWN_TIMEOUT_MS } = require('../../src/http/shutdown');
-const SyncService = require('../../src/SyncService');
+const SyncService = require('../../src/sync_service');
 const { waitFor } = require('../e2e/helpers/waitFor');
 
 const silentLog = { log(){}, warn(){}, error(){} };

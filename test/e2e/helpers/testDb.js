@@ -26,14 +26,8 @@ const REPLICA_DB_PORT = fixturePorts.port('E2E_REPLICA_DB_PORT');
 const REPLICA_DB_USER = process.env.E2E_REPLICA_DB_USER || 'xchain-node';
 const REPLICA_DB_PASS = process.env.E2E_REPLICA_DB_PASS || 'xchain-fixture-throwaway';
 
-const SOURCE2_DB_HOST = process.env.E2E_SOURCE2_DB_HOST || '127.0.0.1';
-const SOURCE2_DB_PORT = fixturePorts.port('E2E_SOURCE2_DB_PORT');
-const SOURCE2_DB_USER = process.env.E2E_SOURCE2_DB_USER || 'xchain-node';
-const SOURCE2_DB_PASS = process.env.E2E_SOURCE2_DB_PASS || 'xchain-fixture-throwaway';
-
 const SOURCE_DB_NAME  = 'xchain_e2e_source';
 const REPLICA_DB_NAME = 'xchain_e2e_replica';
-const SOURCE2_DB_NAME = 'xchain_e2e_source2';
 
 const util = new Utility();
 
@@ -562,8 +556,7 @@ async function dropDatabase(dbName, host, port, user, pass) {
 module.exports = {
     TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASS,
     REPLICA_DB_HOST, REPLICA_DB_PORT, REPLICA_DB_USER, REPLICA_DB_PASS,
-    SOURCE2_DB_HOST, SOURCE2_DB_PORT, SOURCE2_DB_USER, SOURCE2_DB_PASS,
-    SOURCE_DB_NAME, REPLICA_DB_NAME, SOURCE2_DB_NAME,
+    SOURCE_DB_NAME, REPLICA_DB_NAME,
     util,
     createDb, createDatabase, seedSchema,
     getTables, truncateAll, getRowCount, dropDatabase,

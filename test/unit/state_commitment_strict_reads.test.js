@@ -21,10 +21,10 @@
 
 const assert   = require('assert');
 const sinon    = require('sinon');
-const Database = require('../../src/db');
+const { makeTestDatabase } = require('./support/fake_db');
 
 function makeDb() {
-    const db = new Database('localhost', 3306, 'idx', 'u', 'p',
+    const db = makeTestDatabase('idx', 'u', 'p',
         { isNull: (x) => x == null, logError: () => {} }, 'indexer');
     // No transaction open: exactly the state the seed path and the checkpoint
     // forward-follow (ClientSync.oraclePublishSetAt) run in.
