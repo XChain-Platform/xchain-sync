@@ -982,6 +982,26 @@ class ServerPoller {
             }
         }
 
+        if(this.dbType !== 'decoder'){
+            for(const table of ['index_addresses', 'index_tickers']){
+                try {
+                    const rows = await this.db.getBlockScopedRows(table, block_index, conn);
+                    if(!rows || rows.length === 0) continue;
+                    const existing = payload.data[table] || [];
+                    const ids = new Set(existing.map(row => row.id));
+                    for(const row of rows){
+                        if(!ids.has(row.id)){
+                            ids.add(row.id);
+                            existing.push(row);
+                        }
+                    }
+                    payload.data[table] = existing;
+                } catch(e){
+                    if(!isSchemaGapError(e)) throw e;
+                }
+            }
+        }
+
         // In-place mutations to SURVIVING (below-window) rows: deactivation_block
         // stamps, SLASH amount reductions, and v0 request_status flips are not
         // reachable by the action_index-scoped joins above (those rows were created
