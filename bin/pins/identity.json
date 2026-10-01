@@ -45,10 +45,10 @@
   "armed_map_rows": 39,
   "carrier_logic_digest": "0713bf5e35c68e214fee0db8a1b9237d5951d087ddc3b23ce0655eaf100a61bd",
   "vendoredCoins": {
-    "src/coins/BTC.js": "ea5834e4c58cdee03a0ab3ee79851f8a1090cf768a1c248b8df89e580ab4fabb",
-    "src/coins/DOGE.js": "711d4a177d90503675e04387677f574e7d534426b68b75fbdc239797aa34c168",
-    "src/coins/LTC.js": "c113e4e0ce7f5b3774eb1cbe23a9e3a897d7eb42e661cdfdb0f19b16a852a987",
-    "src/coins/consensus_pin.js": "9c00822c9d00d1a1d00ea756bf5dd93f3d4a060df050c9838f102d72c57ff814",
-    "src/coins/index.js": "dd350bc0ec999849fe302ac4381f37b7be3eaa866f019a35cbcceebb4d5ebd4b"
+    "src/coins/BTC.js": "92f1e7d143f844886700f40deb53cb02bb7c6c270ab4bb837488f5d8535629b6",
+    "src/coins/DOGE.js": "3b1aac3d95ca96fd6a7f53c4af169e4e845effb77d00058473bda4d4786e397b",
+    "src/coins/LTC.js": "d7cf410caea44a18c3c5cac07ab7f47507af8680ec3cbbec4f54ab8cd09fc0b9",
+    "src/coins/consensus_pin.js": "342bf7af224a19ea0a98ff9cfb2c9a70b3fd5be75de7ecef2db05936f82baa63",
+    "src/coins/index.js": "08b678d934fa647d3c7d14dc5ccdaeb86722ee32a3662de69e4a31cd7b09234c"
   }
 }
