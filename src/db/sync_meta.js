@@ -125,6 +125,19 @@ module.exports = {
         );
     },
 
+    // Decoder content hashes for one block range, in block order.
+    async findBlockHashesBetween(startBlock, endBlock, conn){
+        return await this.doQuery(
+            `SELECT b.block_index, t.hash AS hash
+             FROM blocks b
+             LEFT JOIN index_transactions t ON (t.id=b.block_hash_id)
+             WHERE b.block_index >= ? AND b.block_index <= ?
+             ORDER BY b.block_index ASC`,
+            [startBlock, endBlock],
+            conn
+        );
+    },
+
     // Delete every recorded block at or above an orphaned height.
     async deleteSyncMetaFrom(block_index){
         return await this.doQuery("DELETE FROM sync_meta WHERE block_index >= ?", [block_index]);

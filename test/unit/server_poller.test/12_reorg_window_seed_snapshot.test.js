@@ -32,7 +32,20 @@ function broadcaster(){
     };
 }
 
-describe('ServerPoller restart reorg-window snapshot @regression', function(){
+function syncMetaRows(startBlock, endBlock){
+    const rows = [];
+    for(let blockIndex = startBlock; blockIndex <= endBlock; blockIndex++){
+        rows.push({
+            block_index: blockIndex,
+            ledger_hash: 'old-' + blockIndex,
+            actions_hash: null,
+            contract_hash: null
+        });
+    }
+    return rows;
+}
+
+function installConsoleHooks(){
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'warn');
@@ -42,13 +55,16 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
     afterEach(function(){
         sinon.restore();
     });
+}
 
-    it('seeds one consistent range read and resolves a mid-seed reorg at the true fork', async function(){
+describe('ServerPoller decoder snapshot transaction @regression', function(){
+    installConsoleHooks();
+    it('seeds one consistent decoder range read and resolves a mid-seed reorg at the true fork @regression', async function(){
         const cursor = 100;
         const fork = 80;
         let generation = 'old';
         const snapshot = { id: 'seed-snapshot' };
-        const db = {
+        const db = withDbMixins({
             dbType: 'decoder',
             getLastBlock: sinon.stub().resolves(cursor),
             getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex,
@@ -66,12 +82,13 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
                 generation = 'new';
                 return rows;
             })
-        };
+        });
         const sink = broadcaster();
         const poller = new ServerPoller('bitcoin', 'mainnet', db, sink, null,
             { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
         poller.lastPolledBlock = cursor;
         poller.recentHashCap = 31;
+        sinon.stub(poller, 'updateStatus').resolves();
 
         poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
 
@@ -90,12 +107,15 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
         assert.strictEqual(event.block_index, fork);
         assert.strictEqual(poller.lastPolledBlock, fork - 1);
     });
+});
 
-    it('uses one consistent range statement when snapshot helpers are unavailable', async function(){
+describe('ServerPoller decoder single range statement @regression', function(){
+    installConsoleHooks();
+    it('uses one consistent decoder range statement when snapshot helpers are unavailable @regression', async function(){
         const cursor = 100;
         const fork = 80;
         let generation = 'old';
-        const db = {
+        const db = withDbMixins({
             dbType: 'decoder',
             getLastBlock: sinon.stub().resolves(cursor),
             getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex,
@@ -110,12 +130,13 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
                 generation = 'new';
                 return rows;
             })
-        };
+        });
         const sink = broadcaster();
         const poller = new ServerPoller('bitcoin', 'mainnet', db, sink, null,
             { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
         poller.lastPolledBlock = cursor;
         poller.recentHashCap = 31;
+        sinon.stub(poller, 'updateStatus').resolves();
 
         poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
 
@@ -131,8 +152,11 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
         assert.strictEqual(event.block_index, fork);
         assert.strictEqual(poller.lastPolledBlock, fork - 1);
     });
+});
 
-    it('seeds indexer hashes from the durable log range after a pre-seed reorg', async function(){
+describe('ServerPoller indexer durable range @regression', function(){
+    installConsoleHooks();
+    it('seeds indexer hashes from the durable log range after a pre-seed reorg @regression', async function(){
         const cursor = 100;
         const fork = 80;
         const snapshot = { id: 'log-seed-snapshot' };
@@ -153,16 +177,7 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
                 assert.match(query, /FROM sync_meta/);
                 assert.deepStrictEqual(args, [70, cursor]);
                 assert.strictEqual(conn, snapshot);
-                const rows = [];
-                for(let blockIndex = args[0]; blockIndex <= args[1]; blockIndex++){
-                    rows.push({
-                        block_index: blockIndex,
-                        ledger_hash: 'old-' + blockIndex,
-                        actions_hash: null,
-                        contract_hash: null
-                    });
-                }
-                return rows;
+                return syncMetaRows(args[0], args[1]);
             })
         });
         const transparencyLog = {
@@ -196,8 +211,11 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
         assert.strictEqual(poller.lastPolledBlock, fork - 1);
         assert.strictEqual(transparencyLog.pruneFrom.calledOnceWith(fork), true);
     });
+});
 
-    it('retries an unstable seed when the adapter has no range-query primitive', async function(){
+describe('ServerPoller unstable fallback @regression', function(){
+    installConsoleHooks();
+    it('retries an unstable seed when the adapter has no range-query primitive @regression', async function(){
         const cursor = 100;
         const fork = 80;
         let generation = 'old';

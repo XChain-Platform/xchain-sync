@@ -513,14 +513,9 @@ class ServerPoller {
             };
         } else {
             rangeDb = this.db;
-            if(typeof rangeDb.doQuery !== 'function')
+            if(typeof rangeDb.findBlockHashesBetween !== 'function')
                 return await this.readStableReorgWindow(floor, cursor);
-            const query = `SELECT b.block_index, t.hash AS hash
-                FROM blocks b
-                LEFT JOIN index_transactions t ON (t.id=b.block_hash_id)
-                WHERE b.block_index >= ? AND b.block_index <= ?
-                ORDER BY b.block_index ASC`;
-            readRange = async conn => await rangeDb.doQuery(query, [floor, cursor], conn);
+            readRange = async conn => await rangeDb.findBlockHashesBetween(floor, cursor, conn);
         }
 
         const supportsSnapshot = typeof rangeDb.beginReadSnapshot === 'function' &&
