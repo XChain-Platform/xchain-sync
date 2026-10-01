@@ -141,8 +141,7 @@ class ServerPoller {
 
     async start(){
         this.lastPolledBlock = await this.resumeCursor();
-        this.lastPolledBlockHash = await this.seedReorgGuardHash(this.lastPolledBlock);
-        await seedReorgWindow(this, logger);
+        this.lastPolledBlockHash = await seedReorgWindow(this, logger);
         this.running = true;
         logger.info('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
@@ -496,6 +495,40 @@ class ServerPoller {
         let row = await this.db.getBlockHashRow(blockIndex);
         if(!row) return null;
         return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
+    }
+
+    async readReorgWindow(floor, cursor){
+        if(typeof this.db.beginReadSnapshot !== 'function' ||
+            typeof this.db.commitReadSnapshot !== 'function' ||
+            typeof this.db.rollbackReadSnapshot !== 'function' ||
+            typeof this.db.doQuery !== 'function')
+            return null;
+
+        let conn = await this.db.beginReadSnapshot();
+        let snapshotOpen = true;
+        try {
+            let query;
+            if(this.dbType === 'decoder'){
+                query = `SELECT b.block_index, t.hash AS hash
+                    FROM blocks b
+                    LEFT JOIN index_transactions t ON (t.id=b.block_hash_id)
+                    WHERE b.block_index >= ? AND b.block_index <= ?
+                    ORDER BY b.block_index ASC`;
+            } else {
+                query = `SELECT block_index, ledger_hash AS hash
+                    FROM sync_meta
+                    WHERE block_index >= ? AND block_index <= ?
+                    ORDER BY block_index ASC`;
+            }
+            let rows = await this.db.doQuery(query, [floor, cursor], conn);
+            await this.db.commitReadSnapshot(conn);
+            snapshotOpen = false;
+            return rows;
+        } catch(e){
+            if(snapshotOpen)
+                await this.db.rollbackReadSnapshot(conn);
+            throw e;
+        }
     }
 
     // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This

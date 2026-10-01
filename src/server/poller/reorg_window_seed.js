@@ -12,24 +12,43 @@
 
 async function seedReorgWindow(poller, logger){
     const cursor = poller.lastPolledBlock;
-    if(cursor === null) return;
+    if(cursor === null) return null;
 
     const floor = Math.max(1, cursor - poller.recentHashCap + 1);
     const suffix = [];
-    for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
-        const hash = poller.transparencyLog
-            ? await poller.transparencyLog.getRecordedHash(blockIndex)
-            : await poller.sourceBlockHash(blockIndex);
-        if(hash === null){
-            logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
-                + ': no durable hash at block ' + blockIndex);
-            break;
+    const rows = await poller.readReorgWindow(floor, cursor);
+
+    if(rows !== null){
+        const hashes = new Map(rows.map(row => [Number(row.block_index), row.hash]));
+        for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
+            const hash = hashes.get(blockIndex);
+            if(hash === null || hash === undefined){
+                logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
+                    + ': no durable hash at block ' + blockIndex);
+                break;
+            }
+            suffix.push([blockIndex, hash]);
         }
-        suffix.push([blockIndex, hash]);
+    } else {
+        for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
+            const hash = poller.transparencyLog
+                ? await poller.transparencyLog.getRecordedHash(blockIndex)
+                : await poller.sourceBlockHash(blockIndex);
+            if(hash === null){
+                logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
+                    + ': no durable hash at block ' + blockIndex);
+                break;
+            }
+            suffix.push([blockIndex, hash]);
+        }
     }
 
     for(let i = suffix.length - 1; i >= 0; i--)
         poller.recentBroadcastHashes.set(suffix[i][0], suffix[i][1]);
+
+    if(suffix.length > 0 && suffix[0][0] === cursor)
+        return suffix[0][1];
+    return await poller.seedReorgGuardHash(cursor);
 }
 
 module.exports = seedReorgWindow;

@@ -1,0 +1,88 @@
+// Copyright © 2025–2026 Dankest, LLC
+// Based on XChain Platform by Dankest, LLC – https://dankest.llc
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This file is part of XChain Platform. Licensed under the GNU Affero
+// General Public License v3.0 or later; see LICENSE.md. A commercial
+// license (without AGPL source-disclosure terms) is available -
+// contact legal@dankest.llc.
+
+'use strict';
+
+const assert = require('assert');
+const sinon = require('sinon');
+const ServerPoller = require('../../../src/server/poller');
+const seedReorgWindow = require('../../../src/server/poller/reorg_window_seed');
+
+function hashRow(blockIndex, generation){
+    return {
+        block_index: blockIndex,
+        block_time: blockIndex * 10,
+        block_hash: generation + '-' + blockIndex
+    };
+}
+
+describe('ServerPoller restart reorg-window snapshot @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'warn');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    it('seeds one consistent range read and resolves a mid-seed reorg at the true fork', async function(){
+        const cursor = 100;
+        const fork = 80;
+        let generation = 'old';
+        const snapshot = { id: 'seed-snapshot' };
+        const db = {
+            dbType: 'decoder',
+            getLastBlock: sinon.stub().resolves(cursor),
+            getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex,
+                generation === 'new' && blockIndex >= fork ? 'new' : 'old')),
+            beginReadSnapshot: sinon.stub().resolves(snapshot),
+            commitReadSnapshot: sinon.stub().resolves(),
+            rollbackReadSnapshot: sinon.stub().resolves(),
+            doQuery: sinon.stub().callsFake(async (query, args, conn) => {
+                assert.match(query, /FROM blocks b/);
+                assert.deepStrictEqual(args, [70, cursor]);
+                assert.strictEqual(conn, snapshot);
+                const rows = [];
+                for(let blockIndex = args[0]; blockIndex <= args[1]; blockIndex++)
+                    rows.push({ block_index: blockIndex, hash: 'old-' + blockIndex });
+                generation = 'new';
+                return rows;
+            })
+        };
+        const broadcaster = {
+            broadcast: sinon.stub(),
+            updateStatus: sinon.stub(),
+            getSubscriberCount: sinon.stub().returns(0)
+        };
+        const poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, null,
+            { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
+        poller.lastPolledBlock = cursor;
+        poller.recentHashCap = 31;
+
+        poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
+
+        assert.strictEqual(db.doQuery.callCount, 1);
+        assert.strictEqual(db.beginReadSnapshot.callCount, 1);
+        assert.strictEqual(db.commitReadSnapshot.callCount, 1);
+        assert.strictEqual(db.rollbackReadSnapshot.callCount, 0);
+        assert.strictEqual(db.getBlockHashRow.callCount, 0);
+        assert.strictEqual(poller.lastPolledBlockHash, 'old-100');
+
+        await poller.poll();
+
+        const event = broadcaster.broadcast.getCalls()
+            .map(call => call.args[2])
+            .find(payload => payload && payload.type === 'reorg');
+        assert.strictEqual(event.block_index, fork);
+        assert.strictEqual(poller.lastPolledBlock, fork - 1);
+    });
+});
