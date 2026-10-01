@@ -33,6 +33,7 @@ describe('list sharing lifecycle registry twin', function () {
         assert.strictEqual(entry.replication, 'hub-mirror');
         assert.strictEqual(entry.rollback, 'exempt');
         assert.strictEqual(entry.replicaRollback, 'exempt');
+        assert.strictEqual(entry.anchorRecovery, 'archive');
     });
 
     it('streams and rolls back list_share_mirrors by action', function () {

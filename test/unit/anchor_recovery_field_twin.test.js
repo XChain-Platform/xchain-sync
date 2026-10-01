@@ -17,6 +17,7 @@ const lifecycle = require('../../src/table_lifecycle');
 
 const ARCHIVED_QUORUM_TABLES = [
     'bridge_transfers',
+    'list_snapshots',
     'policy_snapshots',
     'state_checkpoints',
     'price_snapshots',
