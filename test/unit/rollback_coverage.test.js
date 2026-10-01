@@ -78,7 +78,7 @@ function replicatedTables(dbType){
 // row-delete. dispensers: the decoder live-prunes it (soft-expire), so it seeds from the
 // full snapshot and is held in parity by the periodic apply-side reconcile; deleting its
 // rows on a reorg would corrupt that replicated state with no per-block stream to restore
-// them (src/client/rollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js:47-49).
+// them (src/client/rollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js, "Parity rests").
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
     dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
 };
@@ -1059,8 +1059,9 @@ describe('Rollback coverage guard @regression', function(){
             'superset re-fetch delivers non-tx-interned addresses; do not re-add it to the exclusion list');
     });
 
-    // Light-client state commitment (SPV spec sec.4-5): merkle.js (the SMT + leaf
-    // encoders) and state_commitment_gate.js (the flag-day gate) are copied
+    // Light-client state commitment (SPV spec sec.4-5): merkle.js (the SMT), the
+    // merkle/primitives.js it requires (prefixes, leaf encoders, key derivations)
+    // and state_commitment_gate.js (the flag-day gate) are copied
     // VERBATIM from xchain-indexer. The follower recomputes the per-block roots from
     // these and HALTs on divergence, so any drift turns the divergence detector into
     // a false-halt generator. table_lifecycle.js is the table-lifecycle registry that
@@ -1100,6 +1101,7 @@ describe('Rollback coverage guard @regression', function(){
     // The pairs below compare exactly the same code the single-tail loop did.
     for(const [twin, indexerRel, syncRel] of [
         ['merkle.js',                            'src/consensus/merkle.js'],
+        ['merkle/primitives.js',                 'src/consensus/merkle/primitives.js'],
         ['state_commitment_gate.js',             'src/consensus/gates/state_commitment_gate.js',       'consensus/gates/state_commitment_gate.js'],
         ['swq_source_cap_gate.js',               'src/consensus/gates/swq_source_cap_gate.js',         'consensus/gates/swq_source_cap_gate.js'],
         ['stake_weight_collation_gate.js',       'src/consensus/gates/stake_weight_collation_gate.js', 'consensus/gates/stake_weight_collation_gate.js'],
@@ -1417,7 +1419,7 @@ describe('Rollback coverage guard @regression', function(){
 // parity. The pre-reconcile phrasing, naming the full snapshot as the sole channel, outlived
 // the reconcile it predates and was restated across several consumer-side files, so a
 // rollback author reading them learned that the replace-table reconcile does not exist.
-// The authority is src/schema/replicated_tables.js:47-49: parity rests on the apply-side
+// The authority is the "Parity rests" sentence in src/schema/replicated_tables.js: parity rests on the apply-side
 // reconcile, ClientApplier.applyDispensersReplace via ClientSync.reconcileDispensers.
 describe('dispensers convergence wording does not drift back', function(){
     // Fixed in-repo list on purpose: no repo walk, nothing outside xchain-sync, and
@@ -1451,7 +1453,7 @@ describe('dispensers convergence wording does not drift back', function(){
             assert.strictEqual(STALE.test(src), false,
                 `${rel} restates the superseded dispensers convergence channel. dispensers ` +
                 `SEEDS from the full snapshot and is then held in parity by the periodic ` +
-                `apply-side reconcile; see src/schema/replicated_tables.js:47-49 for the authority.`);
+                `apply-side reconcile; see the "Parity rests" sentence in src/schema/replicated_tables.js.`);
         });
     }
 

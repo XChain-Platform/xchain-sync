@@ -15,17 +15,9 @@ const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout');
 
 const lifecycle = require('../../src/table_lifecycle');
 
-const ARCHIVED_QUORUM_TABLES = [
-    'bridge_transfers',
-    'list_snapshots',
-    'policy_snapshots',
-    'state_checkpoints',
-    'price_snapshots',
-];
-
 const TWIN_FILES = [
-    ['src/table_lifecycle.js', 'src/hub/table_lifecycle.js'],
     ['src/table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
+    ['src/table_lifecycle/action_tables.js', 'src/hub/table_lifecycle/action_tables.js'],
 ];
 
 function indexerRoot() {
@@ -34,19 +26,20 @@ function indexerRoot() {
         : path.resolve(__dirname, '..', '..', '..', 'xchain-indexer');
 }
 
-describe('anchor recovery registry twin', function () {
+describe('list sharing lifecycle registry twin', function () {
 
-    it('declares archive recovery for every added quorum table', function () {
-        for (const table of ARCHIVED_QUORUM_TABLES)
-            assert.strictEqual(lifecycle.entry(table).anchorRecovery, 'archive', table);
+    it('keeps list_snapshots hub-mirrored and rollback-exempt', function () {
+        const entry = lifecycle.entry('list_snapshots');
+        assert.strictEqual(entry.replication, 'hub-mirror');
+        assert.strictEqual(entry.rollback, 'exempt');
+        assert.strictEqual(entry.replicaRollback, 'exempt');
+        assert.strictEqual(entry.anchorRecovery, 'archive');
     });
 
-    it('exports the archive recovery table derivation', function () {
-        assert.strictEqual(typeof lifecycle.anchorRecoveryTables, 'function');
-
-        const recoveryTables = lifecycle.anchorRecoveryTables();
-        for (const table of ARCHIVED_QUORUM_TABLES)
-            assert.ok(recoveryTables.includes(table), table);
+    it('streams and rolls back list_share_mirrors by action', function () {
+        const entry = lifecycle.entry('list_share_mirrors');
+        assert.strictEqual(entry.replication, 'stream:action');
+        assert.strictEqual(entry.rollback, 'action');
     });
 
     for (const [own, canonical] of TWIN_FILES) {

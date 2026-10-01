@@ -1,5 +1,5 @@
 {
-  "armed_map_fingerprint": "5f3a9bdec896aa8d8073a7bff0d7f84ea55b1f792f2a495fab7332386b50236d",
+  "armed_map_fingerprint": "f57fd52a6ca3aeecf2a8927afce2886b785f0182f2466bc80435c965cd764049",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -9,7 +9,7 @@
     "consensus-constants.BTC_STAKE_CAPABILITIES": "a4ce5ddab357e4e71e4e5fe3f5b56665191c1e7a7458d77e7480d742917f9a4c",
     "consensus-constants.GAS_TICK": "89ea3e0f234780ff4c05e114707ab76d4a7d22e69148ff9bd2d6a36e85a5d691",
     "consensus-constants.VALIDATOR_QUERY_LIMIT": "40510175845988f13f6162ed8526f0b09f73384467fa855e1e79b44a56562a58",
-    "equivocation_header.ENGINE_TAGS": "f12cab8aa9b4a98239fd2731227fbea583a26306405ec551c7be0cb7075bcf19",
+    "equivocation_header.ENGINE_TAGS": "94a875df3994d065a749bfb02dc3cde78500fe965c4cd0a7f767b7b5e9501401",
     "equivocation_header.EQUIV_HEADER_ACTIVATION": "b64d8f1cbe12e895958c6fb75ae01b793a75112ed7789d8d483ce2affd49ea35",
     "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION": "d0f6f385a0509a7bee3945d35cc314410dfe63eafda95eb10d613595c7a9f4fa",
     "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION": "767aa75f797d8bd0fe65d2f8a8806c43bf358f8da346be130e54dcff441719a9",
@@ -45,10 +45,10 @@
   "armed_map_rows": 39,
   "carrier_logic_digest": "0713bf5e35c68e214fee0db8a1b9237d5951d087ddc3b23ce0655eaf100a61bd",
   "vendoredCoins": {
-    "src/coins/BTC.js": "900d82359d27269ebb775a207e84cac7ac0702f57f07c0239d5406f2a0ec6c90",
-    "src/coins/DOGE.js": "a0952d619edec50c09d0cbac90023cba2e8e75f0fa98b650e2ee1f4eadd7540b",
-    "src/coins/LTC.js": "c227025a7b1e8d70f5165f6065cd2894161abd4966814c8f7b0f462e036474c9",
-    "src/coins/consensus_pin.js": "f41142b6b3c9e3f1c1d491b9737fee5e6fd988d700bd96f0d200f7bd0b301ae7",
-    "src/coins/index.js": "dd350bc0ec999849fe302ac4381f37b7be3eaa866f019a35cbcceebb4d5ebd4b"
+    "src/coins/BTC.js": "92f1e7d143f844886700f40deb53cb02bb7c6c270ab4bb837488f5d8535629b6",
+    "src/coins/DOGE.js": "3b1aac3d95ca96fd6a7f53c4af169e4e845effb77d00058473bda4d4786e397b",
+    "src/coins/LTC.js": "d7cf410caea44a18c3c5cac07ab7f47507af8680ec3cbbec4f54ab8cd09fc0b9",
+    "src/coins/consensus_pin.js": "342bf7af224a19ea0a98ff9cfb2c9a70b3fd5be75de7ecef2db05936f82baa63",
+    "src/coins/index.js": "08b678d934fa647d3c7d14dc5ccdaeb86722ee32a3662de69e4a31cd7b09234c"
   }
 }

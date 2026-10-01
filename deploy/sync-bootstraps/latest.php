@@ -73,14 +73,10 @@ if ($type === 'sig' && is_file($target . '/latest.tgz')) {
     exit;
 }
 
-// Candidate archives: *.tar.gz and *.tgz, excluding the latest.* aliases.
-$files = array_merge(
-    glob($target . '/*.tar.gz') ?: [],
-    glob($target . '/*.tgz')    ?: []
-);
-$files = array_values(array_filter($files, function ($f) {
-    $b = basename($f);
-    return $b !== 'latest.tgz' && $b !== 'latest.tar.gz';
+// Take candidates from *.tar.gz only, the producer's extension and the only one
+// publish-bootstraps.sh prunes, so an unpruned .tgz stray can never become latest.
+$files = array_values(array_filter(glob($target . '/*.tar.gz') ?: [], function ($f) {
+    return basename($f) !== 'latest.tar.gz';
 }));
 
 if (empty($files)) {

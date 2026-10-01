@@ -146,9 +146,9 @@ class ServerProcess {
         // bootstrap snapshot, not the poller) the walk-back can't go below the start
         // tip, so a reorg into a pre-seeded block is only partially rolled back and the
         // replica keeps a stale orphan -> recompute halt. Bounded to the same window the
-        // live poller retains (RECENT_HASH_CAP = 256 in ServerPoller).
+        // live poller retains (ServerPoller.recentHashCap).
         if(this.poller.lastPolledBlock !== null){
-            let floor = Math.max(1, this.poller.lastPolledBlock - 255);
+            let floor = Math.max(1, this.poller.lastPolledBlock - this.poller.recentHashCap + 1);
             for(let bi = floor; bi <= this.poller.lastPolledBlock; bi++){
                 let h = await this.poller.sourceBlockHash(bi);
                 if(h !== null) this.poller.recentBroadcastHashes.set(bi, h);

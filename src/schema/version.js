@@ -169,6 +169,14 @@
  *       `action_index >= ?`, which is agnostic to the row's column set. The
  *       migration is mode=auto, so it self-heals fleet-wide on the forced restart.
  *       Decoder is unaffected and stays at 4.
+ *  13 - (indexer only) `list_transfers`, a new table (transferred-list ownership
+ *       history, LIST format 3) created by the 2026-10-01-list-transfers migration.
+ *       It is stream:action wire-replicated, so a v12 follower has no table to
+ *       receive the streamed rows and fails the block under ClientApplier's strict
+ *       apply. Nothing here enters a block-hash preimage: `list_transfers` is
+ *       DERIVED in src/table_lifecycle/action_tables.js and rolled back by
+ *       `action_index >= ?`. No row is written below LIST_TRANSFER_ACTIVATION, and
+ *       the migration is mode=auto. Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -185,13 +193,13 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 12, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 13, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-09-13',
+        through: '2026-10-01',
         accounted: [
-            '2026-09-13-destroys-sends-leg-ordinal.sql'
+            '2026-10-01-list-transfers.sql'
         ]
     },
     decoder: {

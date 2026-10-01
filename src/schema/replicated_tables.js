@@ -36,9 +36,15 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
- *   - dispensers (decoder)            soft-expired by an UPDATE of expired_block_index and
- *                                     hard-purged later by purgeExpiredDispensers; neither
- *                                     mutation rides the per-block stream. It IS in the
+ *   - dispensers (decoder)            mutated by five decoder writes that ride no per-block
+ *                                     stream: the soft-expire UPDATE of expired_block_index,
+ *                                     the format-2 edit's expiration extend with same-block
+ *                                     un-expire (extendOpenDispenserExpirationBySource), the
+ *                                     reorg un-expire UPDATE and reorg DELETE by tx_index
+ *                                     (deleteBlockRows), and the deferred hard purge
+ *                                     (purgeExpiredDispensers). The expiration extend leaves
+ *                                     no block marker on the row, so any channel replacing
+ *                                     the full-table reconcile must carry all five. It IS in the
  *                                     decoder `special` bucket so it joins the /status
  *                                     completeness count, but that count is a post-replace
  *                                     equality sanity check, never a drift detector: a
@@ -60,7 +66,8 @@
  *     anchor_reward_attestations,     full and incremental snapshots all exclude them, the
  *     attestation_responses,          last through SnapshotBuilder.OPERATOR_LOCAL_TABLES. On
  *     bridge_transfers,               a source node they converge through hub_db_sync. A
- *     policy_snapshots                serving node does not fall back to a local mirror
+ *     policy_snapshots,
+ *     list_snapshots                  serving node does not fall back to a local mirror
  *                                     either: the explorer reads the consensus-relevant ones
  *                                     from the MANDATORY co-located hub DB and fails loud
  *                                     without it (its checkpoint and match sources throw,
@@ -104,9 +111,9 @@ const TOPOLOGY = {
         // Tx-scoped tables (key off tx_index -> transactions.block_index).
         // dispensers is deliberately NOT per-block-streamed: per-block replication
         // captures only rows *inserted* in a block (via the tx_index->block_index
-        // join), but the decoder also soft-expires dispensers (UPDATE
-        // expired_block_index) and defers the hard-purge to purgeExpiredDispensers.
-        // Neither mutation rides the block stream, so streaming inserts alone would
+        // join), but the decoder also mutates dispensers in place and deletes them
+        // (the full list of five writes is in the header's dispensers entry).
+        // None of them rides the block stream, so streaming inserts alone would
         // let a follower's dispensers count drift away from the source. dispensers
         // is instead listed in `special` below, where it converges through the
         // periodic full-table reconcile; the count it joins there cannot detect
