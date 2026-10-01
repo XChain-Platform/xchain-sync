@@ -491,16 +491,13 @@ class ServerPoller {
 
     // Source content hash at a block, for net-forward reorg detection. Indexer uses
     // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
-    async sourceBlockHash(blockIndex){
-        let row = await this.db.getBlockHashRow(blockIndex);
+    async sourceBlockHash(blockIndex, conn, opts){
+        let row = await this.db.getBlockHashRow(blockIndex, conn, opts);
         if(!row) return null;
         return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
     }
 
     async readReorgWindow(floor, cursor){
-        if(typeof this.db.doQuery !== 'function')
-            return null;
-
         let query;
         if(this.dbType === 'decoder'){
             query = `SELECT b.block_index, t.hash AS hash
@@ -514,6 +511,9 @@ class ServerPoller {
                 WHERE block_index >= ? AND block_index <= ?
                 ORDER BY block_index ASC`;
         }
+
+        if(typeof this.db.doQuery !== 'function')
+            return await this.readStableReorgWindow(floor, cursor);
 
         const supportsSnapshot = typeof this.db.beginReadSnapshot === 'function' &&
             typeof this.db.commitReadSnapshot === 'function' &&
@@ -533,6 +533,29 @@ class ServerPoller {
                 await this.db.rollbackReadSnapshot(conn);
             throw e;
         }
+    }
+
+    async readStableReorgWindow(floor, cursor){
+        const maxAttempts = 3;
+        for(let attempt = 0; attempt < maxAttempts; attempt++){
+            const tipBefore = await this.db.getLastBlock(null, { rethrow: true });
+            const cursorBefore = await this.sourceBlockHash(cursor, null, { rethrow: true });
+            const rows = [];
+
+            for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
+                const hash = this.transparencyLog
+                    ? await this.transparencyLog.getRecordedHash(blockIndex)
+                    : await this.sourceBlockHash(blockIndex, null, { rethrow: true });
+                if(hash === null) break;
+                rows.push({ block_index: blockIndex, hash });
+            }
+
+            const tipAfter = await this.db.getLastBlock(null, { rethrow: true });
+            const cursorAfter = await this.sourceBlockHash(cursor, null, { rethrow: true });
+            if(tipBefore === tipAfter && cursorBefore === cursorAfter)
+                return rows;
+        }
+        throw new Error('Reorg window changed while seeding');
     }
 
     // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This

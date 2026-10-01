@@ -130,4 +130,48 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
         assert.strictEqual(event.block_index, fork);
         assert.strictEqual(poller.lastPolledBlock, fork - 1);
     });
+
+    it('retries an unstable seed when the adapter has no range-query primitive', async function(){
+        const cursor = 100;
+        const fork = 80;
+        let generation = 'old';
+        let seeding = true;
+        const db = {
+            dbType: 'decoder',
+            getLastBlock: sinon.stub().resolves(cursor),
+            getBlockHashRow: sinon.stub().callsFake(async blockIndex => {
+                const row = hashRow(blockIndex,
+                    generation !== 'old' && blockIndex >= fork ? generation : 'old');
+                if(seeding && generation === 'old' && blockIndex === 90)
+                    generation = 'new';
+                return row;
+            })
+        };
+        const sink = broadcaster();
+        const poller = new ServerPoller('bitcoin', 'mainnet', db, sink, null,
+            { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
+        poller.lastPolledBlock = cursor;
+        poller.recentHashCap = 31;
+
+        poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
+
+        assert.strictEqual(db.getBlockHashRow.callCount, 66);
+        assert.strictEqual(poller.lastPolledBlockHash, 'new-100');
+        assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()].slice(0, 2), [
+            [70, 'old-70'], [71, 'old-71']
+        ]);
+        assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()].slice(-2), [
+            [99, 'new-99'], [100, 'new-100']
+        ]);
+
+        seeding = false;
+        generation = 'latest';
+        await poller.poll();
+
+        const event = sink.broadcast.getCalls()
+            .map(call => call.args[2])
+            .find(payload => payload && payload.type === 'reorg');
+        assert.strictEqual(event.block_index, fork);
+        assert.strictEqual(poller.lastPolledBlock, fork - 1);
+    });
 });

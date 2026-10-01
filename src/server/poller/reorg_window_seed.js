@@ -18,29 +18,15 @@ async function seedReorgWindow(poller, logger){
     const suffix = [];
     const rows = await poller.readReorgWindow(floor, cursor);
 
-    if(rows !== null){
-        const hashes = new Map(rows.map(row => [Number(row.block_index), row.hash]));
-        for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
-            const hash = hashes.get(blockIndex);
-            if(hash === null || hash === undefined){
-                logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
-                    + ': no durable hash at block ' + blockIndex);
-                break;
-            }
-            suffix.push([blockIndex, hash]);
+    const hashes = new Map(rows.map(row => [Number(row.block_index), row.hash]));
+    for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
+        const hash = hashes.get(blockIndex);
+        if(hash === null || hash === undefined){
+            logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
+                + ': no durable hash at block ' + blockIndex);
+            break;
         }
-    } else {
-        for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
-            const hash = poller.transparencyLog
-                ? await poller.transparencyLog.getRecordedHash(blockIndex)
-                : await poller.sourceBlockHash(blockIndex);
-            if(hash === null){
-                logger.warn('Reorg window seed stopped for ' + poller.chain + '/' + poller.network + '/' + poller.dbType
-                    + ': no durable hash at block ' + blockIndex);
-                break;
-            }
-            suffix.push([blockIndex, hash]);
-        }
+        suffix.push([blockIndex, hash]);
     }
 
     for(let i = suffix.length - 1; i >= 0; i--)
