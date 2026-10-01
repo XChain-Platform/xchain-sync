@@ -34,6 +34,7 @@ const { collectUpdatedRows } = require('./updated_rows');
 const { collectMaturedCooldownCredits } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
+const seedReorgWindow = require('./poller/reorg_window_seed');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -141,6 +142,7 @@ class ServerPoller {
     async start(){
         this.lastPolledBlock = await this.resumeCursor();
         this.lastPolledBlockHash = await this.seedReorgGuardHash(this.lastPolledBlock);
+        await seedReorgWindow(this, logger);
         this.running = true;
         logger.info('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
