@@ -23,6 +23,14 @@ function hashRow(blockIndex, generation){
     };
 }
 
+function broadcaster(){
+    return {
+        broadcast: sinon.stub(),
+        updateStatus: sinon.stub(),
+        getSubscriberCount: sinon.stub().returns(0)
+    };
+}
+
 describe('ServerPoller restart reorg-window snapshot @regression', function(){
     beforeEach(function(){
         sinon.stub(console, 'log');
@@ -58,12 +66,8 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
                 return rows;
             })
         };
-        const broadcaster = {
-            broadcast: sinon.stub(),
-            updateStatus: sinon.stub(),
-            getSubscriberCount: sinon.stub().returns(0)
-        };
-        const poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, null,
+        const sink = broadcaster();
+        const poller = new ServerPoller('bitcoin', 'mainnet', db, sink, null,
             { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
         poller.lastPolledBlock = cursor;
         poller.recentHashCap = 31;
@@ -79,7 +83,48 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
 
         await poller.poll();
 
-        const event = broadcaster.broadcast.getCalls()
+        const event = sink.broadcast.getCalls()
+            .map(call => call.args[2])
+            .find(payload => payload && payload.type === 'reorg');
+        assert.strictEqual(event.block_index, fork);
+        assert.strictEqual(poller.lastPolledBlock, fork - 1);
+    });
+
+    it('uses one consistent range statement when snapshot helpers are unavailable', async function(){
+        const cursor = 100;
+        const fork = 80;
+        let generation = 'old';
+        const db = {
+            dbType: 'decoder',
+            getLastBlock: sinon.stub().resolves(cursor),
+            getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex,
+                generation === 'new' && blockIndex >= fork ? 'new' : 'old')),
+            doQuery: sinon.stub().callsFake(async (query, args, conn) => {
+                assert.match(query, /FROM blocks b/);
+                assert.deepStrictEqual(args, [70, cursor]);
+                assert.strictEqual(conn, undefined);
+                const rows = [];
+                for(let blockIndex = args[0]; blockIndex <= args[1]; blockIndex++)
+                    rows.push({ block_index: blockIndex, hash: 'old-' + blockIndex });
+                generation = 'new';
+                return rows;
+            })
+        };
+        const sink = broadcaster();
+        const poller = new ServerPoller('bitcoin', 'mainnet', db, sink, null,
+            { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
+        poller.lastPolledBlock = cursor;
+        poller.recentHashCap = 31;
+
+        poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
+
+        assert.strictEqual(db.doQuery.callCount, 1);
+        assert.strictEqual(db.getBlockHashRow.callCount, 0);
+        assert.strictEqual(poller.lastPolledBlockHash, 'old-100');
+
+        await poller.poll();
+
+        const event = sink.broadcast.getCalls()
             .map(call => call.args[2])
             .find(payload => payload && payload.type === 'reorg');
         assert.strictEqual(event.block_index, fork);
