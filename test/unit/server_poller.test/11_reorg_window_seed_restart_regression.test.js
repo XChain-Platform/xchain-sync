@@ -54,6 +54,63 @@ async function startOnce(poller){
     poll.restore();
 }
 
+async function testRestartReorg(){
+    const { poller, db, broadcaster, log } = createPoller();
+    const cursor = 20;
+    poller.recentHashCap = 6;
+    log.getHighWaterMark.resolves(cursor);
+    log.getRecordedHash.callsFake(async blockIndex => 'old-' + blockIndex);
+
+    await startOnce(poller);
+
+    assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
+        [15, 'old-15'], [16, 'old-16'], [17, 'old-17'],
+        [18, 'old-18'], [19, 'old-19'], [20, 'old-20']
+    ]);
+
+    db.getLastBlock.resolves(cursor);
+    db.getBlockHashRow.callsFake(async blockIndex => ({
+        block_index: blockIndex,
+        ledger_hash: blockIndex >= 18 ? 'new-' + blockIndex : 'old-' + blockIndex
+    }));
+
+    await poller.poll();
+
+    assert.strictEqual(broadcaster.broadcast.calledOnce, true);
+    assert.strictEqual(broadcaster.broadcast.firstCall.args[2].type, 'reorg');
+    assert.strictEqual(broadcaster.broadcast.firstCall.args[2].block_index, 18);
+    assert.strictEqual(poller.lastPolledBlock, 17);
+}
+
+async function testMissingHash(){
+    const { poller, log } = createPoller();
+    poller.lastPolledBlock = 20;
+    poller.recentHashCap = 6;
+    log.getRecordedHash.callsFake(async blockIndex => blockIndex === 17 ? null : 'old-' + blockIndex);
+    const logger = { warn: sinon.spy() };
+
+    await seedReorgWindow(poller, logger);
+
+    assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
+        [18, 'old-18'], [19, 'old-19'], [20, 'old-20']
+    ]);
+    assert.deepStrictEqual(log.getRecordedHash.getCalls().map(call => call.args[0]), [20, 19, 18, 17]);
+    assert.strictEqual(logger.warn.calledOnce, true);
+}
+
+async function testDecoderHashes(){
+    const { poller, db } = createPoller('decoder');
+    poller.lastPolledBlock = 8;
+    poller.recentHashCap = 3;
+    db.getBlockHashRow.callsFake(async blockIndex => ({ block_hash: 'block-' + blockIndex }));
+
+    await seedReorgWindow(poller, { warn: sinon.spy() });
+
+    assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
+        [6, 'block-6'], [7, 'block-7'], [8, 'block-8']
+    ]);
+}
+
 describe('ServerPoller restart reorg-window seed @regression', function(){
     beforeEach(function(){
         sinon.stub(console, 'log');
@@ -65,60 +122,7 @@ describe('ServerPoller restart reorg-window seed @regression', function(){
         sinon.restore();
     });
 
-    it('seeds the durable window on restart and resolves a three-block reorg at the true fork', async function(){
-        const { poller, db, broadcaster, log } = createPoller();
-        const cursor = 20;
-        poller.recentHashCap = 6;
-        log.getHighWaterMark.resolves(cursor);
-        log.getRecordedHash.callsFake(async blockIndex => 'old-' + blockIndex);
-
-        await startOnce(poller);
-
-        assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
-            [15, 'old-15'], [16, 'old-16'], [17, 'old-17'],
-            [18, 'old-18'], [19, 'old-19'], [20, 'old-20']
-        ]);
-
-        db.getLastBlock.resolves(cursor);
-        db.getBlockHashRow.callsFake(async blockIndex => ({
-            block_index: blockIndex,
-            ledger_hash: blockIndex >= 18 ? 'new-' + blockIndex : 'old-' + blockIndex
-        }));
-
-        await poller.poll();
-
-        assert.strictEqual(broadcaster.broadcast.calledOnce, true);
-        assert.strictEqual(broadcaster.broadcast.firstCall.args[2].type, 'reorg');
-        assert.strictEqual(broadcaster.broadcast.firstCall.args[2].block_index, 18);
-        assert.strictEqual(poller.lastPolledBlock, 17);
-    });
-
-    it('keeps only the newest contiguous suffix when a durable hash is missing', async function(){
-        const { poller, log } = createPoller();
-        poller.lastPolledBlock = 20;
-        poller.recentHashCap = 6;
-        log.getRecordedHash.callsFake(async blockIndex => blockIndex === 17 ? null : 'old-' + blockIndex);
-        const logger = { warn: sinon.spy() };
-
-        await seedReorgWindow(poller, logger);
-
-        assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
-            [18, 'old-18'], [19, 'old-19'], [20, 'old-20']
-        ]);
-        assert.deepStrictEqual(log.getRecordedHash.getCalls().map(call => call.args[0]), [20, 19, 18, 17]);
-        assert.strictEqual(logger.warn.calledOnce, true);
-    });
-
-    it('seeds decoder hashes from sourceBlockHash without a transparency log', async function(){
-        const { poller, db } = createPoller('decoder');
-        poller.lastPolledBlock = 8;
-        poller.recentHashCap = 3;
-        db.getBlockHashRow.callsFake(async blockIndex => ({ block_hash: 'block-' + blockIndex }));
-
-        await seedReorgWindow(poller, { warn: sinon.spy() });
-
-        assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
-            [6, 'block-6'], [7, 'block-7'], [8, 'block-8']
-        ]);
-    });
+    it('seeds the durable window on restart and resolves a three-block reorg at the true fork', testRestartReorg);
+    it('keeps only the newest contiguous suffix when a durable hash is missing', testMissingHash);
+    it('seeds decoder hashes from sourceBlockHash without a transparency log', testDecoderHashes);
 });
