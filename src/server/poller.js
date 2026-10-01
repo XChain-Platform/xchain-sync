@@ -141,8 +141,7 @@ class ServerPoller {
 
     async start(){
         this.lastPolledBlock = await this.resumeCursor();
-        this.lastPolledBlockHash = await this.seedReorgGuardHash(this.lastPolledBlock);
-        await seedReorgWindow(this, logger);
+        this.lastPolledBlockHash = await seedReorgWindow(this, logger);
         this.running = true;
         logger.info('ServerPoller started for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + (this.lastPolledBlock || 'none'));
 
@@ -492,10 +491,74 @@ class ServerPoller {
 
     // Source content hash at a block, for net-forward reorg detection. Indexer uses
     // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
-    async sourceBlockHash(blockIndex){
-        let row = await this.db.getBlockHashRow(blockIndex);
+    async sourceBlockHash(blockIndex, conn, opts){
+        let row = await this.db.getBlockHashRow(blockIndex, conn, opts);
         if(!row) return null;
         return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
+    }
+
+    async readReorgWindow(floor, cursor){
+        let rangeDb;
+        let readRange;
+        if(this.transparencyLog){
+            rangeDb = this.transparencyLog.db;
+            if(!rangeDb || typeof rangeDb.findSyncMetaLeaves !== 'function')
+                return await this.readStableReorgWindow(floor, cursor);
+            readRange = async conn => {
+                const rows = await rangeDb.findSyncMetaLeaves(floor, cursor, conn);
+                return rows.map(row => ({
+                    block_index: row.block_index,
+                    hash: row.ledger_hash
+                }));
+            };
+        } else {
+            rangeDb = this.db;
+            if(typeof rangeDb.findBlockHashesBetween !== 'function')
+                return await this.readStableReorgWindow(floor, cursor);
+            readRange = async conn => await rangeDb.findBlockHashesBetween(floor, cursor, conn);
+        }
+
+        const supportsSnapshot = typeof rangeDb.beginReadSnapshot === 'function' &&
+            typeof rangeDb.commitReadSnapshot === 'function' &&
+            typeof rangeDb.rollbackReadSnapshot === 'function';
+        if(!supportsSnapshot)
+            return await readRange();
+
+        const conn = await rangeDb.beginReadSnapshot();
+        let snapshotOpen = true;
+        try {
+            const rows = await readRange(conn);
+            await rangeDb.commitReadSnapshot(conn);
+            snapshotOpen = false;
+            return rows;
+        } catch(e){
+            if(snapshotOpen)
+                await rangeDb.rollbackReadSnapshot(conn);
+            throw e;
+        }
+    }
+
+    async readStableReorgWindow(floor, cursor){
+        const maxAttempts = 3;
+        for(let attempt = 0; attempt < maxAttempts; attempt++){
+            const tipBefore = await this.db.getLastBlock(null, { rethrow: true });
+            const cursorBefore = await this.sourceBlockHash(cursor, null, { rethrow: true });
+            const rows = [];
+
+            for(let blockIndex = cursor; blockIndex >= floor; blockIndex--){
+                const hash = this.transparencyLog
+                    ? await this.transparencyLog.getRecordedHash(blockIndex)
+                    : await this.sourceBlockHash(blockIndex, null, { rethrow: true });
+                if(hash === null) break;
+                rows.push({ block_index: blockIndex, hash });
+            }
+
+            const tipAfter = await this.db.getLastBlock(null, { rethrow: true });
+            const cursorAfter = await this.sourceBlockHash(cursor, null, { rethrow: true });
+            if(tipBefore === tipAfter && cursorBefore === cursorAfter)
+                return rows;
+        }
+        throw new Error('Reorg window changed while seeding');
     }
 
     // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This

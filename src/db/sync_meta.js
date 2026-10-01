@@ -114,13 +114,27 @@ module.exports = {
     },
 
     // The Merkle leaves of one block range, in block order.
-    async findSyncMetaLeaves(startBlock, endBlock){
+    async findSyncMetaLeaves(startBlock, endBlock, conn){
         return await this.doQuery(
             `SELECT block_index, ledger_hash, actions_hash, contract_hash
              FROM sync_meta
              WHERE block_index >= ? AND block_index <= ?
              ORDER BY block_index ASC`,
-            [startBlock, endBlock]
+            [startBlock, endBlock],
+            conn
+        );
+    },
+
+    // Decoder content hashes for one block range, in block order.
+    async findBlockHashesBetween(startBlock, endBlock, conn){
+        return await this.doQuery(
+            `SELECT b.block_index, t.hash AS hash
+             FROM blocks b
+             LEFT JOIN index_transactions t ON (t.id=b.block_hash_id)
+             WHERE b.block_index >= ? AND b.block_index <= ?
+             ORDER BY b.block_index ASC`,
+            [startBlock, endBlock],
+            conn
         );
     },
 
