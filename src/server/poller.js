@@ -498,39 +498,47 @@ class ServerPoller {
     }
 
     async readReorgWindow(floor, cursor){
-        let query;
-        if(this.dbType === 'decoder'){
-            query = `SELECT b.block_index, t.hash AS hash
+        let rangeDb;
+        let readRange;
+        if(this.transparencyLog){
+            rangeDb = this.transparencyLog.db;
+            if(!rangeDb || typeof rangeDb.findSyncMetaLeaves !== 'function')
+                return await this.readStableReorgWindow(floor, cursor);
+            readRange = async conn => {
+                const rows = await rangeDb.findSyncMetaLeaves(floor, cursor, conn);
+                return rows.map(row => ({
+                    block_index: row.block_index,
+                    hash: row.ledger_hash
+                }));
+            };
+        } else {
+            rangeDb = this.db;
+            if(typeof rangeDb.doQuery !== 'function')
+                return await this.readStableReorgWindow(floor, cursor);
+            const query = `SELECT b.block_index, t.hash AS hash
                 FROM blocks b
                 LEFT JOIN index_transactions t ON (t.id=b.block_hash_id)
                 WHERE b.block_index >= ? AND b.block_index <= ?
                 ORDER BY b.block_index ASC`;
-        } else {
-            query = `SELECT block_index, ledger_hash AS hash
-                FROM sync_meta
-                WHERE block_index >= ? AND block_index <= ?
-                ORDER BY block_index ASC`;
+            readRange = async conn => await rangeDb.doQuery(query, [floor, cursor], conn);
         }
 
-        if(typeof this.db.doQuery !== 'function')
-            return await this.readStableReorgWindow(floor, cursor);
-
-        const supportsSnapshot = typeof this.db.beginReadSnapshot === 'function' &&
-            typeof this.db.commitReadSnapshot === 'function' &&
-            typeof this.db.rollbackReadSnapshot === 'function';
+        const supportsSnapshot = typeof rangeDb.beginReadSnapshot === 'function' &&
+            typeof rangeDb.commitReadSnapshot === 'function' &&
+            typeof rangeDb.rollbackReadSnapshot === 'function';
         if(!supportsSnapshot)
-            return await this.db.doQuery(query, [floor, cursor]);
+            return await readRange();
 
-        const conn = await this.db.beginReadSnapshot();
+        const conn = await rangeDb.beginReadSnapshot();
         let snapshotOpen = true;
         try {
-            const rows = await this.db.doQuery(query, [floor, cursor], conn);
-            await this.db.commitReadSnapshot(conn);
+            const rows = await readRange(conn);
+            await rangeDb.commitReadSnapshot(conn);
             snapshotOpen = false;
             return rows;
         } catch(e){
             if(snapshotOpen)
-                await this.db.rollbackReadSnapshot(conn);
+                await rangeDb.rollbackReadSnapshot(conn);
             throw e;
         }
     }

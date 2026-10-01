@@ -114,13 +114,14 @@ module.exports = {
     },
 
     // The Merkle leaves of one block range, in block order.
-    async findSyncMetaLeaves(startBlock, endBlock){
+    async findSyncMetaLeaves(startBlock, endBlock, conn){
         return await this.doQuery(
             `SELECT block_index, ledger_hash, actions_hash, contract_hash
              FROM sync_meta
              WHERE block_index >= ? AND block_index <= ?
              ORDER BY block_index ASC`,
-            [startBlock, endBlock]
+            [startBlock, endBlock],
+            conn
         );
     },
 

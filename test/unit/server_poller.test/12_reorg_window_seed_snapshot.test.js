@@ -14,6 +14,7 @@ const assert = require('assert');
 const sinon = require('sinon');
 const ServerPoller = require('../../../src/server/poller');
 const seedReorgWindow = require('../../../src/server/poller/reorg_window_seed');
+const { withDbMixins } = require('../../helpers/db_mixins');
 
 function hashRow(blockIndex, generation){
     return {
@@ -129,6 +130,71 @@ describe('ServerPoller restart reorg-window snapshot @regression', function(){
             .find(payload => payload && payload.type === 'reorg');
         assert.strictEqual(event.block_index, fork);
         assert.strictEqual(poller.lastPolledBlock, fork - 1);
+    });
+
+    it('seeds indexer hashes from the durable log range after a pre-seed reorg', async function(){
+        const cursor = 100;
+        const fork = 80;
+        const snapshot = { id: 'log-seed-snapshot' };
+        const sourceDb = {
+            dbType: 'indexer',
+            getLastBlock: sinon.stub().resolves(cursor),
+            getBlockHashRow: sinon.stub().callsFake(async blockIndex => ({
+                block_index: blockIndex,
+                ledger_hash: blockIndex >= fork ? 'new-' + blockIndex : 'old-' + blockIndex
+            })),
+            doQuery: sinon.stub().rejects(new Error('source range must not seed recorded hashes'))
+        };
+        const logDb = withDbMixins({
+            beginReadSnapshot: sinon.stub().resolves(snapshot),
+            commitReadSnapshot: sinon.stub().resolves(),
+            rollbackReadSnapshot: sinon.stub().resolves(),
+            doQuery: sinon.stub().callsFake(async (query, args, conn) => {
+                assert.match(query, /FROM sync_meta/);
+                assert.deepStrictEqual(args, [70, cursor]);
+                assert.strictEqual(conn, snapshot);
+                const rows = [];
+                for(let blockIndex = args[0]; blockIndex <= args[1]; blockIndex++){
+                    rows.push({
+                        block_index: blockIndex,
+                        ledger_hash: 'old-' + blockIndex,
+                        actions_hash: null,
+                        contract_hash: null
+                    });
+                }
+                return rows;
+            })
+        });
+        const transparencyLog = {
+            db: logDb,
+            getRecordedHash: sinon.stub().resolves(null),
+            pruneFrom: sinon.stub().resolves()
+        };
+        const sink = broadcaster();
+        const poller = new ServerPoller('bitcoin', 'mainnet', sourceDb, sink, transparencyLog,
+            { BLOCK_POLL_INTERVAL: 0 }, { sleep: sinon.stub().resolves() });
+        poller.lastPolledBlock = cursor;
+        poller.recentHashCap = 31;
+        sinon.stub(poller, 'updateStatus').resolves();
+
+        poller.lastPolledBlockHash = await seedReorgWindow(poller, { warn: sinon.spy() });
+
+        assert.strictEqual(logDb.doQuery.callCount, 1);
+        assert.strictEqual(sourceDb.doQuery.callCount, 0);
+        assert.strictEqual(transparencyLog.getRecordedHash.callCount, 0);
+        assert.strictEqual(logDb.beginReadSnapshot.callCount, 1);
+        assert.strictEqual(logDb.commitReadSnapshot.callCount, 1);
+        assert.strictEqual(logDb.rollbackReadSnapshot.callCount, 0);
+        assert.strictEqual(poller.lastPolledBlockHash, 'old-100');
+
+        await poller.poll();
+
+        const event = sink.broadcast.getCalls()
+            .map(call => call.args[2])
+            .find(payload => payload && payload.type === 'reorg');
+        assert.strictEqual(event.block_index, fork);
+        assert.strictEqual(poller.lastPolledBlock, fork - 1);
+        assert.strictEqual(transparencyLog.pruneFrom.calledOnceWith(fork), true);
     });
 
     it('retries an unstable seed when the adapter has no range-query primitive', async function(){
