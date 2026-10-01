@@ -66,7 +66,8 @@
  *     anchor_reward_attestations,     full and incremental snapshots all exclude them, the
  *     attestation_responses,          last through SnapshotBuilder.OPERATOR_LOCAL_TABLES. On
  *     bridge_transfers,               a source node they converge through hub_db_sync. A
- *     policy_snapshots                serving node does not fall back to a local mirror
+ *     policy_snapshots,
+ *     list_snapshots                  serving node does not fall back to a local mirror
  *                                     either: the explorer reads the consensus-relevant ones
  *                                     from the MANDATORY co-located hub DB and fails loud
  *                                     without it (its checkpoint and match sources throw,
