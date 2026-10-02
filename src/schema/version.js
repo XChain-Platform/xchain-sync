@@ -208,7 +208,8 @@ const MIGRATION_FRONTIER = {
     indexer: {
         through: '2026-10-01',
         accounted: [
-            '2026-10-01-list-transfers.sql'
+            '2026-10-01-list-transfers.sql',
+            '2026-10-01-response-mirror-batch-action-index.sql'
         ]
     },
     decoder: {
