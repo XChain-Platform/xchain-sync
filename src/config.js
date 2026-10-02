@@ -82,6 +82,14 @@ function bootstrapDepthKey(chain, network){
 const SOURCE_SAFE_REORG_DEPTH = 126
 const LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
 
+// Source reorg recovery window per <TICK>_<NET>: the default replica depth never falls below it.
+// Mirrors xchain-utxo-tracker/src/chain/undo_blocks.js DEFAULT_UNDO_BLOCKS; replica_freshness.test.js pins the copy.
+const SOURCE_UNDO_WINDOW = Object.freeze({
+    BTC_MAINNET: 12,  LTC_MAINNET: 120, DOGE_MAINNET: 120,
+    BTC_TESTNET: 120, LTC_TESTNET: 5000, DOGE_TESTNET: 120,
+    BTC_REGTEST: 12,  LTC_REGTEST: 120, DOGE_REGTEST: 120
+})
+
 // Return the source reorg ceiling for a chain, in ticker or full-name form.
 function rollbackDepthSafeCeiling(chain, network){
     return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
@@ -92,8 +100,10 @@ function rollbackDepthSafeCeiling(chain, network){
 function resolveMaxRollbackDepth(chain, network, configuredDepth, explicitOverride){
     const configured = parseIntMin1(configuredDepth, 100)
     let resolved = configured
-    if(explicitOverride === false && coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet')
-        resolved = 5000
+    // Unset env: never halt on a reorg the source recovers from on its own
+    const undoWindow = SOURCE_UNDO_WINDOW[String(coinTicker(String(chain))).toUpperCase() + '_' + String(network).toUpperCase()]
+    if(explicitOverride === false && undoWindow !== undefined)
+        resolved = Math.max(configured, undoWindow)
     // Warn loudly, but never clamp: the override is a deliberate operator knob, as in the tracker
     const ceiling = rollbackDepthSafeCeiling(chain, network)
     if(resolved > ceiling){
@@ -212,6 +222,7 @@ module.exports = {
     assertBootstrapDepthChains,
     resolveMaxRollbackDepth,
     rollbackDepthSafeCeiling,
+    SOURCE_UNDO_WINDOW,
 
     getConfig: function(){
         let config = {};

@@ -55,6 +55,31 @@ const { stripComments, normalize, extractFunction, sqlLiterals, syncFile, loadPa
     require('./blockhash_conformance_twin.test/helpers/twin_sources.js');
 
 const indexerGatheringSource = require('./blockhash_conformance_twin.test/helpers/indexer_gathering.js').make({ assert, stripComments, extractFunction, sqlLiterals });
+
+// Assert the three canonicalization loops run INSIDE fnSrc, after the escrows
+// gather (afterText) and before hashing (beforeText), with nothing reassigning or
+// reordering a ledger row set between the last loop and the hash.
+function assertCanonicalizedBeforeHash(fnSrc, from, afterText, beforeText){
+    const body  = stripComments(fnSrc);
+    const start = body.indexOf(afterText);
+    const end   = body.indexOf(beforeText, start);
+    assert.ok(start !== -1 && end > start, from + ' no longer has `' + afterText + '` followed by `' + beforeText + '`');
+    const loopRe = /for \(const row of ledger\.(credits|debits|escrows)\)\s+row\.address = canonicalizeHashAddress\(row\.address\);/g;
+    const seen = new Set();
+    let m, lastEnd = -1;
+    while((m = loopRe.exec(body)) !== null){
+        assert.ok(m.index > start && m.index < end, 'the ' + m[1] + ' canonicalization loop in ' + from +
+            ' runs outside the window between the escrows gather and the hash');
+        seen.add(m[1]);
+        lastEnd = m.index + m[0].length;
+    }
+    assert.deepStrictEqual([...seen].sort(), ['credits', 'debits', 'escrows'],
+        from + ' must canonicalize BURN/GAS/DONATE/REWARD addresses on all three ledger row sets ' +
+        'before hashing; a missing loop leaks the per-chain address encoding into the hash on one side only');
+    assert.doesNotMatch(body.slice(lastEnd, end), /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
+        from + ' reassigns or reorders a canonicalized ledger row set before hashing it');
+}
+
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db/shared.js', function(){
         // The indexer split src/db.js into src/db/index.js plus per-feature mixins. The
@@ -138,16 +163,19 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){
         const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
-        const loopRe = /for \(const row of ledger\.(credits|debits|escrows)\)\s+row\.address = canonicalizeHashAddress\(row\.address\);/g;
-        for(const [name, src] of [['BlockHasher.js', pair.sync], ['db/actions.js', pair.indexer]]){
-            const seen = new Set();
-            let m;
-            loopRe.lastIndex = 0;
-            while((m = loopRe.exec(src)) !== null) seen.add(m[1]);
-            assert.deepStrictEqual([...seen].sort(), ['credits', 'debits', 'escrows'],
-                name + ' must canonicalize BURN/GAS/DONATE/REWARD addresses on all three ledger row sets ' +
-                'before hashing; a missing loop leaks the per-chain address encoding into the hash on one side only');
-        }
+        // Scoped to the hashing functions, so a loop moved into an uncalled helper fails here.
+        assertCanonicalizedBeforeHash(
+            extractFunction(pair.sync, /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js'),
+            'BlockHasher.computeBlockHashes', 'ledger.escrows = await this.db.doQueryStrict(', 'let tables = [');
+        assertCanonicalizedBeforeHash(
+            extractFunction(pair.indexer, /async getBlockHashLedgerRows\(block_index\)\{/, 'db/actions.js'),
+            'db.getBlockHashLedgerRows', 'this.getBlockHashEscrowRows(', 'return ledger;');
+        // The indexer canonicalizes in a helper, so its hash path must actually take the helper's rows.
+        const getHashes = stripComments(extractFunction(pair.indexer, /async getBlockHashes\(block_index\)\{/, 'db/actions.js')).replace(/\s+/g, ' ');
+        assert.strictEqual(getHashes.split('const ledger = await this.getBlockHashLedgerRows(block_index);').length - 1, 1,
+            'db.getBlockHashes must take its ledger rows from getBlockHashLedgerRows exactly once');
+        assert.doesNotMatch(getHashes, /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
+            'db.getBlockHashes reassigns or reorders a canonicalized ledger row set before hashing it');
     });
 });
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){

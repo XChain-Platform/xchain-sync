@@ -211,7 +211,7 @@ class ClientSync {
         // `base = tip - depth` is the deepest block the replica holds; a reorg that
         // rewinds further than `depth` blocks would need to roll back BELOW the floor,
         // which the replica cannot do (no pre-base history). MAX_ROLLBACK_DEPTH (default
-        // 100) is the deepest reorg the client will roll back, so a depth <=
+        // per chain, see config.resolveMaxRollbackDepth) is the deepest reorg the client will roll back, so a depth <=
         // MAX_ROLLBACK_DEPTH lets an in-window reorg request a rollback past the floor.
         // Clamp the effective depth up to MAX_ROLLBACK_DEPTH + 1 and warn loudly so a
         // misconfigured small depth can't quietly strand the replica. (depth 0 = full-
