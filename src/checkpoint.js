@@ -61,12 +61,19 @@ function canonicalCheckpoint(cp){
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
                       String(cp.block_merkle_root).toLowerCase(), String(cp.block_merkle_version)].join('|');
+    // An ANCHOR v3 wrapper section is signed over its folded archive as well (the hub's
+    // foldArchiveCanonical): the batch fields follow the roots and the round id gains the seq.
+    const fold = cp.fold_archive;
+    if (fold != null)
+        raw += '|' + [String(fold.match_batch_seq), String(fold.match_count),
+                      String(fold.batch_crc32).toLowerCase(), String(fold.total_chunks)].join('|');
     // At/above the EQUIV flag-day (gated on the BTC snapshot_block + network) the v0
     // canonical is wrapped in the uniform header (TAG=XCHECKPOINT, v0 ROUND_ID, VIEW=0);
     // below it the bare bytes (must byte-match the hub + indexer).
     if(eq.isEquivHeaderActive(cp.snapshot_block, cp.network))
         return eq.buildEquivCanonical(eq.ENGINE_TAGS.CHECKPOINT,
-            cp.chain + '|' + cp.network + '|' + cp.block_index + '|' + cp.checkpoint_seq, 0, raw);
+            cp.chain + '|' + cp.network + '|' + cp.block_index + '|' + cp.checkpoint_seq
+            + (fold != null ? '|' + fold.match_batch_seq : ''), 0, raw);
     return raw;
 }
 
