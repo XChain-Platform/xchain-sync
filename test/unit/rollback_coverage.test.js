@@ -120,10 +120,10 @@ function indexerFile(rel){
 }
 // A consensus drift guard must never silently pass by skipping. When the sibling is
 // present we run; when it is absent we HARD-FAIL only where the sibling is REQUIRED,
-// i.e. the job that checks it out and sets XCHAIN_REQUIRE_SIBLINGS=1 (the e2e job in
-// .github/workflows/ci.yml), so the guard can never green-by-skip there. We do NOT key
-// on the generic CI flag: GitHub sets CI=true in the shared unit `ci` job too, which
-// does not check out the sibling, and hard-failing there would just be noise. Returns
+// i.e. every job that checks it out and sets XCHAIN_REQUIRE_SIBLINGS=1 (the shared `ci`,
+// e2e and coverage jobs of .github/workflows/ci.yml), so the guard can never green-by-skip
+// there. We do NOT key on the generic CI flag: GitHub sets CI=true in a job with no
+// sibling checkout too, and hard-failing there would just be noise. Returns
 // false (caller should `return`) when it skipped; throws when required-but-missing.
 // Presence is the shared sibling verdict (test/helpers/sibling_checkout.js), so a lane
 // worktree's symlink into a live main checkout is refused exactly like an absent sibling.

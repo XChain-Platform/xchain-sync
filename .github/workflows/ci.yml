@@ -93,16 +93,16 @@ jobs:
 
       # The cross-repo consensus drift guards (rollback_coverage.test.js) compare
       # this repo's rollback/SQL/byte-identical twins against the source indexer.
-      # They live in the unit tier but the shared `ci` job never checks out the
-      # sibling, so they silently skip there (#4631). Run them HERE, where the
-      # sibling IS checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing sibling
+      # They also run in the unit tier: the shared `ci` job and the `coverage` job
+      # both check out the .ci-siblings roster and run with XCHAIN_REQUIRE_SIBLINGS=1.
+      # Run them HERE as well, in a job that does not wait on `ci`, where the sibling
+      # IS checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing sibling
       # hard-fails instead of green-by-skip. Pure source comparisons (no DB).
-      # generatedColumns.test.js joins this list for exactly the reason the comment
-      # above gives, and it walked straight into the trap: it derives the frozen
-      # generated-column map from the indexer AND decoder DDL, so in the shared `ci`
-      # job (no siblings checked out) it skips, and a guard that only ever skips
-      # protects nothing. It needs the DECODER path too, which this job already has
-      # checked out for the e2e tier. decoderTableClassification.test.js joins for the
+      # generatedColumns.test.js joins this list for the same reason: it derives
+      # the frozen generated-column map from the indexer AND decoder DDL, so it is
+      # real coverage only where both siblings are checked out, and a guard that
+      # only ever skips protects nothing. It needs the DECODER path too, which this
+      # job already has checked out for the e2e tier. decoderTableClassification.test.js joins for the
       # same reason: it enumerates the decoder schema dir to prove TOPOLOGY.decoder
       # exhaustive, so it is only real coverage where that sibling exists.
       - name: Run cross-repo consensus drift guards against the checked-out indexer
