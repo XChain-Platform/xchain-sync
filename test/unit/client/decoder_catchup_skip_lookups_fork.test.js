@@ -15,35 +15,43 @@ const {
 const Utility = require('../../../src/util');
 const HashVerifier = require('../../../src/client/hash_verifier');
 
+// Builds a decoder replica committed at 100 whose catch-up snapshot omits
+// tables.index_transactions (skip_lookups) and joins on parent id 7, a row created
+// after the first lookup page; ctx.replicaLookups is what the replica holds.
+function makeFixture(ctx){
+    ctx.replicaLookups = [{ id: 5, hash: 'hash100' }];
+    ctx.pages = 0;
+    let db = createMockDb();
+    db.dbType = 'decoder';
+    db.getLastBlock.resolves(100);
+    db.getBlockHashRow.resolves({ block_index: 100, block_hash: 'hash100' });
+    db.findIndexTransactionsByIds = sinon.spy(async ids =>
+        ctx.replicaLookups.filter(r => ids.map(String).includes(String(r.id))));
+    ctx.applier = { applyIncrementalSnapshot: sinon.stub().resolves() };
+    ctx.rollback = { rollback: sinon.stub().resolves() };
+    let sync = new ClientSync('bitcoin', 'mainnet', db, ctx.applier, ctx.rollback, new HashVerifier(),
+        { SYNC_SOURCES: 'http://source1:3006' }, new Utility());
+    sync.lastAppliedBlock = 100;
+    sync.lastHashes = { block_hash: 'hash100' };
+    sync._truncatedDepth = 1;
+    sinon.stub(sync, 'verifyDecoderCompleteness').resolves();
+    sinon.stub(sync, 'shouldReconcileDispensers').returns(false);
+    sinon.stub(sync, 'refreshTipHashes').resolves();
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+    let snapshot = { schema_version: 'x', since_block: 101, block_height: 103, tables: {
+        blocks: [{ block_index: 101, block_hash_id: 8, previous_block_hash_id: 7 }] } };
+    sinon.stub(axios, 'get').resolves({ data: zlib.gzipSync(JSON.stringify(snapshot)) });
+    ctx.sync = sync;
+}
+
 describe('decoder skip_lookups catch-up fork guard', function(){
-    let replicaLookups, applier, rollback, sync, pages;
+    let ctx, replicaLookups, applier, rollback, sync;
 
     beforeEach(function(){
-        replicaLookups = [{ id: 5, hash: 'hash100' }];
-        pages = 0;
-        let db = createMockDb();
-        db.dbType = 'decoder';
-        db.getLastBlock.resolves(100);
-        db.getBlockHashRow.resolves({ block_index: 100, block_hash: 'hash100' });
-        db.findIndexTransactionsByIds = sinon.spy(async ids =>
-            replicaLookups.filter(r => ids.map(String).includes(String(r.id))));
-        applier = { applyIncrementalSnapshot: sinon.stub().resolves() };
-        rollback = { rollback: sinon.stub().resolves() };
-        sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, new HashVerifier(),
-            { SYNC_SOURCES: 'http://source1:3006' }, new Utility());
-        sync.lastAppliedBlock = 100;
-        sync.lastHashes = { block_hash: 'hash100' };
-        sync._truncatedDepth = 1;
-        sinon.stub(sync, 'verifyDecoderCompleteness').resolves();
-        sinon.stub(sync, 'shouldReconcileDispensers').returns(false);
-        sinon.stub(sync, 'refreshTipHashes').resolves();
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-        // The snapshot omits tables.index_transactions (skip_lookups) and its join block
-        // names parent id 7, a row created after the first lookup page.
-        let snapshot = { schema_version: 'x', since_block: 101, block_height: 103, tables: {
-            blocks: [{ block_index: 101, block_hash_id: 8, previous_block_hash_id: 7 }] } };
-        sinon.stub(axios, 'get').resolves({ data: zlib.gzipSync(JSON.stringify(snapshot)) });
+        ctx = {};
+        makeFixture(ctx);
+        ({ replicaLookups, applier, rollback, sync } = ctx);
     });
 
     afterEach(function(){
@@ -51,7 +59,7 @@ describe('decoder skip_lookups catch-up fork guard', function(){
     });
 
     function stubPaging(onPage){
-        sinon.stub(sync, 'syncLookupTablesPaged').callsFake(async () => { pages++; onPage(pages); });
+        sinon.stub(sync, 'syncLookupTablesPaged').callsFake(async () => { ctx.pages++; onPage(ctx.pages); });
     }
 
     it('re-pages before the link check and rewinds when the replacement parent differs', async function(){
@@ -63,7 +71,7 @@ describe('decoder skip_lookups catch-up fork guard', function(){
         assert.strictEqual(rollback.rollback.calledOnceWith(100), true);
         assert.strictEqual(sync.lastAppliedBlock, 99);
         assert.strictEqual(sync._catchUpPending, true);
-        assert.strictEqual(pages, 2, 'the pre-check re-page ran before any apply');
+        assert.strictEqual(ctx.pages, 2, 'the pre-check re-page ran before any apply');
     });
 
     it('applies the window when the re-paged parent matches the committed tip', async function(){
