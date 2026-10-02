@@ -89,8 +89,9 @@ function verifySignature(payload, sigHex, pubkeyHex){
 // checked against is the legacy rootless one, not what a post-flag-day producer signs.
 function commitmentMissing(cp){
     if(!cp || !isCheckpointCommitmentActive(cp.snapshot_block, cp.network)) return false;
-    return cp.state_root === null || cp.state_root === undefined
-        || cp.block_merkle_root === null || cp.block_merkle_root === undefined
+    // Treat an empty root as absent, as the hub's isRootless does; a version is absent
+    // only when null or undefined, because 0 is a valid version.
+    return !cp.state_root || !cp.block_merkle_root
         || cp.state_root_version === null || cp.state_root_version === undefined
         || cp.block_merkle_version === null || cp.block_merkle_version === undefined;
 }

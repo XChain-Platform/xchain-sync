@@ -155,6 +155,16 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
         assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, false);
     });
 
+    it('rejects a post-flag-day empty-string root even when the signature covers it', function(){
+        const s = makeSigner();
+        const validators = [{ pubkey: s.pubkeyHex, source: s.pubkeyHex, weight: '100' }];
+        for(const field of ['state_root', 'block_merkle_root']){
+            const cp = signedCheckpoint(s, { [field]: '' });
+            assert.strictEqual(checkpoint.commitmentMissing(cp), true, 'empty ' + field + ' is missing');
+            assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, false);
+        }
+    });
+
     it('an empty validator set can never verify', function(){
         const s = makeSigner();
         assert.strictEqual(checkpoint.verifyCheckpoint(signedCheckpoint(s), []).valid, false);
