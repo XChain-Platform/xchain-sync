@@ -34,7 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
-const { decoderLinkBroken } = require('./decoder_link');
+const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
@@ -1767,7 +1767,7 @@ class ClientSync {
                 return;
             // Decoder: a window that does not build on the committed tip is a reorg missed
             // while disconnected; rewind that tip (one block deep) instead of landing on it.
-            if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip)) return;
+            if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, skipLookups ? source : null)) return;
             await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             this._upsertDupKeyTarget = null;
             if(typeof snapshotData.block_height === 'number')
@@ -2959,13 +2959,24 @@ class ClientSync {
     // window's first block does not build on the committed tip, so the window must not
     // land. It runs inside incrementalCatchUp's in-flight runner, so it flags a re-run
     // rather than awaiting a catch-up (which would wait on itself).
-    async rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip){
+    //
+    // Fail-closed: a skip_lookups window is snapshotted after the lookups were paged, so
+    // its join parent id can name a row the replica lacks. `lookupSource` (set for that
+    // case) re-pages the lookups first, and a parent or tip hash that still does not
+    // resolve throws, aborting this pass for the next trigger to retry, never "linked".
+    async rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, lookupSource){
         if(this.dbType !== 'decoder' || dbTip === null || dbTip !== this.lastAppliedBlock) return false;
         let tables = (snapshotData && snapshotData.tables) || {};
         let joinRow = (tables.blocks || []).find(b => b && Number(b.block_index) === sinceBlock);
         if(!joinRow) return false;
-        let tip = await this.db.getBlockHashRow(dbTip);
-        if(!(await decoderLinkBroken(joinRow, tables.index_transactions, tip && tip.block_hash, this.db))) return false;
+        if(lookupSource) await this.syncLookupTablesPaged(lookupSource);
+        let tip = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
+        let state = await decoderLinkState(joinRow, tables.index_transactions, tip && tip.block_hash, this.db);
+        if(state === 'unresolved'){
+            throw new Error('Decoder catch-up join block ' + sinceBlock + ' parent or committed tip ' + dbTip +
+                ' hash is unresolved; aborting this pass to retry');
+        }
+        if(state !== 'broken') return false;
         getLogger().error('Chain continuity error (decoder): catch-up block ' + sinceBlock +
             ' does not build on the committed tip ' + dbTip + '; rewinding the orphaned tip before applying');
         await this.handleReorg({ block_index: dbTip });
