@@ -46,4 +46,23 @@ async function decoderLinkBroken(blockRow, indexTxRows, tipHash, db){
     return prevHash !== null && prevHash !== String(tipHash);
 }
 
-module.exports = { previousBlockHash, decoderLinkBroken };
+// Strict catch-up verdict: 'linked' or 'broken' only on proof, 'unresolved' when the
+// committed tip hash or a named parent lookup row is unavailable. A block naming no
+// parent, or a parent row whose hash is the seeded empty value, proves nothing and
+// reads as linked; the caller must abort and retry on 'unresolved', never apply.
+async function decoderLinkState(blockRow, indexTxRows, tipHash, db){
+    if(!blockRow) return 'linked';
+    let prevId = blockRow.previous_block_hash_id;
+    if(prevId === null || prevId === undefined) return 'linked';
+    if(!tipHash) return 'unresolved';
+    let hit = (indexTxRows || []).find(r => r && String(r.id) === String(prevId));
+    if(!hit && db && typeof db.findIndexTransactionsByIds === 'function'){
+        let rows = await db.findIndexTransactionsByIds([prevId]);
+        hit = (rows || []).find(r => r && String(r.id) === String(prevId));
+    }
+    if(!hit) return 'unresolved';
+    if(!hit.hash) return 'linked';
+    return String(hit.hash) === String(tipHash) ? 'linked' : 'broken';
+}
+
+module.exports = { previousBlockHash, decoderLinkBroken, decoderLinkState };
