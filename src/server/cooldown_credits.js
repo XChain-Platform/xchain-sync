@@ -42,16 +42,37 @@
  * balance rebuild), idempotent at the block/window boundary exactly as normal
  * action-scoped credits are. Indexer dbType only.
  *
+ * The same maturity writes a SECOND row under the same backdated action_index:
+ * the negative `escrows` row that releases the bond the stake locked (escrows has
+ * no block_index either, so it misses the same three channels). Without it the
+ * follower's escrows table stays short by every release, and the supply its
+ * rollback recomputes from credits - debits + escrows comes out too high.
+ * collectMaturedCooldownEscrows forwards that row by the same keys. The source's
+ * cooldown-maturity rollback removes only the credit, so ClientRollback mirrors it
+ * and leaves the release in place too: the replica keeps the rows the source keeps.
+ *
  ********************************************************************/
 
 const { gasTickSymbol } = require('../consensus-constants');
 
-// Select the matured cooldown-refund credit rows whose maturity block
-// (cooldown_end_block) falls in the inclusive window [fromBlock, toBlock].
-// Returns raw `credits` rows (action_index, address_id, tick_id, amount),
-// deduped by their logical identity (action_index, address_id, tick_id); the
-// credits table has no unique key, so the dedup is explicit. The caller merges
-// these into the block / snapshot `credits` array (and dedups the union).
+// The two Database finders behind each half of a maturity: the refund credit
+// and the escrow release written beside it under the same action_index.
+const FINDERS = {
+    credits: { capability: 'findMaturedCapabilityCooldownCredits', contract: 'findMaturedContractCooldownCredits' },
+    escrows: { capability: 'findMaturedCapabilityCooldownEscrows', contract: 'findMaturedContractCooldownEscrows' },
+};
+
+// The logical identity of a backdated ledger row (credits and escrows have no
+// unique key, so every dedup here is explicit and keys on this triple).
+function ledgerRowKey(r){
+    return r.action_index + ':' + r.address_id + ':' + r.tick_id;
+}
+
+// Select the matured cooldown rows of one ledger table (`kind`, credits or
+// escrows) whose maturity block (cooldown_end_block) falls in the inclusive
+// window [fromBlock, toBlock]. Returns raw rows (action_index, address_id,
+// tick_id, amount), deduped by their logical identity. The caller merges these
+// into the block / snapshot array of the same table (and dedups the union).
 //
 //   db        the source Database (indexer dbType only; callers must gate)
 //   fromBlock inclusive lower maturity-block bound
@@ -59,45 +80,43 @@ const { gasTickSymbol } = require('../consensus-constants');
 //             pass fromBlock === toBlock)
 //   conn      optional connection (so a snapshot's REPEATABLE READ view reads
 //             these at the same height as the rest of the payload)
-async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
+async function collectMatured(kind, db, fromBlock, toBlock, conn){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
+    let finders = FINDERS[kind];
 
     let completedStatusId = await db.getStatusId('completed');
     if(completedStatusId === null || completedStatusId === undefined) return [];
 
-    // Dedup by the credit's logical identity (credits has no unique key). An
-    // unstake created AND matured inside the same incremental window can be
+    // An unstake created AND matured inside the same incremental window can be
     // reached both here and by the caller's action-scoped selection; the caller
     // dedups the union on the same triple.
     let acc = new Map();
     function add(rows){
         for(let r of (rows || [])){
             if(r && r.action_index != null && r.address_id != null && r.tick_id != null)
-                acc.set(r.action_index + ':' + r.address_id + ':' + r.tick_id, r);
+                acc.set(ledgerRowKey(r), r);
         }
     }
 
-    // Capability maturity refund: paid in GAS, keyed by the unstake's
-    // action_index. Forward mirror of ClientRollback's capability reverse delete
-    // (same join keys + cooldown_end_block/status predicate); the GAS tick is the
-    // frozen consensus constant, never a hub poll.
+    // Capability maturity: paid in GAS, keyed by the unstake's action_index.
+    // Forward mirror of ClientRollback's capability reverse delete (same join
+    // keys + cooldown_end_block/status predicate); the GAS tick is the frozen
+    // consensus constant, never a hub poll.
     let gasTick = gasTickSymbol();
     if(gasTick){
         try {
-            let rows = await db.findMaturedCapabilityCooldownCredits(gasTick, completedStatusId, from, to, conn);
-            add(rows);
+            add(await db[finders.capability](gasTick, completedStatusId, from, to, conn));
         } catch(e){
             if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
 
-    // Contract maturity refund: paid in the unstake's own tick. Forward mirror
-    // of ClientRollback's contract reverse delete.
+    // Contract maturity: paid in the unstake's own tick. Forward mirror of
+    // ClientRollback's contract reverse delete.
     try {
-        let rows = await db.findMaturedContractCooldownCredits(completedStatusId, from, to, conn);
-        add(rows);
+        add(await db[finders.contract](completedStatusId, from, to, conn));
     } catch(e){
         if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
         // Table may not exist on older source schemas; skip.
@@ -106,4 +125,29 @@ async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
     return Array.from(acc.values());
 }
 
-module.exports = { collectMaturedCooldownCredits };
+// The matured refund credits in the window (see collectMatured).
+async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
+    return await collectMatured('credits', db, fromBlock, toBlock, conn);
+}
+
+// The matured escrow releases in the window, the negative row paired with each
+// refund credit (see collectMatured).
+async function collectMaturedCooldownEscrows(db, fromBlock, toBlock, conn){
+    return await collectMatured('escrows', db, fromBlock, toBlock, conn);
+}
+
+// Append `matured` rows to a payload's `rows` for the same table, skipping any
+// identity already there; returns `rows` unchanged when there is nothing to add,
+// so a payload never gains an empty table entry it did not have.
+function mergeMaturedRows(rows, matured){
+    if(!matured || matured.length === 0) return rows;
+    let out = rows || [];
+    let seen = new Set(out.map(ledgerRowKey));
+    for(let r of matured){
+        let k = ledgerRowKey(r);
+        if(!seen.has(k)){ seen.add(k); out.push(r); }
+    }
+    return out;
+}
+
+module.exports = { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows };

@@ -266,5 +266,27 @@ describe('ServerPoller', function(){
                 /index_(actions|statuses|tickers|fiats|coins|memos|mime_types|pubkeys)/.test(c.args[0]));
             assert.ok(!touchedIndexerOnly, 'decoder payload must not touch indexer-only index tables');
         });
+
+        // A legacy-era cooldown maturity writes a refund credit AND a negative escrow
+        // release under the unstake's earlier action_index; both must ride the block.
+        it('merges the matured escrow release into escrows beside the refund credit @regression', async function(){
+            db.getBlockHashRow.resolves({ block_index: 50, block_time: 100, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getStatusId.resolves(3);
+            let refund  = { action_index: 9, address_id: 7, tick_id: 1, amount: '100' };
+            let release = { action_index: 9, address_id: 7, tick_id: 1, amount: '-100' };
+            let other   = { action_index: 60, address_id: 8, tick_id: 1, amount: '-5' };
+            db.getActionScopedRows.callsFake(async (table) => (table === 'escrows' ? [other] : []));
+            db.doQuery.callsFake(async (sql) => {
+                if(/FROM escrows e JOIN unstakes u/.test(sql)) return [release];
+                if(/FROM credits c JOIN unstakes u/.test(sql)) return [refund];
+                return [];
+            });
+
+            let payload = await poller.buildBlockPayload(50);
+
+            assert.deepStrictEqual(payload.data.credits, [refund]);
+            assert.deepStrictEqual(payload.data.escrows, [other, release],
+                'the release joins the action-scoped escrows, it does not replace them');
+        });
     });
 });

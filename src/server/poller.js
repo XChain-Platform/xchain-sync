@@ -31,7 +31,7 @@
 
 const replicatedTables = require('../schema/replicated_tables');
 const { collectUpdatedRows } = require('./updated_rows');
-const { collectMaturedCooldownCredits } = require('./cooldown_credits');
+const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const seedReorgWindow = require('./poller/reorg_window_seed');
@@ -813,18 +813,14 @@ class ServerPoller {
             // ClientApplier then upserts them and rebuilds balances like any other
             // credit. Disjoint from the action-scoped credits (those carry an action
             // in THIS block; a refund's action is in an earlier block), but dedup the
-            // union defensively on the credit's logical identity.
+            // union defensively on the credit's logical identity. The escrow release
+            // written beside each refund shares its backdated action_index, so it
+            // rides the same way into the escrows payload.
             try {
-                let matured = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
-                if(matured.length > 0){
-                    let existing = payload.data['credits'] || [];
-                    let seen = new Set(existing.map(c => c.action_index + ':' + c.address_id + ':' + c.tick_id));
-                    for(let c of matured){
-                        let k = c.action_index + ':' + c.address_id + ':' + c.tick_id;
-                        if(!seen.has(k)){ seen.add(k); existing.push(c); }
-                    }
-                    payload.data['credits'] = existing;
-                }
+                let refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
+                let releases = await collectMaturedCooldownEscrows(this.db, block_index, block_index, conn);
+                if(refunds.length > 0) payload.data['credits'] = mergeMaturedRows(payload.data['credits'], refunds);
+                if(releases.length > 0) payload.data['escrows'] = mergeMaturedRows(payload.data['escrows'], releases);
             } catch(e){
                 // Skip a genuine schema gap; re-throw any transient fault so the
                 // block is retried rather than broadcast incomplete.

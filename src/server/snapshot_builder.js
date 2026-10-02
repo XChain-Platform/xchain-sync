@@ -26,7 +26,7 @@ const { encodeRow, encodeTables } = require('../util/wire_codec');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
 const { collectUpdatedRows } = require('./updated_rows');
-const { collectMaturedCooldownCredits } = require('./cooldown_credits');
+const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { activationDelayBlocks } = require('../consensus-constants');
@@ -782,7 +782,7 @@ class SnapshotBuilder {
                                 if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
                                 continue;
                             }
-                        } else if(table === 'credits'){
+                        } else if(table === 'credits' || table === 'escrows'){
                             // firstActionIndex is null: a catch-up window with zero actions.
                             // The action-scoped base query would be empty, but the matured-
                             // cooldown merge below keys off the maturity block, not
@@ -790,9 +790,9 @@ class SnapshotBuilder {
                             // actions row (ClientRollback moves its reverse cooldown delete
                             // OUTSIDE this same firstActionIndex guard for exactly this
                             // reason). Fall through with an empty base so the merge still
-                            // ships the backdated refund credit; without this the follower
-                            // receives the updated_rows status flip but not the credit and
-                            // its balances silently diverge over quiet windows.
+                            // ships the backdated refund credit and its escrow release; without
+                            // this the follower receives the updated_rows status flip but not
+                            // the ledger rows and its balances silently diverge over quiet windows.
                             rows = [];
                         } else {
                             continue;
@@ -806,18 +806,15 @@ class SnapshotBuilder {
                     // updated_rows channel uses, deduped on the credit's logical identity
                     // (the forward mirror of ClientRollback's reverse cooldown delete). An
                     // unstake created AND matured inside this window can be reached both
-                    // here and by the action_index scope, hence the dedup.
-                    if(dbType === 'indexer' && table === 'credits'){
+                    // here and by the action_index scope, hence the dedup. The escrow
+                    // release paired with each refund shares its action_index and merges
+                    // into escrows the same way.
+                    if(dbType === 'indexer' && (table === 'credits' || table === 'escrows')){
                         try {
-                            let matured = await collectMaturedCooldownCredits(db, sinceBlock, lastBlock, conn);
-                            if(matured.length > 0){
-                                rows = rows || [];
-                                let seen = new Set(rows.map(c => c.action_index + ':' + c.address_id + ':' + c.tick_id));
-                                for(let c of matured){
-                                    let k = c.action_index + ':' + c.address_id + ':' + c.tick_id;
-                                    if(!seen.has(k)){ seen.add(k); rows.push(c); }
-                                }
-                            }
+                            let matured = (table === 'credits')
+                                ? await collectMaturedCooldownCredits(db, sinceBlock, lastBlock, conn)
+                                : await collectMaturedCooldownEscrows(db, sinceBlock, lastBlock, conn);
+                            rows = mergeMaturedRows(rows, matured);
                         } catch(e){
                             // Swallow ONLY a genuine schema gap (1146 missing table / 1054
                             // missing column on an older source). A transient/operational
