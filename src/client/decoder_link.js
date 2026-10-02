@@ -1,0 +1,49 @@
+/*********************************************************************
+ *
+ * Copyright © 2025–2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC – https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md. A commercial
+ * license (without AGPL source-disclosure terms) is available -
+ * contact legal@dankest.llc.
+ *
+ **********************************************************************
+ *
+ * XChain Sync - Decoder block linkage check (replica side)
+ *
+ * A decoder `blocks` row carries previous_block_hash_id, an id into
+ * index_transactions, and the source ships the index_transactions rows those ids
+ * name with every block. A block that arrives on top of the committed tip but
+ * names a different parent proves the tip was replaced by a reorg this replica
+ * never saw (the source's `reorg` broadcast is not replayed after a reconnect).
+ * The check only ever answers "broken" on proof: anything it cannot resolve
+ * reads as linked, so missing data can never trigger a rewind.
+ *
+ ********************************************************************/
+
+// Return the parent hash a decoder block row names, read from the payload's
+// index_transactions rows first and the replica's own copy second, or null when
+// neither resolves it (or it resolves to the decoder's seeded empty hash).
+async function previousBlockHash(blockRow, indexTxRows, db){
+    let prevId = blockRow ? blockRow.previous_block_hash_id : null;
+    if(prevId === null || prevId === undefined) return null;
+    let hit = (indexTxRows || []).find(r => r && String(r.id) === String(prevId));
+    if(!hit && db && typeof db.findIndexTransactionsByIds === 'function'){
+        let rows = await db.findIndexTransactionsByIds([prevId]);
+        hit = (rows || []).find(r => r && String(r.id) === String(prevId));
+    }
+    return (hit && hit.hash) ? String(hit.hash) : null;
+}
+
+// True only when `blockRow` provably does not build on the committed tip whose
+// hash is `tipHash`: its parent hash resolves and differs from the tip's.
+async function decoderLinkBroken(blockRow, indexTxRows, tipHash, db){
+    if(!tipHash || !blockRow) return false;
+    let prevHash = await previousBlockHash(blockRow, indexTxRows, db);
+    return prevHash !== null && prevHash !== String(tipHash);
+}
+
+module.exports = { previousBlockHash, decoderLinkBroken };

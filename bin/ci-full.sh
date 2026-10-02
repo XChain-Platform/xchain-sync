@@ -171,11 +171,11 @@ else
     node bin/fixture-ports.js compose "$E2E_COMPOSE" up -d --wait
 fi
 
-# Cross-repo consensus drift guards (rollback-coverage and friends) live in
-# the unit tier but the shared `ci` job never checks out a sibling, so they
-# silently skip there. Run them HERE, where xchain-indexer and xchain-decoder
-# ARE checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing sibling
-# hard-fails instead of green-by-skip. Pure source comparisons (no DB).
+# Cross-repo consensus drift guards (rollback-coverage and friends) also run in
+# the strict `ci` tier above; this mirrors ci.yml's e2e step, which re-runs them
+# in a job that does not wait on `ci`. Run them HERE, where xchain-indexer and
+# xchain-decoder ARE checked out, with XCHAIN_REQUIRE_SIBLINGS=1 so a missing
+# sibling hard-fails instead of green-by-skip. Pure source comparisons (no DB).
 run_tier "e2e: cross-repo consensus drift guards" \
   env XCHAIN_REQUIRE_SIBLINGS=1 \
   npx mocha --timeout 10000 \

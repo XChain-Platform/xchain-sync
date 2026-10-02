@@ -34,6 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
+const { decoderLinkBroken } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
@@ -1764,6 +1765,9 @@ class ClientSync {
             if(await this.checkTrainActivation(
                     (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
                 return;
+            // Decoder: a window that does not build on the committed tip is a reorg missed
+            // while disconnected; rewind that tip (one block deep) instead of landing on it.
+            if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip)) return;
             await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
             this._upsertDupKeyTarget = null;
             if(typeof snapshotData.block_height === 'number')
@@ -2941,6 +2945,34 @@ class ClientSync {
         await this.incrementalCatchUp(this.lastAppliedBlock + 1);
     }
 
+    // True when a live decoder block at tip + 1 names a parent other than the committed
+    // tip: a reorg replaced the tip while its `reorg` broadcast was lost (it is never
+    // replayed on reconnect). Unresolvable linkage reads as linked, never as a fork.
+    async decoderTipReplaced(event){
+        let rows = (event && event.data) || {};
+        let blockRow = (rows.blocks || []).find(b => b && Number(b.block_index) === Number(event.block_index));
+        return await decoderLinkBroken(blockRow, rows.index_transactions,
+            this.lastHashes && this.lastHashes.block_hash, this.db);
+    }
+
+    // Catch-up twin of decoderTipReplaced: true, after rewinding the tip, when a decoder
+    // window's first block does not build on the committed tip, so the window must not
+    // land. It runs inside incrementalCatchUp's in-flight runner, so it flags a re-run
+    // rather than awaiting a catch-up (which would wait on itself).
+    async rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip){
+        if(this.dbType !== 'decoder' || dbTip === null || dbTip !== this.lastAppliedBlock) return false;
+        let tables = (snapshotData && snapshotData.tables) || {};
+        let joinRow = (tables.blocks || []).find(b => b && Number(b.block_index) === sinceBlock);
+        if(!joinRow) return false;
+        let tip = await this.db.getBlockHashRow(dbTip);
+        if(!(await decoderLinkBroken(joinRow, tables.index_transactions, tip && tip.block_hash, this.db))) return false;
+        getLogger().error('Chain continuity error (decoder): catch-up block ' + sinceBlock +
+            ' does not build on the committed tip ' + dbTip + '; rewinding the orphaned tip before applying');
+        await this.handleReorg({ block_index: dbTip });
+        this._catchUpPending = true;
+        return true;
+    }
+
     async handleBlock(event, sourceIndex){
         let blockIndex = event.block_index;
 
@@ -2967,10 +2999,9 @@ class ClientSync {
         // short reorg we never observed on the live stream). Silently skipping it
         // would pin this replica to an orphaned tip, so treat it as a continuity
         // error and catch up (symmetric with the indexer's hash-continuity check
-        // below, which catches the same class of fault via its chain hashes). Decoder
-        // events carry only the block's own block_hash (no replicated previous-hash
-        // link), so a head re-delivery is the one fork the stored hash can detect
-        // without hash-chain math.
+        // below, which catches the same class of fault via its chain hashes). A fork
+        // the head is never re-delivered for is caught one block later, by the
+        // previous-hash link check on the next block (decoderTipReplaced).
         if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock){
             if(this.dbType === 'decoder' &&
                blockIndex === this.lastAppliedBlock &&
@@ -3028,6 +3059,12 @@ class ClientSync {
             } else if(blockIndex > this.lastAppliedBlock + 1){
                 this.logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
                 await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+                return;
+            } else if(await this.decoderTipReplaced(event)){
+                getLogger().error('Chain continuity error (decoder): previous-hash mismatch at block ' + blockIndex +
+                    '; the committed tip ' + this.lastAppliedBlock + ' was replaced by a reorg this replica missed; ' +
+                    'rewinding the orphaned tip and catching up');
+                await this.rewindForkedHead(this.lastAppliedBlock);
                 return;
             }
         }

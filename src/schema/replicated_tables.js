@@ -124,16 +124,13 @@ const TOPOLOGY = {
         // Append-only lookup tables that may grow as new blocks are processed.
         // events is operational/logging; included so consumers see decoder activity.
         index:        ['index_addresses', 'index_transactions', 'pubkeys', 'events'],
-        // Counted for completeness but NOT read by ServerPoller's per-scope loops.
-        // dispensers converges only through the full snapshot plus the periodic
-        // re-dump/replace reconcile, and incrementalCatchUp excludes it on every
-        // non-reconcile cycle; see the header note on why its count detects nothing.
         // Replicated-for-completeness-counting but NOT extracted by ServerPoller's
         // per-scope loops (ServerPoller reads only blockScoped/txScoped/actionScoped/
         // index). dispensers lives here so it enters the /status row-count
         // completeness check (getReplicatedTables) without being streamed per block:
         // it converges via full snapshot + the periodic re-dump/replace reconcile,
-        // which is the ONLY thing keeping it in parity. The count is a post-replace
+        // which is the ONLY thing keeping it in parity (the header's dispensers entry
+        // lists the five writes that reconcile must capture). The count is a post-replace
         // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
         // the replica ahead (ClientSync.verifyTableCounts flags remote > local only)
         // and a soft-expire UPDATE leaves counts equal, so neither can ever fire, and
@@ -163,9 +160,10 @@ function getTopology(dbType){
 // client verifier.
 function getReplicatedTables(dbType){
     let t = getTopology(dbType);
-    // `special` carries replicated-but-not-per-scope-extracted tables (sync_meta) so
-    // they join the completeness count check without being read by ServerPoller's
-    // per-scope loops. Guarded with `|| []` for forward-compat with older topologies.
+    // `special` carries replicated-but-not-per-scope-extracted tables (indexer
+    // sync_meta, decoder dispensers) so they join the completeness count check
+    // without being read by ServerPoller's per-scope loops. Guarded with `|| []`
+    // for forward-compat with older topologies.
     let all = [].concat(t.blockScoped, t.txScoped, t.actionScoped, t.index, t.special || []);
     return [...new Set(all)];
 }

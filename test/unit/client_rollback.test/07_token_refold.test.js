@@ -123,6 +123,7 @@ async function sourceFold(root, issues){
     db.createAddress = async (a) => util.isNull(a) ? null : byName(ADDRESSES, a);
     db.getTokenSupply = async () => '5';
     db.doQuery = async (sql, args) => {
+        if(/FROM\s+issues i/.test(sql)) sourceFold.replaySql = sql;
         if(/FROM\s+issues i/.test(sql)) return issues.filter(i => i.status === 'valid').map(i => Object.assign({}, i, {
             tick: TICKERS[i.tick_id], callback_tick: i.callback_tick_ref ? TICKERS[i.callback_tick_ref] : null,
             owner: ADDRESSES[i.source_addr_id], transfer: i.transfer_addr_id ? ADDRESSES[i.transfer_addr_id] : null,
@@ -335,5 +336,62 @@ describe('BlockHasher.computeTokenFoldChecksum (advisory token fold parity)', fu
         let follower = await hasherOver([editedRow({ owner_id: 2, last_action_index: 500 })], 500)
             .computeTokenFoldChecksum(1000, { exclude: source.ahead });
         assert.notStrictEqual(follower.h, source.h);
+    });
+});
+
+// Reduce a replay SELECT to joins, WHERE and ORDER BY, folding away the only allowed
+// differences: the source's tokens join (it feeds bridged alone), = ? versus IN (?,..)
+// on the tick, and the replica's leading tick_id sort key. Also returns its i.* columns.
+function replayShape(sql){
+    let s = String(sql).replace(/\s+/g, ' ').toLowerCase().replace(/ ?([(=,]) ?/g, '$1').replace(/ \)/g, ')').trim();
+    let [from, where, order] = [s.indexOf(' from '), s.indexOf(' where '), s.indexOf(' order by ')];
+    assert.ok(from > 0 && where > from && order > where, 'not a replay SELECT: ' + sql);
+    return { columns: s.slice(7, from).split(',').filter(c => c.startsWith('i.')),
+        joins: s.slice(from + 6, where).split(/ (?=(?:inner|left) join )/).filter(j => j !== 'left join tokens tk on(tk.tick_id=i.tick_id)'),
+        where: s.slice(where + 7, order).replace(/i\.tick_id(?:=\?| in\(\?(?:,\?)*\))/, 'i.tick_id=<ticks>'),
+        orderBy: s.slice(order + 10).replace(/^i\.tick_id asc,/, '') };
+}
+
+// The one replay SELECT the replica's refold issues for a reorg.
+async function replicaReplaySql(){
+    let { db } = replica([GENESIS, SURVIVING_EDIT, issue(500, { transfer_addr_id: 2 })], editedRow({ owner_id: 2 }), 500);
+    await new ClientRollback(db, new Utility(), 'BTC', 'regtest').rollback(1000);
+    let calls = db.doQuery.getCalls().filter(c => /FROM issues i /.test(c.args[0]));
+    assert.strictEqual(calls.length, 1, 'expected exactly one replay SELECT from the refold');
+    return calls[0].args[0];
+}
+
+// The fold depends on the row set AND order, so the replica's refold SELECT must keep
+// the source replay SELECT's joins, filter and order (only replayShape's folds differ).
+describe('ClientRollback token refold: replay SELECT parity with the indexer', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    it('selects the same issues, in the same order, as the indexer replay SELECT', async function(){
+        let root = indexerOrSkip(this);
+        if(!root) return;
+        sourceFold.replaySql = null;
+        await sourceFold(root, [GENESIS, SURVIVING_EDIT]);
+        assert.ok(sourceFold.replaySql, 'the indexer fold issued no replay SELECT');
+        let [src, rep] = [replayShape(sourceFold.replaySql), replayShape(await replicaReplaySql())];
+        assert.deepStrictEqual(src.columns.filter(c => !rep.columns.includes(c)), [], 'the replica omits issue columns the source folds');
+        delete src.columns; delete rep.columns;
+        assert.deepStrictEqual(rep, src, 'foldRowsSql (src/db/token_refold.js) no longer matches issueReplay.rowsQuery (xchain-indexer ' +
+            'src/db/issues/token_info.js); the replica refold would replay a different set or order of issues');
+    });
+
+    it('the shape keeps what it compares, and changes under every drift it must catch', async function(){
+        let sql = await replicaReplaySql();
+        let shape = replayShape(sql);
+        assert.ok(shape.joins.includes('inner join actions a1 on(a1.action_index=i.action_index)'), JSON.stringify(shape.joins));
+        assert.deepStrictEqual([shape.where, shape.orderBy], ["s1.status='valid' and i.tick_id=<ticks>", 'i.action_index asc']);
+        for(let [name, mutated] of Object.entries({
+            'an extra INNER JOIN': sql.replace('WHERE ', 'INNER JOIN foo f ON (f.id=i.id) WHERE '),
+            'an extra WHERE bound': sql.replace(' ORDER BY', ' AND t1.block_index <= ? ORDER BY'),
+            'a reversed order': sql.replace(/i\.action_index ASC$/, 'i.action_index DESC'),
+            'an INNER JOIN turned LEFT': sql.replace('INNER JOIN transactions', 'LEFT JOIN transactions') })){
+            assert.notStrictEqual(mutated, sql, name + ' did not apply to the captured SQL');
+            assert.notDeepStrictEqual(replayShape(mutated), shape, name + ' is invisible to replayShape');
+        }
     });
 });
