@@ -16,7 +16,7 @@ describe('consensus-bound registry rows', function () {
         it('resolves the anchor bundle order activation table', function () {
             assert.deepStrictEqual(
                 gateRegistry.get('anchor_bundle_order_activation.ANCHOR_BUNDLE_ORDER_ACTIVATION'),
-                { mainnet: 9999999999, 'BTC:testnet': 154971, 'LTC:testnet': 4905844, 'DOGE:testnet': 67961578, testnet: 9999999999, regtest: 0 }
+                { mainnet: 9999999999, 'BTC:testnet': 155001, 'LTC:testnet': 4906040, 'DOGE:testnet': 67962387, testnet: 9999999999, regtest: 0 }
             );
         });
 

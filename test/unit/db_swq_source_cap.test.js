@@ -92,14 +92,14 @@ describe('SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1
         // unconditionally (or never) could not pass both this and the mainnet case.
         // testnet caps from genesis and collates only from its v0.21.3 height: a block below it is that venue.
         it('an un-collated venue keeps the bare window: the cap and the collation are separate gates', async function () {
-            assert.ok(154970 < swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'],
+            assert.ok(155000 < swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'],
                 'this control needs a capped-but-uncollated testnet block below the collation height');
             // Built through the SAME helper, so an always-suffix helper fails HERE while an
             // always-empty one fails the mainnet cases above: neither degenerate form passes both.
-            const c = collateSuffix(154970, 'BTC', 'testnet');
+            const c = collateSuffix(155000, 'BTC', 'testnet');
             assert.strictEqual(c, '', 'the collation gate must be off on an unpinned chain');
             const db = dbFor([]);
-            await db.getStakeWeightsByCapability('oracle_publish', 154970, '500', 1000, 'BTC', 'testnet');
+            await db.getStakeWeightsByCapability('oracle_publish', 155000, '500', 1000, 'BTC', 'testnet');
             const { query } = db._calls[0];
             assert.match(query, new RegExp('DENSE_RANK\\(\\) OVER \\(ORDER BY b\\.source' + escapeRe(c) + '\\)'),
                 'testnet caps from genesis');

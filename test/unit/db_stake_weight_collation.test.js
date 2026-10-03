@@ -46,11 +46,11 @@ describe('sync: stake-weight ordering collation gate', function () {
     afterEach(restoreSinon);
 
     it('a chain below its collation height emits no COLLATE', async function () {
-        // testnet arms at the v0.21.3 heights, so a block below BTC:testnet 154971 is un-collated.
-        assert.ok(154970 < swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'],
+        // testnet arms at the v0.21.3 heights, so a block below BTC:testnet 155001 is un-collated.
+        assert.ok(155000 < swc.STAKE_WEIGHT_COLLATION_ACTIVATION['BTC:testnet'],
             'this test needs a testnet block below the collation height');
         const db = dbWithCapturedQueries();
-        await db.applyStakeWeightCap(INNER, 154970, 100, 'BTC', 'testnet', 'probe');
+        await db.applyStakeWeightCap(INNER, 155000, 100, 'BTC', 'testnet', 'probe');
         const q = db._calls.map(c => c.q).join('\n');
         assert.ok(q.length > 0, 'no query was emitted');
         assert.doesNotMatch(q, /COLLATE/,
@@ -95,9 +95,9 @@ describe('sync: stake-weight ordering collation gate', function () {
             'BTC:mainnet':  0,
             'LTC:mainnet':  0,
             'DOGE:mainnet': 0,
-            'BTC:testnet':  154971,
-            'LTC:testnet':  4905844,
-            'DOGE:testnet': 67961578,
+            'BTC:testnet':  155001,
+            'LTC:testnet':  4906040,
+            'DOGE:testnet': 67962387,
             regtest: 0,
         });
     });
