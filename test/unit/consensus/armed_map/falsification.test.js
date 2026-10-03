@@ -117,9 +117,9 @@ describe('armed map v2: falsification on temp trees', function () {
         assert.deepStrictEqual(movedRows(baseline, after), ['checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION']);
     });
 
-    it('moves when NOT-YET-PINNED (null) becomes the UNARMED sentinel', function () {
+    it('moves when a pinned testnet height reverts to NOT-YET-PINNED (null)', function () {
         const root = tree();
-        edit(root, 'src/consensus/gate_registry/shared_rows_3.js', "    'BTC:testnet':  null,", "    'BTC:testnet':  9999999999,");
+        edit(root, 'src/consensus/gate_registry/shared_rows_3.js', "    'BTC:testnet':  154939,", "    'BTC:testnet':  null,");
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
         assert.deepStrictEqual(movedRows(baseline, after), ['stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION']);
