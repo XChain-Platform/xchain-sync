@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.3] - 2026-10-03
+
+### Added
+- Added detailed state-hash divergence diagnostics for replica operators.
+- Added list sharing tables, lifecycle entries and archive recovery for list snapshots.
+- Synchronized the hourly PRICE gate rows.
+- Synchronized list names and descriptions across shared-list mirrors.
+
+### Changed
+- Keyed token activation gates separately for each testnet chain.
+- Synchronized archive recovery and other consensus-bound registry rows with their canonical definitions.
+- Armed testnet mirror admission producers at BTC 154234, LTC 4903068 and DOGE 67936053.
+- Armed testnet mirror admission consumers at BTC 154291, LTC 4903291 and DOGE 67936888.
+- Armed the testnet anchor attestation barrier at BTC 154291.
+- Armed testnet token bridges at BTC 154567, LTC 4903068 and DOGE 67951140.
+- Armed testnet token policy inheritance at BTC 154567, LTC 4903068 and DOGE 67951140.
+
 ## [0.21.1] - 2026-10-01
 
 ### Added
