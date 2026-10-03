@@ -1,5 +1,5 @@
 {
-  "armed_map_fingerprint": "a80c69d2d1d6b447e64249bfdafb16b11adf281aaddf5a59b9ab2d75f75f8d4d",
+  "armed_map_fingerprint": "8e10196db2b69e5eb939a393c7804b92fb7dbfef9cec18b30a06dd61f7f9aa03",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -12,7 +12,7 @@
     "equivocation_header.ENGINE_TAGS": "94a875df3994d065a749bfb02dc3cde78500fe965c4cd0a7f767b7b5e9501401",
     "equivocation_header.EQUIV_HEADER_ACTIVATION": "b64d8f1cbe12e895958c6fb75ae01b793a75112ed7789d8d483ce2affd49ea35",
     "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION": "d0f6f385a0509a7bee3945d35cc314410dfe63eafda95eb10d613595c7a9f4fa",
-    "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION": "0f53267c861535d8511874cfc427f232fd251e00ddc5d70bc6d3e086dd6a1427",
+    "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION": "e89d86e8689c2dc4f10d5051889c7422b9afc7623af039f6afe4001c0b7bfea7",
     "stake_weight_collation_activation.STAKE_WEIGHT_ORDERING_COLUMNS": "a03eef553097aaf0cc4f6e67725f81cafcea478c98641931504c3eb9ace75386",
     "stake_weighted_quorum.STAKE_WEIGHTED_QUORUM_ACTIVATION": "b64d8f1cbe12e895958c6fb75ae01b793a75112ed7789d8d483ce2affd49ea35",
     "stateHash.ARCHIVE_CHUNK_HEIGHT_COL": "e628942d1f7b614254af443d4925c32bc4d58395b04828c987f2c03b2d95e9ab",
