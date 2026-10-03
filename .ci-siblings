@@ -27,3 +27,5 @@ xchain-decoder
 xchain-sdk
 # state_subtree_activation.js byte-identity in its escrow-leaf refusal carrier.
 xchain-explorer
+# The source undo-window table that SOURCE_UNDO_WINDOW mirrors (DEFAULT_UNDO_BLOCKS).
+xchain-utxo-tracker

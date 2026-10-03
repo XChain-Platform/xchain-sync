@@ -120,10 +120,10 @@ function indexerFile(rel){
 }
 // A consensus drift guard must never silently pass by skipping. When the sibling is
 // present we run; when it is absent we HARD-FAIL only where the sibling is REQUIRED,
-// i.e. the job that checks it out and sets XCHAIN_REQUIRE_SIBLINGS=1 (the e2e job in
-// .github/workflows/ci.yml), so the guard can never green-by-skip there. We do NOT key
-// on the generic CI flag: GitHub sets CI=true in the shared unit `ci` job too, which
-// does not check out the sibling, and hard-failing there would just be noise. Returns
+// i.e. every job that checks it out and sets XCHAIN_REQUIRE_SIBLINGS=1 (the shared `ci`,
+// e2e and coverage jobs of .github/workflows/ci.yml), so the guard can never green-by-skip
+// there. We do NOT key on the generic CI flag: GitHub sets CI=true in a job with no
+// sibling checkout too, and hard-failing there would just be noise. Returns
 // false (caller should `return`) when it skipped; throws when required-but-missing.
 // Presence is the shared sibling verdict (test/helpers/sibling_checkout.js), so a lane
 // worktree's symlink into a live main checkout is refused exactly like an absent sibling.
@@ -526,6 +526,9 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'unstakes status reset',           re: /UPDATE unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
             { name: 'contract_unstakes status reset',  re: /UPDATE contract_unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block >= \? AND block_index < \?/ },
         ];
+        // The escrow release paired with each refund is forwarded to the replica, so the
+        // replica deletes it on reorg exactly when the source does, never one side alone.
+        const releaseDeletes = [];
         for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             // Normalise away the two ways the same SQL is spelled: the source uses backtick
             // template literals; the replica concatenates double-quoted strings with `+`. Strip
@@ -538,7 +541,10 @@ describe('Rollback coverage guard @regression', function(){
             for(const op of OPS){
                 assert.ok(op.re.test(norm), `${label} is missing the cooldown-maturity ${op.name}; source and replica must both reverse it on reorg`);
             }
+            releaseDeletes.push((norm.match(/DELETE e FROM escrows e JOIN (?:unstakes u|contract_unstakes cu) ON/g) || []).length);
         }
+        assert.strictEqual(releaseDeletes[0], releaseDeletes[1],
+            'the cooldown escrow-release delete must be present on both sides or neither (replica ' + releaseDeletes[0] + ', source ' + releaseDeletes[1] + ')');
     });
 
     // Orphan-sweep parity, driven by the registry: every ORPHAN_SWEEPS
@@ -631,6 +637,9 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'contract refund select (own tick)',                       re: /SELECT c\.\* FROM credits c JOIN contract_unstakes cu ON cu\.action_index = c\.action_index AND cu\.source_id = c\.address_id AND cu\.tick_id = c\.tick_id/ },
             { name: 'capability maturity-block + completed predicate',         re: /WHERE u\.status_id = \? AND u\.cooldown_end_block BETWEEN \? AND \?/ },
             { name: 'contract maturity-block + completed predicate',           re: /WHERE cu\.status_id = \? AND cu\.cooldown_end_block BETWEEN \? AND \?/ },
+            // The escrow release written beside each refund, under the same keys.
+            { name: 'capability release select (GAS, by unstake action_index)', re: /SELECT e\.\* FROM escrows e JOIN unstakes u ON u\.action_index = e\.action_index AND u\.source_id = e\.address_id JOIN index_tickers g ON g\.id = e\.tick_id AND g\.tick = \? WHERE u\.status_id = \? AND u\.cooldown_end_block BETWEEN \? AND \?/ },
+            { name: 'contract release select (own tick)',                       re: /SELECT e\.\* FROM escrows e JOIN contract_unstakes cu ON cu\.action_index = e\.action_index AND cu\.source_id = e\.address_id AND cu\.tick_id = e\.tick_id WHERE cu\.status_id = \? AND cu\.cooldown_end_block BETWEEN \? AND \?/ },
         ];
         for(const op of FWD_OPS){
             assert.ok(op.re.test(fwd), `cooldown_credits.js is missing the forward ${op.name}; it must mirror ClientRollback's reverse delete keys`);
@@ -641,6 +650,8 @@ describe('Rollback coverage guard @regression', function(){
             const src = fs.readFileSync(pathMod.resolve(__dirname, f), 'utf8');
             assert.ok(/collectMaturedCooldownCredits\s*\(/.test(src),
                 `${f} does not call collectMaturedCooldownCredits; its replication channel drops cooldown-maturity refunds`);
+            assert.ok(/collectMaturedCooldownEscrows\s*\(/.test(src),
+                `${f} does not call collectMaturedCooldownEscrows; its replication channel drops the escrow release paired with each refund`);
         }
     });
 

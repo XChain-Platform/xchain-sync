@@ -31,7 +31,9 @@
  * column sets, same ORDER BY, same object key-insertion order, the same
  * array-with-props quirk for `actions`, and the same previous-block chaining.
  * ANY change to the indexer's hash inputs MUST be mirrored here and the
- * test/fixtures/block-hash-vectors.json regenerated. The xchain-e2e-test
+ * test/fixtures/block-hash-vectors.json regenerated, but only once
+ * test/unit/blockhash_conformance_twin.test.js passes: that golden is a sync
+ * self-lock, so never regenerate it to clear a failure. The xchain-e2e-test
  * recompute-conformance scenario (indexer + sync on the regtest stack) is the
  * live drift guard.
  *

@@ -65,3 +65,68 @@ describe('collectMaturedCooldownCredits', function () {
         );
     });
 });
+
+// The escrow release paired with each matured refund rides the same collector over
+// the escrows finders, so the follower's escrows table (and the supply its rollback
+// recomputes from it) keeps every release the source wrote.
+describe('collectMaturedCooldownEscrows', function () {
+    const { collectMaturedCooldownEscrows: collectEscrowsFromRealFake } = require('../../src/server/cooldown_credits.js');
+    const collectMaturedCooldownEscrows = (db, ...rest) => collectEscrowsFromRealFake(Object.assign(db, CREDITS_MIXIN), ...rest);
+
+    // A fake that records each statement, answering in call order like mockDb.
+    function recordingDb(queries) {
+        const sqls = [];
+        const db = mockDb({ queries });
+        const inner = db.doQuery;
+        db.doQuery = async (sql, ...rest) => { sqls.push(sql); return inner(sql, ...rest); };
+        return { db, sqls };
+    }
+
+    it('reads the escrows table by the unstake keys, never credits', async function () {
+        const { db, sqls } = recordingDb([[], []]);
+        await collectMaturedCooldownEscrows(db, 1, 999);
+        assert.strictEqual(sqls.length, 2);
+        assert.ok(/^SELECT e\.\* FROM escrows e JOIN unstakes u ON u\.action_index = e\.action_index AND u\.source_id = e\.address_id/.test(sqls[0]), sqls[0]);
+        assert.ok(/^SELECT e\.\* FROM escrows e JOIN contract_unstakes cu ON cu\.action_index = e\.action_index AND cu\.source_id = e\.address_id AND cu\.tick_id = e\.tick_id/.test(sqls[1]), sqls[1]);
+        assert.ok(sqls.every((s) => !/credits/.test(s)), 'an escrow collector must never read credits');
+    });
+
+    it('returns [] when the completed status id is unresolved', async function () {
+        const rows = await collectMaturedCooldownEscrows(mockDb({ statusId: null }), 100, 200);
+        assert.deepStrictEqual(rows, []);
+    });
+
+    it('aggregates the GAS and contract releases and dedups on the logical identity', async function () {
+        const gas = { action_index: 10, address_id: 5, tick_id: 1, amount: '-3' };
+        const contract = { action_index: 11, address_id: 6, tick_id: 2, amount: '-4' };
+        const rows = await collectMaturedCooldownEscrows(mockDb({ queries: [[gas, gas], [contract]] }), 1, 999);
+        const keys = rows.map((r) => `${r.action_index}:${r.address_id}:${r.tick_id}`).sort();
+        assert.deepStrictEqual(keys, ['10:5:1', '11:6:2']);
+    });
+
+    it('skips a schema gap and re-throws anything else', async function () {
+        const noTable = Object.assign(new Error('no such table'), { errno: 1146 });
+        const rows = await collectMaturedCooldownEscrows(mockDb({ queries: [noTable, []] }), 1, 999);
+        assert.deepStrictEqual(rows, []);
+        const fatal = Object.assign(new Error('deadlock'), { errno: 1213 });
+        await assert.rejects(() => collectMaturedCooldownEscrows(mockDb({ queries: [fatal] }), 1, 999), /deadlock/);
+    });
+});
+
+describe('mergeMaturedRows', function () {
+    const { mergeMaturedRows } = require('../../src/server/cooldown_credits.js');
+
+    it('returns the payload rows unchanged (even undefined) when nothing matured', function () {
+        assert.strictEqual(mergeMaturedRows(undefined, []), undefined);
+        const rows = [{ action_index: 1, address_id: 1, tick_id: 1 }];
+        assert.strictEqual(mergeMaturedRows(rows, []), rows);
+    });
+
+    it('appends only the matured rows whose identity the payload does not already carry', function () {
+        const kept = { action_index: 1, address_id: 1, tick_id: 1, amount: '-1' };
+        const fresh = { action_index: 2, address_id: 1, tick_id: 1, amount: '-2' };
+        const out = mergeMaturedRows([kept], [Object.assign({}, kept), fresh]);
+        assert.deepStrictEqual(out, [kept, fresh]);
+        assert.deepStrictEqual(mergeMaturedRows(undefined, [fresh]), [fresh]);
+    });
+});

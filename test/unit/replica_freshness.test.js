@@ -17,6 +17,8 @@
 // class; the server path fronting a replica had nothing.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const { applyReplicaFreshness } = require('../../src/api');
@@ -95,13 +97,41 @@ describe('/status replication freshness', function(){
 });
 
 describe('per-chain rollback depth', function(){
-    it('raises only litecoin testnet to the public-testnet rollback window', function(){
+    it('raises the unset default to the source undo window per chain and network', function(){
         assert.strictEqual(config.resolveMaxRollbackDepth('litecoin', 'testnet', 100, false), 5000);
-        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'mainnet', 100, false), 100);
-        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'regtest', 100, false), 100);
-        assert.strictEqual(config.resolveMaxRollbackDepth('bitcoin', 'testnet', 100, false), 100);
+        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'mainnet', 100, false), 120);
+        assert.strictEqual(config.resolveMaxRollbackDepth('LTC', 'regtest', 100, false), 120);
+        assert.strictEqual(config.resolveMaxRollbackDepth('bitcoin', 'testnet', 100, false), 120);
+        assert.strictEqual(config.resolveMaxRollbackDepth('bitcoin', 'mainnet', 100, false), 100);
+        assert.strictEqual(config.resolveMaxRollbackDepth('BTC', 'regtest', 100, false), 100);
+        for(const net of ['mainnet', 'testnet', 'regtest']){
+            assert.strictEqual(config.resolveMaxRollbackDepth('dogecoin', net, 100, false), 120);
+            assert.strictEqual(config.resolveMaxRollbackDepth('DOGE', net, 100, false), 120);
+        }
     });
+});
 
+// The copy must track the tracker table: a shallower default halts on reorgs the source recovers
+describe('source undo window mirror', function(){
+    it('mirrors the utxo-tracker undo window table, inside the source ceiling', function(){
+        for(const [key, w] of Object.entries(config.SOURCE_UNDO_WINDOW)){
+            const [tick, net] = [key.split('_')[0], key.split('_')[1].toLowerCase()];
+            assert.ok(config.resolveMaxRollbackDepth(tick, net, 100, false) >= w, key);
+            assert.ok(w <= config.rollbackDepthSafeCeiling(tick, net), key);
+        }
+        const tracker = path.join(__dirname, '..', '..', '..', 'xchain-utxo-tracker', 'src', 'chain', 'undo_blocks.js');
+        if(!fs.existsSync(tracker)){
+            if(process.env.XCHAIN_REQUIRE_SIBLINGS === '1') assert.fail('xchain-utxo-tracker sibling is required');
+            return this.skip();
+        }
+        const literal = fs.readFileSync(tracker, 'utf8').match(/const DEFAULT_UNDO_BLOCKS = (\{[^}]*\})/);
+        assert.ok(literal, 'DEFAULT_UNDO_BLOCKS literal not found in the tracker');
+        const table = JSON.parse(literal[1].replace(/(\w+):/g, '"$1":'));
+        assert.deepStrictEqual({ ...config.SOURCE_UNDO_WINDOW }, table);
+    });
+});
+
+describe('per-chain rollback depth overrides and ceiling', function(){
     it('preserves an explicit operator override', function(){
         assert.strictEqual(config.resolveMaxRollbackDepth('litecoin', 'testnet', 250, true), 250);
     });
@@ -136,7 +166,7 @@ describe('per-chain rollback depth', function(){
     });
 
     it('stays silent for the defaults and for an in-range override', function(){
-        for(const args of [['bitcoin', 'mainnet', 100, false], ['litecoin', 'testnet', 100, false],
+        for(const args of [['bitcoin', 'mainnet', 100, false], ['litecoin', 'testnet', 100, false], ['dogecoin', 'mainnet', 100, false],
                            ['litecoin', 'testnet', 250, true], ['bitcoin', 'mainnet', 126, true]]){
             const r = resolveCapturingErrors(...args);
             assert.deepStrictEqual(r.errors, [], 'no warning for ' + args.join(','));

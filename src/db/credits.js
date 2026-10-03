@@ -12,10 +12,10 @@
  *
  **********************************************************************
  *
- * The replicated credits table, read by the source-side forward channel that
- * carries unstake cooldown refunds: a refund is credited in the block where the
- * cooldown MATURES, which is not the block that created the unstake, so a
- * block-scoped read of the unstake would never reach it.
+ * The replicated credits and escrows tables, read by the source-side forward
+ * channel that carries unstake cooldown refunds and their escrow releases: both
+ * land in the block where the cooldown MATURES, which is not the block that
+ * created the unstake, so a block-scoped read of the unstake never reaches them.
  *
  * A Database mixin: every method below is installed on Database.prototype by
  * db/index.js, so `this` is the Database instance and call sites are unchanged.
@@ -61,6 +61,46 @@ module.exports = {
         return await this.doQuery(
             "SELECT c.* FROM credits c " +
             "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?",
+            [completedStatusId, from, to], conn);
+    },
+
+    /**
+     * Escrow releases for capability unstakes whose cooldown matured in this
+     * window: the negative GAS row written beside each refund credit, under the
+     * same backdated action index, to release the bond the stake locked. The
+     * unstake action itself writes no escrow, so these joins reach only releases.
+     *
+     * @param {string} gasTick           the GAS tick symbol
+     * @param {number} completedStatusId the status id an unstake carries once complete
+     * @param {number} from              first block of the window, inclusive
+     * @param {number} to                last block of the window, inclusive
+     * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findMaturedCapabilityCooldownEscrows(gasTick, completedStatusId, from, to, conn){
+        return await this.doQuery(
+            "SELECT e.* FROM escrows e " +
+            "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
+            "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
+            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?",
+            [gasTick, completedStatusId, from, to], conn);
+    },
+
+    /**
+     * Escrow releases for contract unstakes whose cooldown matured in this
+     * window, in the unstake's OWN tick, paired with each contract refund credit.
+     *
+     * @param {number} completedStatusId the status id an unstake carries once complete
+     * @param {number} from              first block of the window, inclusive
+     * @param {number} to                last block of the window, inclusive
+     * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findMaturedContractCooldownEscrows(completedStatusId, from, to, conn){
+        return await this.doQuery(
+            "SELECT e.* FROM escrows e " +
+            "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
             "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?",
             [completedStatusId, from, to], conn);
     },

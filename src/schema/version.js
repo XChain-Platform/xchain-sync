@@ -176,6 +176,23 @@
  *       apply. Nothing here enters a block-hash preimage: `list_transfers` is
  *       DERIVED in src/table_lifecycle/action_tables.js and rolled back by
  *       `action_index >= ?`. No row is written below LIST_TRANSFER_ACTIVATION, and
+ *       the migration is mode=auto.
+ *       Also folded in here, having landed inside the same frontier move without a
+ *       bump of its own: `list_share_mirrors`, a stream:action table (DERIVED, rolled
+ *       back by `action_index >= ?`) created by the 2026-09-30-list-share-tables
+ *       migration beside the hub-mirrored `list_snapshots`, which never rides the
+ *       wire. A v12 follower has no table to receive its streamed rows either.
+ *       Unlike list_transfers, that migration is mode=manual
+ *       deploy-precondition=required: it does not self-heal on the forced restart,
+ *       and the indexer refuses to start until it has run. Decoder is unaffected and
+ *       stays at 4.
+ *  14 - (indexer only) `list_metas`, a new table for resolved LIST names and
+ *       descriptions created by the 2026-10-01-list-metas migration. It is
+ *       stream:action wire-replicated, so a v13 follower has no table to receive
+ *       the streamed rows and fails the block under ClientApplier's strict apply.
+ *       Nothing here enters a block-hash preimage: `list_metas` is DERIVED in
+ *       src/table_lifecycle/action_tables.js and rolled back by
+ *       `action_index >= ?`. No row is written below LIST_META_ACTIVATION, and
  *       the migration is mode=auto. Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
@@ -193,13 +210,15 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 13, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 14, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
         through: '2026-10-01',
         accounted: [
-            '2026-10-01-list-transfers.sql'
+            '2026-10-01-list-metas.sql',
+            '2026-10-01-list-transfers.sql',
+            '2026-10-01-response-mirror-batch-action-index.sql'
         ]
     },
     decoder: {

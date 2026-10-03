@@ -29,7 +29,7 @@ const vectors = require('../../fixtures/block-hash-vectors.json');
 
 // db.doQuery / doQueryStrict feed BlockHasher the canned golden rows IN CALL
 // ORDER (one sequence per computeBlockHashes pass), so the recompute yields the
-// indexer-authentic committed hashes from vectors.expected.
+// golden committed hashes from vectors.expected.
 function seqDb(results){
     let i = 0;
     const next = async () => results[i++];

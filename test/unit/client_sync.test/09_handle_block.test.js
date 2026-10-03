@@ -271,6 +271,57 @@ function registerHandleBlockGroup8Tests(){
     });
 }
 
+function registerHandleBlockGroup9Tests(){
+    describe('handleBlock', function(){
+        registerBlockEventHook();
+
+        // A reorg that replaced the tip while the socket was down is never re-delivered
+        // as the head; the next block's previous-hash link is the only evidence of it.
+        describe('decoder previous-hash link guard', function(){
+            function nextBlock(prevHash){
+                return { type: 'block', block_index: 101, block_hash: 'hash101',
+                    data: { blocks: [{ block_index: 101, block_hash_id: 8, previous_block_hash_id: 7 }],
+                            index_transactions: prevHash === undefined ? [] : [{ id: 7, hash: prevHash }] } };
+            }
+
+            it('rewinds the orphaned tip when the next block names a different parent', async function(){
+                let s = decoderSync();
+                sinon.stub(s, 'incrementalCatchUp').resolves();
+
+                await s.handleBlock(nextBlock('FORKED100'), 0);
+
+                assert.strictEqual(s.rollback.rollback.calledOnceWith(100), true, 'the orphaned tip is unwound');
+                assert.strictEqual(s.lastAppliedBlock, 99);
+                assert.strictEqual(s.incrementalCatchUp.firstCall.args[0], 100, 'and the replacement is re-fetched');
+                assert.strictEqual(applier.applyBlock.called, false, 'the block is not stacked on the orphan');
+            });
+
+            it('applies normally when the next block names the committed tip', async function(){
+                let s = decoderSync();
+                sinon.stub(s, 'incrementalCatchUp').resolves();
+                sinon.stub(s, 'applyBlockEvent').resolves();
+
+                await s.handleBlock(nextBlock('hash100'), 0);
+
+                assert.strictEqual(s.rollback.rollback.called, false);
+                assert.strictEqual(s.applyBlockEvent.calledOnce, true);
+            });
+
+            it('never rewinds on linkage it cannot resolve, or before a tip hash is stored', async function(){
+                for(let [label, prepare] of [['unresolved parent id', (s) => s],
+                                             ['no stored tip hash', (s) => { s.lastHashes = null; return s; }]]){
+                    let s = prepare(decoderSync());
+                    sinon.stub(s, 'incrementalCatchUp').resolves();
+                    sinon.stub(s, 'applyBlockEvent').resolves();
+                    await s.handleBlock(label === 'unresolved parent id' ? nextBlock(undefined) : nextBlock('FORKED100'), 0);
+                    assert.strictEqual(s.rollback.rollback.called, false, label + ' must not rewind');
+                    assert.strictEqual(s.applyBlockEvent.calledOnce, true, label + ' applies the block');
+                }
+            });
+        });
+    });
+}
+
 describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerHandleBlockGroup1Tests();
@@ -281,4 +332,5 @@ describe('ClientSync', function(){
     registerHandleBlockGroup6Tests();
     registerHandleBlockGroup7Tests();
     registerHandleBlockGroup8Tests();
+    registerHandleBlockGroup9Tests();
 });

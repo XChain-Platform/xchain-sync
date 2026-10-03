@@ -10,17 +10,22 @@
  *
  **********************************************************************
  *
- * Generator for test/fixtures/block-hash-vectors.json: the BlockHasher
- * conformance lock. It runs BlockHasher's assembly over canned replica rows but
- * computes the final hash with the REAL xchain-indexer getDataHash, so the
- * expected hashes are authentically the indexer's, not a sync-side echo, and
- * the committed JSON locks BlockHasher + utility.getDataHash against regression
- * with no runtime cross-repo dependency in the unit test (xchain-e2e-test's
- * recompute scenario is the live cross-repo drift guard).
+ * Generator for test/fixtures/block-hash-vectors.json: a sync SELF-regression
+ * lock. It runs sync's own BlockHasher assembly (row handling, the special-address
+ * canonicalization loops, the block_index / previous_hash / hash_version fold)
+ * over canned replica rows; only the final serializer, getDataHash, is the
+ * xchain-indexer copy. So the committed JSON locks BlockHasher +
+ * utility.getDataHash against regression, but it does NOT prove the assembly
+ * matches the indexer's. Cross-repo parity is guarded by
+ * test/unit/blockhash_conformance_twin.test.js (CI time) and the xchain-e2e-test
+ * consensusHashConformance recompute (regtest stack).
  *
  * Run manually (sibling xchain-indexer must be present) and commit the output:
  *   INDEXER_COIN=BTC INDEXER_NETWORK=regtest \
  *     node test/fixtures/gen-block-hash-vectors.js
+ * Regenerate only after a hash-input change is mirrored on BOTH sides and the
+ * conformance twin passes. Never regenerate to make a failing block_hasher or
+ * recompute-halt test pass: that bakes a drift into the golden instead of fixing it.
  *
  ********************************************************************/
 
@@ -36,7 +41,7 @@ const IndexerUtil  = require('../../../xchain-indexer/src/utility.js');
 // Canned rows the 11 BlockHasher queries return, IN CALL ORDER:
 // credits, debits, escrows, actions, contracts, state, executions,
 // emissions, deposits, withdrawals, previous-block-hash-row.
-// As of BLOCK_HASH_VERSION 2 the consensus projections carry the RESOLVED canonical
+// Under BLOCK_HASH_VERSION 1 (the only shipped scheme) the consensus projections carry the RESOLVED canonical
 // strings (address/tick/action/status) the JOINs produce, never the raw lookup ids; so
 // these canned rows model the resolved column set exactly as the live queries return it.
 const BLOCK_INDEX = 1000;
@@ -73,7 +78,7 @@ async function main(){
     let call = 0;
     const next = async () => results[call++];
     const mockDb = { doQuery: next, doQueryStrict: next };
-    // Hash with the INDEXER's getDataHash so the expected values are authentic.
+    // Serialize with the INDEXER's getDataHash; the preimage is still sync's own BlockHasher assembly.
     const hasher = new BlockHasher(mockDb, new IndexerUtil());
     const expected = await hasher.computeBlockHashes(BLOCK_INDEX);
 

@@ -77,6 +77,9 @@ const SIBLINGS = [
     { repo: 'xchain-explorer', envs: [],
       marker: path.join('src', 'consensus', 'gates', 'state_subtree_gate.js'),
       guards: 'state_subtree_gate.js byte-identity in its escrow-leaf refusal carrier' },
+    { repo: 'xchain-utxo-tracker', envs: [],
+      marker: path.join('src', 'chain', 'undo_blocks.js'),
+      guards: 'the source undo-window mirror against DEFAULT_UNDO_BLOCKS' },
 ];
 
 function resolve(entry) {
