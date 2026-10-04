@@ -106,11 +106,9 @@ for(const [name, collect] of COLLECTORS){
             await assert.rejects(collect(makeDb(err), 1, 2, CONN, {}), (thrown) => thrown === err);
         });
 
-        it('swallows an error that carries no errno', async function(){
+        it('rethrows an error that carries no errno', async function(){
             const err = errnoError();
-            const acc = {};
-            await collect(makeDb(err), 1, 2, CONN, acc);
-            assert.strictEqual(acc.tokens, undefined);
+            await assert.rejects(collect(makeDb(err), 1, 2, CONN, {}), (thrown) => thrown === err);
         });
     });
 }
