@@ -48,8 +48,10 @@ describe('previousBlockHash', function(){
     });
 
     it('falls back to the database when the supplied rows miss', async function(){
+        let calls = 0;
         let requestedIds;
         const db = { findIndexTransactionsByIds: async ids => {
+            calls++;
             requestedIds = ids;
             return [{ id: '7', hash: 'stored-parent' }];
         } };
@@ -57,7 +59,14 @@ describe('previousBlockHash', function(){
         const hash = await previousBlockHash({ previous_block_hash_id: 7 }, [], db);
 
         assert.strictEqual(hash, 'stored-parent');
+        assert.strictEqual(calls, 1);
         assert.deepStrictEqual(requestedIds, [7]);
+    });
+
+    it('returns null when the database has no lookup method', async function(){
+        assert.strictEqual(await previousBlockHash(
+            { previous_block_hash_id: 7 }, [], {}
+        ), null);
     });
 
     it('returns null when no matching row carries a hash', async function(){
@@ -65,7 +74,6 @@ describe('previousBlockHash', function(){
         const emptyDb = { findIndexTransactionsByIds: async () => undefined };
 
         assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, [], db), null);
-        assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, [], {}), null);
         assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, undefined, emptyDb), null);
     });
 });
