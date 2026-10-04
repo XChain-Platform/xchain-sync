@@ -624,21 +624,27 @@ class ServerPoller {
     // Fourth, replication-integrity hash (the in-place mutations + backdated refund
     // credits the three hashes can't cover). Optional top-level field, NOT in
     // sync_meta / the Merkle leaf / the hub-signed checkpoint; a follower with
+
     // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
     // for blocks indexed before the feature (the follower then skips the check).
     //
+
     // Burst exemption: during a catch-up batch the pinned view sits at the batch
     // tip, so updated_rows for every block B < viewTip carry row state as of the
     // tip, not as of B (the tick set is B-scoped but the row read takes every column
+
     // from the pinned view). The follower's apply-time recompute of state_hash(B) reads those rows
     // back and would halt on a value the source never committed at B, even though
     // the replica converges to exact tip state by the end of the batch (each later
+
     // mutation re-emits its row under its own block). Ship NULL for those blocks so
     // the follower takes its existing pre-feature skip path -- the same posture the
     // incremental-snapshot channel has by design (state_hash-exempt, consistent at
+
     // its own view tip). Steady-state blocks (viewTip == B, the overwhelmingly
     // common case) keep the full check; ledger/actions/contract hashes and the
     // state-commitment roots are B-scoped committed rows and stay verified on every
+
     // path.
     addPayloadHashFields(payload, hashRow, block_index, viewTip){
         if(this.dbType === 'decoder'){
@@ -658,18 +664,23 @@ class ServerPoller {
     // Light-client state-commitment roots (SPV spec sec.4-5). Top-level fields
     // ONLY, like state_hash: NOT in payload.data (the follower computes its own
     // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
+
     // before the flag-day (the follower then skips the check). The follower
     // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
     // for the later full-state_root verification (no wire change needed then).
+
     // state_root folds the BTC-only stakes_root, which the follower recomputes
     // every block from the live stakes/unstakes tables (stateCommitment
     // .gatherStakeEntries reading amount/deactivation_block). During a catch-up
+
     // burst those columns carry TIP-state (post-slash) values, not the values
     // committed at block B, so the follower would recompute state_root over a
     // future amount and durably HALT on a value the source never committed at B.
+
     // NULL state_root for burst blocks exactly like state_hash above; the
     // follower's per-field compare skips a null state_root. balances_root/
     // block_merkle_root stay live: they derive from B-scoped credit/debit/content
+
     // rows applied in block order and are not exposed to the tip-state drift.
     async addPayloadStateRoots(payload, hashRow, block_index, conn, viewTip){
         if(this.dbType !== 'decoder' && isStateCommitmentActive(block_index, this.network, this.coinTicker)){
@@ -691,12 +702,15 @@ class ServerPoller {
     // Replicate the per-block transparency-log row (sync_meta) live. The
     // table is otherwise only carried by snapshots (SnapshotBuilder includes
     // it; ClientRollback prunes it on reorg), so without this the replica's
+
     // sync_meta drifts behind the source between snapshots. Built inline from
     // the hashes rather than read from the table: the server's
     // transparencyLog.recordBlock runs AFTER this payload is built (see
+
     // poll), so the row isn't in sync_meta yet at this point. id/logged_at
     // are node-local and intentionally omitted (the client assigns its own);
     // the client applies sync_meta with INSERT IGNORE on the unique
+
     // block_index, so re-sends are idempotent.
     addSyncMetaPayloadRow(payload, hashRow){
         if(this.dbType === 'decoder') return;
@@ -755,12 +769,15 @@ class ServerPoller {
     // Discover in ONE round-trip which action-scoped tables carry rows this block,
     // then fetch only those, because the loop below otherwise queries all 86
     // registry tables, empty ones included, and grows with every table added.
+
     // Skipping a probe-absent table cannot change payload.data: the probe runs
     // getActionScopedRows' own predicate, so its verdict IS that fetch's row count,
     // and an empty fetch is already dropped by the length check below.
+
     //
     // scopedTables stays null on ANY probe failure, and on a db without the helper,
     // which restores the query-every-table behaviour verbatim. Swallowing a
+
     // transient fault here is safe precisely because the fallback re-issues the
     // real fetches: a fault that persists throws from those instead, freezing the
     // cursor rather than broadcasting an incomplete block.
@@ -783,6 +800,7 @@ class ServerPoller {
     // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
     // getActionScopedRows joins on action_index and would drop those rows from the
     // payload, while the consensus hash includes them (via execution_index). A
+
     // follower would then recompute a divergent contract_hash and halt. Stream them
     // through the execution_index chain instead, matching BlockHasher exactly.
     async addActionScopedTableRows(payload, block_index, conn, metric){
@@ -844,12 +862,15 @@ class ServerPoller {
     // Cooldown-maturity refund credits mint AT this block but carry the
     // unstake's earlier-block action_index (and no block_index), so the
     // action-scoped join above misses them, leaving followers permanently
+
     // short by every matured refund. Select them by maturity block
     // (cooldown_end_block = this block), the forward mirror of
     // ClientRollback's reverse delete, and merge into the credits payload;
+
     // ClientApplier then upserts them and rebuilds balances like any other
     // credit. Disjoint from the action-scoped credits (those carry an action
     // in THIS block; a refund's action is in an earlier block), but dedup the
+
     // union defensively on the credit's logical identity. The escrow release
     // written beside each refund shares its backdated action_index, so it
     // rides the same way into the escrows payload.
@@ -870,6 +891,7 @@ class ServerPoller {
     // The dedup key is the FULL five-column identity. round_qualifier is the
     // archive leg's snapshot_block, and its round_reference (MATCH_BATCH_SEQ) is
     // a dense hub counter a rebase reissues, so two distinct archive rewards can
+
     // share the four older columns; on the narrower key the second is treated as
     // a duplicate and dropped from the payload before it ever reaches a replica.
     mergeValidatorRewardRows(payload, rows){
@@ -885,9 +907,11 @@ class ServerPoller {
     // Recovery-redriven validator rewards: a reorg re-drain re-materializes a
     // survivor reward at block_index = earn-block E < B, so the block-scoped
     // getBlockScopedRows path (forward from B) misses it. Select by applied_block
+
     // (= this block, the re-drain point), the forward analogue of ClientRollback's
     // block_index >= B delete, and merge into the validator_rewards payload deduped
     // on the row's UNIQUE identity. Disjoint from the block-scoped rows (those carry
+
     // block_index = this block; a survivor's earn-block is earlier).
     async addRedrivenRewardPayloadRows(payload, block_index, conn){
         try {
@@ -904,12 +928,15 @@ class ServerPoller {
     // Derived anchor/archive validator rewards: the BTC-side derivation writes the
     // row while processing THIS block but stamps block_index = the checkpoint's
     // SNAPSHOT_BLOCK E (< this block), so getBlockScopedRows never carries it.
+
     // Select by derive_block_index (= this block, the materialization point), the
     // forward twin of ClientRollback's derive_block_index >= B delete, and merge
     // deduped on the UNIQUE identity exactly like the redriven rows above. The
+
     // reconcile that collapses the round to its winner runs in the same block on the
     // source, so only survivors are read here; the losers' pre-images ride the
     // anchor_reward_reconcile_log rows this payload already carries.
+
     // Five-column identity, same reason as the redriven merge above: the
     // archive leg is exactly the channel that can present two distinct rewards
     // differing only in round_qualifier.
@@ -928,12 +955,15 @@ class ServerPoller {
     // Index tables: get entries referenced by this block's data.
     // Both indexer and decoder use this pattern (decoder has fewer index tables).
     // The client uses INSERT IGNORE so duplicates are harmless.
+
     // events: decoder-only operational log with no block_index/tx_index
     // cursor, so it can't be scoped per-block; it is intentionally skipped
     // here. It converges via snapshots instead: both the full snapshot and
+
     // every incremental snapshot re-dump the events table in full (the client
     // applies them with INSERT IGNORE on the AUTO_INCREMENT id PK, so repeated
     // dumps are idempotent). See SnapshotBuilder.streamIncrementalSnapshot.
+
     // For other index tables, the generic _id-reference pass below
     // (indexer only) extracts them; see the comment there.
     addReferencedIndexRows(payload, block_index, conn, tableIndex = 0){
@@ -952,9 +982,11 @@ class ServerPoller {
     // index_transactions: every `*_hash_id` this block's own rows carry, DERIVED
     // from the column suffix rather than listed. The generic `*_id` scan below
     // skips this table, so a hash column absent here reaches a follower as a
+
     // permanently dangling reference: its blocks row is correct, its LEFT JOIN
     // (getBlockHashRow, and the explorer's identical join) resolves that hash to
     // NULL for every block above the last snapshot, which is the only thing that
+
     // re-dumps this table in full. One rule for both dbTypes, so a hash column
     // added later cannot re-open the gap.
     async addIndexTransactionRows(payload, table, block_index, conn, tableIndex){
@@ -990,6 +1022,7 @@ class ServerPoller {
     // index_addresses: collect referenced address IDs from transactions
     // Decoder: also collect from transaction_outputs
     // A DISPENSER create interns its GET_ADDRESS and oracle address in
+
     // this block, but dispensers never streams, so ship those ids here or
     // the replica's MAX(id) cursor passes them and leaves a hole. Its own
     // schema-gap guard, so a source without dispensers keeps the tx ids.
@@ -1068,21 +1101,27 @@ class ServerPoller {
     // Indexer only: extract the remaining interned-lookup index tables
     // (index_actions, index_statuses, index_tickers, index_fiats, index_coins,
     // index_memos, index_mime_types, index_pubkeys). Each is an append-only
+
     // string-interning table referenced by `*_id` columns scattered across
     // dozens of action/block-scoped tables. The references are NOT a clean
     // suffix convention (e.g. lists.item_id and orders.give_tick_id/get_coin_id
+
     // all point at index_tickers/index_coins). Hardcoding every referencing
     // column would silently drop a brand-new interned value the first time a new
     // action type appears mid-stream, until the next snapshot backfilled it.
+
     // Instead, pool every `*_id` value present in this block's already-assembled
     // payload and fetch the matching rows from each remaining index table.
     // Over-fetch is harmless: the rows exist on the source, the client applies
+
     // them INSERT IGNORE on the PK (ClientApplier.ignoreTables), so the replica's
     // index_* set stays a subset of the source's and never overshoots the
     // row-count completeness check.
+
     // index_transactions keeps its explicit-only join above (it is referenced by
     // block-hash/tx-hash IDs the generic _id scan can't see). index_addresses IS
     // re-fetched here: the explicit join above sees only tx source/dest, but an
+
     // address can first receive its in-block id via a non-tx column (credits.address_id,
     // contract_executions.caller_id, XCALL/XEXEC counterparties, action-data recipients),
     // which only the generic _id scan reaches.
@@ -1099,9 +1138,11 @@ class ServerPoller {
                 // index_addresses is pre-populated tx-only by the explicit join above;
                 // re-fetch it here over the full ref set (a superset of the tx-only set,
                 // since the scan also sees transactions.source_id/destination_id) so a
+
                 // non-tx-interned address is streamed at its intern block. Without this it
                 // is never delivered, forking the follower's index map (reorg-gated
                 // divergence today; a per-block halt once the index-map state_hash class
+
                 // is armed). For every other table the already-populated skip stands.
                 if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
                 try {
@@ -1144,15 +1185,19 @@ class ServerPoller {
     // In-place mutations to SURVIVING (below-window) rows: deactivation_block
     // stamps, SLASH amount reductions, and v0 request_status flips are not
     // reachable by the action_index-scoped joins above (those rows were created
+
     // by an earlier block's action). Carry their current full state in a separate
     // top-level `updated_rows` map so the follower can UPSERT them; without this
     // every forward in-place mutation is silently dropped on the replica. Indexer
+
     // only (decoder has none of these tables). tokens.escrow_action_index rides
     // along (the tokens class carries the full row); the follower additionally
     // re-derives it from the replicated offer/status tables when a payload
+
     // touches an escrow table (ClientApplier.maybeRederiveEscrow), so the wire
     // value is a convergent carry, not the gate's only writer. Kept OUT of payload.data so an
     // old follower that doesn't recognise the field simply ignores it (its apply
+
     // loop iterates payload.data only) rather than mis-applying a non-row map.
     async addUpdatedPayloadRows(payload, block_index, conn){
         if(this.dbType !== 'decoder'){
