@@ -588,10 +588,11 @@ class Database {
 
     // Replicate schema from a source database into this database.
     // Reads all table DDLs from the source via SHOW CREATE TABLE and
-    // creates any missing tables locally. For tables that already exist,
-    // propagates any columns the source has added since the replica was
-    // bootstrapped (see addMissingColumns). This ensures the replica always
-    // matches the authoritative indexer schema (no copied SQL files needed).
+    // creates any missing tables locally.
+
+    // Propagate source-added columns into existing replica tables.
+    // Keep bootstrapped replicas aligned with the authoritative indexer schema.
+    // Avoid relying on copied SQL files for schema convergence.
     async replicateSchema(sourceDb){
         logger.info('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
         const { sourceTables, existingSet } = await this.discoverReplicatedTables(sourceDb);
