@@ -33,6 +33,21 @@ describe('Decoder Link', function(){
             assert.strictEqual(calls, 0);
         });
 
+        it('does not query the database when a supplied matching row has no hash', async function(){
+            let calls = 0;
+            const db = { findIndexTransactionsByIds: async () => {
+                calls++;
+                return [{ id: 7, hash: 'stored-parent' }];
+            } };
+
+            const hash = await previousBlockHash(
+                { previous_block_hash_id: 7 }, [{ id: '7', hash: null }], db
+            );
+
+            assert.strictEqual(hash, null);
+            assert.strictEqual(calls, 0);
+        });
+
         it('falls back to the database when the supplied rows miss', async function(){
             let requestedIds;
             const db = { findIndexTransactionsByIds: async ids => {
@@ -50,9 +65,6 @@ describe('Decoder Link', function(){
             const db = { findIndexTransactionsByIds: async () => [{ id: 8, hash: 'other' }] };
             const emptyDb = { findIndexTransactionsByIds: async () => undefined };
 
-            assert.strictEqual(await previousBlockHash(
-                { previous_block_hash_id: 7 }, [{ id: 7, hash: null }], db
-            ), null);
             assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, [], db), null);
             assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, [], {}), null);
             assert.strictEqual(await previousBlockHash({ previous_block_hash_id: 7 }, undefined, emptyDb), null);
