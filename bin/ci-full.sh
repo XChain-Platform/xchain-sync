@@ -181,6 +181,7 @@ run_tier "e2e: cross-repo consensus drift guards" \
   npx mocha --timeout 10000 \
     test/unit/rollback_coverage.test.js \
     test/unit/blockhash_conformance_twin.test.js \
+    test/unit/blockhash_conformance_twin.test/*.test.js \
     test/unit/protocol_address_roles_twin.test.js \
     test/unit/stakes_validator_set_parity.test.js \
     test/unit/generated_columns.test.js \

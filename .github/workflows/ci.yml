@@ -110,7 +110,7 @@ jobs:
           XCHAIN_INDEXER_SQL_PATH: ${{ github.workspace }}/../xchain-indexer/src/sql
           XCHAIN_DECODER_SQL_PATH: ${{ github.workspace }}/../xchain-decoder/src/sql
           XCHAIN_REQUIRE_SIBLINGS: "1"
-        run: npx mocha --timeout 10000 test/unit/rollback_coverage.test.js test/unit/blockhash_conformance_twin.test.js test/unit/protocol_address_roles_twin.test.js test/unit/stakes_validator_set_parity.test.js test/unit/generated_columns.test.js test/unit/decoder_table_classification.test.js
+        run: npx mocha --timeout 10000 test/unit/rollback_coverage.test.js test/unit/blockhash_conformance_twin.test.js test/unit/blockhash_conformance_twin.test/*.test.js test/unit/protocol_address_roles_twin.test.js test/unit/stakes_validator_set_parity.test.js test/unit/generated_columns.test.js test/unit/decoder_table_classification.test.js
 
       - name: Run the e2e tier
         env:
