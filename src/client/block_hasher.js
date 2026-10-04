@@ -66,166 +66,6 @@ const { canonicalizeHashAddress } = require('../util/protocol_address_roles');
 const gateRegistry = require('../consensus/gate_registry');
 const STATE_KEY_COLLATION_KEY = 'state_key_collation_activation.STATE_KEY_COLLATION_ACTIVATION';
 
-// credits (hash RESOLVED address/tick strings, never the local AUTO_INCREMENT ids;
-// see BLOCK_HASH_VERSION; LEFT JOIN preserves NULL-id native-coin rows; ORDER BY pins a
-// BINARY collation so the tie-break order is id- and collation-independent across nodes)
-const CREDIT_HASH_QUERY = `SELECT
-                    c.action_index,
-                    a1.address AS address,
-                    t1.tick    AS tick,
-                    c.amount
-                FROM
-                    credits c
-                    INNER JOIN actions        a  ON (a.action_index=c.action_index)                    LEFT  JOIN index_addresses a1 ON (a1.id=c.address_id)
-                    LEFT  JOIN index_tickers   t1 ON (t1.id=c.tick_id)
-                WHERE
-                    a.block_index=?
-                ORDER BY
-                    c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`;
-const DEBIT_HASH_QUERY = `SELECT
-                    d.action_index,
-                    a1.address AS address,
-                    t1.tick    AS tick,
-                    d.amount
-                FROM
-                    debits d
-                    INNER JOIN actions        a  ON (a.action_index=d.action_index)                    LEFT  JOIN index_addresses a1 ON (a1.id=d.address_id)
-                    LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
-                WHERE
-                    a.block_index=?
-                ORDER BY
-                    d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`;
-const ESCROW_HASH_QUERY = `SELECT
-                    e.action_index,
-                    a1.address AS address,
-                    t1.tick    AS tick,
-                    e.amount
-                FROM
-                    escrows e
-                    INNER JOIN actions        a  ON (a.action_index=e.action_index)                    LEFT  JOIN index_addresses a1 ON (a1.id=e.address_id)
-                    LEFT  JOIN index_tickers   t1 ON (t1.id=e.tick_id)
-                WHERE
-                    a.block_index=?
-                ORDER BY
-                    e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`;
-
-// actions (hash the resolved action-type string, never the index_actions id)
-const ACTION_HASH_QUERY = `SELECT
-                    a.action_index,
-                    a.tx_index,
-                    ia.action AS action
-                FROM
-                    actions a                    LEFT  JOIN index_actions ia ON (ia.id=a.action_id)
-                WHERE
-                    a.block_index=?
-                ORDER BY
-                    a.action_index ASC`;
-
-// New deployments, resolving source_id to an address and status_id to a status.
-const CONTRACT_HASH_QUERY = `SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status
-                 FROM contracts c
-                 INNER JOIN actions a ON (a.action_index=c.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=c.source_id)
-                 LEFT  JOIN index_statuses  s1 ON (s1.id=c.status_id)
-                 WHERE a.block_index=?
-                 ORDER BY c.action_index ASC`;
-// Executions, resolved the same way as deployments above.
-const EXECUTION_HASH_QUERY = `SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count
-                 FROM contract_executions ce
-                 INNER JOIN actions a ON (a.action_index=ce.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=ce.caller_id)
-                 LEFT  JOIN index_statuses  s1 ON (s1.id=ce.status_id)
-                 WHERE a.block_index=?
-                 ORDER BY ce.action_index ASC`;
-// Emissions carry no block column, so scope comes through their execution.
-const EMISSION_HASH_QUERY = `SELECT em.execution_index, em.emitted_action, em.action_index, em.position
-                 FROM contract_emissions em
-                 INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index)
-                 INNER JOIN actions a ON (a.action_index=ce.action_index)
-                 WHERE a.block_index=?
-                 ORDER BY em.execution_index ASC, em.position ASC`;
-// Deposits, with the resolved secondary sort keys pinned to a BINARY collation so
-// the tie-break order cannot vary with a node's default collation.
-const DEPOSIT_HASH_QUERY = `SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status
-                 FROM deposits d
-                 INNER JOIN actions a ON (a.action_index=d.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=d.source_id)
-                 LEFT  JOIN index_tickers   t1 ON (t1.id=d.tick_id)
-                 LEFT  JOIN index_statuses  s1 ON (s1.id=d.status_id)
-                 WHERE a.block_index=?
-                 ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`;
-// Same resolution and tie-order treatment as deposits.
-const WITHDRAWAL_HASH_QUERY = `SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status
-                 FROM withdrawals w
-                 INNER JOIN actions a ON (a.action_index=w.action_index)                 LEFT  JOIN index_addresses a1 ON (a1.id=w.source_id)
-                 LEFT  JOIN index_tickers   t1 ON (t1.id=w.tick_id)
-                 LEFT  JOIN index_statuses  s1 ON (s1.id=w.status_id)
-                 WHERE a.block_index=?
-                 ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`;
-const PREVIOUS_HASH_QUERY = `SELECT
-                t1.hash as ledger,
-                t2.hash as actions,
-                t3.hash as contracts
-            FROM
-                blocks b
-                LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id)
-                LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id)
-                LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id)
-            WHERE
-                b.block_index=?`;
-
-async function getLedgerHashData(db, block_index){
-    const ledger = { credits: [], debits: [], escrows: [] };
-    ledger.credits = await db.doQueryStrict(CREDIT_HASH_QUERY, [block_index]);
-    ledger.debits = await db.doQueryStrict(DEBIT_HASH_QUERY, [block_index]);
-    ledger.escrows = await db.doQueryStrict(ESCROW_HASH_QUERY, [block_index]);
-    // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
-    // to their chain-independent role token, byte-for-byte mirror of
-    // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
-    // issuance fee credited to DONATE1) would otherwise leak the chain's address
-    // encoding into the hash, so the replica's recomputed hash must apply the same
-    // substitution to match the source. See src/util/protocol_address_roles.js.
-    for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
-    for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
-    for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-    return ledger;
-}
-
-async function getActionsHashData(db, block_index){
-    return await db.doQueryStrict(ACTION_HASH_QUERY, [block_index]);
-}
-
-async function getContractsHashData(db, block_index, network, coin){
-    const contracts = {
-        contracts:   [],
-        state:       [],
-        executions:  [],
-        emissions:   [],
-        deposits:    [],
-        withdrawals: []
-    };
-    contracts.contracts = await db.doQueryStrict(CONTRACT_HASH_QUERY, [block_index]);
-    // contract state (latest value per key written in this block).
-    // state_key collation is flag-day gated, byte-for-byte mirror of
-    // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
-    // (utf8_general_ci) below the activation height, COLLATE utf8_bin
-    // pinned at/after it (the state_key_collation_activation registry row).
-    let stateKeyBin = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null);
-    let stateKeyCollate = stateKeyBin ? ' COLLATE utf8_bin' : '';
-    const stateQuery = `SELECT cs.contract_index, cs.state_key, cs.state_value
-                 FROM contract_state cs
-                 INNER JOIN (
-                     SELECT MAX(id) as max_id
-                     FROM contract_state
-                     WHERE block_index=?
-                     GROUP BY contract_index, state_key` + stateKeyCollate + `
-                 ) latest ON cs.id = latest.max_id
-                 ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
-    contracts.state = await db.doQueryStrict(stateQuery, [block_index]);
-    contracts.executions = await db.doQueryStrict(EXECUTION_HASH_QUERY, [block_index]);
-    contracts.emissions = await db.doQueryStrict(EMISSION_HASH_QUERY, [block_index]);
-    contracts.deposits = await db.doQueryStrict(DEPOSIT_HASH_QUERY, [block_index]);
-    contracts.withdrawals = await db.doQueryStrict(WITHDRAWAL_HASH_QUERY, [block_index]);
-    return contracts;
-}
-
 class BlockHasher {
 
     // db:   a DB handle exposing async doQuery(sql, params) and
@@ -250,13 +90,38 @@ class BlockHasher {
     // returning [] would hash a truncated preimage and halt on a false divergence
     // instead of surfacing as a recompute error (same rule as db/actions.js).
     async computeBlockHashes(block_index, network, coin){
-        let info = [], hashes = [];
-        const ledger = await getLedgerHashData(this.db, block_index);
-        const actions = await getActionsHashData(this.db, block_index);
-        const contracts_data = await getContractsHashData(this.db, block_index, network, coin);
+        async function getLedgerHashData(height){
+            const ledger = { credits: [], debits: [], escrows: [] };
+            ledger.credits = await this.db.doQueryStrict(`SELECT c.action_index, a1.address AS address, t1.tick AS tick, c.amount FROM credits c INNER JOIN actions a ON (a.action_index=c.action_index) LEFT JOIN index_addresses a1 ON (a1.id=c.address_id) LEFT JOIN index_tickers t1 ON (t1.id=c.tick_id) WHERE a.block_index=? ORDER BY c.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, c.amount ASC`, [height]);
+            ledger.debits = await this.db.doQueryStrict(`SELECT d.action_index, a1.address AS address, t1.tick AS tick, d.amount FROM debits d INNER JOIN actions a ON (a.action_index=d.action_index) LEFT JOIN index_addresses a1 ON (a1.id=d.address_id) LEFT JOIN index_tickers t1 ON (t1.id=d.tick_id) WHERE a.block_index=? ORDER BY d.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC`, [height]);
+            ledger.escrows = await this.db.doQueryStrict(`SELECT e.action_index, a1.address AS address, t1.tick AS tick, e.amount FROM escrows e INNER JOIN actions a ON (a.action_index=e.action_index) LEFT JOIN index_addresses a1 ON (a1.id=e.address_id) LEFT JOIN index_tickers t1 ON (t1.id=e.tick_id) WHERE a.block_index=? ORDER BY e.action_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, e.amount ASC`, [height]);
+            for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
+            for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
+            for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
+            return ledger;
+        }
+        async function getActionsHashData(height){
+            return await this.db.doQueryStrict(`SELECT a.action_index, a.tx_index, ia.action AS action FROM actions a LEFT JOIN index_actions ia ON (ia.id=a.action_id) WHERE a.block_index=? ORDER BY a.action_index ASC`, [height]);
+        }
+        async function getContractsHashData(height){
+            const contracts = { contracts: [], state: [], executions: [], emissions: [], deposits: [], withdrawals: [] };
+            contracts.contracts = await this.db.doQueryStrict(`SELECT c.action_index, a1.address AS source_address, c.code_hash, s1.status AS status FROM contracts c INNER JOIN actions a ON (a.action_index=c.action_index) LEFT JOIN index_addresses a1 ON (a1.id=c.source_id) LEFT JOIN index_statuses s1 ON (s1.id=c.status_id) WHERE a.block_index=? ORDER BY c.action_index ASC`, [height]);
+            let stateKeyCollate = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null) ? ' COLLATE utf8_bin' : '';
+            const stateQuery = `SELECT cs.contract_index, cs.state_key, cs.state_value FROM contract_state cs INNER JOIN ( SELECT MAX(id) as max_id FROM contract_state WHERE block_index=? GROUP BY contract_index, state_key` + stateKeyCollate + ` ) latest ON cs.id = latest.max_id ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
+            contracts.state = await this.db.doQueryStrict(stateQuery, [height]);
+            contracts.executions = await this.db.doQueryStrict(`SELECT ce.action_index, ce.contract_index, a1.address AS caller_address, ce.gas_used, s1.status AS status, ce.emitted_count FROM contract_executions ce INNER JOIN actions a ON (a.action_index=ce.action_index) LEFT JOIN index_addresses a1 ON (a1.id=ce.caller_id) LEFT JOIN index_statuses s1 ON (s1.id=ce.status_id) WHERE a.block_index=? ORDER BY ce.action_index ASC`, [height]);
+            contracts.emissions = await this.db.doQueryStrict(`SELECT em.execution_index, em.emitted_action, em.action_index, em.position FROM contract_emissions em INNER JOIN contract_executions ce ON (ce.action_index=em.execution_index) INNER JOIN actions a ON (a.action_index=ce.action_index) WHERE a.block_index=? ORDER BY em.execution_index ASC, em.position ASC`, [height]);
+            contracts.deposits = await this.db.doQueryStrict(`SELECT d.action_index, d.contract_index, a1.address AS source_address, t1.tick AS tick, d.amount, s1.status AS status FROM deposits d INNER JOIN actions a ON (a.action_index=d.action_index) LEFT JOIN index_addresses a1 ON (a1.id=d.source_id) LEFT JOIN index_tickers t1 ON (t1.id=d.tick_id) LEFT JOIN index_statuses s1 ON (s1.id=d.status_id) WHERE a.block_index=? ORDER BY d.action_index ASC, d.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, d.amount ASC, s1.status COLLATE utf8_bin ASC`, [height]);
+            contracts.withdrawals = await this.db.doQueryStrict(`SELECT w.action_index, w.contract_index, a1.address AS source_address, t1.tick AS tick, w.amount, s1.status AS status FROM withdrawals w INNER JOIN actions a ON (a.action_index=w.action_index) LEFT JOIN index_addresses a1 ON (a1.id=w.source_id) LEFT JOIN index_tickers t1 ON (t1.id=w.tick_id) LEFT JOIN index_statuses s1 ON (s1.id=w.status_id) WHERE a.block_index=? ORDER BY w.action_index ASC, w.contract_index ASC, a1.address COLLATE utf8_bin ASC, t1.tick COLLATE utf8mb4_bin ASC, w.amount ASC, s1.status COLLATE utf8_bin ASC`, [height]);
+            return contracts;
+        }
+        const info = [], hashes = [];
+        const ledger = await getLedgerHashData.call(this, block_index);
+        const actions = await getActionsHashData.call(this, block_index);
+        const contracts_data = await getContractsHashData.call(this, block_index);
         // Previous block's committed hashes, which chain this block to the last.
-        let prev_block_index = block_index - 1;
-        let results = await this.db.doQueryStrict(PREVIOUS_HASH_QUERY, [prev_block_index]);
+        const prev_block_index = block_index - 1;
+        const results = await this.db.doQueryStrict(`SELECT t1.hash as ledger, t2.hash as actions, t3.hash as contracts FROM blocks b LEFT JOIN index_transactions t1 ON (t1.id=b.ledger_hash_id) LEFT JOIN index_transactions t2 ON (t2.id=b.actions_hash_id) LEFT JOIN index_transactions t3 ON (t3.id=b.contract_hash_id) WHERE b.block_index=?`, [prev_block_index]);
         if(results.length > 0){
             hashes['ledger']    = results[0].ledger;
             hashes['actions']   = results[0].actions;
