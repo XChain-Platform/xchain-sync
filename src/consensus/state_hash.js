@@ -165,22 +165,7 @@ const SLASH_SPECS = copy('stateHash.SLASH_SPECS');
 const REQUEST_STATUS_TABLES = copy('stateHash.REQUEST_STATUS_TABLES');
 const COOLDOWN_TABLES = copy('stateHash.COOLDOWN_TABLES');
 
-// Build the canonical state-hash preimage object for block B. db must expose
-// doQuery(sql, args) and getStatusId(name) (both xchain-indexer and xchain-sync
-// Database classes do). opts: { activationDelay, gasTick }. The caller hashes the
-// returned object with util.getDataHash. A try/catch around each class lets older
-// schemas (missing a table/column) degrade to an empty class rather than throw.
-async function buildStateHashData(db, blockIndex, opts){
-    let B       = Number(blockIndex);
-    let delay   = (opts && opts.activationDelay != null) ? Number(opts.activationDelay) : null;
-    let gasTick = (opts && opts.gasTick != null) ? opts.gasTick : null;
-    let network = (opts && opts.network != null) ? opts.network : null;
-    let coin    = (opts && opts.coin != null) ? opts.coin : null;
-    let completedStatusId = await db.getStatusId('completed');
-
-    // 1. deactivation_block stamps. A stamp written at block B carries value
-    //    B + delay, so a stamp landed at B iff deactivation_block = B + delay.
-    //    Skipped when delay is unknown (mirrors collectUpdatedRows).
+async function buildDeactivations(db, B, delay){
     let deactivations = {};
     for(let t of DEACTIVATION_TABLES){
         deactivations[t] = [];
@@ -192,10 +177,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B + delay, B + delay]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
     }
+    return deactivations;
+}
 
-    // 2. SLASH amount cuts: the slashed row reached via its debit-log entry for
-    //    this block. DISTINCT collapses multiple debits for one stake (amount is
-    //    functionally determined by action_index).
+async function buildSlashes(db, B){
     let slashes = {};
     for(let s of SLASH_SPECS){
         slashes[s.table] = [];
@@ -207,8 +192,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [s.target, B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table may not exist on older schemas */ }
     }
+    return slashes;
+}
 
-    // 3. v0 request_status flips (the resolved_block stamp), attests + xcalls.
+async function buildRequestStatus(db, B){
     let request_status = {};
     for(let t of REQUEST_STATUS_TABLES){
         request_status[t] = [];
@@ -219,9 +206,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
     }
+    return request_status;
+}
 
-    // 4. cooldown-maturity status flips, keyed by the maturity block. status_id
-    //    resolved to its canonical status string.
+async function buildCooldown(db, B){
     let cooldown = {};
     for(let t of COOLDOWN_TABLES){
         cooldown[t] = [];
@@ -233,12 +221,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
     }
+    return cooldown;
+}
 
-    // 5. backdated cooldown refund credits: capability (GAS) + contract (own tick),
-    //    keyed by the matured unstake's cooldown_end_block (the forward mirror of
-    //    cooldownCredits.js). address_id/tick_id resolved; ordered with the same
-    //    BINARY-collation-pinned keys as the ledger credit hash. A null gasTick makes
-    //    the GAS join match nothing (capability branch empties); contract still runs.
+async function buildCredits(db, B, gasTick, completedStatusId){
     let credits = [];
     if(completedStatusId != null && completedStatusId !== undefined){
         try {
@@ -262,19 +248,11 @@ async function buildStateHashData(db, blockIndex, opts){
                 [gasTick, completedStatusId, B, B, completedStatusId, B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table may not exist on older schemas */ }
     }
+    return credits;
+}
 
-    // 6. invalid_archive stamp on anchor_actions archive-head parent rows. When the final v2 chunk of a chunked archive batch lands at block B and the
-    //    reassembled blob fails its CRC check, anchor.js stamps the parent archive head (v1) 'invalid_archive' in place. The parent's action_index is in an
-    //    earlier block, so it is invisible to the action-scoped consensus hashes and to the per-block stream. Resolved via the status name (not status_id) to stay id-independent across nodes.
-
-    //    Version predicate GATED: legacy v1-only below the
-    //    ARCHIVE_INVALID_STATE_HASH activation, the full ARCHIVE_HEAD_VERSIONS set
-    //    at/after it, so the pre-flag preimage stays byte-identical.
+async function buildAnchorInvalid(db, B, network, coin){
     let archiveInvalidActive = isArchiveInvalidStateHashActive(B, network, coin);
-
-    //    Chunk-height key ALSO GATED, on its own separate flag day: the legacy `c.block_index` key is NEVER populated on a v2 continuation row, so this class
-    //    matched nothing on every node from the day it landed. At/after ARCHIVE_INVALID_HEIGHT_KEY it uses `c.block_index_doge`, the height the completing chunk
-    //    actually landed at. See the constant for why the two gates are separate and why repairing it is preimage-moving.
     let chunkHeightCol = isArchiveInvalidHeightKeyActive(B, network, coin)
                             ? ARCHIVE_CHUNK_HEIGHT_COL : ARCHIVE_CHUNK_HEIGHT_COL_LEGACY;
     let anchor_invalid = [];
@@ -291,14 +269,10 @@ async function buildStateHashData(db, blockIndex, opts){
             "ORDER BY p.action_index ASC",
             [B, B]);
     } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
+    return anchor_invalid;
+}
 
-    // 7. Index-map delta (id-determinism P4): the (id, string) pairs whose deterministic
-    //    id was first assigned at block B. Included ONLY at/after the per-chain
-    //    INDEX_MAP_STATE_HASH_ACTIVATION height, so below it the two keys are
-    //    omitted and the preimage is byte-identical to the pre-feature shape (no fleet halt).
-    //    Deliberately hashes the surrogate id (the value under protection); sound only because
-    //    every id-assignment path is now deterministic (compaction + F1a). Two appended
-    //    doQuery calls keep the existing call order unchanged when inert.
+async function buildIndexMap(db, B, network){
     let indexMapActive = isIndexMapStateHashActive(B, network);
     let index_addresses_new = [];
     let index_tickers_new   = [];
@@ -312,17 +286,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 "SELECT id, tick FROM index_tickers WHERE block_index = ? ORDER BY id ASC", [B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
     }
+    return { indexMapActive, index_addresses_new, index_tickers_new };
+}
 
-    // 8. VOTE poll finalization flips: polls rows whose terminal flip landed at
-    //    block B, keyed by resolved_block (the SAME key the forward updated_rows
-    //    POLL_FINALIZE channel selects by and the reverse rollback re-open resets).
-    //    Hashes the full deterministic tally outcome (winner, weights, gates,
-    //    deposit + callback resolution), never a surrogate id; poll identity is
-    //    action_index (unique), so ORDER BY action_index is a total order. GATED
-    //    INERT by default: included ONLY at/after the per-chain activation height,
-    //    so below it the key is omitted and the preimage is byte-identical to the
-    //    pre-feature shape (no fleet halt). The query is appended after every
-    //    existing call so the doQuery call order is unchanged when inert.
+async function buildPollFinalize(db, B, network, coin){
     let pollFinalizeActive = isPollFinalizeStateHashActive(B, network, coin);
     let poll_finalize = [];
     if(pollFinalizeActive){
@@ -335,18 +302,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
     }
+    return { pollFinalizeActive, poll_finalize };
+}
 
-    // 9. tokens.supply refreshes: (tick, supply) for every tick a ledger row
-    //    touched at block B (supply is functionally derived from credits/debits/
-    //    escrows, so this selection is exactly the set of possibly-moved supplies;
-    //    the same join shape the updated_rows forward class uses, scoped to one
-    //    block). Resolved tick strings with a pinned BINARY sort; supply is the
-    //    minimal-decimal string updateTokens writes, byte-identical on source and
-    //    follower (the follower's row is the source's row, replicated verbatim).
-    //    Per-branch joins (driving from actions) rather than a UNION ALL derived
-    //    table, mirroring the forward class's optimiser note. GATED INERT below
-    //    the per-chain activation height; query appended after every existing
-    //    call so the doQuery call order is unchanged when inert.
+async function buildTokenSupply(db, B, network, coin){
     let tokenSupplyActive = isTokenSupplyStateHashActive(B, network, coin);
     let token_supply = [];
     if(tokenSupplyActive){
@@ -364,17 +323,10 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B, B, B, B, B, B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
     }
+    return { tokenSupplyActive, token_supply };
+}
 
-    // 10. BET status flips: feeds latched or terminal at block B (a feed can do
-    //     BOTH in one pass on a large block-time jump: the latch stamps
-    //     closed_block, then the expiry step flips terminal in the same block)
-    //     and bets settled at block B. Keyed by the stamp columns, the SAME keys
-    //     the forward updated_rows BET classes select by and the reverse
-    //     rollback resets. Status strings resolved via index_statuses (never a
-    //     surrogate id); row identity is action_index (unique), so ORDER BY
-    //     action_index is a total order. GATED INERT below the per-chain
-    //     activation height; queries appended after every existing call so the
-    //     doQuery call order is unchanged when inert.
+async function buildBetStatus(db, B, network, coin){
     let betStatusActive = isBetStatusStateHashActive(B, network, coin);
     let bet_feed_status = [];
     let bet_status = [];
@@ -394,40 +346,58 @@ async function buildStateHashData(db, blockIndex, opts){
                 [B]);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
     }
+    return { betStatusActive, bet_feed_status, bet_status };
+}
 
-    // Fixed key order: the hash preimage. NOT chained on a previous state_hash
-    // (the adjacent three hashes already carry chain-continuity; a chain would only
-    // make NULL-backfill of historical blocks poison every successor).
+function assemblePreimage(B, sections){
     let preimage = {
-        deactivations:      deactivations,
-        slashes:            slashes,
-        request_status:     request_status,
-        cooldown:           cooldown,
-        credits:            credits,
-        anchor_invalid:     anchor_invalid
+        deactivations:      sections.deactivations,
+        slashes:            sections.slashes,
+        request_status:     sections.request_status,
+        cooldown:           sections.cooldown,
+        credits:            sections.credits,
+        anchor_invalid:     sections.anchor_invalid
     };
-    // Index-map keys are inserted (in fixed order, before block_index) ONLY when active,
-    // so an inert block serializes byte-identically to the pre-feature preimage.
-    if(indexMapActive){
-        preimage.index_addresses_new = index_addresses_new;
-        preimage.index_tickers_new   = index_tickers_new;
+    if(sections.indexMapActive){
+        preimage.index_addresses_new = sections.index_addresses_new;
+        preimage.index_tickers_new   = sections.index_tickers_new;
     }
-    // Poll-finalize and token-supply keys likewise inserted ONLY when active
-    // (in fixed order after the index-map keys, before block_index), preserving
-    // the inert byte-identity guarantee per class.
-    if(pollFinalizeActive){
-        preimage.poll_finalize = poll_finalize;
+    if(sections.pollFinalizeActive){
+        preimage.poll_finalize = sections.poll_finalize;
     }
-    if(tokenSupplyActive){
-        preimage.token_supply = token_supply;
+    if(sections.tokenSupplyActive){
+        preimage.token_supply = sections.token_supply;
     }
-    if(betStatusActive){
-        preimage.bet_feed_status = bet_feed_status;
-        preimage.bet_status      = bet_status;
+    if(sections.betStatusActive){
+        preimage.bet_feed_status = sections.bet_feed_status;
+        preimage.bet_status      = sections.bet_status;
     }
     preimage.block_index        = B;
     preimage.state_hash_version = STATE_HASH_VERSION;
     return preimage;
+}
+
+// Build the canonical state-hash preimage object for block B. Each section is
+// awaited in its original order so database calls remain strictly sequential.
+async function buildStateHashData(db, blockIndex, opts){
+    let B       = Number(blockIndex);
+    let delay   = (opts && opts.activationDelay != null) ? Number(opts.activationDelay) : null;
+    let gasTick = (opts && opts.gasTick != null) ? opts.gasTick : null;
+    let network = (opts && opts.network != null) ? opts.network : null;
+    let coin    = (opts && opts.coin != null) ? opts.coin : null;
+    let completedStatusId = await db.getStatusId('completed');
+    let sections = {};
+    sections.deactivations = await buildDeactivations(db, B, delay);
+    sections.slashes = await buildSlashes(db, B);
+    sections.request_status = await buildRequestStatus(db, B);
+    sections.cooldown = await buildCooldown(db, B);
+    sections.credits = await buildCredits(db, B, gasTick, completedStatusId);
+    sections.anchor_invalid = await buildAnchorInvalid(db, B, network, coin);
+    Object.assign(sections, await buildIndexMap(db, B, network));
+    Object.assign(sections, await buildPollFinalize(db, B, network, coin));
+    Object.assign(sections, await buildTokenSupply(db, B, network, coin));
+    Object.assign(sections, await buildBetStatus(db, B, network, coin));
+    return assemblePreimage(B, sections);
 }
 
 module.exports = { buildStateHashData, STATE_HASH_VERSION,
