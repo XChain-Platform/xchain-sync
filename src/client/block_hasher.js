@@ -171,34 +171,45 @@ const PREVIOUS_HASH_QUERY = `SELECT
             WHERE
                 b.block_index=?`;
 
-function ledgerHashGroup(){
-    return {
-        data: { credits: [], debits: [], escrows: [] },
-        queries: {
-            credits: CREDIT_HASH_QUERY,
-            debits:  DEBIT_HASH_QUERY,
-            escrows: ESCROW_HASH_QUERY
-        }
+async function getLedgerHashData(db, block_index){
+    const ledger = { credits: [], debits: [], escrows: [] };
+    ledger.credits = await db.doQueryStrict(CREDIT_HASH_QUERY, [block_index]);
+    ledger.debits = await db.doQueryStrict(DEBIT_HASH_QUERY, [block_index]);
+    ledger.escrows = await db.doQueryStrict(ESCROW_HASH_QUERY, [block_index]);
+    // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
+    // to their chain-independent role token, byte-for-byte mirror of
+    // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
+    // issuance fee credited to DONATE1) would otherwise leak the chain's address
+    // encoding into the hash, so the replica's recomputed hash must apply the same
+    // substitution to match the source. See src/util/protocol_address_roles.js.
+    for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
+    for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
+    for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
+    return ledger;
+}
+
+async function getActionsHashData(db, block_index){
+    return await db.doQueryStrict(ACTION_HASH_QUERY, [block_index]);
+}
+
+async function getContractsHashData(db, block_index, network, coin){
+    const contracts = {
+        contracts:   [],
+        state:       [],
+        executions:  [],
+        emissions:   [],
+        deposits:    [],
+        withdrawals: []
     };
-}
-
-function actionsHashGroup(){
-    return ACTION_HASH_QUERY;
-}
-
-function contractsHashGroup(){
-    return {
-        data: {
-            contracts:   [],
-            state:       [],
-            executions:  [],
-            emissions:   [],
-            deposits:    [],
-            withdrawals: []
-        },
-        queries: {
-            contracts:   CONTRACT_HASH_QUERY,
-            state:       stateKeyCollate => `SELECT cs.contract_index, cs.state_key, cs.state_value
+    contracts.contracts = await db.doQueryStrict(CONTRACT_HASH_QUERY, [block_index]);
+    // contract state (latest value per key written in this block).
+    // state_key collation is flag-day gated, byte-for-byte mirror of
+    // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
+    // (utf8_general_ci) below the activation height, COLLATE utf8_bin
+    // pinned at/after it (the state_key_collation_activation registry row).
+    let stateKeyBin = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null);
+    let stateKeyCollate = stateKeyBin ? ' COLLATE utf8_bin' : '';
+    const stateQuery = `SELECT cs.contract_index, cs.state_key, cs.state_value
                  FROM contract_state cs
                  INNER JOIN (
                      SELECT MAX(id) as max_id
@@ -206,13 +217,13 @@ function contractsHashGroup(){
                      WHERE block_index=?
                      GROUP BY contract_index, state_key` + stateKeyCollate + `
                  ) latest ON cs.id = latest.max_id
-                 ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`,
-            executions:  EXECUTION_HASH_QUERY,
-            emissions:   EMISSION_HASH_QUERY,
-            deposits:    DEPOSIT_HASH_QUERY,
-            withdrawals: WITHDRAWAL_HASH_QUERY
-        }
-    };
+                 ORDER BY cs.contract_index ASC, cs.state_key` + stateKeyCollate + ` ASC`;
+    contracts.state = await db.doQueryStrict(stateQuery, [block_index]);
+    contracts.executions = await db.doQueryStrict(EXECUTION_HASH_QUERY, [block_index]);
+    contracts.emissions = await db.doQueryStrict(EMISSION_HASH_QUERY, [block_index]);
+    contracts.deposits = await db.doQueryStrict(DEPOSIT_HASH_QUERY, [block_index]);
+    contracts.withdrawals = await db.doQueryStrict(WITHDRAWAL_HASH_QUERY, [block_index]);
+    return contracts;
 }
 
 class BlockHasher {
@@ -239,35 +250,10 @@ class BlockHasher {
     // returning [] would hash a truncated preimage and halt on a false divergence
     // instead of surfacing as a recompute error (same rule as db/actions.js).
     async computeBlockHashes(block_index, network, coin){
-        const { data: ledger, queries: ledgerQueries } = ledgerHashGroup();
         let info = [], hashes = [];
-        ledger.credits = await this.db.doQueryStrict(ledgerQueries.credits, [block_index]);
-        ledger.debits = await this.db.doQueryStrict(ledgerQueries.debits, [block_index]);
-        ledger.escrows = await this.db.doQueryStrict(ledgerQueries.escrows, [block_index]);
-        // CONSENSUS: canonicalize protocol special addresses (BURN/GAS/DONATE/REWARD)
-        // to their chain-independent role token, byte-for-byte mirror of
-        // xchain-indexer/src/db/actions.js getBlockHashes. A per-chain special address (e.g. an
-        // issuance fee credited to DONATE1) would otherwise leak the chain's address
-        // encoding into the hash, so the replica's recomputed hash must apply the same
-        // substitution to match the source. See src/util/protocol_address_roles.js.
-        for (const row of ledger.credits) row.address = canonicalizeHashAddress(row.address);
-        for (const row of ledger.debits)  row.address = canonicalizeHashAddress(row.address);
-        for (const row of ledger.escrows) row.address = canonicalizeHashAddress(row.address);
-        const actions = await this.db.doQueryStrict(actionsHashGroup(), [block_index]);
-        const { data: contracts_data, queries: contractQueries } = contractsHashGroup();
-        contracts_data.contracts = await this.db.doQueryStrict(contractQueries.contracts, [block_index]);
-        // contract state (latest value per key written in this block).
-        // state_key collation is flag-day gated, byte-for-byte mirror of
-        // xchain-indexer/src/db/actions.js getBlockHashes(): legacy folding
-        // (utf8_general_ci) below the activation height, COLLATE utf8_bin
-        // pinned at/after it (the state_key_collation_activation registry row).
-        let stateKeyBin = gateRegistry.activeAt(STATE_KEY_COLLATION_KEY, network, coin, block_index, null);
-        let stateKeyCollate = stateKeyBin ? ' COLLATE utf8_bin' : '';
-        contracts_data.state = await this.db.doQueryStrict(contractQueries.state(stateKeyCollate), [block_index]);
-        contracts_data.executions = await this.db.doQueryStrict(contractQueries.executions, [block_index]);
-        contracts_data.emissions = await this.db.doQueryStrict(contractQueries.emissions, [block_index]);
-        contracts_data.deposits = await this.db.doQueryStrict(contractQueries.deposits, [block_index]);
-        contracts_data.withdrawals = await this.db.doQueryStrict(contractQueries.withdrawals, [block_index]);
+        const ledger = await getLedgerHashData(this.db, block_index);
+        const actions = await getActionsHashData(this.db, block_index);
+        const contracts_data = await getContractsHashData(this.db, block_index, network, coin);
         // Previous block's committed hashes, which chain this block to the last.
         let prev_block_index = block_index - 1;
         let results = await this.db.doQueryStrict(PREVIOUS_HASH_QUERY, [prev_block_index]);
