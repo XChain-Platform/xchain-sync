@@ -668,9 +668,7 @@ class ClientApplier {
         }
     }
 
-    async insertRows(table, rows, opts){
-        if(!rows || rows.length === 0) return;
-
+    validateInsertTable(table){
         // The table name is spliced into every statement below rather than bound as a
         // parameter, so refuse anything that is not a plain identifier before it can
         // reach the database.
@@ -683,11 +681,10 @@ class ClientApplier {
             // back and the block is retried or the client halts.
             throw new Error('Rejected table name in insertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
+    }
 
-        let useIgnore = this.ignoreTables.has(table);
-        let useUpsert = this.upsertFullDumpTables.has(table);
-        let columns   = Object.keys(rows[0]);
-
+    prepareInsertColumns(table, rows){
+        let columns = Object.keys(rows[0]);
         // Generated columns are the DATABASE's to compute. The source reads its rows
         // with SELECT *, so one rides the wire like any other column, and naming it in
         // the INSERT is errno 1906: harmless on a permissive server, a hard error under
@@ -710,38 +707,37 @@ class ClientApplier {
             if(columns.length === 0)
                 throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
         }
+        return columns;
+    }
 
+    prepareNaturalKeyRows(table, rows, columns){
         // Drop the source's local surrogate id and clear any row already holding the
         // same natural key, so a re-sent row replaces rather than collides. See
         // localSurrogateIdTables for why this table cannot use IGNORE or UPSERT.
         let naturalKey = this.localSurrogateIdTables.get(table);
-        if(naturalKey && columns.includes('id')){
-            let keyCheck = validation.validateIdentifier(naturalKey);
-            if(!keyCheck.valid)
-                throw new Error('Rejected natural key in insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
+        if(!naturalKey || !columns.includes('id')) return { columns, naturalKey: null, keyValues: [] };
 
-            columns = columns.filter(c => c !== 'id');
-            if(columns.length === 0)
-                throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
+        let keyCheck = validation.validateIdentifier(naturalKey);
+        if(!keyCheck.valid)
+            throw new Error('Rejected natural key in insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
 
-            // Fail closed on a row that cannot be identified: inserting it would append a
-            // duplicate the DELETE could never scope to (block_index is not UNIQUE).
-            let keyValues = [];
-            for(let row of rows){
-                let v = row[naturalKey];
-                if(v === undefined || v === null)
-                    throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
-                if(!keyValues.includes(v)) keyValues.push(v);
-            }
+        columns = columns.filter(c => c !== 'id');
+        if(columns.length === 0)
+            throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
 
-            // Chunked to keep the IN list bounded on a large catch-up window.
-            let deleteBatch = 500;
-            for(let i = 0; i < keyValues.length; i += deleteBatch){
-                let slice = keyValues.slice(i, i + deleteBatch);
-                await this.db.deleteRowsByKeyValues(table, naturalKey, slice);
-            }
+        // Fail closed on a row that cannot be identified: inserting it would append a
+        // duplicate the DELETE could never scope to (block_index is not UNIQUE).
+        let keyValues = [];
+        for(let row of rows){
+            let v = row[naturalKey];
+            if(v === undefined || v === null)
+                throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
+            if(!keyValues.includes(v)) keyValues.push(v);
         }
+        return { columns, naturalKey, keyValues };
+    }
 
+    validateInsertColumns(columns){
         // Column names are spliced in the same way, so each one gets the same check.
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
@@ -751,97 +747,142 @@ class ClientApplier {
                 throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
+    }
+
+    prepareTableRows(table, rows){
+        this.validateInsertTable(table);
+        let useIgnore = this.ignoreTables.has(table);
+        let useUpsert = this.upsertFullDumpTables.has(table);
+        let prepared = this.prepareNaturalKeyRows(table, rows, this.prepareInsertColumns(table, rows));
+        return { ...prepared, useIgnore, useUpsert };
+    }
+
+    prepareInsertBatch(rows, columns, start, batchSize){
+        let batch = rows.slice(start, start + batchSize);
+        let args = [];
+        for(let row of batch){
+            for(let col of columns){
+                // decodeValue restores base64 binary sentinels back to Buffers
+                // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
+                // encoding); non-binary values pass through unchanged.
+                args.push(decodeValue(row[col] !== undefined ? row[col] : null));
+            }
+        }
+        return { batch, args };
+    }
+
+    insertRowBatch(table, columns, batch, args, useIgnore, useUpsert){
+        return this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+    }
+
+    assertNoEventTruncation(warnings){
+        // events rows >64KB silently truncate on a still-TEXT (pre-migration)
+        // replica when INSERT IGNORE is used: the id collision guard skips the row
+        // on re-send, so the truncated copy is never healed. Detect this by reading
+        // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
+        // valid on the same connection the INSERT just ran on; we are inside a
+        // beginTransaction so this.db.transactionConnection is the live connection).
+        // Throw (halt the apply transaction) on any 1265 truncation warning so
+        // operators see the exact row rather than a silently corrupt events log.
+        for(let w of (warnings || [])){
+            let code = Number(w.Code || w.code || 0);
+            if(code === 1265){
+                throw new Error('events row truncated (errno 1265) during INSERT IGNORE: ' +
+                    'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
+                    'Warning: ' + (w.Message || w.message || ''));
+            }
+        }
+    }
+
+    shouldCheckStrictIgnoreWarnings(table, opts){
+        // gated on opts.strictIgnoreCheck (set only by ClientSync's
+        // from-zero lookup repair, ClientApplier.applyIncrementalSnapshot's
+        // caller) rather than running on every ordinary per-block apply: this is
+        // an extra SHOW WARNINGS round-trip per batch, and the hot streaming path
+        // re-sends these tables' rows constantly by design (that is the whole
+        // point of ignoreTables), so it must stay cheap there. A REPAIR pass is
+        // different - ClientSync only pages a table from-zero because the
+        // completeness check already measured it short, so every row in that page
+        // is expected to be either already-correct or genuinely missing, never a
+        // silent conflict.
+        //
+        // For this class of table the row's own id/PRIMARY KEY is the ENTIRE
+        // re-send contract - a benign re-delivery can only ever warn "Duplicate
+        // entry '<id>' for key 'PRIMARY'". Any other warning (a collision on a
+        // DIFFERENT unique key, e.g. index_statuses' `status`, or a non-duplicate
+        // error like a truncated/NULL column) means IGNORE just silently dropped
+        // a row the repair needed to land, with the replica left short and no
+        // signal anywhere that it happened. Fail loud instead, so the repair's
+        // caller (ClientSync.maybeVerifyCompleteness) sees exactly which
+        // table/row collided rather than reporting the same short count forever.
+
+        // Keep warning classification scoped to repair passes.
+        return opts && opts.strictIgnoreCheck && this.idKeyedIgnoreTables.has(table);
+    }
+
+    assertNoStrictIgnoreConflicts(table, suspect){
+        // A natural-key collision on this class has two causes and only one of
+        // them needs a human. A STALE GENERATION is the healable one: the source
+        // re-interned its lookup rows (the ids are node-local AUTO_INCREMENT
+        // surrogates assigned in first-seen order and the table is never rolled
+        // back), so the replica holds the natural value at an id the source no
+        // longer has. Retiring that dead row and landing the source's converges
+        // the table. A GENUINE conflict is the other: the id the local row holds
+        // is one the source ALSO serves, so retiring it would destroy a live row.
+        for(let w of suspect){
+            let code = Number(w.Code || w.code || 0);
+            let message = w.Message || w.message || '';
+            throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
+                '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
+                'PRIMARY-key duplicate only; the local row holding this one\'s natural key is ' +
+                'still in the source\'s own row set, so it cannot be retired automatically and ' +
+                'needs a human to reconcile it.');
+        }
+    }
+
+    async insertRows(table, rows, opts){
+        if(!rows || rows.length === 0) return;
+        let prepared = this.prepareTableRows(table, rows);
+
+        // Chunked to keep the IN list bounded on a large catch-up window.
+        let deleteBatch = 500;
+        for(let i = 0; i < prepared.keyValues.length; i += deleteBatch){
+            let slice = prepared.keyValues.slice(i, i + deleteBatch);
+            await this.db.deleteRowsByKeyValues(table, prepared.naturalKey, slice);
+        }
+        this.validateInsertColumns(prepared.columns);
 
         // Mutable-aggregate full-dump tables (useUpsert) overwrite their existing row so
         // a re-dump on a non-empty replica refreshes (not skips) stale values.
         // Batch inserts in groups of 100 for efficiency
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
-            let batch = rows.slice(i, i + batchSize);
-            let args = [];
-
-            for(let row of batch){
-                for(let col of columns){
-                    // decodeValue restores base64 binary sentinels back to Buffers
-                    // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
-                    // encoding); non-binary values pass through unchanged.
-                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
-                }
-            }
+            let { batch, args } = this.prepareInsertBatch(rows, prepared.columns, i, batchSize);
 
             try {
-                await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+                await this.insertRowBatch(table, prepared.columns, batch, args,
+                    prepared.useIgnore, prepared.useUpsert);
             } catch(e){
                 // Name the upsert table on the error so ClientSync can tell a repeating
                 // full-dump duplicate key apart from any other apply failure.
-                if(useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
+                if(prepared.useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
                 throw e;
             }
 
-            // events rows >64KB silently truncate on a still-TEXT (pre-migration)
-            // replica when INSERT IGNORE is used: the id collision guard skips the row
-            // on re-send, so the truncated copy is never healed. Detect this by reading
-            // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
-            // valid on the same connection the INSERT just ran on; we are inside a
-            // beginTransaction so this.db.transactionConnection is the live connection).
-            // Throw (halt the apply transaction) on any 1265 truncation warning so
-            // operators see the exact row rather than a silently corrupt events log.
             if(table === 'events'){
                 let warnings = await this.db.doQuery('SHOW WARNINGS');
-                for(let w of (warnings || [])){
-                    let code = Number(w.Code || w.code || 0);
-                    if(code === 1265){
-                        throw new Error('events row truncated (errno 1265) during INSERT IGNORE: ' +
-                            'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
-                            'Warning: ' + (w.Message || w.message || ''));
-                    }
-                }
-            } else if(opts && opts.strictIgnoreCheck && this.idKeyedIgnoreTables.has(table)){
-                // gated on opts.strictIgnoreCheck (set only by ClientSync's
-                // from-zero lookup repair, ClientApplier.applyIncrementalSnapshot's
-                // caller) rather than running on every ordinary per-block apply: this is
-                // an extra SHOW WARNINGS round-trip per batch, and the hot streaming path
-                // re-sends these tables' rows constantly by design (that is the whole
-                // point of ignoreTables), so it must stay cheap there. A REPAIR pass is
-                // different - ClientSync only pages a table from-zero because the
-                // completeness check already measured it short, so every row in that page
-                // is expected to be either already-correct or genuinely missing, never a
-                // silent conflict.
-                //
-                // For this class of table the row's own id/PRIMARY KEY is the ENTIRE
-                // re-send contract - a benign re-delivery can only ever warn "Duplicate
-                // entry '<id>' for key 'PRIMARY'". Any other warning (a collision on a
-                // DIFFERENT unique key, e.g. index_statuses' `status`, or a non-duplicate
-                // error like a truncated/NULL column) means IGNORE just silently dropped
-                // a row the repair needed to land, with the replica left short and no
-                // signal anywhere that it happened. Fail loud instead, so the repair's
-                // caller (ClientSync.maybeVerifyCompleteness) sees exactly which
-                // table/row collided rather than reporting the same short count forever.
+                this.assertNoEventTruncation(warnings);
+            } else if(this.shouldCheckStrictIgnoreWarnings(table, opts)){
                 let suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
 
-                // A natural-key collision on this class has two causes and only one of
-                // them needs a human. A STALE GENERATION is the healable one: the source
-                // re-interned its lookup rows (the ids are node-local AUTO_INCREMENT
-                // surrogates assigned in first-seen order and the table is never rolled
-                // back), so the replica holds the natural value at an id the source no
-                // longer has. Retiring that dead row and landing the source's converges
-                // the table. A GENUINE conflict is the other: the id the local row holds
-                // is one the source ALSO serves, so retiring it would destroy a live row.
                 if(suspect.length){
                     let retired = await this.retireStaleNaturalKeyRows(table, batch, rows, suspect);
                     if(retired.length){
-                        await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+                        await this.insertRowBatch(table, prepared.columns, batch, args,
+                            prepared.useIgnore, prepared.useUpsert);
                         suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
                     }
-                    for(let w of suspect){
-                        let code = Number(w.Code || w.code || 0);
-                        let message = w.Message || w.message || '';
-                        throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
-                            '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
-                            'PRIMARY-key duplicate only; the local row holding this one\'s natural key is ' +
-                            'still in the source\'s own row set, so it cannot be retired automatically and ' +
-                            'needs a human to reconcile it.');
-                    }
+                    this.assertNoStrictIgnoreConflicts(table, suspect);
                 }
             }
         }
