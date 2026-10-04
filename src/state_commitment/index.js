@@ -717,7 +717,7 @@ async function computeFollowerBalancesRoot(db, smt, chain, network, blockIndex, 
 
 async function computeFollowerStakesRoot(db, smt, chain, network, blockIndex){
     const stakeEntries = await gatherStakeEntries(db, chain, network, blockIndex);
-    return buildStakesRoot(smt, chain, network, blockIndex, stakeEntries);
+    return await buildStakesRoot(smt, chain, network, blockIndex, stakeEntries);
 }
 
 // ---- Follower orchestrator --------------------------------------------------
