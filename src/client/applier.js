@@ -56,13 +56,14 @@ const ESCROW_TRIGGER_TABLES = new Set([
 function initializeCoreState(applier, db, util, chain, network) {
     applier.db = db;
     applier.util = util;
-    // The chain and network key state_tree_roots rows and SMT balance and escrow keys.
-    // Null values keep the state-commitment path disabled for callers without them.
+    // Keep chain and network nullable so callers without commitment context
+    // leave the state-commitment path disabled.
     applier.chain = chain || null;
-    // The canonical ticker matches source configuration in activation lookups and roots.
+    // Normalize the chain to the ticker form shared by activation lookups and
+    // state_tree_roots rows, matching the source indexer's configured coin.
     applier.coinTicker = coinTicker(chain) || null;
     applier.network = network || null;
-    // These roots expose the latest applyBlock computation for commitment verification.
+    // Reset computed roots until applyBlock produces a commitment-enabled result.
     applier._lastComputedRoots = null;
 }
 
@@ -89,9 +90,11 @@ function initializeIgnoreTables(applier) {
 }
 
 function initializeIdKeyedIgnoreTables(applier) {
-    // These tables expect resend collisions only on their numeric primary IDs.
-    // Natural-key collisions remain faults during strict lookup repair checks.
+    // Limit strict collision checks to tables deduplicated by numeric primary ID,
+    // excluding tables with surrogate IDs and separate natural-key uniqueness where
+    // a warning on the natural key represents expected re-delivery.
     applier.idKeyedIgnoreTables = new Set([
+        // Keep streamed lookups visible to repair when a natural value holds the wrong ID.
         ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
         'pubkeys',
         'rollcalls',
@@ -101,14 +104,17 @@ function initializeIdKeyedIgnoreTables(applier) {
 }
 
 function initializeRepairNaturalKeyColumns(applier) {
-    // These keys let lookup repair reconcile carried IDs with natural values.
+    // Map lookup tables to natural columns so from-zero repair reconciles a carried
+    // ID with its value instead of letting INSERT IGNORE preserve the same natural
+    // value under a different local ID.
     applier.repairNaturalKeyColumns = new Map([
         ['index_statuses', ['status']]
     ]);
 }
 
 function initializeUpsertFullDumpTables(applier) {
-    // Mutable full-dump aggregates upsert so carried source values replace stale rows.
+    // Upsert mutable full-dump aggregates through their unique natural keys so
+    // current source values replace stale rows after re-delivery.
     applier.upsertFullDumpTables = new Set([
         'markets',
         'attest_validator_stats'
@@ -116,17 +122,24 @@ function initializeUpsertFullDumpTables(applier) {
 }
 
 function initializeLocalSurrogateIdTables(applier) {
-    // These tables mint local IDs after deleting any row with the carried natural key.
-    // Blocks use block_index because their ID is node-local and has no references.
+    // Map source rows whose numeric IDs are local-only to natural keys, dropping
+    // each carried ID and replacing the matching natural row in one transaction
+    // to avoid either a primary-key collision or a duplicate block.
     applier.localSurrogateIdTables = new Map([
+        // Keep blocks keyed by block_index because no relation targets blocks.id,
+        // letting each replica allocate its own ID after rollback or re-application.
         ['blocks', 'block_index']
     ]);
 }
 
 function initializeLocalSurrogateIdOnlyTables(applier) {
-    // These upsert tables mint local IDs and already carry a real unique natural key.
-    // Composite keys keep them outside the single-key delete-and-insert path.
+    // Mark upserted tables whose local IDs must be stripped before insertion,
+    // relying on an existing composite unique key instead of the single-column
+    // delete path above.
     applier.localSurrogateIdOnlyTables = new Set([
+        // Keep attest validator stats keyed by validator and provider while every
+        // replica assigns its own surrogate sequence; source reorg recomputation
+        // may allocate the same numeric ID to a different surviving row.
         'attest_validator_stats'
     ]);
 }
