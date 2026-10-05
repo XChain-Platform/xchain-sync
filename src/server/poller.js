@@ -314,9 +314,8 @@ class ServerPoller {
 
     async handleHeightDropReorg(currentBlock){
         // A falling tip can expose replacement content below the new height, so the
-        // recorded window determines the fork instead of treating currentBlock + 1 as
-        // authoritative. This keeps the rollback event deep enough for joined hashes.
-        // Walking recorded hashes makes the event identify the true fork point.
+        // recorded window identifies the true fork instead of treating currentBlock + 1
+        // as authoritative, keeping the rollback deep enough for joined hashes.
         let forkBlock = await this.resolveForkPoint(currentBlock + 1);
         logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
         if(this.transparencyLog)
