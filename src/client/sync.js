@@ -2260,6 +2260,43 @@ class ClientSync {
         return Number.isFinite(keep) && keep > 0;
     }
 
+    shouldCompareTableCount(table, excludeTables){
+        if(excludeTables && excludeTables.has(table)) return false;
+        if(OPERATIONAL_LOG_TABLES.has(table)) return false;
+        if(table === 'sync_meta' && this.syncMetaWindowArmed()) return false;
+        return true;
+    }
+
+    validatedRemoteTableCount(table, value){
+        let idCheck = validation.validateIdentifier(table);
+        if(!idCheck.valid){
+            getLogger().error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
+            return undefined;
+        }
+        let remote = Number(value);
+        return Number.isFinite(remote) ? remote : undefined;
+    }
+
+    async localTableCountForVerification(table){
+        let local;
+        try {
+            local = Number(await this.db.getTableCount(table));
+        } catch(e){
+            try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
+            local = 0;
+        }
+        return Number.isFinite(local) ? local : 0;
+    }
+
+    appendTableCountMismatch(mismatches, table, remote, local, exactParity){
+        if(remote > local){
+            mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
+        } else if(local > remote && exactParity && exactParity.has(table)){
+            mismatches.push({ table: table, sourceCount: remote, localCount: local,
+                delta: remote - local, reason: 'replica-ahead' });
+        }
+    }
+
     async verifyTableCounts(remoteCounts, excludeTables, opts){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
@@ -2268,71 +2305,11 @@ class ClientSync {
         let sameHeight   = Number.isFinite(remoteHeight) && Number.isFinite(localHeight) && remoteHeight === localHeight;
         let exactParity  = (sameHeight && this.dbType === 'indexer') ? this.exactParityTables() : null;
         for(let table of Object.keys(remoteCounts)){
-            // Callers can exclude a table whose drift is expected between convergence
-            // passes (e.g. `dispensers` between replace-table reconciles) so a known,
-            // separately-tracked divergence does not spam TABLE_COUNT_MISMATCH.
-            if(excludeTables && excludeTables.has(table)) continue;
-            // Operational logs are excluded from every count check, at the comparison
-            // itself rather than per call site, because their counts CANNOT converge
-            // and a permanent delta here is what buries the real signal.
-            //
-            // `events` is an append-only operational log keyed by an AUTO_INCREMENT id
-            // that BOTH sides generate independently, and the client applies it with
-            // INSERT IGNORE (ClientApplier.ignoreTables) because a full re-dump would
-            // otherwise collide on the PK. So any source row whose id the replica has
-            // already used for one of its OWN events is silently dropped, and the two
-            // counts diverge permanently by construction. Measured across four healthy
-            // production replicas: short by 1, 1, 3 and 415 rows respectively, none of
-            // which any amount of syncing could close.
-            //
-            // The `index_*` lookups deliberately STAY strict. They are fully paged in
-            // and their counts are expected to match exactly, which is the whole point:
-            // that check is what caught the BTC mainnet state-hash hole (1969 missing
-            // index_transactions rows, blocks 961908-963876). Excluding them to quiet
-            // this signal would delete the only detector for that class of defect.
-            if(OPERATIONAL_LOG_TABLES.has(table)) continue;
-            // Exclude sync_meta too, and ONLY while this client's own retention window
-            // is armed. SyncService.startSyncMetaRetention then deletes rows below the
-            // window locally while the source keeps them, so the shortfall is the window
-            // working rather than a replication hole, and reporting it every pass would
-            // bury the real signal exactly as an unfiltered events delta does. With
-            // the window at its default 0 nothing is pruned and sync_meta stays
-            // strictly compared, so this exclusion cannot quietly widen.
-            if(table === 'sync_meta' && this.syncMetaWindowArmed()) continue;
-            // table names here come straight from the remote source's /status
-            // payload: validate before they reach getTableCount's identifier
-            // interpolation, mirroring the schema-application loop above. Skip
-            // (don't fault) an invalid key so one bad name can't manufacture a
-            // false count mismatch and trip a needless recompute/halt.
-            let idCheck = validation.validateIdentifier(table);
-            if(!idCheck.valid){
-                getLogger().error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
-                continue;
-            }
-            let remote = Number(remoteCounts[table]);
-            if(!Number.isFinite(remote)) continue;
-            let local;
-            try {
-                local = Number(await this.db.getTableCount(table));
-            } catch(e){
-                // This key came from the SOURCE's /status payload, so the source HAS the
-                // table: a local errno 1146 means the source's schema moved ahead of this
-                // replica after bootstrap. The apply-path heal (applyBlockEvent) never
-                // fires for a table the source has not yet written a row to, because
-                // nothing ever streams for it, so a zero-row server-side addition would
-                // error here on EVERY completeness check forever and never get created
-                // (observed live: polls / poll_results / vote_delegations on the BTC
-                // replicas). Route it through the same debounced schema heal, which CREATEs
-                // missing tables; the count then reads correctly on the next pass. Advisory
-                // path, so a heal failure must never fault the completeness check itself.
-                try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
-                local = 0;
-            }
-            if(!Number.isFinite(local)) local = 0;
-            if(remote > local)
-                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
-            else if(local > remote && exactParity && exactParity.has(table))
-                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local, reason: 'replica-ahead' });
+            if(!this.shouldCompareTableCount(table, excludeTables)) continue;
+            let remote = this.validatedRemoteTableCount(table, remoteCounts[table]);
+            if(remote === undefined) continue;
+            let local = await this.localTableCountForVerification(table);
+            this.appendTableCountMismatch(mismatches, table, remote, local, exactParity);
         }
         return mismatches;
     }
@@ -2723,6 +2700,14 @@ class ClientSync {
     }
 
     connectWebSocket(source, sourceIndex){
+        let ws = this.createWebSocket(source, sourceIndex);
+        if(!ws) return;
+
+        this.registerWebSocketHandlers(ws, source, sourceIndex);
+        this.wsConns[sourceIndex] = ws;
+    }
+
+    createWebSocket(source, sourceIndex){
         // Per-chain sync mode preference: 'full' (default) or 'infra-only', resolved
         // once in the constructor (SYNC_MODE_<CHAIN>), which also refuses the
         // infra-only + halting-verification combination before any connect.
@@ -2746,53 +2731,53 @@ class ClientSync {
             return;
         }
 
-        ws.on('open', () => {
-            getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
-        });
+        return ws;
+    }
 
-        ws.on('message', (data) => {
-            // Serialize event processing in arrival order. ws does not await an async
-            // listener, so without this a burst of block events runs handleEvent
-            // concurrently and races on lastAppliedBlock (the gap/continuity check runs
-            // before withApplyLock), firing spurious gaps that thrash the client into
-            // bulk catch-up (which skips the apply-time state_hash recompute). Chaining
-            // synchronously per message keeps gap-detection and apply atomic and ordered.
-            let event;
-            try {
-                event = JSON.parse(data.toString());
-                let check = validation.validateWsEvent(event);
-                if(!check.valid){
-                    getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
-                    return;
-                }
-            } catch(e){
-                getLogger().error(util.format('Error parsing WebSocket message:', e));
+    registerWebSocketHandlers(ws, source, sourceIndex){
+        ws.on('open', () => this.handleWebSocketOpen(source));
+        ws.on('message', data => this.handleWebSocketMessage(data, source, sourceIndex));
+        ws.on('close', () => this.handleWebSocketClose(source, sourceIndex));
+        ws.on('error', err => this.handleWebSocketError(err, source));
+    }
+
+    handleWebSocketOpen(source){
+        getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+    }
+
+    handleWebSocketMessage(data, source, sourceIndex){
+        // Synchronous chaining keeps gap detection and apply work atomic and ordered
+        // because ws does not await async listeners.
+        let event;
+        try {
+            event = JSON.parse(data.toString());
+            let check = validation.validateWsEvent(event);
+            if(!check.valid){
+                getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
                 return;
             }
-            // Stamp liveness on receipt (before the serialized apply chain) so the
-            // freshness signal reflects when the server last spoke, not when we
-            // finished applying. Any valid event type counts, including the periodic
-            // status heartbeat that arrives even when no new block is produced.
-            this._lastWsEventAt = Date.now();
-            this._wsEventChain = (this._wsEventChain || Promise.resolve())
-                .then(() => this.handleEvent(event, sourceIndex))
-                .catch(e => this.handleWsChainError(e));
-        });
+        } catch(e){
+            getLogger().error(util.format('Error parsing WebSocket message:', e));
+            return;
+        }
+        // Stamp liveness on receipt so freshness reflects when the server last speaks,
+        // not when apply work finishes. Every valid event type counts.
+        this._lastWsEventAt = Date.now();
+        this._wsEventChain = (this._wsEventChain || Promise.resolve())
+            .then(() => this.handleEvent(event, sourceIndex))
+            .catch(e => this.handleWsChainError(e));
+    }
 
-        ws.on('close', () => {
-            getLogger().info('WebSocket disconnected from ' + source);
-            // A source we are no longer connected to is not evidence about anything.
-            // Keeping its last verdict would let a disconnected server go on certifying
-            // its own freshness, which is the shape of the bug this map exists to fix.
-            this._upstreamStatus.delete(sourceIndex);
-            this.scheduleReconnect(source, sourceIndex);
-        });
+    handleWebSocketClose(source, sourceIndex){
+        getLogger().info('WebSocket disconnected from ' + source);
+        // A disconnected source provides no evidence about upstream freshness, so its
+        // last verdict cannot continue certifying that source.
+        this._upstreamStatus.delete(sourceIndex);
+        this.scheduleReconnect(source, sourceIndex);
+    }
 
-        ws.on('error', (err) => {
-            getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
-        });
-
-        this.wsConns[sourceIndex] = ws;
+    handleWebSocketError(err, source){
+        getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
     }
 
     // Terminal-error gate for the serialized WS event chain. Ordinary handler
