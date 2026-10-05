@@ -257,91 +257,38 @@ class ClientApplier {
      *                         { table: [rows] } map) and any updated_rows
      */
     async applyBlock(payload){
-        // Clear any prior block's computed roots up front: on an early return
-        // (malformed payload or an already-applied duplicate) ClientSync must NOT
-        // compare stale roots against this event. A null here means "not recomputed
-        // this apply" and the state-commitment check is skipped, never treated as a
-        // divergence (a duplicate block was already verified when first applied).
+        // Clear computed roots before every attempt so early returns cannot expose
+        // roots from an earlier block to ClientSync.
         this._lastComputedRoots = null;
-        // block_index is null-checked (not truthiness-checked): the genesis block is
-        // a legitimate block_index 0 (ServerPoller emits Number(0)), and ClientSync
-        // documents block 0 as the one valid from-empty apply target. `!0` would
-        // silently drop it before any transaction opened.
+        // A null check keeps the genesis block_index 0 valid.
         if(!payload || !payload.data || payload.block_index == null) return;
 
-        // Schema-version gate: reject live block payloads with a mismatched schema
-        // version the same way snapshot applies do, so a server-side schema bump
-        // fails closed on live blocks rather than silently accepting rows whose
-        // encoding or column set the local replica cannot correctly apply.
-        // Gated on schema_version != null so old payloads (pre-5250) pass through.
-        let dbType = (this.db && this.db.dbType) || 'indexer';
-        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
-            throw new Error('Schema version mismatch: server=' + payload.schema_version +
-                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
-        }
-
-        // rethrow, not the fail-soft default: this guard runs before beginTransaction, where
-        // doQuery turns a query error into [], so a transient fault would read as "block not
-        // applied yet" and re-run insertRows for a block already in the replica - credits,
-        // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
-        // upsertFullDumpTables), and rebuildBalancesTouchedBy would then run over the
-        // duplicated rows. Let the error propagate: applyBlockEvent's catch logs it and
-        // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
+        this.assertBlockSchemaVersion(payload);
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             logger.info('Block ' + payload.block_index + ' already exists, skipping');
             return;
         }
 
+        await this.applyBlockTransaction(payload);
+    }
+
+    assertBlockSchemaVersion(payload){
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
+            throw new Error('Schema version mismatch: server=' + payload.schema_version +
+                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
+        }
+    }
+
+    async applyBlockTransaction(payload){
         await this.db.beginTransaction();
         try {
             let data = payload.data;
-            for(let table in data){
-                let rows = data[table];
-                if(!rows || rows.length === 0) continue;
-                await this.insertRows(table, rows);
-            }
-            // Rebuild balances if this payload touched credits/debits.
-            // ServerPoller's per-block payload can't scope balances via the
-            // action-scoped JOIN (the balances table has no action_index
-            // column), so the only way the replica's balances table can stay
-            // consistent with credits/debits during live sync is to recompute
-            // it from the (now-updated) credit/debit data, scoped to the ids
-            // the new rows touched where possible. Indexer-shaped DBs only;
-            // decoder has no balances/credits/debits tables.
+            await this.insertBlockRows(data);
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer'){
-                // Apply in-place mutations to SURVIVING rows (deactivation_block,
-                // SLASH amounts, request_status) the action-scoped insert loop above
-                // can't reach (they live on rows created by an earlier block). Without
-                // this UPSERT every forward in-place mutation is silently dropped.
-                if(payload.updated_rows)
-                    await this.applyUpdatedRows(payload.updated_rows);
-                // Mirror the anchor-reward winner collapse: the source DELETEd the
-                // loser validator_rewards rows this block's reconcile-log rows pre-image
-                // (rows from EARLIER blocks the action-scoped delete never reaches).
-                if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
-                    await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
-                // Re-derive tokens.escrow_action_index when this block moved any
-                // offer/status (the gate is replica-derived, not wire-carried).
-                await this.maybeRederiveEscrow(data);
-                if(data.credits || data.debits)
-                    await this.rebuildBalancesTouchedBy(data.credits, data.debits);
-                // Light-client state commitment (SPV spec sec.4-5): recompute + persist
-                // the per-block SMT roots over the replica INSIDE this txn (atomic with
-                // the data apply, so block B+1's incremental update always finds B's
-                // balances_root). The touched (address,tick) set comes from the applied
-                // event rows (credits/debits/escrows; cooldown refunds already merged by
-                // the source), mirroring the indexer's ledger-choke-point set. ClientSync
-                // reads _lastComputedRoots after commit and HALTs on divergence.
-                if(isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
-                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
-                    let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
-                    this._lastComputedRoots = await computeFollowerRoots(
-                        this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
-                } else {
-                    this._lastComputedRoots = null;
-                }
+                await this.applyIndexerBlockState(payload, data);
             } else {
                 this._lastComputedRoots = null;
             }
@@ -351,6 +298,36 @@ class ClientApplier {
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
+    }
+
+    async insertBlockRows(data){
+        for(let table in data){
+            let rows = data[table];
+            if(!rows || rows.length === 0) continue;
+            await this.insertRows(table, rows);
+        }
+    }
+
+    async applyIndexerBlockState(payload, data){
+        if(payload.updated_rows)
+            await this.applyUpdatedRows(payload.updated_rows);
+        if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
+            await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
+        await this.maybeRederiveEscrow(data);
+        if(data.credits || data.debits)
+            await this.rebuildBalancesTouchedBy(data.credits, data.debits);
+        await this.updateBlockStateCommitment(payload, data);
+    }
+
+    async updateBlockStateCommitment(payload, data){
+        if(!isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
+            this._lastComputedRoots = null;
+            return;
+        }
+        let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
+        let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
+        this._lastComputedRoots = await computeFollowerRoots(
+            this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
     }
 
     // Collect the distinct (keyField, tick_id) ids touched by freshly applied
@@ -439,11 +416,44 @@ class ClientApplier {
         }
     }
 
-    // Apply a full snapshot (used for initial bootstrap)
-    // snapshotData: parsed JSON object with { schema_version, block_height, tables: { tableName: [rows...] } }
-    //
-    // On schema_version mismatch the validator must be restarted after the server is upgraded so
-    // that fetchAndApplySchema re-runs against the new DDL before any rows are applied.
+    // Names of the local snapshot-eligible tables; operator-local tables are excluded.
+    localSnapshotTableNames(schemaRows){
+        return (schemaRows || [])
+            .map(r => r.table_name || r.TABLE_NAME)
+            .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+    }
+
+    // Payload tables minus node-local ones; a source still shipping one is ignored.
+    payloadSnapshotTableNames(snapshotData){
+        return Object.keys(snapshotData.tables).filter(t => {
+            if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
+            logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
+            return false;
+        });
+    }
+
+    // Tolerates only a missing table or column (1146/1054); any other error propagates.
+    ignoreSchemaGap(e){
+        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+    }
+
+    isClearableTable(table){
+        let tCheck = validation.validateIdentifier(table);
+        if(!tCheck.valid) logger.error('Skipping clear of invalid table: ' + table);
+        return tCheck.valid;
+    }
+
+    logLargeTableInsert(table, rows){
+        if(rows.length > 100)
+            logger.info('  ' + table + ': ' + rows.length + ' rows');
+    }
+
+    // Seeds the light-client SMT at the snapshot tip on indexer replicas past the flag day.
+    shouldSeedSnapshotRoots(snapshotData, dbType){
+        return dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker);
+    }
+
+    // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
@@ -458,60 +468,20 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            // Clear the FULL local snapshot-eligible table set, not just the tables
-            // named in the payload: streamFullSnapshot omits any table with zero
-            // source rows, so a table emptied on the source but still populated on
-            // this replica would otherwise survive a re-bootstrap (the oversized-
-            // incremental fallback applies a full snapshot over a NON-empty replica),
-            // and verifyTableCounts only reports remote>local, so the stale rows
-            // would never surface. schema_version equality with the source was
-            // enforced above, so the local table set mirrors the source's.
-            // Enumeration failure must abort the apply: a missing table/column
-            // (1146/1054) is the only schema-gap failure worth tolerating, and
-            // information_schema has no such failure mode, so realistic failures
-            // here are transient/operational (connection drop, lock-wait,
-            // permissions). Those MUST propagate so the surrounding catch rolls
-            // the transaction back and the bootstrap is retried; committing with
-            // an un-enumerated table set leaves tables emptied on the source
-            // still populated locally, invisible to verifyTableCounts. Mirrors
-            // the narrow catch at the escrow-gate rederive below.
+            // The full local table set is cleared, not just the payload's: tables empty on the
+            // source are omitted from the payload. Enumeration failures abort the apply.
             let localTables = [];
             try {
-                let schemaRows = await this.db.findStreamableTableNames();
-                localTables = (schemaRows || [])
-                    .map(r => r.table_name || r.TABLE_NAME)
-                    .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+                localTables = this.localSnapshotTableNames(await this.db.findStreamableTableNames());
             } catch(e){
                 logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                this.ignoreSchemaGap(e);
             }
 
-            // Node-local tables (OPERATOR_LOCAL_TABLES and SOURCE_UNSTREAMED_TABLES)
-            // never ride snapshots; if an older source still ships one (e.g.
-            // mempool_transactions or merkle_reorgs before their exclusions), drop it
-            // here rather than importing another node's local state. Note the two sets
-            // differ on the clear loop above: SOURCE_UNSTREAMED_TABLES stays in
-            // localTables so a previously-imported foreign copy is purged by this very
-            // apply, while OPERATOR_LOCAL_TABLES is clear-protected.
-            let payloadTables = Object.keys(snapshotData.tables).filter(t => {
-                if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
-                logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
-                return false;
-            });
-
-            // Clear all snapshot tables first (reverse dependency order: child rows
-            // before parents; orderSnapshotTables mirrors the builder's stream order).
-            // DELETE rather than TRUNCATE: MariaDB rejects TRUNCATE on any table referenced
-            // by a foreign key, even when the referencing table is empty. The decoder DB
-            // declares such a FK (pubkeys.address_id → index_addresses.id), so TRUNCATE
-            // would crash the bootstrap; DELETE honours FK constraints row-by-row.
-            let tables = orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
+            let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
             for(let i = tables.length - 1; i >= 0; i--){
-                let tCheck = validation.validateIdentifier(tables[i]);
-                if(!tCheck.valid){
-                    logger.error('Skipping clear of invalid table: ' + tables[i]);
-                    continue;
-                }
+                if(!this.isClearableTable(tables[i])) continue;
                 await this.db.deleteAllRows(tables[i]);
             }
 
@@ -519,40 +489,17 @@ class ClientApplier {
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
                 await this.insertRows(table, rows);
-                if(rows.length > 100)
-                    logger.info('  ' + table + ': ' + rows.length + ' rows');
+                this.logLargeTableInsert(table, rows);
             }
 
-            // Scoped clear of state_tree_roots at/above the snapshot height. This table
-            // is 'follower-derived' (OPERATOR_LOCAL_TABLES), so the clear loop above is
-            // clear-protected and leaves it untouched, while its backing state_tree_nodes
-            // store (replication 'snapshot') was wiped and re-imported wholesale. On a
-            // full-snapshot apply over a NON-empty replica (the oversized-incremental
-            // recovery fallback), pre-existing root rows at heights ABOVE the snapshot
-            // height survive as future-dated, orphaned-fork roots the follower would serve
-            // as authoritative SPV commitments until a live block upserts over each height.
-            // Delete block_index >= snapshot height (seedSnapshotRoots re-inserts the row
-            // at the height right below), mirroring the predicate ClientRollback already
-            // applies to this same table (blockTables, DELETE WHERE block_index >= N).
-            // Run unconditionally, NOT gated on dbType/isStateCommitmentActive: the orphan
-            // roots must go even when state commitment is inactive on this node. Swallow
-            // only schema gaps (1146 table missing on decoder / older schemas, 1054 missing
-            // column); any other error must propagate so the outer catch rolls the txn back.
-            // Bind this.coinTicker, NOT this.chain: the rows carry the TICKER (every writer
-            // in stateCommitment.js is called with this.coinTicker, and SyncService passes
-            // the hub's full lowercase coin name into the constructor), so the full name
-            // matches zero rows and the cleanup silently no-ops on every production chain.
+            // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
             try {
                 await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
             } catch(e){
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                this.ignoreSchemaGap(e);
             }
 
-            // Seed the light-client SMT at the snapshot tip so the first live block
-            // (block_height+1) finds a prior balances_root (SPV spec sec.4.3). Full
-            // build over the replicated state; block_merkle_root is NULL (state-at-
-            // height, not the tip block's content rows). Indexer + post-flag-day only.
-            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
+            if(this.shouldSeedSnapshotRoots(snapshotData, dbType))
                 await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();

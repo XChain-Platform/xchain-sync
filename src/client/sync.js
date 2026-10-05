@@ -155,6 +155,90 @@ function reportIndexMapResult(client, source, blockHeight, localChecksum, remote
     return true;
 }
 
+function buildDivergenceHalt(blockIndex, mismatches, sources, reason){
+    return {
+        blockIndex, reason: reason || 'cross-source-divergence',
+        mismatches: mismatches || [], sources: sources || [],
+        at: new Date().toISOString()
+    };
+}
+
+function logDivergenceReason(client, blockIndex, mismatches){
+    if(client._halted.reason === 'local-recompute-divergence'){
+        getLogger().error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
+        getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
+        getLogger().error('investigate replica state and clear before this validator can resume.');
+    } else if(client._halted.reason === 'recompute-error'){
+        getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
+        getLogger().error('retries. This recompute is the only verification of the applied range');
+        getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
+        getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
+        getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
+        getLogger().error('clear before this validator can resume.');
+    } else if(client._halted.reason === 'boundary-read-error'){
+        getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
+        getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
+        getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
+        getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
+        getLogger().error('fix the local database fault and clear before this validator can resume.');
+    } else if(client._halted.reason === 'max-rollback-depth-exceeded'){
+        getLogger().error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
+        getLogger().error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
+        getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
+        getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
+        getLogger().error('this validator can resume.');
+    } else if(client._halted.reason === 'checkpoint-quorum-divergence'){
+        getLogger().error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
+        getLogger().error('match this replica (quorum failed under the pinned validator set, or its');
+        getLogger().error('committed state_root disagrees with the replica\'s own recompute). The');
+        getLogger().error('source served state the federation did not sign. HALTING (applying no');
+        getLogger().error('further blocks). Operator must investigate and clear before resuming.');
+    } else if(client._halted.reason === 'no-source-quorum'){
+        getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
+        getLogger().error('SOURCE_QUORUM (' + client.effectiveQuorum() + ' of ' + client.activeSourceCount() +
+            ' active). The replica cannot determine which chain is canonical, so it must not');
+        getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
+        getLogger().error('the contending sources and clear before this validator can resume.');
+    } else if(client._halted.reason === 'checkpoint-freshness-stale'){
+        getLogger().error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
+        getLogger().error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
+        getLogger().error('is on. The tail past the last anchor is unverifiable against the federation, so');
+        getLogger().error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
+        getLogger().error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
+    } else if(client._halted.reason === 'train-activation'){
+        let m = (mismatches && mismatches[0]) || {};
+        getLogger().error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
+        getLogger().error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
+            ', which this build does');
+        getLogger().error('not implement. Applying this block under the old rules would fork. HALTING');
+        getLogger().error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
+        getLogger().error('platform version that carries the rule set, then clear. Clearing without the');
+        getLogger().error('update is not a supported path.');
+        if(m.reason) getLogger().error(m.reason);
+    } else {
+        getLogger().error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
+        getLogger().error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
+        getLogger().error('investigate and clear before this validator can resume.');
+    }
+}
+
+function logDivergenceHalt(client, blockIndex, mismatches, sources){
+    getLogger().error('================================================================');
+    getLogger().error('CONSENSUS DIVERGENCE HALT: ' + client.chain + '/' + client.network + '/' + client.dbType);
+    logDivergenceReason(client, blockIndex, mismatches);
+    getLogger().error('mismatches: ' + JSON.stringify(mismatches));
+    getLogger().error('sources: ' + JSON.stringify(sources));
+    getLogger().error('================================================================');
+}
+
+function stopDivergenceApply(client){
+    // Stop the live apply path; pending cross-source hashes are now moot.
+    client.pendingHashes.clear();
+    client._strictConfirmPending.clear();
+    for(let [, timer] of client._applyTimers) clearTimeout(timer);
+    client._applyTimers.clear();
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -1380,59 +1464,26 @@ class ClientSync {
         }
     }
 
-    // Seed a TRUNCATED replica from a recent height instead of full history.
-    // Opt-in per chain (SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>) for fast chains
-    // whose full-history snapshot cannot be buffered+applied in one client pass.
-    // Returns true once the tip is committed; throws on a failure the caller can
-    // retry. Works for BOTH dbTypes: the terminal-block recompute below is a no-op
-    // for the decoder (verifyRecompute returns null; it has no synthetic chain
-    // hashes), so the decoder simply seeds [base..tip] and live-follows by block_hash
-    // continuity, which only needs the immediate predecessor (present from base up).
-    //
-    // CONSENSUS NOTE (load-bearing, indexer): the join block `base` has no `base-1`
-    // predecessor on a truncated replica, so BlockHasher.computeBlockHashes(base)
-    // folds a NULL previous_hash and would false-HALT on recompute. We record
-    // this._bootstrapBase so verifyRecompute skips recompute for ONLY that one
-    // block; base's committed hashes arrive verbatim in the snapshot, and every
-    // block > base recomputes normally (each folds its predecessor's committed
-    // hash, which is present in [base..tip] and replicated verbatim). The chained
-    // verification is therefore intact from base+1 upward.
-    async bootstrapFromHeight(depth){
-        let source = this.sources[0];
-        if(!source) throw new Error('Bootstrap-from-height: no sync source');
-
-        // 1. Discover the source tip.
-        let statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-        let statusResp = await axios.get(statusUrl, { headers: this.upstreamHeaders(), timeout: 30000 });
-        let status = statusResp.data || {};
-        // A server reports block_height (last broadcast position) and source_height
-        // (DB tip). The incremental snapshot is built from the DB, so prefer the DB
-        // tip; fall back to block_height. Either way `base` only needs to be recent.
-        let tip = (typeof status.source_height === 'number') ? status.source_height
+    async discoverBootstrapRange(source, depth){
+        const statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        const statusResp = await axios.get(statusUrl, { headers: this.upstreamHeaders(), timeout: 30000 });
+        const status = statusResp.data || {};
+        // The incremental snapshot comes from the DB tip, with the last broadcast
+        // position as a fallback when the source does not expose source_height.
+        const tip = (typeof status.source_height === 'number') ? status.source_height
                 : (typeof status.block_height === 'number') ? status.block_height : null;
         if(typeof tip !== 'number'){
             throw new Error('Bootstrap-from-height: source tip unavailable from ' + statusUrl);
         }
-        let base = Math.max(0, tip - depth);
+        const base = Math.max(0, tip - depth);
         getLogger().info('Bootstrap-from-height: source tip=' + tip + ', depth=' + depth +
             ', base=' + base + ' for ' + this.chain + '/' + this.network);
+        return { tip, base };
+    }
 
-        // 2. Apply schema before any data (same as the full-bootstrap path).
-        await this.fetchAndApplySchema(source);
-
-        // 3. Sync the append-only lookup tables (index_*) by id-cursor paging BEFORE
-        //    the block window. A single full-dump of e.g. index_transactions (~8.5M
-        //    rows on DOGE testnet) exceeds SNAPSHOT_MAX_CONTENT and aborts the
-        //    download; paging keeps each request bounded. Done first so the block
-        //    window's FK targets (blocks.*_hash_id -> index_transactions) are present.
-        await this.syncLookupTablesPaged(source);
-
-        // 4. Fetch and apply the block window from `base` with skip_lookups=1 (the
-        //    lookups were just paged in). Bounded by the truncation window, so this
-        //    response stays small. applyIncrementalSnapshot also applies updated_rows,
-        //    cooldown credits, and rebuilds touched balances (all still bundled here).
-        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
-        let response = await axios.get(url, {
+    async fetchBootstrapWindow(source, base){
+        const url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
+        const response = await axios.get(url, {
             headers: this.upstreamHeaders(),
             responseType: 'arraybuffer',
             timeout: 600000,
@@ -1443,84 +1494,74 @@ class ClientSync {
         if(Buffer.isBuffer(jsonStr)){
             try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
         }
-        let snapshotData;
         try {
-            snapshotData = JSON.parse(jsonStr.toString());
+            return JSON.parse(jsonStr.toString());
         } catch(parseErr){
             throw new Error('Snapshot download truncated or corrupt from ' + source +
                 ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
         }
+    }
 
-        // Platform-train gate on the window tip, before the join floor is recorded or
-        // any row lands: a window whose top is at or above the boundary must not be
-        // seeded by a build that lacks the rule set. Returns false so the retry
-        // wrapper sees the halt and stops instead of re-fetching the same window.
-        if(await this.checkTrainActivation(
-                (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : tip))
-            return false;
+    async applyBootstrapWindow(snapshotData, base, tip){
+        const activationHeight = (typeof snapshotData.block_height === 'number')
+            ? snapshotData.block_height : tip;
+        if(await this.checkTrainActivation(activationHeight)) return false;
 
-        // Record the join block BEFORE apply so a recompute triggered during/after
-        // apply already sees the skip. since_block is authoritative (the server
-        // echoes the exact bound it served); fall back to our requested base.
+        // since_block is the exact bound served; base is the requested fallback.
         this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
-        // Persist the join floor durably. _bootstrapBase is otherwise an in-memory-
-        // only field: after a restart the incremental path leaves it null, dropping
-        // both the join-block recompute skip (a false-HALT on the join block) and the
-        // truncation floor. Reloaded by loadBootstrapBase() at startup.
         await this.persistBootstrapBase(this._bootstrapBase);
-
         await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
         if(typeof snapshotData.block_height === 'number'){
             this.lastAppliedBlock = snapshotData.block_height;
         }
+        return true;
+    }
 
-        // 4b. Re-page the append-only lookups AFTER the block window. Step 3 paged
-        //     index_* up to the source's high-water T1, but the step-4 snapshot is a
-        //     fresh REPEATABLE READ at the source's CURRENT tip T2, which is higher
-        //     whenever the source produced a block during paging (the normal case on
-        //     a fast chain like DOGE testnet, where paging spans millions of rows /
-        //     many seconds). Blocks (T1..T2] then carry blocks.*_hash_id pointing at
-        //     index_transactions rows that were never paged in; getBlockHashRow
-        //     resolves them as NULL (LEFT JOIN miss), which (a) commits gap blocks
-        //     with unresolvable consensus hashes, (b) silently skips the terminal
-        //     recompute below (its NULL-ledger_hash guard goes false), and (c) halts
-        //     the first live block when it folds a NULL predecessor hash. Re-paging
-        //     now (cursor = current MAX(id), so only the new (T1..T2] rows) fills
-        //     those FK targets before recompute + live-follow. Idempotent and cheap
-        //     when no block landed (one MAX(id) probe per table, zero pages).
-        //     <SYNC-LOOKUP-REPAGE> keep aligned with runIncrementalCatchUp.
-        await this.syncLookupTablesPaged(source);
-
-        // Pair lastHashes with the height set above (see refreshTipHashes). start()
-        // re-reads it anyway, but this path is also the oversized-catch-up fallback,
-        // reached with live-follow already running.
-        await this.refreshTipHashes();
-
-        // 4. Verify the TERMINAL block (folds tip-1's committed hash, which is
-        //    present in [base..tip]). The join block `base` is intentionally NOT
-        //    recomputed here (no base-1 predecessor); verifyRecompute skips it.
+    async verifyBootstrapTerminalBlock(){
         if(this.config['VERIFY_RECOMPUTE'] && typeof this.lastAppliedBlock === 'number' &&
            this.lastAppliedBlock > this._bootstrapBase){
-            if(await this.verifyRangeBoundary(this.lastAppliedBlock)){
-                // Halted: leave lastAppliedBlock as-is so start()'s empty-replica
-                // guard does not fire; the durable halt blocks all further applies.
-                return true;
-            }
+            return await this.verifyRangeBoundary(this.lastAppliedBlock);
         }
+        return false;
+    }
 
-        // Decoder: seed + converge `dispensers` (never carried by the incremental
-        // block window or the id-cursor lookup paging) and verify the replica is
-        // row-complete against the source. Without this a truncated decoder replica
-        // starts with ZERO dispenser rows and no completeness signal ever fires.
-        // Best-effort; the reconcile leaves the local table intact on failure.
-        if(this.dbType === 'decoder'){
-            await this.reconcileDispensers(source);
-            await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
-        }
+    async reconcileBootstrapDecoder(source){
+        await this.reconcileDispensers(source);
+        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
+    }
 
+    logBootstrapFromHeightComplete(){
         getLogger().info('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
             ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
             ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
+    }
+
+    // Seed a truncated replica from a recent height instead of full history.
+    // Both DB types live-follow from the immediate predecessor in the window.
+
+    // The indexer join block has no predecessor, so recompute skips only that block.
+    // Later blocks fold their committed predecessors and retain chained verification.
+    async bootstrapFromHeight(depth){
+        const source = this.sources[0];
+        if(!source) throw new Error('Bootstrap-from-height: no sync source');
+
+        const { tip, base } = await this.discoverBootstrapRange(source, depth);
+        await this.fetchAndApplySchema(source);
+        await this.syncLookupTablesPaged(source);
+
+        const snapshotData = await this.fetchBootstrapWindow(source, base);
+        if(!await this.applyBootstrapWindow(snapshotData, base, tip)) return false;
+
+        // Re-page lookups so rows added during the window request exist locally.
+        await this.syncLookupTablesPaged(source);
+        await this.refreshTipHashes();
+
+        if(await this.verifyBootstrapTerminalBlock()) return true;
+        if(this.dbType === 'decoder'){
+            await this.reconcileBootstrapDecoder(source);
+        }
+
+        this.logBootstrapFromHeightComplete();
         return true;
     }
 
@@ -2260,6 +2301,43 @@ class ClientSync {
         return Number.isFinite(keep) && keep > 0;
     }
 
+    shouldCompareTableCount(table, excludeTables){
+        if(excludeTables && excludeTables.has(table)) return false;
+        if(OPERATIONAL_LOG_TABLES.has(table)) return false;
+        if(table === 'sync_meta' && this.syncMetaWindowArmed()) return false;
+        return true;
+    }
+
+    validatedRemoteTableCount(table, value){
+        let idCheck = validation.validateIdentifier(table);
+        if(!idCheck.valid){
+            getLogger().error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
+            return undefined;
+        }
+        let remote = Number(value);
+        return Number.isFinite(remote) ? remote : undefined;
+    }
+
+    async localTableCountForVerification(table){
+        let local;
+        try {
+            local = Number(await this.db.getTableCount(table));
+        } catch(e){
+            try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
+            local = 0;
+        }
+        return Number.isFinite(local) ? local : 0;
+    }
+
+    appendTableCountMismatch(mismatches, table, remote, local, exactParity){
+        if(remote > local){
+            mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
+        } else if(local > remote && exactParity && exactParity.has(table)){
+            mismatches.push({ table: table, sourceCount: remote, localCount: local,
+                delta: remote - local, reason: 'replica-ahead' });
+        }
+    }
+
     async verifyTableCounts(remoteCounts, excludeTables, opts){
         let mismatches = [];
         if(!remoteCounts || typeof remoteCounts !== 'object') return mismatches;
@@ -2268,71 +2346,11 @@ class ClientSync {
         let sameHeight   = Number.isFinite(remoteHeight) && Number.isFinite(localHeight) && remoteHeight === localHeight;
         let exactParity  = (sameHeight && this.dbType === 'indexer') ? this.exactParityTables() : null;
         for(let table of Object.keys(remoteCounts)){
-            // Callers can exclude a table whose drift is expected between convergence
-            // passes (e.g. `dispensers` between replace-table reconciles) so a known,
-            // separately-tracked divergence does not spam TABLE_COUNT_MISMATCH.
-            if(excludeTables && excludeTables.has(table)) continue;
-            // Operational logs are excluded from every count check, at the comparison
-            // itself rather than per call site, because their counts CANNOT converge
-            // and a permanent delta here is what buries the real signal.
-            //
-            // `events` is an append-only operational log keyed by an AUTO_INCREMENT id
-            // that BOTH sides generate independently, and the client applies it with
-            // INSERT IGNORE (ClientApplier.ignoreTables) because a full re-dump would
-            // otherwise collide on the PK. So any source row whose id the replica has
-            // already used for one of its OWN events is silently dropped, and the two
-            // counts diverge permanently by construction. Measured across four healthy
-            // production replicas: short by 1, 1, 3 and 415 rows respectively, none of
-            // which any amount of syncing could close.
-            //
-            // The `index_*` lookups deliberately STAY strict. They are fully paged in
-            // and their counts are expected to match exactly, which is the whole point:
-            // that check is what caught the BTC mainnet state-hash hole (1969 missing
-            // index_transactions rows, blocks 961908-963876). Excluding them to quiet
-            // this signal would delete the only detector for that class of defect.
-            if(OPERATIONAL_LOG_TABLES.has(table)) continue;
-            // Exclude sync_meta too, and ONLY while this client's own retention window
-            // is armed. SyncService.startSyncMetaRetention then deletes rows below the
-            // window locally while the source keeps them, so the shortfall is the window
-            // working rather than a replication hole, and reporting it every pass would
-            // bury the real signal exactly as an unfiltered events delta does. With
-            // the window at its default 0 nothing is pruned and sync_meta stays
-            // strictly compared, so this exclusion cannot quietly widen.
-            if(table === 'sync_meta' && this.syncMetaWindowArmed()) continue;
-            // table names here come straight from the remote source's /status
-            // payload: validate before they reach getTableCount's identifier
-            // interpolation, mirroring the schema-application loop above. Skip
-            // (don't fault) an invalid key so one bad name can't manufacture a
-            // false count mismatch and trip a needless recompute/halt.
-            let idCheck = validation.validateIdentifier(table);
-            if(!idCheck.valid){
-                getLogger().error('Rejected table name in remote table_counts: ' + table + ' (' + idCheck.reason + ')');
-                continue;
-            }
-            let remote = Number(remoteCounts[table]);
-            if(!Number.isFinite(remote)) continue;
-            let local;
-            try {
-                local = Number(await this.db.getTableCount(table));
-            } catch(e){
-                // This key came from the SOURCE's /status payload, so the source HAS the
-                // table: a local errno 1146 means the source's schema moved ahead of this
-                // replica after bootstrap. The apply-path heal (applyBlockEvent) never
-                // fires for a table the source has not yet written a row to, because
-                // nothing ever streams for it, so a zero-row server-side addition would
-                // error here on EVERY completeness check forever and never get created
-                // (observed live: polls / poll_results / vote_delegations on the BTC
-                // replicas). Route it through the same debounced schema heal, which CREATEs
-                // missing tables; the count then reads correctly on the next pass. Advisory
-                // path, so a heal failure must never fault the completeness check itself.
-                try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
-                local = 0;
-            }
-            if(!Number.isFinite(local)) local = 0;
-            if(remote > local)
-                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local });
-            else if(local > remote && exactParity && exactParity.has(table))
-                mismatches.push({ table: table, sourceCount: remote, localCount: local, delta: remote - local, reason: 'replica-ahead' });
+            if(!this.shouldCompareTableCount(table, excludeTables)) continue;
+            let remote = this.validatedRemoteTableCount(table, remoteCounts[table]);
+            if(remote === undefined) continue;
+            let local = await this.localTableCountForVerification(table);
+            this.appendTableCountMismatch(mismatches, table, remote, local, exactParity);
         }
         return mismatches;
     }
@@ -2723,6 +2741,14 @@ class ClientSync {
     }
 
     connectWebSocket(source, sourceIndex){
+        let ws = this.createWebSocket(source, sourceIndex);
+        if(!ws) return;
+
+        this.registerWebSocketHandlers(ws, source, sourceIndex);
+        this.wsConns[sourceIndex] = ws;
+    }
+
+    createWebSocket(source, sourceIndex){
         // Per-chain sync mode preference: 'full' (default) or 'infra-only', resolved
         // once in the constructor (SYNC_MODE_<CHAIN>), which also refuses the
         // infra-only + halting-verification combination before any connect.
@@ -2746,53 +2772,53 @@ class ClientSync {
             return;
         }
 
-        ws.on('open', () => {
-            getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
-        });
+        return ws;
+    }
 
-        ws.on('message', (data) => {
-            // Serialize event processing in arrival order. ws does not await an async
-            // listener, so without this a burst of block events runs handleEvent
-            // concurrently and races on lastAppliedBlock (the gap/continuity check runs
-            // before withApplyLock), firing spurious gaps that thrash the client into
-            // bulk catch-up (which skips the apply-time state_hash recompute). Chaining
-            // synchronously per message keeps gap-detection and apply atomic and ordered.
-            let event;
-            try {
-                event = JSON.parse(data.toString());
-                let check = validation.validateWsEvent(event);
-                if(!check.valid){
-                    getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
-                    return;
-                }
-            } catch(e){
-                getLogger().error(util.format('Error parsing WebSocket message:', e));
+    registerWebSocketHandlers(ws, source, sourceIndex){
+        ws.on('open', () => this.handleWebSocketOpen(source));
+        ws.on('message', data => this.handleWebSocketMessage(data, source, sourceIndex));
+        ws.on('close', () => this.handleWebSocketClose(source, sourceIndex));
+        ws.on('error', err => this.handleWebSocketError(err, source));
+    }
+
+    handleWebSocketOpen(source){
+        getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+    }
+
+    handleWebSocketMessage(data, source, sourceIndex){
+        // Synchronous chaining keeps gap detection and apply work atomic and ordered
+        // because ws does not await async listeners.
+        let event;
+        try {
+            event = JSON.parse(data.toString());
+            let check = validation.validateWsEvent(event);
+            if(!check.valid){
+                getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
                 return;
             }
-            // Stamp liveness on receipt (before the serialized apply chain) so the
-            // freshness signal reflects when the server last spoke, not when we
-            // finished applying. Any valid event type counts, including the periodic
-            // status heartbeat that arrives even when no new block is produced.
-            this._lastWsEventAt = Date.now();
-            this._wsEventChain = (this._wsEventChain || Promise.resolve())
-                .then(() => this.handleEvent(event, sourceIndex))
-                .catch(e => this.handleWsChainError(e));
-        });
+        } catch(e){
+            getLogger().error(util.format('Error parsing WebSocket message:', e));
+            return;
+        }
+        // Stamp liveness on receipt so freshness reflects when the server last speaks,
+        // not when apply work finishes. Every valid event type counts.
+        this._lastWsEventAt = Date.now();
+        this._wsEventChain = (this._wsEventChain || Promise.resolve())
+            .then(() => this.handleEvent(event, sourceIndex))
+            .catch(e => this.handleWsChainError(e));
+    }
 
-        ws.on('close', () => {
-            getLogger().info('WebSocket disconnected from ' + source);
-            // A source we are no longer connected to is not evidence about anything.
-            // Keeping its last verdict would let a disconnected server go on certifying
-            // its own freshness, which is the shape of the bug this map exists to fix.
-            this._upstreamStatus.delete(sourceIndex);
-            this.scheduleReconnect(source, sourceIndex);
-        });
+    handleWebSocketClose(source, sourceIndex){
+        getLogger().info('WebSocket disconnected from ' + source);
+        // A disconnected source provides no evidence about upstream freshness, so its
+        // last verdict cannot continue certifying that source.
+        this._upstreamStatus.delete(sourceIndex);
+        this.scheduleReconnect(source, sourceIndex);
+    }
 
-        ws.on('error', (err) => {
-            getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
-        });
-
-        this.wsConns[sourceIndex] = ws;
+    handleWebSocketError(err, source){
+        getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
     }
 
     // Terminal-error gate for the serialized WS event chain. Ordinary handler
@@ -3277,79 +3303,11 @@ class ClientSync {
     // marker, one startup check and one operator clear.
     async haltOnDivergence(blockIndex, mismatches, sources, reason){
         if(this._halted) return; // already halted
-        this._halted = {
-            blockIndex, reason: reason || 'cross-source-divergence',
-            mismatches: mismatches || [], sources: sources || [],
-            at: new Date().toISOString()
-        };
+        this._halted = buildDivergenceHalt(blockIndex, mismatches, sources, reason);
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
         catch(e){ getLogger().error(util.format('CRITICAL: failed to persist divergence halt (still halting in-memory):', e)); }
-        getLogger().error('================================================================');
-        getLogger().error('CONSENSUS DIVERGENCE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
-        if(this._halted.reason === 'local-recompute-divergence'){
-            getLogger().error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
-            getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
-            getLogger().error('investigate replica state and clear before this validator can resume.');
-        } else if(this._halted.reason === 'recompute-error'){
-            getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
-            getLogger().error('retries. This recompute is the only verification of the applied range');
-            getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
-            getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
-            getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
-            getLogger().error('clear before this validator can resume.');
-        } else if(this._halted.reason === 'boundary-read-error'){
-            getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
-            getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
-            getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
-            getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
-            getLogger().error('fix the local database fault and clear before this validator can resume.');
-        } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
-            getLogger().error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
-            getLogger().error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
-            getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
-            getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
-            getLogger().error('this validator can resume.');
-        } else if(this._halted.reason === 'checkpoint-quorum-divergence'){
-            getLogger().error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
-            getLogger().error('match this replica (quorum failed under the pinned validator set, or its');
-            getLogger().error('committed state_root disagrees with the replica\'s own recompute). The');
-            getLogger().error('source served state the federation did not sign. HALTING (applying no');
-            getLogger().error('further blocks). Operator must investigate and clear before resuming.');
-        } else if(this._halted.reason === 'no-source-quorum'){
-            getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
-            getLogger().error('SOURCE_QUORUM (' + this.effectiveQuorum() + ' of ' + this.activeSourceCount() +
-                ' active). The replica cannot determine which chain is canonical, so it must not');
-            getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
-            getLogger().error('the contending sources and clear before this validator can resume.');
-        } else if(this._halted.reason === 'checkpoint-freshness-stale'){
-            getLogger().error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
-            getLogger().error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
-            getLogger().error('is on. The tail past the last anchor is unverifiable against the federation, so');
-            getLogger().error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
-            getLogger().error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
-        } else if(this._halted.reason === 'train-activation'){
-            let m = (mismatches && mismatches[0]) || {};
-            getLogger().error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
-            getLogger().error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
-                ', which this build does');
-            getLogger().error('not implement. Applying this block under the old rules would fork. HALTING');
-            getLogger().error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
-            getLogger().error('platform version that carries the rule set, then clear. Clearing without the');
-            getLogger().error('update is not a supported path.');
-            if(m.reason) getLogger().error(m.reason);
-        } else {
-            getLogger().error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
-            getLogger().error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
-            getLogger().error('investigate and clear before this validator can resume.');
-        }
-        getLogger().error('mismatches: ' + JSON.stringify(mismatches));
-        getLogger().error('sources: ' + JSON.stringify(sources));
-        getLogger().error('================================================================');
-        // Stop the live apply path; pending cross-source hashes are now moot.
-        this.pendingHashes.clear();
-        this._strictConfirmPending.clear();
-        for(let [, timer] of this._applyTimers) clearTimeout(timer);
-        this._applyTimers.clear();
+        logDivergenceHalt(this, blockIndex, mismatches, sources);
+        stopDivergenceApply(this);
     }
 
     // Recompute a block's consensus hashes from the replica's raw rows and compare
@@ -4083,88 +4041,68 @@ class ClientSync {
         return null;
     }
 
-    async handleReorg(event){
-        getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
-
-        // Ignore a reorg while the replica has NO committed tip. A reorg presupposes
-        // blocks to invalidate; a null tip means getLastBlock was null at start and the
-        // DB holds no data, so there is nothing to roll back - and setting
-        // lastAppliedBlock = block_index - 1 from purely server-supplied data would
-        // inflate the in-memory tip past an empty DB, wedging the replica exactly like
-        // the above-tip case below (handleBlock then drops every canonical block
-        // <= the inflated tip, halted:false). This is defense in depth: the live path
-        // cannot reach here with a null tip (start() throws "Refusing to enter
-        // live-follow" before connectWebSockets if the replica is still empty after
-        // bootstrap, and lastAppliedBlock is never reset to null once set), but guarding
-        // here hardens against a future change that opens the WS earlier.
+    ignoreReorgWithoutTip(event){
         if(this.lastAppliedBlock === null){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': no committed tip yet (replica empty); a reorg has nothing to roll back');
-            return;
+            return true;
         }
+        return false;
+    }
 
-        // Ignore a reorg that targets a block ABOVE our current tip. A reorg can only
-        // invalidate a block we already hold; a target > lastAppliedBlock is either a
-        // bogus/hostile event or one for data we have not reached. The depth guard below
-        // computes depth = lastAppliedBlock - block_index + 1, which is <= 0 for an
-        // above-tip target and so never trips MAX_ROLLBACK_DEPTH; rollback() would then
-        // be a no-op and the cursor advance at the end of this method would push
-        // lastAppliedBlock PAST the data actually in the DB. Every canonical block the
-        // source then streams is <= the inflated tip and silently dropped by
-        // handleBlock, wedging the replica (halted:false) until an operator restarts it.
-        // A reorg to an unapplied block is a no-op, never a cursor advance. (Guarded only
-        // when we have a tip; a null tip is a distinct early-sync state the rollback path
-        // handles on its own.)
+    ignoreReorgAboveTip(event){
         if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': target block ' + event.block_index + ' is above the replica tip (' +
                 this.lastAppliedBlock + '); a reorg to an unapplied block is a no-op');
+            return true;
+        }
+        return false;
+    }
+
+    rollbackDepth(event){
+        return this.lastAppliedBlock - event.block_index + 1;
+    }
+
+    async haltForExcessiveRollback(event, depth){
+        await this.haltOnDivergence(event.block_index,
+            [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
+            this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
+    }
+
+    async applyReorgRollback(event){
+        await this.withApplyLock(() => this.rollback.rollback(event.block_index));
+        this.lastAppliedBlock = event.block_index - 1;
+        if(this.lastAppliedBlock > 0)
+            this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+        else
+            this.lastHashes = null;
+    }
+
+    async haltForReorgRollbackFailure(event, error){
+        getLogger().error(util.format('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
+            this.chain, this.network, this.dbType, event.block_index, error));
+        await this.haltOnDivergence(event.block_index,
+            [{ field: 'reorg_rollback_failed', error: String(error && error.message ? error.message : error) }],
+            this.sources.slice(0, 1), 'reorg-rollback-failed');
+    }
+
+    async handleReorg(event){
+        getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
+
+        if(this.ignoreReorgWithoutTip(event)) return;
+        if(this.ignoreReorgAboveTip(event)) return;
+
+        let depth = this.rollbackDepth(event);
+        if(depth > this.maxRollbackDepth){
+            await this.haltForExcessiveRollback(event, depth);
             return;
         }
 
-        if(this.lastAppliedBlock !== null){
-            let depth = this.lastAppliedBlock - event.block_index + 1;
-            if(depth > this.maxRollbackDepth){
-                // A reorg too deep to roll back safely must FAIL CLOSED, not fail open.
-                // Returning bare here would leave lastAppliedBlock pointing at the now-
-                // orphaned tip: every canonical block the source re-streams from
-                // event.block_index upward is <= lastAppliedBlock, so handleBlock's
-                // `blockIndex <= lastAppliedBlock` guard silently drops it and the replica
-                // serves the orphaned fork indefinitely. The indexer track might eventually
-                // self-halt once canonical hashes overtake the old tip and VERIFY_RECOMPUTE
-                // catches the chained-hash break, but the decoder track has no recompute net
-                // and would stay permanently diverged with halted:false on /status. So record
-                // a durable halt via the same contract used for consensus divergence and let
-                // the operator investigate/clear, rather than advancing onto the fork.
-                await this.haltOnDivergence(event.block_index,
-                    [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
-                    this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
-                return; // halted: no rollback, lastAppliedBlock left as-is, no further applies
-            }
-        }
-
         try {
-            await this.withApplyLock(() => this.rollback.rollback(event.block_index));
-            this.lastAppliedBlock = event.block_index - 1;
-            if(this.lastAppliedBlock > 0)
-                this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
-            else
-                this.lastHashes = null;
+            await this.applyReorgRollback(event);
         } catch(e){
-            // FAIL CLOSED, consistent with the MAX_ROLLBACK_DEPTH branch above. A failed
-            // rollback (lock timeout, deadlock, connection drop mid-rewind) otherwise leaves
-            // lastAppliedBlock at the now-orphaned tip: handleBlock's `blockIndex <=
-            // lastAppliedBlock` guard then silently drops every canonical block the source
-            // re-streams from event.block_index upward, so the replica serves the orphaned
-            // fork with halted:false on /status (the decoder track has no recompute net to
-            // self-halt). Record a durable halt via the same contract used for consensus
-            // divergence and let the operator investigate/clear, rather than wedging silently.
-            getLogger().error(util.format('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
-                this.chain, this.network, this.dbType, event.block_index, e));
-            await this.haltOnDivergence(event.block_index,
-                [{ field: 'reorg_rollback_failed', error: String(e && e.message ? e.message : e) }],
-                this.sources.slice(0, 1), 'reorg-rollback-failed');
-            return; // halted: do not leave lastAppliedBlock advanced onto the orphaned fork
+            await this.haltForReorgRollbackFailure(event, e);
         }
     }
 }
