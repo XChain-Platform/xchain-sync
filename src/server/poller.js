@@ -247,223 +247,140 @@ class ServerPoller {
     }
 
     async poll(){
-        // Fail CLOSED on the cursor read (M-17). db.doQuery collapses a
-        // non-transactional query error into [], so the fail-soft default answers a
-        // source-DB outage with null - the same answer a genuinely empty source
-        // gives - and the early return below then makes an unreachable database
-        // indistinguishable from an idle chain: pollErrorCount stays 0, the loop in
-        // start() never logs, and updateStatus keeps publishing a fresh status with
-        // poll_error_count 0 while the poller is blind. Rethrow instead, so the outage
-        // surfaces as a counted poll failure. An empty source still returns null.
+        // A failed cursor read throws so an outage cannot look like an idle chain.
         let currentBlock = await this.db.getLastBlock(null, { rethrow: true });
         if(currentBlock === null) return;
 
         if(this.lastPolledBlock === null){
-            this.lastPolledBlock = currentBlock;
-            this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
-            await this.updateStatus();
+            await this.initializePollCursor(currentBlock);
             return;
         }
 
-        // Net-forward reorg guard: a rollback then readvance within one poll interval
-        // leaves currentBlock >= lastPolledBlock, so the height-only check below never
-        // fires, yet the block we already broadcast was orphaned and re-mined. Detect
-        // it by re-reading the source hash at lastPolledBlock; a change means the chain
-        // forked at or below it. Roll back one block and re-read the prior hash so
-        // a deeper reorg is walked back over subsequent polls.
-        if(this.lastPolledBlockHash !== null){
-            let srcHash = await this.sourceBlockHash(this.lastPolledBlock);
-            if(srcHash !== null && srcHash !== this.lastPolledBlockHash){
-                // Net-forward reorg: the chain forked at or below lastPolledBlock. Resolve
-                // the TRUE fork point WITHIN THIS POLL by walking down over the recorded
-                // pre-reorg hashes, instead of one height per poll. The earlier per-poll
-                // walk-back left a window on a reorg deeper than one block: while it
-                // descended one height per ~poll, the chain could grow and the forward
-                // re-stream below overwrote recentBroadcastHashes for a still-orphaned
-                // lower block with its POST-reorg hash, so a later compare matched
-                // (post vs post), the walk-back stopped short, and a too-shallow reorg
-                // was broadcast. The follower then rolled back only to that shallow point,
-                // kept stale lower blocks, and its chained recompute diverged. Resolving
-                // the full depth in one poll closes that window: one deep reorg is
-                // broadcast and the forward loop below re-streams every orphaned block
-                // fresh. Bounded by the recorded-hash window (recentHashCap); a fork
-                // below it stops at the deepest recorded height (cold-start fallback,
-                // same as before), where the follower's recompute/remediation is the net.
-                let forkBlock = await this.resolveForkPoint(this.lastPolledBlock);
-                logger.info('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
-                if(this.transparencyLog)
-                    await this.transparencyLog.pruneFrom(forkBlock);
-                // Reorg event message shape:
-                //   { type: 'reorg', chain, network, dbType, block_index }
-                //   block_index: the first orphaned block height (clients must roll back
-                //     all blocks >= block_index and re-apply from the source).
-                //   dbType: the database type this poller manages ('indexer' or 'decoder'),
-                //     included so a subscriber receiving events for multiple db types can
-                //     route the rollback to the correct replica without inspecting the
-                //     subscription URL.
-                this.broadcaster.broadcast(this.chain, this.network, {
-                    type: 'reorg',
-                    chain: this.chain,
-                    network: this.network,
-                    dbType: this.dbType,
-                    block_index: forkBlock
-                });
-                // Re-stream from the fork point: the forward loop below re-broadcasts every
-                // orphaned block (forkBlock..currentBlock) with its fresh post-reorg hash.
-                this.lastPolledBlock = forkBlock - 1;
-                // Seed from the recorded pre-reorg hash at the new height (a fresh source
-                // read returns the post-reorg hash and would mask a still-deeper reorg). On
-                // a miss (cold start / below the cap) fall back to null, disabling the guard
-                // for that step rather than falsely confirming.
-                this.lastPolledBlockHash = (this.lastPolledBlock >= 0 && this.recentBroadcastHashes.has(this.lastPolledBlock))
-                    ? this.recentBroadcastHashes.get(this.lastPolledBlock) : null;
-                await this.updateStatus();
-                return;
-            }
-        }
+        if(this.lastPolledBlockHash !== null && await this.handleNetForwardReorg()) return;
 
         if(currentBlock < this.lastPolledBlock){
-            // Resolve the TRUE fork point before broadcasting (same walk-back as the
-            // net-forward path). A poll can observe the source MID-REWRITE: tip
-            // dropped, but replacement blocks already committed at or below
-            // currentBlock. Broadcasting reorg@currentBlock+1 in that state is too
-            // shallow: the follower rolls back only above currentBlock, keeps stale
-            // pre-reorg blocks at/below it, and a catch-up racing the next poll (which
-            // would detect the deeper rewrite via the seeded pre-reorg hash) stitches
-            // post-reorg blocks onto the stale range: the join recompute then halts on
-            // a divergence no delivery interruption caused. Walking the
-            // recorded pre-reorg hashes down from currentBlock resolves the full depth
-            // in THIS poll, so the one reorg event carries the true fork point.
-            let forkBlock = await this.resolveForkPoint(currentBlock + 1);
-            logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
-
-            // Prune the source's own transparency log first (indexer only; decoder
-            // has no transparencyLog). The indexer rolls back its data tables on a
-            // reorg but not these sync-service-owned tables, and recordBlock's
-            // INSERT IGNORE would otherwise keep the orphaned blocks' stale hashes
-            // and drop the re-added blocks' new ones, serving wrong Merkle proofs.
-            // Throwing here leaves lastPolledBlock un-rewound so the next poll
-            // re-detects the reorg and retries (prune + broadcast stay together).
-            if(this.transparencyLog)
-                await this.transparencyLog.pruneFrom(forkBlock);
-
-            // Reorg event shape: see the net-forward reorg broadcast above for the
-            // full field documentation. block_index is the first orphaned block.
-            this.broadcaster.broadcast(this.chain, this.network, {
-                type: 'reorg',
-                chain: this.chain,
-                network: this.network,
-                dbType: this.dbType,
-                block_index: forkBlock
-            });
-            this.lastPolledBlock = forkBlock - 1;
-            // Seed from the RECORDED pre-reorg hash (mirror of the net-forward path
-            // above): a fresh source read here returns the post-reorg hash, so the
-            // next poll's content-change guard would compare post vs post and never
-            // fire on a rewrite still deeper than the recorded-hash window resolved.
-            // On a miss (cold start / below the cap) fall back to the source read,
-            // disabling the guard for that step as before.
-            this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
-                ? this.recentBroadcastHashes.get(this.lastPolledBlock)
-                : await this.sourceBlockHash(this.lastPolledBlock);
-            await this.updateStatus();
+            await this.handleHeightDropReorg(currentBlock);
             return;
         }
 
-        // Process new blocks (limit to 100 per poll to avoid large bursts)
         let blocksProcessed = 0;
-        // Catch-up log throttle: on a fast/lagging chain the server can be thousands
-        // of blocks behind and the per-block console line floods the journal. Log only
-        // when catching up a batch (last block of the batch) or for individual blocks
-        // during normal steady-state follow. This avoids burying real errors in noise
-        // while still surfacing progress at batch boundaries.
         let catchUpStart = this.lastPolledBlock;
         let streamTo = currentBlock;
-        if(this.lastPolledBlock < currentBlock){
-            // Pin the whole forward batch to ONE consistent REPEATABLE READ view.
-            // Every payload read (hash header, table rows, and above all the
-            // updated_rows in-place-mutation channel) observes the same instant.
-            // In steady state the snapshot tip IS the block being streamed, so
-            // updated_rows carry exact state-at-B; without the pin they read the
-            // source's live tip, and a row re-mutated right after B streamed its
-            // future state under B's payload, halting a strict follower's
-            // apply-time recompute (deepdive H-P2). During a catch-up burst the
-            // pin still bounds every read to one view (the batch tip), so blocks
-            // B < snapTip carry tip-state updated_rows; those blocks ship
-            // state_hash NULL (burst exemption in buildBlockPayload) because the
-            // follower's apply-time recompute at B would otherwise halt on the
-            // future value, while the batch as a whole converges to exact tip
-            // state by its last block.
-            let snapConn = await this.db.beginReadSnapshot();
-            try {
-                // The snapshot's own tip is the batch authority: it may sit ahead of
-                // the pre-snapshot read (a block landed in between; safe to stream,
-                // and it makes the batch end exact) or behind it (a reorg raced us;
-                // never build a block the snapshot cannot see, the next poll
-                // re-detects it).
-                let snapTip = await this.db.getLastBlock(snapConn);
-                if(snapTip != null) streamTo = snapTip;
-                while(this.lastPolledBlock < streamTo && blocksProcessed < 100){
-                    let nextBlock = this.lastPolledBlock + 1;
-                    let payload = await this.buildBlockPayload(nextBlock, snapConn, snapTip);
-                    if(payload){
-                        // Record in transparency log (indexer only; decoder has no synthetic hashes)
-                        if(this.transparencyLog){
-                            await this.transparencyLog.recordBlock(
-                                payload.block_index, payload.block_time,
-                                payload.ledger_hash, payload.actions_hash, payload.contract_hash
-                            );
-                        }
+        if(this.lastPolledBlock < currentBlock)
+            ({ blocksProcessed, catchUpStart, streamTo } = await this.streamNewBlocks(currentBlock));
+        this.logSyncedBlocks(blocksProcessed, catchUpStart, streamTo);
 
-                        // Broadcast to subscribers (infraTables enables filtering for infra-only subscribers)
-                        this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
-
-                        // Track the hash we just broadcast so the next poll can detect
-                        // a net-forward reorg that rewrites this block.
-                        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
-                        // Record it for the net-forward walk-back so a deeper reorg can
-                        // be detected against this pre-reorg hash on a later poll.
-                        this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
-                        if(nextBlock > this.recentHashCap)
-                            this.recentBroadcastHashes.delete(nextBlock - this.recentHashCap - 1);
-                    } else {
-                        // No payload (block vanished mid-poll): disable the hash check for this
-                        // step rather than compare against a stale hash next poll.
-                        this.lastPolledBlockHash = null;
-                    }
-                    this.lastPolledBlock = nextBlock;
-                    blocksProcessed++;
-                }
-            } finally {
-                await this.db.commitReadSnapshot(snapConn);
-            }
-        }
-
-        // Log a single summary line for catch-up batches; log each block individually
-        // only when following the tip one block at a time (steady-state, low noise).
-        if(blocksProcessed > 0){
-            let isBatch = (streamTo - catchUpStart) > 1 || blocksProcessed >= 100;
-            if(isBatch){
-                logger.info('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
-                    ' (' + blocksProcessed + ' block(s)) for ' + this.chain + '/' + this.network + '/' + this.dbType);
-            } else {
-                logger.info('Synced block ' + this.lastPolledBlock + ' for ' +
-                    this.chain + '/' + this.network + '/' + this.dbType);
-            }
-        }
-
-        // Refresh status on EVERY poll, not only when blocks advanced. The replication
-        // verdict updateStatus carries is the one field whose failure mode also stops
-        // block advancement: a native SQL replica that stops applying freezes the served
-        // tip, so a refresh gated on blocksProcessed > 0 never runs again and REST and the
-        // periodic WebSocket status keep republishing the last healthy replica_stale:false
-        // and a zero lag indefinitely, straight past SYNC_REPLICA_MAX_LAG_S. Idle polls
-        // cost no extra source read (streamTo is the tip this poll already read) and no
-        // extra WebSocket traffic (updateStatus only writes the broadcaster's map; the
-        // status push is api.js's own timer).
+        // Every poll refreshes replica health, including polls where the tip is idle.
         await this.updateStatus(streamTo);
 
         return blocksProcessed;
+    }
+
+    async initializePollCursor(currentBlock){
+        this.lastPolledBlock = currentBlock;
+        this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
+        await this.updateStatus();
+    }
+
+    async handleNetForwardReorg(){
+        let srcHash = await this.sourceBlockHash(this.lastPolledBlock);
+        if(srcHash === null || srcHash === this.lastPolledBlockHash) return false;
+
+        // The recorded hashes locate the fork even when the source tip stays ahead.
+        let forkBlock = await this.resolveForkPoint(this.lastPolledBlock);
+        logger.info('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
+        if(this.transparencyLog)
+            await this.transparencyLog.pruneFrom(forkBlock);
+        this.broadcastReorg(forkBlock);
+        this.lastPolledBlock = forkBlock - 1;
+        // A recorded pre-reorg hash keeps deeper rewrites visible on the next poll.
+        this.lastPolledBlockHash = (this.lastPolledBlock >= 0 && this.recentBroadcastHashes.has(this.lastPolledBlock))
+            ? this.recentBroadcastHashes.get(this.lastPolledBlock) : null;
+        await this.updateStatus();
+        return true;
+    }
+
+    async handleHeightDropReorg(currentBlock){
+        // Walking recorded hashes makes the event identify the true fork point.
+        let forkBlock = await this.resolveForkPoint(currentBlock + 1);
+        logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
+        if(this.transparencyLog)
+            await this.transparencyLog.pruneFrom(forkBlock);
+
+        this.broadcastReorg(forkBlock);
+        this.lastPolledBlock = forkBlock - 1;
+        // The source hash is a fallback when the bounded recorded window has no entry.
+        this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
+            ? this.recentBroadcastHashes.get(this.lastPolledBlock)
+            : await this.sourceBlockHash(this.lastPolledBlock);
+        await this.updateStatus();
+    }
+
+    broadcastReorg(forkBlock){
+        this.broadcaster.broadcast(this.chain, this.network, {
+            type: 'reorg',
+            chain: this.chain,
+            network: this.network,
+            dbType: this.dbType,
+            block_index: forkBlock
+        });
+    }
+
+    async streamNewBlocks(currentBlock){
+        let result = {
+            blocksProcessed: 0,
+            catchUpStart: this.lastPolledBlock,
+            streamTo: currentBlock
+        };
+
+        // One repeatable-read snapshot pins every payload read in the forward batch.
+        let snapConn = await this.db.beginReadSnapshot();
+        try {
+            // The snapshot tip bounds the batch when a block or reorg races the first read.
+            let snapTip = await this.db.getLastBlock(snapConn);
+            if(snapTip != null) result.streamTo = snapTip;
+            while(this.lastPolledBlock < result.streamTo && result.blocksProcessed < 100){
+                let nextBlock = this.lastPolledBlock + 1;
+                let payload = await this.buildBlockPayload(nextBlock, snapConn, snapTip);
+                if(payload){
+                    if(this.transparencyLog){
+                        await this.transparencyLog.recordBlock(
+                            payload.block_index, payload.block_time,
+                            payload.ledger_hash, payload.actions_hash, payload.contract_hash
+                        );
+                    }
+                    this.publishBlockPayload(payload, nextBlock);
+                } else {
+                    this.lastPolledBlockHash = null;
+                }
+                this.lastPolledBlock = nextBlock;
+                result.blocksProcessed++;
+            }
+        } finally {
+            await this.db.commitReadSnapshot(snapConn);
+        }
+        return result;
+    }
+
+    publishBlockPayload(payload, nextBlock){
+        this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
+        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+        this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
+        if(nextBlock > this.recentHashCap)
+            this.recentBroadcastHashes.delete(nextBlock - this.recentHashCap - 1);
+    }
+
+    logSyncedBlocks(blocksProcessed, catchUpStart, streamTo){
+        if(blocksProcessed === 0) return;
+
+        let isBatch = (streamTo - catchUpStart) > 1 || blocksProcessed >= 100;
+        if(isBatch){
+            logger.info('Synced blocks ' + (catchUpStart + 1) + '-' + this.lastPolledBlock +
+                ' (' + blocksProcessed + ' block(s)) for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        } else {
+            logger.info('Synced block ' + this.lastPolledBlock + ' for ' +
+                this.chain + '/' + this.network + '/' + this.dbType);
+        }
     }
 
     // Walk the recorded pre-reorg broadcast hashes down from a candidate fork
