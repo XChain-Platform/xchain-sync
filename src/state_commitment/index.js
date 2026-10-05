@@ -89,6 +89,7 @@ const SUB = require('../consensus/gates/state_subtree_gate.js');
 const CST = require('../contract_state_subtree.js');
 const ESC = require('../escrow_leaf_subtree.js');
 const { minimalDecimal } = require('../db/balance_helpers.js');
+const { getLogger } = require('../observability');
 // The SQL text of the node rows and of the orphan walk's reads, byte twins of
 // the same two files in xchain-indexer so the statements stay lockstep with the
 // blocks below that issue them.
@@ -693,7 +694,7 @@ async function computeFollowerBalancesRoot(db, smt, chain, network, blockIndex, 
     const noPriorRoot = !(prior && prior.balances_root);
     if(isActivationBlock || armingBlock || noPriorRoot){
         if(!isActivationBlock && !armingBlock)
-            console.warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
+            getLogger().warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
                 ' block ' + (blockIndex - 1) + '; full-recomputing balances_root for block ' + blockIndex +
                 ' instead of threading from the empty root (snapshot-bootstrap or activation rolled below this height)');
         const balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
