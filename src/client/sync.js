@@ -3788,122 +3788,24 @@ class ClientSync {
         }
     }
 
-    // SPV: fetch the source's latest signed checkpoint, verify its quorum against the
-    // OUT-OF-BAND pinned validator set, and assert its committed state_root equals the
-    // replica's OWN recomputed state_tree_roots row at that height. This anchors the
-    // replica to the federation quorum: a single lying source cannot forge a quorum of
-    // signatures, so it cannot make a fabricated state_root pass. Skips silently (INERT)
-    // when there is no pinned set, no checkpoint yet, or the replica has not reached the
-    // checkpoint height. NEVER halts on a transport error (404 / network), only on a
-    // real quorum failure or state_root divergence.
+    // SPV: verify the source's latest signed checkpoint quorum against the pinned validator
+    // set and assert its state_root equals the replica's own recomputed root at that height.
+    // Inert without a pinned set or checkpoint; halts only on a real quorum or root failure.
     async verifyCheckpointQuorum(){
         if(this._halted) return;
         let validators = getPinnedValidators(this.chain, this.network);
         if(!validators || !validators.length) return;            // inert: no out-of-band trust root
-        // Fetch the anchor out-of-band when configured (hub/federation), NOT from the very
-        // source we audit, so a single source cannot withhold the checkpoints that would
-        // catch a forged tail. Falls back to sources[0] when no out-of-band URL is set.
+        // The anchor comes from the out-of-band URL when set, so the audited source cannot withhold it.
         let source = this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
         if(!source) return;
-        let cp;
-        try {
-            let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
-            let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-            cp = resp && resp.data;
-        } catch(e){
-            // Transport fault / 404 is not proof of divergence, so it never halts. But it
-            // is no longer SWALLOWED: a source that withholds the anchor must be visible,
-            // otherwise a forged tail past the last served checkpoint goes unanchored.
-            getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
-                this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
-            return;
-        }
+        let cp = await this.fetchCheckpointAnchor(source);
         if(!cp) return;
-        // A ROOTLESS checkpoint. Below the commitment flag-day that is normal and there
-        // is nothing to anchor. At or above it the federation never signs one, so a
-        // rootless row served there is stale, forged, or a source withholding the
-        // anchorable material (uuid:c9dfc3d9). Deciding that on the WIRE's missing
-        // state_root alone also returned before the seq-regression and freshness guards
-        // below, leaving no trace at all. Decide it on the replica's OWN bundled
-        // flag-day map instead, via the same predicate checkpoint.verifyCheckpoint
-        // fail-closes on, and make the active-height case visible. Still a return and
-        // never a halt: absence is not proof of forgery, matching the freshness guard's
-        // documented advisory stance a few lines down.
-        if(checkpointVerifier.commitmentMissing(cp)){
-            getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
-                this.chain + '/' + this.network + ' at block ' + cp.block_index +
-                ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
-                '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
-                'source may be withholding anchorable checkpoints, not anchoring this cycle');
-            return;
-        }
-        if(cp.state_root == null) return;                        // pre-commitment: nothing to anchor
-        if(typeof cp.block_index !== 'number') return;           // malformed: no height to anchor
-        // Reject a checkpoint_seq regression: a genuine federation sequence only advances,
-        // so a lower seq than one already anchored means the source rewound (withholding
-        // newer checkpoints). Do not anchor it; surface the rewind.
-        if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
-                && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
-            getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
-                ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
-                '); source may be withholding newer checkpoints, not anchoring');
-            return;
-        }
-        // Freshness: if the newest quorum checkpoint trails the tip by more than the bound,
-        // the anchor cannot catch a forged tail near the tip. Advisory by default (never a
-        // halt): withholding is not proof of forgery and halting on absence is a DoS vector.
-        // CHECKPOINT_FRESHNESS_STRICT promotes it to enforced: a replica that has
-        // opted in refuses to serve the unanchored tail and HALTs. Only enforced once at
-        // least one checkpoint has been verified (the federation is demonstrably live), so a
-        // replica that has never anchored is not halted at startup.
-        if(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS']){
-            getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
-                ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
-                ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
-            if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
-                await this.haltOnDivergence(cp.block_index,
-                    [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
-                       b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }],
-                    this.sources.slice(0, 1), 'checkpoint-freshness-stale');
-                return;
-            }
-        }
+        if(this.checkpointSkipsAnchoring(cp)) return;
+        if(await this.haltOnStaleCheckpoint(cp)) return;
         if(cp.block_index > this.lastAppliedBlock) return;       // not caught up to this checkpoint yet
-
-        // 1. The checkpoint must meet the federation quorum. Try the PINNED launch set
-        //    first (the launch epoch). If it no longer signs (the federation rotated
-        //    its keys), roll the trust root FORWARD from the pinned SEED checkpoint over
-        //    BTC's stakes_root (spec §7.3) IF a seed is configured; otherwise preserve
-        //    the original behavior (a quorum failure is a divergence).
-        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
-        if(!q.valid){
-            let seed = getPinnedCheckpoint(this.chain, this.network);
-            if(seed){
-                let r = await this.followCheckpointForward(cp, seed, source);
-                if(r.verdict === 'ok'){
-                    this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
-                    getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
-                        this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
-                    return;
-                }
-                if(r.verdict === 'divergence'){
-                    await this.haltOnDivergence(cp.block_index, r.mismatches,
-                        this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
-                    return;
-                }
-                // 'wait': cannot anchor across rotation yet. Log it like the other withholding
-                // paths, so a source stalling the rotation walk is visible, never silent.
-                getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
-                    this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
-                    ': ' + (r.reason || 'inconclusive') + '; anchor not refreshed this cycle');
-                return;
-            }
-            await this.haltOnDivergence(cp.block_index,
-                [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
-                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
-            return;
-        }
-        // 2. Its committed roots must equal the replica's OWN recomputed roots at that height.
+        let q = await this.checkQuorumOrFollowRotation(cp, validators, source);
+        if(!q) return;
+        // Its committed roots must equal the replica's OWN recomputed roots at that height.
         let cmp = await this.checkpointRootsMatchLocal(cp);
         if(cmp.status === 'missing') return;                     // height not recomputed here (truncated bootstrap)
         if(cmp.status === 'mismatch'){
@@ -3915,6 +3817,96 @@ class ClientSync {
         getLogger().info('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
+    }
+
+    // Fetch the latest checkpoint from the source. A transport fault or 404 never halts but is
+    // logged, so a source withholding the anchor stays visible. Resolves undefined on failure.
+    async fetchCheckpointAnchor(source){
+        try {
+            let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
+            let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+            return resp && resp.data;
+        } catch(e){
+            getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
+                this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
+        }
+    }
+
+    // True when the checkpoint cannot be anchored this cycle: rootless, malformed, or a seq
+    // regression. Rootless at or above the flag-day is logged; none of these ever halts.
+    checkpointSkipsAnchoring(cp){
+        if(checkpointVerifier.commitmentMissing(cp)){
+            getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
+                this.chain + '/' + this.network + ' at block ' + cp.block_index +
+                ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
+                '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
+                'source may be withholding anchorable checkpoints, not anchoring this cycle');
+            return true;
+        }
+        if(cp.state_root == null) return true;                   // pre-commitment: nothing to anchor
+        if(typeof cp.block_index !== 'number') return true;      // malformed: no height to anchor
+        // A genuine federation sequence only advances, so a lower seq means the source rewound.
+        if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
+                && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
+            getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
+                ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
+                '); source may be withholding newer checkpoints, not anchoring');
+            return true;
+        }
+        return false;
+    }
+
+    // Freshness is advisory by default. CHECKPOINT_FRESHNESS_STRICT halts on a stale anchor,
+    // but only after one checkpoint has verified. Resolves true when it halted.
+    async haltOnStaleCheckpoint(cp){
+        if(!(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS'])) return false;
+        getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
+            ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
+            ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
+        if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
+            await this.haltOnDivergence(cp.block_index,
+                [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
+                   b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }],
+                this.sources.slice(0, 1), 'checkpoint-freshness-stale');
+            return true;
+        }
+        return false;
+    }
+
+    // The checkpoint must meet the quorum of the pinned launch set. If the federation rotated
+    // its keys, follow the rotation forward from the pinned seed when one is configured.
+    // Resolves the quorum result, or null once the cycle is settled (anchored, halted, waiting).
+    async checkQuorumOrFollowRotation(cp, validators, source){
+        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        if(q.valid) return q;
+        let seed = getPinnedCheckpoint(this.chain, this.network);
+        if(seed){
+            await this.settleRotationFollow(cp, seed, source);
+            return null;
+        }
+        await this.haltOnDivergence(cp.block_index,
+            [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
+            this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+        return null;
+    }
+
+    // Act on the rotation-follow verdict: record the anchor, halt on divergence, or log the wait.
+    async settleRotationFollow(cp, seed, source){
+        let r = await this.followCheckpointForward(cp, seed, source);
+        if(r.verdict === 'ok'){
+            this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
+            getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
+                this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
+            return;
+        }
+        if(r.verdict === 'divergence'){
+            await this.haltOnDivergence(cp.block_index, r.mismatches,
+                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+            return;
+        }
+        getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
+            this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
+            ': ' + (r.reason || 'inconclusive') + '; anchor not refreshed this cycle');
     }
 
     // Advance the high-water mark of verified checkpoint sequences. Monotonic: a later
