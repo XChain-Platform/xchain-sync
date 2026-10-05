@@ -605,7 +605,26 @@ class ServerPoller {
 
         let payload = this.createBlockPayload(hashRow);
         this.addPayloadHashFields(payload, hashRow, block_index, viewTip);
-        return this.addPayloadStateRoots(payload, hashRow, block_index, conn, viewTip);
+        let indexer = this.dbType !== 'decoder';
+        if(indexer) await this.addPayloadStateRoots(payload, block_index, conn, viewTip);
+        this.addSyncMetaPayloadRow(payload, hashRow);
+        await this.addBlockScopedPayloadRows(payload, block_index, conn);
+        await this.addTransactionPayloadRows(payload, block_index, conn);
+        if(indexer){
+            await this.addActionPayloadRows(payload, block_index, conn);
+            await this.addCooldownPayloadRows(payload, block_index, conn);
+            await this.addRedrivenRewardPayloadRows(payload, block_index, conn);
+            await this.addDerivedRewardPayloadRows(payload, block_index, conn);
+        } else {
+            await this.addDecoderPayloadRows(payload, block_index, conn);
+        }
+        await this.addReferencedIndexRows(payload, block_index, conn);
+        if(indexer){
+            await this.addGenericIndexRows(payload, block_index, conn);
+            await this.addBlockScopedIndexRows(payload, block_index, conn);
+            await this.addUpdatedPayloadRows(payload, block_index, conn);
+        }
+        return payload;
     }
 
     createBlockPayload(hashRow){
@@ -682,21 +701,19 @@ class ServerPoller {
     // block_merkle_root stay live: they derive from B-scoped credit/debit/content
 
     // rows applied in block order and are not exposed to the tip-state drift.
-    async addPayloadStateRoots(payload, hashRow, block_index, conn, viewTip){
-        if(this.dbType !== 'decoder' && isStateCommitmentActive(block_index, this.network, this.coinTicker)){
+    async addPayloadStateRoots(payload, block_index, conn, viewTip){
+        if(isStateCommitmentActive(block_index, this.network, this.coinTicker)){
             let roots = await this.db.getStateRootsRow(this.coinTicker, this.network, block_index, conn);
             payload.balances_root    = roots ? roots.balances_root    : null;
             payload.block_merkle_root = roots ? roots.block_merkle_root : null;
             payload.state_root       = (viewTip != null && Number(viewTip) > block_index)
                 ? null
                 : (roots ? roots.state_root : null);
-        } else if(this.dbType !== 'decoder'){
+        } else {
             payload.balances_root    = null;
             payload.block_merkle_root = null;
             payload.state_root       = null;
         }
-        this.addSyncMetaPayloadRow(payload, hashRow);
-        return this.addBlockScopedPayloadRows(payload, block_index, conn);
     }
 
     // Replicate the per-block transparency-log row (sync_meta) live. The
@@ -737,7 +754,6 @@ class ServerPoller {
                 if(!isSchemaGapError(e)) throw e;
             }
         }
-        return this.addTransactionPayloadRows(payload, block_index, conn);
     }
 
     // Transactions (both indexer and decoder)
@@ -745,9 +761,6 @@ class ServerPoller {
         let txRows = await this.db.getTransactions(block_index, conn);
         if(txRows && txRows.length > 0)
             payload.data['transactions'] = txRows;
-        if(this.dbType === 'decoder')
-            return this.addDecoderPayloadRows(payload, block_index, conn);
-        return this.addActionPayloadRows(payload, block_index, conn);
     }
 
     // Decoder: tx-scoped tables (transaction_outputs)
@@ -763,7 +776,6 @@ class ServerPoller {
                 if(!isSchemaGapError(e)) throw e;
             }
         }
-        return this.addReferencedIndexRows(payload, block_index, conn);
     }
 
     // Discover in ONE round-trip which action-scoped tables carry rows this block,
@@ -781,7 +793,7 @@ class ServerPoller {
     // transient fault here is safe precisely because the fallback re-issues the
     // real fetches: a fault that persists throws from those instead, freezing the
     // cursor rather than broadcasting an incomplete block.
-    async actionScopedProbe(payload, block_index, conn, result){
+    async actionScopedProbe(block_index, conn, result){
         if(typeof this.db.getNonEmptyActionScopedTables === 'function'){
             try {
                 result.probeQueries = 1;
@@ -794,7 +806,6 @@ class ServerPoller {
                 result.scopedTables = null;
             }
         }
-        return this.addActionScopedTableRows(payload, block_index, conn, result);
     }
 
     // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
@@ -837,9 +848,6 @@ class ServerPoller {
                 if(!isSchemaGapError(e)) throw e;
             }
         }
-        this.reportActionScopedQueryMetric(metric.scopedQueries, metric.scopedNonEmpty,
-                                           Date.now() - metric.scopedStartedAt, metric.probeQueries);
-        return this.addCooldownPayloadRows(payload, block_index, conn);
     }
 
     async addActionPayloadRows(payload, block_index, conn){
@@ -856,7 +864,10 @@ class ServerPoller {
             scopedStartedAt: Date.now(),
             scopedTables: null
         };
-        return this.actionScopedProbe(payload, block_index, conn, metric);
+        await this.actionScopedProbe(block_index, conn, metric);
+        await this.addActionScopedTableRows(payload, block_index, conn, metric);
+        this.reportActionScopedQueryMetric(metric.scopedQueries, metric.scopedNonEmpty,
+                                           Date.now() - metric.scopedStartedAt, metric.probeQueries);
     }
 
     // Cooldown-maturity refund credits mint AT this block but carry the
@@ -885,7 +896,6 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addRedrivenRewardPayloadRows(payload, block_index, conn);
     }
 
     // The dedup key is the FULL five-column identity. round_qualifier is the
@@ -922,7 +932,6 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addDerivedRewardPayloadRows(payload, block_index, conn);
     }
 
     // Derived anchor/archive validator rewards: the BTC-side derivation writes the
@@ -949,7 +958,6 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addReferencedIndexRows(payload, block_index, conn);
     }
 
     // Index tables: get entries referenced by this block's data.
@@ -966,17 +974,15 @@ class ServerPoller {
 
     // For other index tables, the generic _id-reference pass below
     // (indexer only) extracts them; see the comment there.
-    addReferencedIndexRows(payload, block_index, conn, tableIndex = 0){
-        if(tableIndex >= this.indexTables.length)
-            return this.addGenericIndexRows(payload, block_index, conn);
-        let table = this.indexTables[tableIndex];
-        if(table === 'index_transactions')
-            return this.addIndexTransactionRows(payload, table, block_index, conn, tableIndex);
-        if(table === 'index_addresses' && payload.data['transactions'])
-            return this.addIndexAddressRows(payload, table, block_index, conn, tableIndex);
-        if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses'])
-            return this.addIndexPubkeyRows(payload, table, block_index, conn, tableIndex);
-        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
+    async addReferencedIndexRows(payload, block_index, conn){
+        for(let table of this.indexTables){
+            if(table === 'index_transactions')
+                await this.addIndexTransactionRows(payload, table, conn);
+            else if(table === 'index_addresses' && payload.data['transactions'])
+                await this.addIndexAddressRows(payload, table, block_index, conn);
+            else if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses'])
+                await this.addIndexPubkeyRows(payload, table, conn);
+        }
     }
 
     // index_transactions: every `*_hash_id` this block's own rows carry, DERIVED
@@ -989,7 +995,7 @@ class ServerPoller {
 
     // re-dumps this table in full. One rule for both dbTypes, so a hash column
     // added later cannot re-open the gap.
-    async addIndexTransactionRows(payload, table, block_index, conn, tableIndex){
+    async addIndexTransactionRows(payload, table, conn){
         try {
             let ids = [];
             let collectHashIds = (row) => {
@@ -1016,7 +1022,6 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
     }
 
     // index_addresses: collect referenced address IDs from transactions
@@ -1026,7 +1031,7 @@ class ServerPoller {
     // this block, but dispensers never streams, so ship those ids here or
     // the replica's MAX(id) cursor passes them and leaves a hole. Its own
     // schema-gap guard, so a source without dispensers keeps the tx ids.
-    async addIndexAddressRows(payload, table, block_index, conn, tableIndex){
+    async addIndexAddressRows(payload, table, block_index, conn){
         try {
             let ids = [];
             for(let tx of payload.data['transactions']){
@@ -1061,11 +1066,10 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
     }
 
     // pubkeys: decoder-only; fetch any pubkeys for addresses referenced this block
-    async addIndexPubkeyRows(payload, table, block_index, conn, tableIndex){
+    async addIndexPubkeyRows(payload, table, conn){
         try {
             let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
             if(ids.length > 0){
@@ -1078,7 +1082,6 @@ class ServerPoller {
             // block is retried rather than broadcast incomplete.
             if(!isSchemaGapError(e)) throw e;
         }
-        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
     }
 
     collectPayloadReferenceIds(payload){
@@ -1126,8 +1129,6 @@ class ServerPoller {
     // contract_executions.caller_id, XCALL/XEXEC counterparties, action-data recipients),
     // which only the generic _id scan reaches.
     async addGenericIndexRows(payload, block_index, conn){
-        if(this.dbType === 'decoder')
-            return this.addBlockScopedIndexRows(payload, block_index, conn);
         let refIds = this.collectPayloadReferenceIds(payload);
         if(refIds.size > 0){
             let idList = [...refIds];
@@ -1156,30 +1157,26 @@ class ServerPoller {
                 }
             }
         }
-        return this.addBlockScopedIndexRows(payload, block_index, conn);
     }
 
     async addBlockScopedIndexRows(payload, block_index, conn){
-        if(this.dbType !== 'decoder'){
-            for(const table of ['index_addresses', 'index_tickers']){
-                try {
-                    const rows = await this.db.getBlockScopedRows(table, block_index, conn);
-                    if(!rows || rows.length === 0) continue;
-                    const existing = payload.data[table] || [];
-                    const ids = new Set(existing.map(row => row.id));
-                    for(const row of rows){
-                        if(!ids.has(row.id)){
-                            ids.add(row.id);
-                            existing.push(row);
-                        }
+        for(const table of ['index_addresses', 'index_tickers']){
+            try {
+                const rows = await this.db.getBlockScopedRows(table, block_index, conn);
+                if(!rows || rows.length === 0) continue;
+                const existing = payload.data[table] || [];
+                const ids = new Set(existing.map(row => row.id));
+                for(const row of rows){
+                    if(!ids.has(row.id)){
+                        ids.add(row.id);
+                        existing.push(row);
                     }
-                    payload.data[table] = existing;
-                } catch(e){
-                    if(!isSchemaGapError(e)) throw e;
                 }
+                payload.data[table] = existing;
+            } catch(e){
+                if(!isSchemaGapError(e)) throw e;
             }
         }
-        return this.addUpdatedPayloadRows(payload, block_index, conn);
     }
 
     // In-place mutations to SURVIVING (below-window) rows: deactivation_block
@@ -1200,23 +1197,20 @@ class ServerPoller {
 
     // loop iterates payload.data only) rather than mis-applying a non-row map.
     async addUpdatedPayloadRows(payload, block_index, conn){
-        if(this.dbType !== 'decoder'){
-            try {
-                // conn matters most HERE: these tables are exactly the ones mutated in
-                // place, so tip-reads (the pre-snapshot behavior) could stream a row's
-                // post-B state under block B's payload (deepdive H-P2).
-                let updated = await collectUpdatedRows(this.db, block_index, block_index, this.activationDelay, conn);
-                if(updated && Object.keys(updated).length > 0)
-                    payload.updated_rows = updated;
-            } catch(e){
-                // Only a genuine schema gap may be skipped; any transient fault must
-                // re-throw so the block is retried rather than broadcast without
-                // updated_rows (a dropped in-place mutation forks every follower).
-                logger.error(util.format('updated_rows collection failed for block ' + block_index + ':', e));
-                if(!isSchemaGapError(e)) throw e;
-            }
+        try {
+            // conn matters most HERE: these tables are exactly the ones mutated in
+            // place, so tip-reads (the pre-snapshot behavior) could stream a row's
+            // post-B state under block B's payload (deepdive H-P2).
+            let updated = await collectUpdatedRows(this.db, block_index, block_index, this.activationDelay, conn);
+            if(updated && Object.keys(updated).length > 0)
+                payload.updated_rows = updated;
+        } catch(e){
+            // Only a genuine schema gap may be skipped; any transient fault must
+            // re-throw so the block is retried rather than broadcast without
+            // updated_rows (a dropped in-place mutation forks every follower).
+            logger.error(util.format('updated_rows collection failed for block ' + block_index + ':', e));
+            if(!isSchemaGapError(e)) throw e;
         }
-        return payload;
     }
 
     // Emit a throttled [METRIC] line recording how many action-scoped round-trips a
