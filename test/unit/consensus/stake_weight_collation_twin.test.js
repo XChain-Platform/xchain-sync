@@ -11,9 +11,10 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
+const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { siblingCheckout, skipOrFail } = require('../../helpers/sibling_checkout.js');
+const { siblingCheckout } = require('../../helpers/sibling_checkout.js');
 
 const ROW_KEY = 'stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION';
 
@@ -28,6 +29,16 @@ function extractRow(source, key) {
     return source.slice(start, end + 4);
 }
 
+/** The indexer canonical file text: the working copy when usable, else the pinned origin/develop blob. */
+function readIndexerCanonical(verdict) {
+    if (verdict.usable) return fs.readFileSync(verdict.path, 'utf8');
+    assert.ok(fs.existsSync(verdict.path), verdict.reason);
+    const indexerRoot = path.resolve(verdict.path, '../../..');
+    return childProcess.execFileSync('git', [
+        '-C', indexerRoot, 'show', 'origin/develop:src/protocol_changes/shared_rows_3.js',
+    ], { encoding: 'utf8' });
+}
+
 describe('stake weight collation activation row twin', function () {
     const oursPath = path.join(__dirname, '../../../src/consensus/gate_registry/shared_rows_3.js');
 
@@ -38,10 +49,8 @@ describe('stake weight collation activation row twin', function () {
 
     it('is byte-identical to the xchain-indexer canonical row', function () {
         const verdict = siblingCheckout(__dirname, '../../../../xchain-indexer/src/protocol_changes/shared_rows_3.js');
-        if (!skipOrFail(this, verdict, 'the stake weight collation row twin guard')) return;
-
         const ours = extractRow(fs.readFileSync(oursPath, 'utf8'), ROW_KEY);
-        const theirs = extractRow(fs.readFileSync(verdict.path, 'utf8'), ROW_KEY);
+        const theirs = extractRow(readIndexerCanonical(verdict), ROW_KEY);
         assert.strictEqual(ours, theirs, ROW_KEY + ' in ' + oursPath + ' differs from ' + verdict.path);
     });
 
