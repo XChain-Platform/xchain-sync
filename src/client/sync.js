@@ -249,7 +249,7 @@ function updateLastKnownServerBlock(client, blockIndex){
 
 // Log a proven gap and return its catch-up start, or null when the status proves none.
 function statusGapStart(client, blockHeight){
-    if(client.lastAppliedBlock === null || blockHeight <= client.lastAppliedBlock + 1)
+    if(client.lastAppliedBlock === null || !(blockHeight > client.lastAppliedBlock + 1))
         return null;
     client.logGap('Block gap detected: local=' + client.lastAppliedBlock + ' remote=' + blockHeight);
     return client.lastAppliedBlock + 1;
