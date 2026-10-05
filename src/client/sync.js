@@ -1810,196 +1810,126 @@ class ClientSync {
         return this._catchUpInFlight;
     }
 
+    async downloadIncrementalCatchUp(source, sinceBlock){
+        getLogger().info('Incremental catch-up from block ' + sinceBlock + '...');
+        // Sync append-only lookups separately for bounded replicas so the block
+        // snapshot stays below the content limit.
+        let skipLookups = this._truncatedDepth >= 1;
+        if(skipLookups){
+            await this.syncLookupTablesPaged(source);
+        }
+        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
+            (skipLookups ? '?skip_lookups=1' : '');
+        let response = await axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 300000,
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+        }
+        let snapshotData;
+        try {
+            snapshotData = JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+        }
+        return { snapshotData, skipLookups };
+    }
+
+    async applyIncrementalCatchUpSnapshot(source, snapshotData, sinceBlock, dbTip, skipLookups){
+        // Refuse a range whose tip crosses the active platform-train boundary.
+        if(await this.checkTrainActivation(
+                (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
+            return true;
+        // Rewind a decoder tip when the downloaded range does not build on it.
+        if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, skipLookups ? source : null)) return true;
+        await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+        this._upsertDupKeyTarget = null;
+        if(typeof snapshotData.block_height === 'number')
+            this.lastAppliedBlock = snapshotData.block_height;
+        // Fill lookup rows created while the source prepared the block snapshot.
+        if(skipLookups){
+            await this.syncLookupTablesPaged(source);
+        }
+        // Keep the cached hashes at the applied height before live events read them.
+        await this.refreshTipHashes();
+        return false;
+    }
+
+    async verifyIncrementalCatchUpRange(snapshotData, sinceBlock){
+        // Audit the local resume point because it folds the committed predecessor.
+        let joinBlock = sinceBlock;
+        // Reject a source that shifts the audited range boundary.
+        if(typeof snapshotData.since_block === 'number' && snapshotData.since_block !== sinceBlock){
+            await this.haltOnDivergence(joinBlock,
+                [{ field: 'since_block', a: sinceBlock, b: snapshotData.since_block }],
+                this.sources.slice(0, 1), 'catchup-since-block-mismatch');
+            return true;
+        }
+        if(await this.verifyRangeBoundary(joinBlock)) return true;
+        // Audit the terminal block when chained hashes cover more than the join.
+        let terminalBlock = snapshotData.block_height;
+        if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
+            if(await this.verifyRangeBoundary(terminalBlock)) return true;
+        }
+        return false;
+    }
+
+    async verifyIncrementalCatchUpDecoder(source){
+        let didReconcile = this.shouldReconcileDispensers(Date.now());
+        if(didReconcile) await this.reconcileDispensers(source);
+        // Check dispensers only after reconciliation to avoid interim drift reports.
+        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
+            didReconcile ? null : new Set(['dispensers']));
+    }
+
+    async handleIncrementalCatchUpFailure(source, sinceBlock, error){
+        let isSizeError = this.isContentLengthOverflow(error);
+        if(isSizeError){
+            // Use the bounded bootstrap for replicas whose full snapshot exceeds the cap.
+            if(this._truncatedDepth >= 1){
+                getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                    '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
+                    this._truncatedDepth + ', truncated replica).');
+                await this.bootstrapFromHeightRetry(this._truncatedDepth);
+                return;
+            }
+            // Use the full bootstrap when a full-history catch-up window exceeds the cap.
+            getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                '; falling back to full bootstrap.');
+            await this.bootstrapFromSnapshot();
+            return;
+        }
+        getLogger().error(util.format('Incremental catch-up failed:', error));
+        if(await this.noteUpsertDuplicateKey(source, error)) return;
+        // Retry once after a schema repair; the repair debounce bounds recursion.
+        if(await this.healSchemaIfStale(error))
+            return this.runIncrementalCatchUp();
+    }
+
     async runIncrementalCatchUp(){
         let source = this.sources[0];
         if(!source) return;
-
-        // Resume from the committed tip + 1 (the server's since/ bound is inclusive),
-        // re-read here so a lagging in-memory cursor can never re-request applied rows.
-        // Declared outside the try because the catch reports on sinceBlock.
         let dbTip = null;
         let sinceBlock = 0;
         try {
-            // rethrow, not the fail-soft default: this read runs outside a transaction, where
-            // doQuery logs a query error and returns [], so a transient fault would read as
-            // dbTip === null - the same answer a genuinely empty replica gives - and collapse
-            // sinceBlock to 1, re-requesting the WHOLE history into ledger tables that take a
-            // plain INSERT (credits/debits/escrows are in neither ignoreTables nor
-            // upsertFullDumpTables). Read INSIDE the try so the catch below aborts this pass
-            // and the next status/gap trigger retries, rather than rejecting out of the
-            // _catchUpInFlight runner into the WS event handlers, which do not catch.
-            // Sitting inside the try also routes a tip-read schema fault (1146/1054) into
-            // the catch's healSchemaIfStale and its one debounce-bounded retry, an edge
-            // the read could not reach while it sat outside.
+            // Rethrow tip-read faults so recovery handles them instead of resuming at one.
             dbTip = await this.db.getLastBlock(null, { rethrow: true });
             sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
-
-            getLogger().info('Incremental catch-up from block ' + sinceBlock + '...');
-            // Truncated/fast chains: sync the append-only lookup tables by id cursor
-            // first (only NEW rows, since the replica's MAX(id) is the cursor), then
-            // fetch the block window with skip_lookups=1. Without this the bundled
-            // snapshot re-full-dumps multi-million-row lookups on EVERY catch-up and
-            // exceeds the content limit (the same wall as bootstrap). Full-history
-            // chains keep the single bundled snapshot (lookups included) unchanged.
-            let skipLookups = this._truncatedDepth >= 1;
-            if(skipLookups){
-                await this.syncLookupTablesPaged(source);
-            }
-            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
-                (skipLookups ? '?skip_lookups=1' : '');
-            let response = await axios.get(url, {
-                headers: this.upstreamHeaders(),
-                responseType: 'arraybuffer',
-                timeout: 300000,
-                decompress: true,
-                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-            });
-
-            let jsonStr = response.data;
-            if(Buffer.isBuffer(jsonStr)){
-                try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
-            }
-
-            let snapshotData;
-            try {
-                snapshotData = JSON.parse(jsonStr.toString());
-            } catch(parseErr){
-                throw new Error('Snapshot download truncated or corrupt from ' + source +
-                    ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
-            }
-            // Platform-train gate on the range TIP: the window lands in one transaction,
-            // so a window whose top is at or above the boundary must not land at all.
-            if(await this.checkTrainActivation(
-                    (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
-                return;
-            // Decoder: a window that does not build on the committed tip is a reorg missed
-            // while disconnected; rewind that tip (one block deep) instead of landing on it.
-            if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, skipLookups ? source : null)) return;
-            await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
-            this._upsertDupKeyTarget = null;
-            if(typeof snapshotData.block_height === 'number')
-                this.lastAppliedBlock = snapshotData.block_height;
-
-            // Re-page lookups AFTER the block window, same reason as bootstrap: the
-            // skip_lookups snapshot is a fresh REPEATABLE READ at the source tip T2,
-            // which exceeds the paging high-water T1 whenever the source advanced
-            // during paging, so blocks (T1..T2] reference index_* rows not yet pulled.
-            // Re-paging (cursor = current MAX(id)) fills (T1..T2] before recompute so
-            // getBlockHashRow resolves non-NULL and the join/terminal recompute below
-            // actually runs instead of silently skipping on a NULL ledger_hash.
-            // <SYNC-LOOKUP-REPAGE> keep aligned with bootstrapFromHeight.
-            if(skipLookups){
-                await this.syncLookupTablesPaged(source);
-            }
-
-            // The height above moved; bring lastHashes to the same block before any
-            // live event can read the pair (see refreshTipHashes). After the re-page,
-            // so the hash row resolves non-NULL.
-            await this.refreshTipHashes();
-
-            // Verify the catch-up range. The live path recomputes every applied
-            // block's consensus hashes, but a catch-up jumps a range in one
-            // apply with no recompute. A reorg that happened while this client
-            // was DISCONNECTED (the one fork the live event stream cannot deliver)
-            // was previously stitched onto the replica's orphaned tip unverified,
-            // silently following the new chain while keeping the orphaned blocks
-            // below the join.
-            //
-            // Recomputing the FIRST re-delivered block (join block) closes the
-            // orphan-stitch fault: its chain hashes fold the previous block's
-            // committed hashes, so a join onto an orphan cannot reproduce the
-            // committed hash -> durable halt, same contract as the live path.
-            //
-            // Recomputing the TERMINAL block (block_height) closes the
-            // truncated/corrupted interior fault: its committed hashes fold the
-            // whole applied range via the chained sync_meta rows, so a payload
-            // that is correct at the join but corrupted past it is detected here
-            // rather than being silently accepted and chained over by the next
-            // live block's recompute.
-            //
-            // Both recomputes are gated on VERIFY_RECOMPUTE.
+            let { snapshotData, skipLookups } = await this.downloadIncrementalCatchUp(source, sinceBlock);
+            if(await this.applyIncrementalCatchUpSnapshot(
+                    source, snapshotData, sinceBlock, dbTip, skipLookups)) return;
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
-                // The join block MUST be the client's OWN resume point (sinceBlock =
-                // dbTip+1), NEVER the server-echoed snapshotData.since_block. Recomputing
-                // dbTip+1 folds the pre-existing replica tip's committed hash (dbTip),
-                // which is the only check that catches a range stitched onto an orphaned
-                // tip after a disconnect reorg. Trusting the server's echoed since_block
-                // lets a hostile source (A) OMIT it to skip verification entirely, or
-                // (B) INFLATE it so the audited boundary sits inside the served range and
-                // the real join (dbTip+1, which folds the orphan) is never recomputed.
-                let joinBlock = sinceBlock;
-                // A source echoing a since_block that disagrees with our own resume point
-                // is buggy or trying to shift the audited boundary; refuse the range.
-                if(typeof snapshotData.since_block === 'number' && snapshotData.since_block !== sinceBlock){
-                    await this.haltOnDivergence(joinBlock,
-                        [{ field: 'since_block', a: sinceBlock, b: snapshotData.since_block }],
-                        this.sources.slice(0, 1), 'catchup-since-block-mismatch');
-                    return;
-                }
-                if(await this.verifyRangeBoundary(joinBlock)) return;
-                // Also recompute the terminal block if the range spans more than one block.
-                let terminalBlock = snapshotData.block_height;
-                if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
-                    if(await this.verifyRangeBoundary(terminalBlock)) return;
-                }
+                if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock)) return;
             }
-
-            // Decoder: converge `dispensers` and verify row counts. dispensers
-            // cannot ride the block stream or the id-cursor lookup paging, so it
-            // drifts between reconciles; re-dump + atomic replace every Nth catch-up
-            // (cheap: the table is bounded by the decoder's hard-purge depth), and
-            // INCLUDE dispensers in the completeness check only on those same cycles
-            // so the interim drift does not spam TABLE_COUNT_MISMATCH. Other decoder
-            // tables converge via the block stream / full-dumps and are checked on
-            // every catch-up. Best-effort; gated to the decoder dbType.
-            if(this.dbType === 'decoder'){
-                let didReconcile = this.shouldReconcileDispensers(Date.now());
-                if(didReconcile) await this.reconcileDispensers(source);
-                // Include dispensers in the completeness check only on the cycles we
-                // actually reconciled, else interim drift spams TABLE_COUNT_MISMATCH.
-                await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
-                    didReconcile ? null : new Set(['dispensers']));
-            }
-        } catch(e){
-            // Content-length overflow: the since/:block payload exceeds the axios
-            // cap (ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED). A deeply-lagged full-history
-            // replica can never shrink this below the wall, so incremental can make
-            // no progress. Fall back to a full bootstrap (the same path start() uses
-            // for an empty replica) so the node self-recovers instead of looping
-            // forever and requiring a manual DB wipe.
-            let isSizeError = this.isContentLengthOverflow(e);
-            if(isSizeError){
-                // A truncated replica (SYNC_BOOTSTRAP_DEPTH) exists precisely because
-                // its full-history snapshot exceeds SNAPSHOT_MAX_CONTENT and cannot be
-                // buffered+applied in one pass, so bootstrapFromSnapshot would hit the
-                // identical size wall, exhaust retries, throw BootstrapExhaustedError,
-                // and process.exit(1) into a permanent crash loop. Route truncated chains
-                // to the bounded height bootstrap instead (mirroring start()'s empty-DB
-                // branch); reserve the full snapshot for full-history replicas.
-                if(this._truncatedDepth >= 1){
-                    getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
-                        '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
-                        this._truncatedDepth + ', truncated replica).');
-                    await this.bootstrapFromHeightRetry(this._truncatedDepth);
-                    return;
-                }
-                // A full-history replica whose chain has GROWN past the wall lands
-                // here and its full snapshot is oversized too; bootstrapFromSnapshot
-                // now halts on that rather than crash-looping, so this stays
-                // the right call for the case it was written for (a payload window too
-                // wide to fetch incrementally but a snapshot that still fits).
-                getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
-                    '; falling back to full bootstrap.');
-                await this.bootstrapFromSnapshot();
-                return;
-            }
-            getLogger().error(util.format('Incremental catch-up failed:', e));
-            if(await this.noteUpsertDuplicateKey(source, e)) return;
-            // Schema-gap failures are fixable right now: heal and retry once.
-            // The heal's debounce bounds the recursion: a second schema-gap
-            // failure inside the window returns false and falls through.
-            if(await this.healSchemaIfStale(e))
-                return this.runIncrementalCatchUp();
+            if(this.dbType === 'decoder') await this.verifyIncrementalCatchUpDecoder(source);
+        } catch(error){
+            return this.handleIncrementalCatchUpFailure(source, sinceBlock, error);
         }
     }
 
