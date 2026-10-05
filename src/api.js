@@ -1116,66 +1116,52 @@ function createApp(syncService, cfg, app = express()){
     return app;
 }
 
-async function startApi(){
+// API key check for WebSocket upgrades, enforced only when a key is configured
+// because managed validators replicate keyless. Returns false after rejecting.
+function authorizeUpgrade(request, socket){
+    let apiKey = cfg['SYNC_API_KEY'];
+    if(!apiKey) return true;
+    let authHeader = request.headers['authorization'];
+    if(!authHeader || !safeEqual(authHeader, 'Bearer ' + apiKey)){
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return false;
+    }
+    return true;
+}
 
-    // Verify the bundled coin files against CONSENSUS_CONFIG_PIN before any port,
-    // poller or source-DB handle exists. Sync recomputes state and halts on
-    // divergence, so a coin bundle that drifted on THIS host must fail closed with
-    // the pin-mismatch error instead of surfacing later as an opaque
-    // local-recompute divergence. CI hashes the checkout, never the running
-    // artifact. All networks (the XChainHub.start form) because sync serves every
-    // chain the hub hands it, so no single network key is known at boot. A null pin
-    // (mainnet, pre-arm) skips; a mismatch on an armed network throws, uncaught.
-    for(const net of coins.NETWORKS) coins.verifyConsensusPin(net);
+// Parses /subscribe/:dbType/:chain/:network[?sync_mode=full|infra-only].
+// 'infra-only' is indexer-only; the decoder always serves the full table set.
+function parseSubscribePath(url){
+    let match = url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)(?:\?(.*))?/);
+    if(!match) return null;
 
-    const syncService = new SyncService(cfg);
-    const app = express();
-    createApp(syncService, cfg, app);
-    const server = http.createServer(app);
+    let dbType  = match[1];
+    let chain   = match[2];
+    let network = match[3];
+    if(dbType !== 'indexer' && dbType !== 'decoder') return null;
 
-    const wss = new WebSocket.Server({ noServer: true });
+    let syncMode = 'full';
+    if(match[4]){
+        let qs = new URLSearchParams(match[4]);
+        let mode = qs.get('sync_mode');
+        if(mode === 'infra-only' && dbType === 'indexer') syncMode = 'infra-only';
+    }
+    return { dbType, chain, network, syncMode };
+}
 
-    server.on('upgrade', (request, socket, head) => {
-        // API key authentication for WebSocket connections (enforced only when
-        // a key is configured; see the SYNC_API_KEY note at the top). Managed
-        // validators replicate keyless, so an unconditional reject here would
-        // sever their streaming sync.
-        let apiKey = cfg['SYNC_API_KEY'];
-        if(apiKey){
-            let authHeader = request.headers['authorization'];
-            if(!authHeader || !safeEqual(authHeader, 'Bearer ' + apiKey)){
-                socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-                socket.destroy();
-                return;
-            }
-        }
+// A manual handleUpgrade does not emit 'connection', so the emit below runs the
+// keepalive wiring that the ping interval depends on.
+function createUpgradeHandler(syncService, wss){
+    return function handleWebSocketUpgrade(request, socket, head){
+        if(!authorizeUpgrade(request, socket)) return;
 
-        // Parse the path: /subscribe/:dbType/:chain/:network[?sync_mode=full|infra-only]
-        let match = request.url.match(/^\/subscribe\/([^\/]+)\/([^\/]+)\/([^\/\?]+)(?:\?(.*))?/);
-        if(!match){
+        let sub = parseSubscribePath(request.url);
+        if(!sub){
             socket.destroy();
             return;
         }
-
-        let dbType  = match[1];
-        let chain   = match[2];
-        let network = match[3];
-
-        if(dbType !== 'indexer' && dbType !== 'decoder'){
-            socket.destroy();
-            return;
-        }
-
-        // Parse query string for sync_mode preference.
-        // Subscribers can request 'full' (default, all tables) or 'infra-only' (only cross-chain
-        // infrastructure tables: stakes, delegations, validator_rewards, prices, etc.).
-        // 'infra-only' is indexer-only; decoder always serves the full table set.
-        let syncMode = 'full';
-        if(match[4]){
-            let qs = new URLSearchParams(match[4]);
-            let mode = qs.get('sync_mode');
-            if(mode === 'infra-only' && dbType === 'indexer') syncMode = 'infra-only';
-        }
+        let { dbType, chain, network, syncMode } = sub;
 
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db){
@@ -1191,16 +1177,13 @@ async function startApi(){
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
-            // Fire the wss 'connection' handler so the keepalive wiring (ws.isAlive +
-            // the pong listener set in wss.on('connection')) actually runs. A manual
-            // handleUpgrade does NOT emit 'connection' on its own, so without this the
-            // pong tracking is never attached and the ping interval terminates every
-            // subscriber on its second tick (~2x WS_PING_INTERVAL) regardless of pongs.
             wss.emit('connection', ws, request);
             broadcaster.addSubscription(ws, request, chain, network, syncMode, dbType);
         });
-    });
+    };
+}
 
+function startPingInterval(wss){
     const pingInterval = setInterval(() => {
         wss.clients.forEach((ws) => {
             if(ws.isAlive === false){
@@ -1220,10 +1203,11 @@ async function startApi(){
     wss.on('close', () => {
         clearInterval(pingInterval);
     });
+}
 
-    // Periodic status broadcasts (server mode), once per (chain, network, dbType).
-    // Handles are collected so the shutdown drain can clear them: both reach into
-    // the broadcaster that SyncService.stop() tears down.
+// Server-mode status broadcasts and stale validator-heartbeat eviction. The
+// handles are returned so the shutdown drain can clear them.
+function startBackgroundTimers(syncService){
     const backgroundTimers = [];
     if(cfg['SYNC_MODE'] === 'server'){
         backgroundTimers.push(setInterval(() => {
@@ -1235,30 +1219,17 @@ async function startApi(){
             }
         }, cfg['WS_STATUS_INTERVAL']));
 
-        // Stale validator-heartbeat eviction, run every 30 seconds.
-        // Removes entries whose last_seen exceeds VALIDATOR_HEARTBEAT_TTL so the map
-        // does not accumulate dead entries after validators disconnect.
         backgroundTimers.push(setInterval(() => {
             let broadcaster = syncService.getBroadcaster();
             if(broadcaster) broadcaster.evictStaleValidators(cfg['VALIDATOR_HEARTBEAT_TTL']);
         }, 30000));
     }
+    return backgroundTimers;
+}
 
-    server.listen(cfg['SYNC_API_PORT'], () => {
-        console.log('xchain-sync API listening on port ' + cfg['SYNC_API_PORT']);
-    });
-
-    syncService.start().catch((error) => {
-        console.error('Fatal SyncService error:', error);
-        process.exit(1);
-    });
-
-    // Graceful shutdown. node is PID 1 in the image, so `docker stop` delivers
-    // SIGTERM to this process; before this handler existed the default action
-    // killed the poll/apply loops wherever they stood, which on a replica means an
-    // aborted apply transaction on every routine restart. The handler is bounded by
-    // its own hard-exit timer (src/http/shutdown.js): installing it removes node's
-    // default terminate, so a hung drain must still end the process.
+// node is PID 1 in the image, so SIGTERM from `docker stop` reaches this handler.
+// Its hard-exit timer (src/http/shutdown.js) bounds a hung drain.
+function installShutdownHandlers(syncService, server, wss, backgroundTimers){
     const shutdown = createShutdown({
         drain: createSyncDrain({
             syncService: syncService,
@@ -1269,13 +1240,11 @@ async function startApi(){
     });
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT',  () => shutdown('SIGINT'));
+}
 
-    // Crash visibility. An uncaughtException leaves module-level state (the
-    // poll/apply loops, open DB pool handles) in an unknown shape, so the
-    // process still exits after logging; an unhandledRejection logs and
-    // continues, matching the decoder's existing choice (src/api.js
-    // unhandledRejection handler) since a single unresolved promise, unlike a
-    // synchronous throw, does not by itself corrupt shared state.
+// An uncaughtException leaves shared state unknown, so the process exits after
+// logging; an unhandledRejection logs and continues.
+function installCrashHandlers(){
     process.on('uncaughtException', (err) => {
         getLogger().error('CRASH', { kind: 'uncaughtException', err: err && err.message, stack: err && err.stack });
         process.exit(1);
@@ -1284,6 +1253,37 @@ async function startApi(){
         const err = reason instanceof Error ? reason : new Error(String(reason));
         getLogger().error('CRASH', { kind: 'unhandledRejection', err: err.message, stack: err.stack });
     });
+}
+
+async function startApi(){
+    // Pin check precedes any port, poller or source-DB handle; a null pin skips,
+    // a mismatch on an armed network throws, uncaught.
+    for(const net of coins.NETWORKS) coins.verifyConsensusPin(net);
+
+    const syncService = new SyncService(cfg);
+    const app = express();
+    createApp(syncService, cfg, app);
+    const server = http.createServer(app);
+
+    const wss = new WebSocket.Server({ noServer: true });
+
+    server.on('upgrade', createUpgradeHandler(syncService, wss));
+
+    startPingInterval(wss);
+
+    const backgroundTimers = startBackgroundTimers(syncService);
+
+    server.listen(cfg['SYNC_API_PORT'], () => {
+        console.log('xchain-sync API listening on port ' + cfg['SYNC_API_PORT']);
+    });
+
+    syncService.start().catch((error) => {
+        console.error('Fatal SyncService error:', error);
+        process.exit(1);
+    });
+
+    installShutdownHandlers(syncService, server, wss, backgroundTimers);
+    installCrashHandlers();
 }
 
 // Only boot when this file IS the process entry point (`npm run api`, the
