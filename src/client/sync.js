@@ -4065,88 +4065,68 @@ class ClientSync {
         return null;
     }
 
-    async handleReorg(event){
-        getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
-
-        // Ignore a reorg while the replica has NO committed tip. A reorg presupposes
-        // blocks to invalidate; a null tip means getLastBlock was null at start and the
-        // DB holds no data, so there is nothing to roll back - and setting
-        // lastAppliedBlock = block_index - 1 from purely server-supplied data would
-        // inflate the in-memory tip past an empty DB, wedging the replica exactly like
-        // the above-tip case below (handleBlock then drops every canonical block
-        // <= the inflated tip, halted:false). This is defense in depth: the live path
-        // cannot reach here with a null tip (start() throws "Refusing to enter
-        // live-follow" before connectWebSockets if the replica is still empty after
-        // bootstrap, and lastAppliedBlock is never reset to null once set), but guarding
-        // here hardens against a future change that opens the WS earlier.
+    ignoreReorgWithoutTip(event){
         if(this.lastAppliedBlock === null){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': no committed tip yet (replica empty); a reorg has nothing to roll back');
-            return;
+            return true;
         }
+        return false;
+    }
 
-        // Ignore a reorg that targets a block ABOVE our current tip. A reorg can only
-        // invalidate a block we already hold; a target > lastAppliedBlock is either a
-        // bogus/hostile event or one for data we have not reached. The depth guard below
-        // computes depth = lastAppliedBlock - block_index + 1, which is <= 0 for an
-        // above-tip target and so never trips MAX_ROLLBACK_DEPTH; rollback() would then
-        // be a no-op and the cursor advance at the end of this method would push
-        // lastAppliedBlock PAST the data actually in the DB. Every canonical block the
-        // source then streams is <= the inflated tip and silently dropped by
-        // handleBlock, wedging the replica (halted:false) until an operator restarts it.
-        // A reorg to an unapplied block is a no-op, never a cursor advance. (Guarded only
-        // when we have a tip; a null tip is a distinct early-sync state the rollback path
-        // handles on its own.)
+    ignoreReorgAboveTip(event){
         if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': target block ' + event.block_index + ' is above the replica tip (' +
                 this.lastAppliedBlock + '); a reorg to an unapplied block is a no-op');
+            return true;
+        }
+        return false;
+    }
+
+    rollbackDepth(event){
+        return this.lastAppliedBlock - event.block_index + 1;
+    }
+
+    async haltForExcessiveRollback(event, depth){
+        await this.haltOnDivergence(event.block_index,
+            [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
+            this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
+    }
+
+    async applyReorgRollback(event){
+        await this.withApplyLock(() => this.rollback.rollback(event.block_index));
+        this.lastAppliedBlock = event.block_index - 1;
+        if(this.lastAppliedBlock > 0)
+            this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+        else
+            this.lastHashes = null;
+    }
+
+    async haltForReorgRollbackFailure(event, error){
+        getLogger().error(util.format('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
+            this.chain, this.network, this.dbType, event.block_index, error));
+        await this.haltOnDivergence(event.block_index,
+            [{ field: 'reorg_rollback_failed', error: String(error && error.message ? error.message : error) }],
+            this.sources.slice(0, 1), 'reorg-rollback-failed');
+    }
+
+    async handleReorg(event){
+        getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
+
+        if(this.ignoreReorgWithoutTip(event)) return;
+        if(this.ignoreReorgAboveTip(event)) return;
+
+        let depth = this.rollbackDepth(event);
+        if(depth > this.maxRollbackDepth){
+            await this.haltForExcessiveRollback(event, depth);
             return;
         }
 
-        if(this.lastAppliedBlock !== null){
-            let depth = this.lastAppliedBlock - event.block_index + 1;
-            if(depth > this.maxRollbackDepth){
-                // A reorg too deep to roll back safely must FAIL CLOSED, not fail open.
-                // Returning bare here would leave lastAppliedBlock pointing at the now-
-                // orphaned tip: every canonical block the source re-streams from
-                // event.block_index upward is <= lastAppliedBlock, so handleBlock's
-                // `blockIndex <= lastAppliedBlock` guard silently drops it and the replica
-                // serves the orphaned fork indefinitely. The indexer track might eventually
-                // self-halt once canonical hashes overtake the old tip and VERIFY_RECOMPUTE
-                // catches the chained-hash break, but the decoder track has no recompute net
-                // and would stay permanently diverged with halted:false on /status. So record
-                // a durable halt via the same contract used for consensus divergence and let
-                // the operator investigate/clear, rather than advancing onto the fork.
-                await this.haltOnDivergence(event.block_index,
-                    [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
-                    this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
-                return; // halted: no rollback, lastAppliedBlock left as-is, no further applies
-            }
-        }
-
         try {
-            await this.withApplyLock(() => this.rollback.rollback(event.block_index));
-            this.lastAppliedBlock = event.block_index - 1;
-            if(this.lastAppliedBlock > 0)
-                this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
-            else
-                this.lastHashes = null;
+            await this.applyReorgRollback(event);
         } catch(e){
-            // FAIL CLOSED, consistent with the MAX_ROLLBACK_DEPTH branch above. A failed
-            // rollback (lock timeout, deadlock, connection drop mid-rewind) otherwise leaves
-            // lastAppliedBlock at the now-orphaned tip: handleBlock's `blockIndex <=
-            // lastAppliedBlock` guard then silently drops every canonical block the source
-            // re-streams from event.block_index upward, so the replica serves the orphaned
-            // fork with halted:false on /status (the decoder track has no recompute net to
-            // self-halt). Record a durable halt via the same contract used for consensus
-            // divergence and let the operator investigate/clear, rather than wedging silently.
-            getLogger().error(util.format('Reorg rollback failed for %s/%s (%s) rewinding to block %s:',
-                this.chain, this.network, this.dbType, event.block_index, e));
-            await this.haltOnDivergence(event.block_index,
-                [{ field: 'reorg_rollback_failed', error: String(e && e.message ? e.message : e) }],
-                this.sources.slice(0, 1), 'reorg-rollback-failed');
-            return; // halted: do not leave lastAppliedBlock advanced onto the orphaned fork
+            await this.haltForReorgRollbackFailure(event, e);
         }
     }
 }
