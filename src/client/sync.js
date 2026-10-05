@@ -2398,51 +2398,18 @@ class ClientSync {
         if(!this.beginCompletenessSweep(source, remoteHeight)) return;
         try {
             if(this.dbType === 'decoder'){
-                // Delegate: the decoder variant carries the truncation exclusions its
-                // counts need. dispensers converges only on a reconcile cycle, so it is
-                // excluded here or every sweep reports drift.
-                let decoderShortfalls = await this.verifyDecoderCompleteness(
-                    source, this.lastAppliedBlock, new Set(['dispensers']), { requireEqualHeight: true });
-                // Age and repair the decoder shortfalls too, but ONLY from this periodic
-                // equal-height path: the bootstrap caller runs the same check while the
-                // replica is legitimately mid-dump, and folding those sweeps in would
-                // escalate a gap that the next snapshot page closes. A null return means
-                // the check could not complete (unreachable source, wrong dbType, source
-                // moved on), which is not evidence the gaps closed.
-                if(Array.isArray(decoderShortfalls)){
-                    let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
-                    await this.trackReplicaGaps(decoderShortfalls, {
-                        source: source, blockIndex: this.lastAppliedBlock, repaired: decoderRepairTried
-                    });
-                }
+                await this.sweepDecoderCompleteness(source);
                 return;
             }
-            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-            let remoteStatus = response.data;
+            let remoteStatus = await this.fetchCompletenessStatus(source);
             if(!this.remoteStatusMatchesCompletenessHeight(remoteStatus)) return;
             let mismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
                 { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
             let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
             let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
-            let repairTried = new Set();
-            if(shortfalls.length){
-                getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower may be missing replicated rows:');
-                getLogger().error(JSON.stringify(shortfalls));
-                repairTried = await this.repairShortLookups(source, shortfalls);
-            }
-            if(ahead.length){
-                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                getLogger().error(JSON.stringify(ahead));
-            }
-            // Age the shortfall set. A repeated TABLE_COUNT_MISMATCH line is the same
-            // severity on sweep 1 and sweep 700, so a gap that no amount of syncing
-            // will close reads exactly like the transient race it is not; this is what
-            // let a mainnet follower sit ~2k index_transactions rows short for weeks
-            // with the detector firing on every pass. Runs on EVERY completed sweep,
-            // shortfalls or not, because a clean sweep is how a gap gets cleared.
+            let repairTried = await this.reportCompletenessMismatches(source, shortfalls, ahead);
+            // Runs on every completed sweep, shortfalls or not: a clean sweep is how
+            // a tracked gap gets cleared.
             await this.trackReplicaGaps(shortfalls, {
                 source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
             });
@@ -2451,6 +2418,45 @@ class ClientSync {
         } catch(e){
             getLogger().error(util.format('Periodic completeness sweep failed against ' + source + ':', e.message || e));
         }
+    }
+
+    // Decoder variant of the sweep: dispensers converges only on a reconcile cycle,
+    // so it is excluded or every sweep reports drift. Shortfalls are aged and
+    // repaired only here, since bootstrap runs the same check mid-dump.
+    async sweepDecoderCompleteness(source){
+        let decoderShortfalls = await this.verifyDecoderCompleteness(
+            source, this.lastAppliedBlock, new Set(['dispensers']), { requireEqualHeight: true });
+        // A null return means the check could not complete, which is not evidence
+        // the gaps closed.
+        if(!Array.isArray(decoderShortfalls)) return;
+        let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
+        await this.trackReplicaGaps(decoderShortfalls, {
+            source: source, blockIndex: this.lastAppliedBlock, repaired: decoderRepairTried
+        });
+    }
+
+    async fetchCompletenessStatus(source){
+        let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+        return response.data;
+    }
+
+    // Log the shortfall and replica-ahead sets and re-page short lookups; returns the
+    // Set of tables the repair pass tried (empty when there were no shortfalls).
+    async reportCompletenessMismatches(source, shortfalls, ahead){
+        let repairTried = new Set();
+        if(shortfalls.length){
+            getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+                '; follower may be missing replicated rows:');
+            getLogger().error(JSON.stringify(shortfalls));
+            repairTried = await this.repairShortLookups(source, shortfalls);
+        }
+        if(ahead.length){
+            getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
+                '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+            getLogger().error(JSON.stringify(ahead));
+        }
+        return repairTried;
     }
 
     // Read a numeric tunable from config, falling back to the environment and then to
