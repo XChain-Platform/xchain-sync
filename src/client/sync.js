@@ -3783,13 +3783,40 @@ class ClientSync {
         // The anchor comes from the out-of-band URL when set, so the audited source cannot withhold it.
         let source = this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
         if(!source) return;
-        let cp = await this.fetchCheckpointAnchor(source);
+        let cp;
+        try {
+            let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
+            let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+            cp = resp && resp.data;
+        } catch(e){
+            this.warnCheckpointFetchFailure(source, e);
+            return;
+        }
         if(!cp) return;
         if(this.checkpointSkipsAnchoring(cp)) return;
-        if(await this.haltOnStaleCheckpoint(cp)) return;
+        let freshnessMismatches = this.checkpointFreshnessMismatches(cp);
+        if(freshnessMismatches){
+            await this.haltOnDivergence(cp.block_index, freshnessMismatches,
+                this.sources.slice(0, 1), 'checkpoint-freshness-stale');
+            return;
+        }
         if(cp.block_index > this.lastAppliedBlock) return;       // not caught up to this checkpoint yet
-        let q = await this.checkQuorumOrFollowRotation(cp, validators, source);
-        if(!q) return;
+        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        if(!q.valid){
+            let seed = getPinnedCheckpoint(this.chain, this.network);
+            if(seed){
+                let r = await this.followCheckpointForward(cp, seed, source);
+                let rotationMismatches = this.processRotationFollow(cp, source, r);
+                if(!rotationMismatches) return;
+                await this.haltOnDivergence(cp.block_index, rotationMismatches,
+                    this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+                return;
+            }
+            await this.haltOnDivergence(cp.block_index,
+                [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
+                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
+            return;
+        }
         // Its committed roots must equal the replica's OWN recomputed roots at that height.
         let cmp = await this.checkpointRootsMatchLocal(cp);
         if(cmp.status === 'missing') return;                     // height not recomputed here (truncated bootstrap)
@@ -3804,17 +3831,10 @@ class ClientSync {
             ' valid sigs, weighted=' + q.weighted + ')');
     }
 
-    // Fetch the latest checkpoint from the source. A transport fault or 404 never halts but is
-    // logged, so a source withholding the anchor stays visible. Resolves undefined on failure.
-    async fetchCheckpointAnchor(source){
-        try {
-            let url = source + '/checkpoint/indexer/' + this.chain + '/' + this.network + '/latest';
-            let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-            return resp && resp.data;
-        } catch(e){
-            getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
-                this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
-        }
+    // A transport fault or 404 never halts, but the failed refresh stays visible.
+    warnCheckpointFetchFailure(source, error){
+        getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
+            this.network + ' from ' + source + ' (' + error.message + '); anchor not refreshed this cycle');
     }
 
     // True when the checkpoint cannot be anchored this cycle: rootless, malformed, or a seq
@@ -3841,57 +3861,33 @@ class ClientSync {
         return false;
     }
 
-    // Freshness is advisory by default. CHECKPOINT_FRESHNESS_STRICT halts on a stale anchor,
-    // but only after one checkpoint has verified. Resolves true when it halted.
-    async haltOnStaleCheckpoint(cp){
-        if(!(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS'])) return false;
+    // Freshness is advisory by default. Strict mode returns a mismatch after one checkpoint
+    // verifies so the caller can halt on the stale anchor.
+    checkpointFreshnessMismatches(cp){
+        if(!(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS'])) return null;
         getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
             ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
             ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
         if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
-            await this.haltOnDivergence(cp.block_index,
-                [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
-                   b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }],
-                this.sources.slice(0, 1), 'checkpoint-freshness-stale');
-            return true;
+            return [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
+                b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }];
         }
-        return false;
-    }
-
-    // The checkpoint must meet the quorum of the pinned launch set. If the federation rotated
-    // its keys, follow the rotation forward from the pinned seed when one is configured.
-    // Resolves the quorum result, or null once the cycle is settled (anchored, halted, waiting).
-    async checkQuorumOrFollowRotation(cp, validators, source){
-        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
-        if(q.valid) return q;
-        let seed = getPinnedCheckpoint(this.chain, this.network);
-        if(seed){
-            await this.settleRotationFollow(cp, seed, source);
-            return null;
-        }
-        await this.haltOnDivergence(cp.block_index,
-            [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
-            this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
         return null;
     }
 
-    // Act on the rotation-follow verdict: record the anchor, halt on divergence, or log the wait.
-    async settleRotationFollow(cp, seed, source){
-        let r = await this.followCheckpointForward(cp, seed, source);
-        if(r.verdict === 'ok'){
+    // Record a successful rotation follow, return divergence mismatches, or log a wait.
+    processRotationFollow(cp, source, result){
+        if(result.verdict === 'ok'){
             this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
             getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
                 this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
-            return;
+            return null;
         }
-        if(r.verdict === 'divergence'){
-            await this.haltOnDivergence(cp.block_index, r.mismatches,
-                this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
-            return;
-        }
+        if(result.verdict === 'divergence') return result.mismatches;
         getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
             this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
-            ': ' + (r.reason || 'inconclusive') + '; anchor not refreshed this cycle');
+            ': ' + (result.reason || 'inconclusive') + '; anchor not refreshed this cycle');
+        return null;
     }
 
     // Advance the high-water mark of verified checkpoint sequences. Monotonic: a later
