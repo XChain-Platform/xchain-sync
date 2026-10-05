@@ -1153,7 +1153,7 @@ function parseSubscribePath(url){
 // A manual handleUpgrade does not emit 'connection', so the emit below runs the
 // keepalive wiring that the ping interval depends on.
 function createUpgradeHandler(syncService, wss){
-    return (request, socket, head) => {
+    return function handleWebSocketUpgrade(request, socket, head){
         if(!authorizeUpgrade(request, socket)) return;
 
         let sub = parseSubscribePath(request.url);
