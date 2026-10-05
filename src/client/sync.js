@@ -89,6 +89,72 @@ function latestTime(a, b){
     return Math.max(a, b);
 }
 
+function blockHashFields(row){
+    return {
+        ledger_hash: row.ledger_hash,
+        actions_hash: row.actions_hash,
+        contract_hash: row.contract_hash
+    };
+}
+
+// Compare hashes only at equal heights so tip skew cannot masquerade as divergence.
+function compareSourceBlockHashes(client, source, blockHeight, remoteStatus, localHashes){
+    if(remoteStatus.block_height != null && Number(remoteStatus.block_height) !== blockHeight){
+        getLogger().warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
+            ', source ' + source + ' height ' + remoteStatus.block_height + ')');
+        return { verdict: 'skew', mismatches: null };
+    }
+    let result = client.hashVerifier.compareBlockHashes(blockHeight,
+        blockHashFields(localHashes), blockHashFields(remoteStatus));
+    if(result.match){
+        getLogger().info('Hash verification passed against ' + source);
+        return { verdict: 'agree', mismatches: null };
+    }
+    getLogger().error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
+    getLogger().error(util.format('Mismatches:', JSON.stringify(result.mismatches)));
+    return { verdict: 'diverge', mismatches: result.mismatches };
+}
+
+// Report completeness gaps without changing the hash verdict or halting the replica.
+function reportTableCountResults(source, blockHeight, remoteStatus, countMismatches){
+    let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
+    let ahead = countMismatches.filter(m => m.reason === 'replica-ahead');
+    if(shortfalls.length){
+        getLogger().error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+            '; follower may be missing replicated rows:');
+        getLogger().error(JSON.stringify(shortfalls));
+    }
+    if(ahead.length){
+        getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + blockHeight + ' against ' + source +
+            '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+        getLogger().error(JSON.stringify(ahead));
+    }
+    if(!countMismatches.length && remoteStatus.table_counts){
+        getLogger().info('Table-count verification passed against ' + source);
+    }
+}
+
+// Check map content only when both peers expose comparable same-height data.
+function shouldCompareIndexMap(client, blockHeight, remoteStatus, countMismatches){
+    return client.config['INDEX_MAP_PARITY_CHECK']
+        && remoteStatus.index_map_checksum != null
+        && Number(remoteStatus.block_height) === blockHeight
+        && !countMismatches.some(m => m.table === 'index_addresses');
+}
+
+// Report advisory map divergence and tell the caller whether to record it.
+function reportIndexMapResult(client, source, blockHeight, localChecksum, remoteChecksum){
+    let result = client.hashVerifier.compareIndexMap(blockHeight, localChecksum, remoteChecksum);
+    if(result.match){
+        getLogger().info('Index-map parity passed against ' + source);
+        return false;
+    }
+    getLogger().warn('INDEX_MAP_PARITY mismatch at block ' + blockHeight + ' against ' + source +
+        ': local=' + localChecksum + ' source=' + remoteChecksum +
+        ' (advisory, NOT halting; id->address map content diverged at equal row count)');
+    return true;
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -1912,140 +1978,38 @@ class ClientSync {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
-
             let localHashes = await this.db.getBlockHashRow(blockHeight);
             if(!localHashes) return 'skip';
-
-            // Height gate: remoteStatus reports the source's CURRENT tip, whose
-            // hashes describe that tip, not necessarily our bootstrap blockHeight.
-            // Comparing across skewed heights would raise a spurious HASH MISMATCH
-            // (alarm fatigue) and make genuine divergence indistinguishable from
-            // skew. Only run the cross-source hash comparison when both sides are at
-            // the same height (the same gate the advisory index-map check applies
-            // below). A confirmed same-height mismatch is a real cross-source
-            // divergence and must halt like the live dual-source path, not log-and-
-            // continue: a replica bootstrapped from a forked/Byzantine source would
-            // otherwise proceed to serve and extend forked state.
-            if(remoteStatus.block_height != null && Number(remoteStatus.block_height) !== blockHeight){
-                getLogger().warn('Skipping cross-source hash check: tip skew (local height ' + blockHeight +
-                    ', source ' + source + ' height ' + remoteStatus.block_height + ')');
-                verdict = 'skew';
-            } else {
-                let result = this.hashVerifier.compareBlockHashes(blockHeight, {
-                    ledger_hash: localHashes.ledger_hash,
-                    actions_hash: localHashes.actions_hash,
-                    contract_hash: localHashes.contract_hash
-                }, {
-                    ledger_hash: remoteStatus.ledger_hash,
-                    actions_hash: remoteStatus.actions_hash,
-                    contract_hash: remoteStatus.contract_hash
-                });
-
-                if(!result.match){
-                    getLogger().error('HASH MISMATCH at block ' + blockHeight + ' against ' + source);
-                    getLogger().error(util.format('Mismatches:', JSON.stringify(result.mismatches)));
-                    verdict = 'diverge';
-                    if(this.config['HALT_ON_DIVERGENCE']){
-                        // Durable, alerting halt mirroring the live dual-source path:
-                        // this source bulk-applied an entire replica and now disagrees
-                        // at the same height, so it is on a forked/Byzantine chain.
-                        await this.haltOnDivergence(blockHeight, result.mismatches, [source], 'cross-source-divergence');
-                        return 'halted';
-                    }
-                } else {
-                    getLogger().info('Hash verification passed against ' + source);
-                    verdict = 'agree';
-                }
+            let comparison = compareSourceBlockHashes(this, source, blockHeight, remoteStatus, localHashes);
+            verdict = comparison.verdict;
+            if(comparison.verdict === 'diverge' && this.config['HALT_ON_DIVERGENCE']){
+                await this.haltOnDivergence(blockHeight, comparison.mismatches,
+                    [source], 'cross-source-divergence');
+                return 'halted';
             }
-
-            // Independent recomputation (validator track): the comparison above is a
-            // transport check (verbatim-replicated local hash vs the source's
-            // published hash). Additionally recompute the LOCAL committed hash from
-            // the LOCAL replicated raw rows: this catches a catch-up snapshot whose
-            // DATA does not match its committed hash, which the verbatim comparison
-            // cannot. (The live per-block path does the same in applyBlockEvent.)
             if(this.config['VERIFY_RECOMPUTE']){
-                let recomputeMismatches = await this.verifyRecompute({ block_index: blockHeight }, {
-                    ledger_hash:   localHashes.ledger_hash,
-                    actions_hash:  localHashes.actions_hash,
-                    contract_hash: localHashes.contract_hash
-                });
+                let recomputeMismatches = await this.verifyRecompute(
+                    { block_index: blockHeight }, blockHashFields(localHashes));
                 if(recomputeMismatches){
                     await this.haltOnDivergence(blockHeight, recomputeMismatches, [source], 'local-recompute-divergence');
                     return 'halted';
                 }
             }
-
-            // Replica-completeness check (additive; never overrides the hash result).
-            //
-            // The committed ledger/actions/contract hashes are computed on the
-            // source during block processing and replicated verbatim, so a follower
-            // missing entire tables still agrees on every hash (the hashes describe
-            // the source's blockchain computation, not what actually landed
-            // downstream). The source now publishes per-table row counts on /status
-            // (api.buildStatusRow); compare them against our own to surface any table
-            // the source has rows in that we do not. A shortfall is logged as a
-            // health signal for operators: it does NOT reject the block, since a
-            // passing hash check is still a valid consensus result.
-            // At the same height, exact-parity tables are also checked for the
-            // replica-AHEAD direction (an un-replicated source-side forward DELETE
-            // leaves extra local rows the shortfall check cannot see); reported under
-            // its own tag so operators can tell it from ordinary lag.
             let countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
                 { remoteHeight: remoteStatus.block_height, localHeight: blockHeight });
-            let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
-            let ahead      = countMismatches.filter(m => m.reason === 'replica-ahead');
-            if(shortfalls.length){
-                getLogger().error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
-                    '; follower may be missing replicated rows:');
-                getLogger().error(JSON.stringify(shortfalls));
-            }
-            if(ahead.length){
-                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + blockHeight + ' against ' + source +
-                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                getLogger().error(JSON.stringify(ahead));
-            }
-            if(!countMismatches.length && remoteStatus.table_counts){
-                getLogger().info('Table-count verification passed against ' + source);
-            }
-
-            // Advisory id->address map parity (NON-consensus; never halts). The
-            // ledger/actions/contract hashes resolve ids to canonical strings, so a
-            // divergent id map (e.g. a local INSERT IGNORE that kept a pre-existing
-            // colliding id and dropped the source's authoritative row) is invisible
-            // both to them AND to the row-count check above (same count, different
-            // content). Recompute the deterministic-subset checksum over our replica
-            // and compare to the source's, but ONLY when:
-            //   - both sides have the feature on (source published a non-null checksum;
-            //     our INDEX_MAP_PARITY_CHECK is set), and
-            //   - we are AT the source's published height, so both checksums use the
-            //     same block_index<= bound, and
-            //   - index_addresses is not itself short here: a row shortfall is a
-            //     completeness gap already surfaced above, not a content divergence,
-            //     and comparing then would only be incompleteness noise.
-            // A mismatch is logged + durably counted, never halted on (string-based
-            // consensus is unaffected).
-            if(this.config['INDEX_MAP_PARITY_CHECK']
-                    && remoteStatus.index_map_checksum != null
-                    && Number(remoteStatus.block_height) === blockHeight
-                    && !countMismatches.some(m => m.table === 'index_addresses')){
+            reportTableCountResults(source, blockHeight, remoteStatus, countMismatches);
+            if(shouldCompareIndexMap(this, blockHeight, remoteStatus, countMismatches)){
                 try {
                     let localChecksum = await this.blockHasher.computeIndexMapChecksum(blockHeight);
-                    let res = this.hashVerifier.compareIndexMap(blockHeight, localChecksum, remoteStatus.index_map_checksum);
-                    if(!res.match){
-                        getLogger().warn('INDEX_MAP_PARITY mismatch at block ' + blockHeight + ' against ' + source +
-                            ': local=' + localChecksum + ' source=' + remoteStatus.index_map_checksum +
-                            ' (advisory, NOT halting; id->address map content diverged at equal row count)');
+                    if(reportIndexMapResult(this, source, blockHeight, localChecksum,
+                        remoteStatus.index_map_checksum)){
                         await this.recordIndexMapMismatch(blockHeight);
-                    } else {
-                        getLogger().info('Index-map parity passed against ' + source);
                     }
                 } catch(e){
                     getLogger().error(util.format('Index-map parity check errored at block ' + blockHeight +
                         ' (advisory, ignoring):', e.message));
                 }
             }
-
             await this.verifyTableContentParity(source, blockHeight, remoteStatus);
             await this.verifyTokenFoldParity(source, blockHeight, remoteStatus);
             return verdict;
