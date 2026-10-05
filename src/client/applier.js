@@ -439,58 +439,41 @@ class ClientApplier {
         }
     }
 
-    async collectFullSnapshotTables(snapshotData){
-        let localTables = [];
-        try {
-            let schemaRows = await this.db.findStreamableTableNames();
-            localTables = (schemaRows || [])
-                .map(r => r.table_name || r.TABLE_NAME)
-                .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
-        } catch(e){
-            logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
-            if(e.errno !== 1146 && e.errno !== 1054) throw e;
-        }
+    // Names of the local snapshot-eligible tables; operator-local tables are excluded.
+    localSnapshotTableNames(schemaRows){
+        return (schemaRows || [])
+            .map(r => r.table_name || r.TABLE_NAME)
+            .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+    }
 
-        let payloadTables = Object.keys(snapshotData.tables).filter(t => {
+    // Payload tables minus node-local ones; a source still shipping one is ignored.
+    payloadSnapshotTableNames(snapshotData){
+        return Object.keys(snapshotData.tables).filter(t => {
             if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
             logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
             return false;
         });
-        return orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
     }
 
-    async clearFullSnapshotTables(tables){
-        for(let i = tables.length - 1; i >= 0; i--){
-            let tCheck = validation.validateIdentifier(tables[i]);
-            if(!tCheck.valid){
-                logger.error('Skipping clear of invalid table: ' + tables[i]);
-                continue;
-            }
-            await this.db.deleteAllRows(tables[i]);
-        }
+    // Tolerates only a missing table or column (1146/1054); any other error propagates.
+    ignoreSchemaGap(e){
+        if(e.errno !== 1146 && e.errno !== 1054) throw e;
     }
 
-    async insertFullSnapshotTables(snapshotData, tables){
-        for(let table of tables){
-            let rows = snapshotData.tables[table];
-            if(!rows || rows.length === 0) continue;
-            await this.insertRows(table, rows);
-            if(rows.length > 100)
-                logger.info('  ' + table + ': ' + rows.length + ' rows');
-        }
+    isClearableTable(table){
+        let tCheck = validation.validateIdentifier(table);
+        if(!tCheck.valid) logger.error('Skipping clear of invalid table: ' + table);
+        return tCheck.valid;
     }
 
-    async clearFullSnapshotRoots(snapshotData){
-        try {
-            await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
-        } catch(e){
-            if(e.errno !== 1146 && e.errno !== 1054) throw e;
-        }
+    logLargeTableInsert(table, rows){
+        if(rows.length > 100)
+            logger.info('  ' + table + ': ' + rows.length + ' rows');
     }
 
-    async seedFullSnapshotRoots(snapshotData, dbType){
-        if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
-            await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
+    // Seeds the light-client SMT at the snapshot tip on indexer replicas past the flag day.
+    shouldSeedSnapshotRoots(snapshotData, dbType){
+        return dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker);
     }
 
     // Apply a full snapshot after confirming that its schema matches this replica.
@@ -508,11 +491,39 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            let tables = await this.collectFullSnapshotTables(snapshotData);
-            await this.clearFullSnapshotTables(tables);
-            await this.insertFullSnapshotTables(snapshotData, tables);
-            await this.clearFullSnapshotRoots(snapshotData);
-            await this.seedFullSnapshotRoots(snapshotData, dbType);
+            // The full local table set is cleared, not just the payload's: tables empty on the
+            // source are omitted from the payload. Enumeration failures abort the apply.
+            let localTables = [];
+            try {
+                localTables = this.localSnapshotTableNames(await this.db.findStreamableTableNames());
+            } catch(e){
+                logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
+                this.ignoreSchemaGap(e);
+            }
+
+            let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
+            for(let i = tables.length - 1; i >= 0; i--){
+                if(!this.isClearableTable(tables[i])) continue;
+                await this.db.deleteAllRows(tables[i]);
+            }
+
+            for(let table of tables){
+                let rows = snapshotData.tables[table];
+                if(!rows || rows.length === 0) continue;
+                await this.insertRows(table, rows);
+                this.logLargeTableInsert(table, rows);
+            }
+
+            // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
+            try {
+                await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
+            } catch(e){
+                this.ignoreSchemaGap(e);
+            }
+
+            if(this.shouldSeedSnapshotRoots(snapshotData, dbType))
+                await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
