@@ -2358,6 +2358,28 @@ class ClientSync {
         return shortLookups;
     }
 
+    beginCompletenessSweep(source, remoteHeight){
+        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
+        if(!interval || !source) return false;
+        if(this._halted) return false;                        // nothing to verify onto
+        if(this.lastAppliedBlock === null) return false;       // pre-bootstrap
+        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return false;
+        let now = Date.now();
+        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return false;
+        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
+        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
+        // a second tick run one concurrently against the same source.
+        this._lastCompletenessSweepAt = now;
+        return true;
+    }
+
+    remoteStatusMatchesCompletenessHeight(remoteStatus){
+        // Re-check the height against the status we just fetched: the tick that
+        // triggered this may be seconds old and the source may have advanced.
+        return remoteStatus.block_height == null ||
+            Number(remoteStatus.block_height) === Number(this.lastAppliedBlock);
+    }
+
     // Periodic replica-completeness sweep against the PRIMARY source: the row-count
     // comparison is the only check that sees a follower short rows the consensus hashes
     // structurally cannot cover, since those hashes describe the source's computation
@@ -2373,17 +2395,7 @@ class ClientSync {
     // bootstrap caller's posture) and best-effort, so an unreachable source logs and
     // returns rather than disturbing live following.
     async maybeVerifyCompleteness(source, remoteHeight){
-        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
-        if(!interval || !source) return;
-        if(this._halted) return;                        // nothing to verify onto
-        if(this.lastAppliedBlock === null) return;       // pre-bootstrap
-        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return;
-        let now = Date.now();
-        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return;
-        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
-        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
-        // a second tick run one concurrently against the same source.
-        this._lastCompletenessSweepAt = now;
+        if(!this.beginCompletenessSweep(source, remoteHeight)) return;
         try {
             if(this.dbType === 'decoder'){
                 // Delegate: the decoder variant carries the truncation exclusions its
@@ -2408,10 +2420,7 @@ class ClientSync {
             let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
             let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
             let remoteStatus = response.data;
-            // Re-check the height against the status we just fetched: the tick that
-            // triggered this may be seconds old and the source may have advanced.
-            if(remoteStatus.block_height != null &&
-               Number(remoteStatus.block_height) !== Number(this.lastAppliedBlock)) return;
+            if(!this.remoteStatusMatchesCompletenessHeight(remoteStatus)) return;
             let mismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
                 { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
             let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
