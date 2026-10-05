@@ -706,98 +706,69 @@ class ClientSync {
     getEvictedSources(){ return [...this._evictedSources].map(i => this.sources[i] || ('#' + i)); }
     getSourcesAgreeing(){ return this._lastSourcesAgreeing; }
 
-    async start(){
-        this.running = true;
-        getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+    installStartupHalt(prior){
+        this._halted = {
+            blockIndex: Number(prior.block_index), reason: prior.reason,
+            mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
+            at: prior.detected_at
+        };
+    }
 
-        this.warnTrustPosture();
+    async waitForStartupHalt(){
+        while(this.running && this._halted){ await this.util.sleep(5000); }
+        return this._halted ? 'stop' : 'restart';
+    }
 
-        // A divergence halt is durable: if a prior run recorded an uncleared halt,
-        // stay halted (do NOT catch up / apply) until an operator clears it. A
-        // halted validator must never silently resume onto a contested chain.
-        try {
-            let prior = await this.db.getActiveHalt(this.dbType);
-            if(prior){
-                this._halted = {
-                    blockIndex: Number(prior.block_index), reason: prior.reason,
-                    mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
-                    at: prior.detected_at
-                };
-                getLogger().error('ClientSync is HALTED on a prior consensus divergence at block ' +
-                    prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
-                    '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
-                // Stay alive but idle so /status can report the halt.
-                while(this.running && this._halted){ await this.util.sleep(5000); }
-                if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
-                return;
+    async retryStartupHaltRead(){
+        let haltRetryDelay = 5000;
+        while(this.running && this._halted && this._halted.reason === 'halt-state-check-failed'){
+            await this.util.sleep(haltRetryDelay);
+            if(!(this.running && this._halted && this._halted.reason === 'halt-state-check-failed')) break;
+            try {
+                const prior = await this.db.getActiveHalt(this.dbType);
+                if(!prior){
+                    getLogger().info('halt-state check recovered for ' + this.chain + '/' + this.network +
+                        '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
+                    this._halted = null;
+                    break;
+                }
+                this.installStartupHalt(prior);
+                getLogger().error('halt-state check recovered for ' + this.chain + '/' + this.network +
+                    '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
+                    prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+                break;
+            } catch(e2){
+                haltRetryDelay = Math.min(haltRetryDelay * 2, 60000);
             }
+        }
+    }
+
+    async resolveStartupHalt(){
+        // A persisted divergence halt keeps the client idle until an operator clears it.
+        try {
+            const prior = await this.db.getActiveHalt(this.dbType);
+            if(!prior) return 'continue';
+            this.installStartupHalt(prior);
+            getLogger().error('ClientSync is HALTED on a prior consensus divergence at block ' +
+                prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
+                '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+            return await this.waitForStartupHalt();
         } catch(e){
-            // Fail CLOSED: an uncertain halt-state check (transient DB error while
-            // reading sync_halt) must NOT be treated as "no halt" and resume catch-up -
-            // a durably-halted replica could then silently resume onto a contested
-            // chain. Hold in an idle halted state until a restart can positively read
-            // the halt table (getActiveHalt now fails closed / throws rather than
-            // returning [] on a query error).
+            // An uncertain halt-state read blocks replication until an authoritative read succeeds.
             getLogger().error(util.format('halt-state check failed; staying HALTED (fail-closed) until it can be read:', e));
             this._halted = {
                 blockIndex: -1, reason: 'halt-state-check-failed',
                 mismatches: [], sources: [], at: null
             };
-            // Keep replication blocked, but RE-READ the authoritative halt table each
-            // idle tick instead of idling forever on the one failed read. The original
-            // loop never retried, so a transient MariaDB blip left the replica idle for
-            // good after the database recovered: the process is still running, so
-            // `restart: unless-stopped` never restarts it and nothing else re-reads
-            // sync_halt. The safety invariant is unchanged, because only a POSITIVE read
-            // leaves this state: a definitive null resumes, a returned row installs the
-            // real durable halt, and a throw keeps the synthetic halt and idles on with a
-            // backoff so a sick database is not hammered.
-            let haltRetryDelay = 5000;
-            while(this.running && this._halted && this._halted.reason === 'halt-state-check-failed'){
-                await this.util.sleep(haltRetryDelay);
-                if(!(this.running && this._halted && this._halted.reason === 'halt-state-check-failed')) break;
-                try {
-                    let prior = await this.db.getActiveHalt(this.dbType);
-                    if(!prior){
-                        getLogger().info('halt-state check recovered for ' + this.chain + '/' + this.network +
-                            '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
-                        this._halted = null;
-                        break;
-                    }
-                    this._halted = {
-                        blockIndex: Number(prior.block_index), reason: prior.reason,
-                        mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
-                        at: prior.detected_at
-                    };
-                    getLogger().error('halt-state check recovered for ' + this.chain + '/' + this.network +
-                        '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
-                        prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
-                    break;
-                } catch(e2){
-                    haltRetryDelay = Math.min(haltRetryDelay * 2, 60000);
-                }
-            }
-            // A real durable halt installed above idles here exactly as the prior-halt
-            // branch does; a cleared or never-existent halt falls straight through.
-            while(this.running && this._halted){ await this.util.sleep(5000); }
-            if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
-            return;
+            await this.retryStartupHaltRead();
+            return this.waitForStartupHalt();
         }
+    }
 
-        // Reload the durable truncation join floor (set by a prior bootstrapFromHeight).
-        // _bootstrapBase is otherwise in-memory only, so after a restart the incremental
-        // resume path below would leave it null: the join-block recompute skip and the
-        // truncation floor would be silently lost. Must run before the resume branch so
-        // verifyRecompute and the depth guard see the persisted floor.
-        await this.loadBootstrapBase();
-
+    async synchronizeStoredReplica(){
         this.lastAppliedBlock = await this.db.getLastBlock();
-
         if(this.lastAppliedBlock === null){
-            // Empty database. Choose the bootstrap strategy: a chain with a
-            // configured SYNC_BOOTSTRAP_DEPTH seeds from a recent height (fast
-            // chains whose full snapshot can't be applied in one pass); everything
-            // else takes the full-history snapshot.
+            // A configured truncation depth selects recent-height bootstrap.
             if(this._truncatedDepth >= 1){
                 getLogger().info('No local data found; bootstrapping ' + this.chain + '/' + this.network +
                     ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + this._truncatedDepth + ', truncated replica)...');
@@ -806,53 +777,49 @@ class ClientSync {
                 getLogger().info('No local data found, bootstrapping from full snapshot...');
                 await this.bootstrapFromSnapshot();
             }
-        } else {
-            // Partial data: incremental catch-up.
-            // Reconcile the schema first. fetchAndApplySchema otherwise runs only at
-            // bootstrap, so a replica bootstrapped BEFORE the source added a table never
-            // receives it on resume; and a zero-row source table (no VOTE / anchor-reconcile
-            // activity on this chain) streams nothing, so neither the apply-path heal nor
-            // the completeness-check heal ever fires to create it. The result is a permanent
-            // ER_NO_SUCH_TABLE on every /status table-count sweep (observed live: polls /
-            // poll_results / vote_delegations / votes / anchor_reward_reconcile_log on the BTC
-            // replicas). Re-applying here is idempotent (replicateSchema only CREATEs missing
-            // tables, never ALTERs or drops) and non-fatal (a fetch failure just logs and
-            // returns), so a restart converges the schema even with no row flow to trigger a heal.
-            await this.fetchAndApplySchema(this.sources[0]);
-            // Pass the next needed block (lastAppliedBlock + 1): the server uses
-            // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
-            // applied rows and the non-ignore INSERT throws a duplicate-key error.
-            getLogger().info('Resuming from block ' + this.lastAppliedBlock);
-            await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+            return;
         }
+        // Resume applies the source schema before incremental rows reach the replica.
+        await this.fetchAndApplySchema(this.sources[0]);
+        getLogger().info('Resuming from block ' + this.lastAppliedBlock);
+        await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+    }
 
-        // Never enter live-follow on an empty replica. bootstrapFromSnapshot now
-        // throws on permanent exhaustion (unwinding before we get here, propagated to
-        // the supervisor for a clean restart), but guard the tip directly too: if for
-        // any reason we reach this point with no committed block, the live WS path
-        // would apply the first block onto an empty DB with every continuity/fork/
-        // duplicate guard disabled (all gated on lastAppliedBlock !== null), silently
-        // orphaning all blocks below it. Refuse rather than corrupt the replica.
+    ensureLiveFollowTip(){
         if(this.lastAppliedBlock === null){
             throw new Error('Refusing to enter live-follow: replica still empty after bootstrap for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
+    }
 
-        // One loud, one-time signal for a schema gap that would otherwise replicate
-        // silently. Runs after bootstrap / catch-up (both of which apply the source
-        // schema, which CREATEs missing tables), so anything still absent here is a
-        // gap no automatic heal closed, on a replica that is about to enter
-        // live-follow reporting halted:false and lag_blocks:0 for tables that will
-        // never arrive.
+    async prepareLiveFollow(){
+        // Missing-table warnings run after bootstrap or catch-up applies the source schema.
         await this.warnMissingTables();
-
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+    }
 
-        // Start the dispensers wall clock at live-follow: a full snapshot seeds the table at parity.
+    beginLiveFollow(){
+        // The dispensers wall clock begins when live-follow begins.
         if(this.dbType === 'decoder') this._dispenserClockArmedAt = Date.now();
         this.connectWebSockets();
+    }
 
-        // Keep alive
+    async start(){
+        this.running = true;
+        getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        this.warnTrustPosture();
+
+        const haltAction = await this.resolveStartupHalt();
+        if(haltAction === 'restart') return this.start();
+        if(haltAction === 'stop') return;
+
+        // The persisted truncation floor loads before the resume branch and its depth guard.
+        await this.loadBootstrapBase();
+        await this.synchronizeStoredReplica();
+        this.ensureLiveFollowTip();
+        await this.prepareLiveFollow();
+        this.beginLiveFollow();
+
         while(this.running){
             await this.util.sleep(5000);
         }
