@@ -28,6 +28,74 @@ const { requireStakeWeight } = require('./shared.js');
 const { getLogger } = require('../observability');
 const logger = getLogger();
 
+function foldStakeWeightRows(rows, label){
+    return rows.map(r => ({
+        pubkey: String(r.pubkey),
+        source: String(r.source),
+        weight: requireStakeWeight(r.weight, label)
+    }));
+}
+
+function stakeWeightSlashExclusion(keyCol){
+    return `AND NOT EXISTS (SELECT 1 FROM capability_slash_events cse
+                             WHERE cse.signing_pubkey_id = ${keyCol} AND cse.block_index <= ?)`;
+}
+
+const STAKE_WEIGHTS_AS_OF_SQL = `SELECT ip.pubkey AS pubkey,
+                          sa.address AS source,
+                          q.total    AS weight
+                   FROM (
+                       SELECT s.source_id AS source_id,
+                              SUM(CAST(s.amount AS DECIMAL(30,8))
+                                  + COALESCE(CAST(addback.amt AS DECIMAL(30,8)), 0)) AS total
+                       FROM stakes s
+                       LEFT JOIN (
+                           SELECT csd.stake_action_index AS stake_action_index,
+                                  SUM(CAST(csd.amount AS DECIMAL(30,8))) AS amt
+                           FROM capability_slash_debits csd
+                           WHERE csd.target_table = 'stakes' AND csd.block_index > ?
+                           GROUP BY csd.stake_action_index
+                       ) addback ON addback.stake_action_index = s.action_index
+                       WHERE s.status_id = ?
+                         AND s.activation_block <= ?
+                         AND (s.deactivation_block IS NULL OR s.deactivation_block > ?)
+                       GROUP BY s.source_id
+                       HAVING total >= CAST(? AS DECIMAL(30,8))
+                   ) q
+                   JOIN index_addresses sa ON sa.id = q.source_id
+                   JOIN (
+                       SELECT s2.source_id AS source_id, s2.signing_pubkey_id AS pubkey_id
+                       FROM stakes s2
+                       WHERE s2.status_id = ?
+                         AND s2.activation_block <= ?
+                         AND (s2.deactivation_block IS NULL OR s2.deactivation_block > ?)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM stake_key_revocations r
+                             WHERE r.source_id = s2.source_id
+                               AND r.signing_pubkey_id = s2.signing_pubkey_id
+                               AND r.status_id = ?
+                               AND r.deactivation_block <= ?
+                               AND r.action_index > s2.action_index)
+                         ${stakeWeightSlashExclusion('s2.signing_pubkey_id')}
+                       GROUP BY s2.source_id, s2.signing_pubkey_id
+                       UNION
+                       SELECT d.source_id AS source_id, d.signing_pubkey_id AS pubkey_id
+                       FROM delegations d
+                       WHERE d.status_id = ?
+                         AND d.activation_block <= ?
+                         AND (d.deactivation_block IS NULL OR d.deactivation_block > ?)
+                         ${stakeWeightSlashExclusion('d.signing_pubkey_id')}
+                   ) ek ON ek.source_id = q.source_id
+                   JOIN index_pubkeys ip ON ip.id = ek.pubkey_id`;
+
+function buildStakeWeightsAsOfQuery(valid_id, snapshotBlock, minStake){
+    let args = [snapshotBlock,
+                valid_id, snapshotBlock, snapshotBlock, String(minStake),
+                valid_id, snapshotBlock, snapshotBlock, valid_id, snapshotBlock, snapshotBlock,
+                valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
+    return { sql: STAKE_WEIGHTS_AS_OF_SQL, args };
+}
+
 module.exports = {
 
     // Light-client stakes_root support (SPV spec sec.4.1, BTC-only). Source-deduped
@@ -161,11 +229,9 @@ module.exports = {
             let truncated = raw.some(r => Number(r._sr) > maxSources);
             if(truncated)
                 logger.warn(label + ' saw more than ' + maxSources + ' distinct staking sources at block ' + blockIndex + ' - stakes_root snapshot truncated; stake-weighted quorum fails closed. Raise STAKE_WEIGHT_MAX_SOURCES (coordinated flag-day upgrade) if the federation has grown.');
-            let rows = (truncated ? raw.filter(r => Number(r._sr) <= maxSources) : raw).map(r => ({
-                pubkey: String(r.pubkey),
-                source: String(r.source),
-                weight: requireStakeWeight(r.weight, label)
-            }));
+            let rows = foldStakeWeightRows(
+                truncated ? raw.filter(r => Number(r._sr) <= maxSources) : raw,
+                label);
             return { rows, truncated };
         }
         let query = `${inner.sql} ORDER BY source${swc}, pubkey${swc} LIMIT ?`;
@@ -173,11 +239,7 @@ module.exports = {
         let truncated = raw.length >= limit;
         if(truncated)
             logger.warn(label + ' hit the result cap of ' + limit + ' rows at block ' + blockIndex + ' - stakes_root set may be truncated vs the source. Raise the frozen VALIDATOR_QUERY_LIMIT (coordinated fleet upgrade) if the federation has grown.');
-        let rows = raw.map(r => ({
-            pubkey: String(r.pubkey),
-            source: String(r.source),
-            weight: requireStakeWeight(r.weight, label)
-        }));
+        let rows = foldStakeWeightRows(raw, label);
         return { rows, truncated };
     },
 
@@ -220,66 +282,8 @@ module.exports = {
         // transaction open (ClientSync.oraclePublishSetAt).
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
-        // Membership exclusion is identical to stakeWeightsSql: a key slashed at
-        // block > S has cse.block_index > S, so NOT EXISTS is TRUE and the key is
-        // correctly KEPT in the set at S. Only the q-subquery AMOUNT is reconstructed.
-        const slashExcl = (keyCol) =>
-            `AND NOT EXISTS (SELECT 1 FROM capability_slash_events cse
-                             WHERE cse.signing_pubkey_id = ${keyCol} AND cse.block_index <= ?)`;
-        let sql = `SELECT ip.pubkey AS pubkey,
-                          sa.address AS source,
-                          q.total    AS weight
-                   FROM (
-                       SELECT s.source_id AS source_id,
-                              SUM(CAST(s.amount AS DECIMAL(30,8))
-                                  + COALESCE(CAST(addback.amt AS DECIMAL(30,8)), 0)) AS total
-                       FROM stakes s
-                       LEFT JOIN (
-                           SELECT csd.stake_action_index AS stake_action_index,
-                                  SUM(CAST(csd.amount AS DECIMAL(30,8))) AS amt
-                           FROM capability_slash_debits csd
-                           WHERE csd.target_table = 'stakes' AND csd.block_index > ?
-                           GROUP BY csd.stake_action_index
-                       ) addback ON addback.stake_action_index = s.action_index
-                       WHERE s.status_id = ?
-                         AND s.activation_block <= ?
-                         AND (s.deactivation_block IS NULL OR s.deactivation_block > ?)
-                       GROUP BY s.source_id
-                       HAVING total >= CAST(? AS DECIMAL(30,8))
-                   ) q
-                   JOIN index_addresses sa ON sa.id = q.source_id
-                   JOIN (
-                       SELECT s2.source_id AS source_id, s2.signing_pubkey_id AS pubkey_id
-                       FROM stakes s2
-                       WHERE s2.status_id = ?
-                         AND s2.activation_block <= ?
-                         AND (s2.deactivation_block IS NULL OR s2.deactivation_block > ?)
-                         AND NOT EXISTS (
-                             SELECT 1 FROM stake_key_revocations r
-                             WHERE r.source_id = s2.source_id
-                               AND r.signing_pubkey_id = s2.signing_pubkey_id
-                               AND r.status_id = ?
-                               AND r.deactivation_block <= ?
-                               AND r.action_index > s2.action_index)
-                         ${slashExcl('s2.signing_pubkey_id')}
-                       GROUP BY s2.source_id, s2.signing_pubkey_id
-                       UNION
-                       SELECT d.source_id AS source_id, d.signing_pubkey_id AS pubkey_id
-                       FROM delegations d
-                       WHERE d.status_id = ?
-                         AND d.activation_block <= ?
-                         AND (d.deactivation_block IS NULL OR d.deactivation_block > ?)
-                         ${slashExcl('d.signing_pubkey_id')}
-                   ) ek ON ek.source_id = q.source_id
-                   JOIN index_pubkeys ip ON ip.id = ek.pubkey_id`;
-        // Arg order tracks the placeholders left-to-right: the addback block bound
-        // first, then the same sequence stakeWeightsSql uses (all historical-block
-        // args bound to snapshotBlock), then the LIMIT.
-        let args = [snapshotBlock,
-                    valid_id, snapshotBlock, snapshotBlock, String(minStake),
-                    valid_id, snapshotBlock, snapshotBlock, valid_id, snapshotBlock, snapshotBlock,
-                    valid_id, snapshotBlock, snapshotBlock, snapshotBlock];
-        let { rows } = await this.applyStakeWeightCap({ sql, args }, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
+        let query = buildStakeWeightsAsOfQuery(valid_id, snapshotBlock, minStake);
+        let { rows } = await this.applyStakeWeightCap(query, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
         return rows;
     },
 
