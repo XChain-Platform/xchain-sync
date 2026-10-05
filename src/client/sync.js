@@ -155,6 +155,90 @@ function reportIndexMapResult(client, source, blockHeight, localChecksum, remote
     return true;
 }
 
+function buildDivergenceHalt(blockIndex, mismatches, sources, reason){
+    return {
+        blockIndex, reason: reason || 'cross-source-divergence',
+        mismatches: mismatches || [], sources: sources || [],
+        at: new Date().toISOString()
+    };
+}
+
+function logDivergenceReason(client, blockIndex, mismatches){
+    if(client._halted.reason === 'local-recompute-divergence'){
+        getLogger().error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
+        getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
+        getLogger().error('investigate replica state and clear before this validator can resume.');
+    } else if(client._halted.reason === 'recompute-error'){
+        getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
+        getLogger().error('retries. This recompute is the only verification of the applied range');
+        getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
+        getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
+        getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
+        getLogger().error('clear before this validator can resume.');
+    } else if(client._halted.reason === 'boundary-read-error'){
+        getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
+        getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
+        getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
+        getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
+        getLogger().error('fix the local database fault and clear before this validator can resume.');
+    } else if(client._halted.reason === 'max-rollback-depth-exceeded'){
+        getLogger().error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
+        getLogger().error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
+        getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
+        getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
+        getLogger().error('this validator can resume.');
+    } else if(client._halted.reason === 'checkpoint-quorum-divergence'){
+        getLogger().error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
+        getLogger().error('match this replica (quorum failed under the pinned validator set, or its');
+        getLogger().error('committed state_root disagrees with the replica\'s own recompute). The');
+        getLogger().error('source served state the federation did not sign. HALTING (applying no');
+        getLogger().error('further blocks). Operator must investigate and clear before resuming.');
+    } else if(client._halted.reason === 'no-source-quorum'){
+        getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
+        getLogger().error('SOURCE_QUORUM (' + client.effectiveQuorum() + ' of ' + client.activeSourceCount() +
+            ' active). The replica cannot determine which chain is canonical, so it must not');
+        getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
+        getLogger().error('the contending sources and clear before this validator can resume.');
+    } else if(client._halted.reason === 'checkpoint-freshness-stale'){
+        getLogger().error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
+        getLogger().error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
+        getLogger().error('is on. The tail past the last anchor is unverifiable against the federation, so');
+        getLogger().error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
+        getLogger().error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
+    } else if(client._halted.reason === 'train-activation'){
+        let m = (mismatches && mismatches[0]) || {};
+        getLogger().error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
+        getLogger().error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
+            ', which this build does');
+        getLogger().error('not implement. Applying this block under the old rules would fork. HALTING');
+        getLogger().error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
+        getLogger().error('platform version that carries the rule set, then clear. Clearing without the');
+        getLogger().error('update is not a supported path.');
+        if(m.reason) getLogger().error(m.reason);
+    } else {
+        getLogger().error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
+        getLogger().error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
+        getLogger().error('investigate and clear before this validator can resume.');
+    }
+}
+
+function logDivergenceHalt(client, blockIndex, mismatches, sources){
+    getLogger().error('================================================================');
+    getLogger().error('CONSENSUS DIVERGENCE HALT: ' + client.chain + '/' + client.network + '/' + client.dbType);
+    logDivergenceReason(client, blockIndex, mismatches);
+    getLogger().error('mismatches: ' + JSON.stringify(mismatches));
+    getLogger().error('sources: ' + JSON.stringify(sources));
+    getLogger().error('================================================================');
+}
+
+function stopDivergenceApply(client){
+    // Stop the live apply path; pending cross-source hashes are now moot.
+    client.pendingHashes.clear();
+    client._strictConfirmPending.clear();
+    for(let [, timer] of client._applyTimers) clearTimeout(timer);
+    client._applyTimers.clear();
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -3201,79 +3285,11 @@ class ClientSync {
     // marker, one startup check and one operator clear.
     async haltOnDivergence(blockIndex, mismatches, sources, reason){
         if(this._halted) return; // already halted
-        this._halted = {
-            blockIndex, reason: reason || 'cross-source-divergence',
-            mismatches: mismatches || [], sources: sources || [],
-            at: new Date().toISOString()
-        };
+        this._halted = buildDivergenceHalt(blockIndex, mismatches, sources, reason);
         try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
         catch(e){ getLogger().error(util.format('CRITICAL: failed to persist divergence halt (still halting in-memory):', e)); }
-        getLogger().error('================================================================');
-        getLogger().error('CONSENSUS DIVERGENCE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
-        if(this._halted.reason === 'local-recompute-divergence'){
-            getLogger().error('block ' + blockIndex + ': local recompute diverged from committed hash. Replica');
-            getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
-            getLogger().error('investigate replica state and clear before this validator can resume.');
-        } else if(this._halted.reason === 'recompute-error'){
-            getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
-            getLogger().error('retries. This recompute is the only verification of the applied range');
-            getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
-            getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
-            getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
-            getLogger().error('clear before this validator can resume.');
-        } else if(this._halted.reason === 'boundary-read-error'){
-            getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
-            getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
-            getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
-            getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
-            getLogger().error('fix the local database fault and clear before this validator can resume.');
-        } else if(this._halted.reason === 'max-rollback-depth-exceeded'){
-            getLogger().error('block ' + blockIndex + ': reorg too deep to roll back safely (exceeds');
-            getLogger().error('MAX_ROLLBACK_DEPTH). The replica is stranded on the orphaned fork and');
-            getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
-            getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
-            getLogger().error('this validator can resume.');
-        } else if(this._halted.reason === 'checkpoint-quorum-divergence'){
-            getLogger().error('block ' + blockIndex + ': the federation quorum-signed checkpoint does not');
-            getLogger().error('match this replica (quorum failed under the pinned validator set, or its');
-            getLogger().error('committed state_root disagrees with the replica\'s own recompute). The');
-            getLogger().error('source served state the federation did not sign. HALTING (applying no');
-            getLogger().error('further blocks). Operator must investigate and clear before resuming.');
-        } else if(this._halted.reason === 'no-source-quorum'){
-            getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
-            getLogger().error('SOURCE_QUORUM (' + this.effectiveQuorum() + ' of ' + this.activeSourceCount() +
-                ' active). The replica cannot determine which chain is canonical, so it must not');
-            getLogger().error('pick one. HALTING (applying no further blocks). Operator must investigate');
-            getLogger().error('the contending sources and clear before this validator can resume.');
-        } else if(this._halted.reason === 'checkpoint-freshness-stale'){
-            getLogger().error('block ' + blockIndex + ': the newest federation quorum checkpoint trails the');
-            getLogger().error('replica tip by more than CHECKPOINT_FRESHNESS_BLOCKS and CHECKPOINT_FRESHNESS_STRICT');
-            getLogger().error('is on. The tail past the last anchor is unverifiable against the federation, so');
-            getLogger().error('this replica refuses to serve it. HALTING (applying no further blocks). Operator');
-            getLogger().error('must restore a fresh anchor (or clear strict mode) and clear before resuming.');
-        } else if(this._halted.reason === 'train-activation'){
-            let m = (mismatches && mismatches[0]) || {};
-            getLogger().error('block ' + blockIndex + ': TRAIN ACTIVATION HALT. The signed release manifest requires');
-            getLogger().error('rule set ' + m.required + ' from BTC height ' + m.at_height + ' on ' + m.network +
-                ', which this build does');
-            getLogger().error('not implement. Applying this block under the old rules would fork. HALTING');
-            getLogger().error('(applying no further blocks). REQUIRED OPERATOR ACTION: update this node to the');
-            getLogger().error('platform version that carries the rule set, then clear. Clearing without the');
-            getLogger().error('update is not a supported path.');
-            if(m.reason) getLogger().error(m.reason);
-        } else {
-            getLogger().error('block ' + blockIndex + ': sources disagree on the consensus hash. One is on a');
-            getLogger().error('forked/Byzantine chain. HALTING (applying no further blocks). Operator must');
-            getLogger().error('investigate and clear before this validator can resume.');
-        }
-        getLogger().error('mismatches: ' + JSON.stringify(mismatches));
-        getLogger().error('sources: ' + JSON.stringify(sources));
-        getLogger().error('================================================================');
-        // Stop the live apply path; pending cross-source hashes are now moot.
-        this.pendingHashes.clear();
-        this._strictConfirmPending.clear();
-        for(let [, timer] of this._applyTimers) clearTimeout(timer);
-        this._applyTimers.clear();
+        logDivergenceHalt(this, blockIndex, mismatches, sources);
+        stopDivergenceApply(this);
     }
 
     // Recompute a block's consensus hashes from the replica's raw rows and compare
