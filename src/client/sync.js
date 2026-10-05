@@ -868,12 +868,46 @@ class ClientSync {
         }
         if(!schema || !schema.tables) return;
 
-        // Fail closed: faults that survive the ordering fixpoint record a durable halt.
         let pending = this.collectSchemaTables(schema.tables);
-        let result = await this.applySchemaTables(pending);
-        if(result.pending.length){
-            let failed = this.schemaFailureDetails(result.pending, result.lastErr);
-            await this.haltOnSchemaFailure(source, failed);
+        let lastErr = new Map();
+        while(pending.length){
+            let stillPending = [];
+            let progressed = false;
+            for(let { tableName, createSql } of pending){
+                let attempt = 0;
+                let succeeded = false;
+                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
+                    try {
+                        let exists = await this.db.findTableInSchema(tableName);
+                        if(exists.length === 0){
+                            await this.db.doQuery(createSql);
+                            getLogger().info('  Created table: ' + tableName);
+                        } else {
+                            // Propagates columns added upstream since bootstrap, outside any snapshot transaction.
+                            await this.db.addMissingColumns(tableName, createSql);
+                        }
+                        lastErr.delete(tableName);
+                        succeeded = true;
+                        break;
+                    } catch(e){
+                        if(e.errno !== SCHEMA_TRANSIENT_ERRNO || attempt >= SCHEMA_TRANSIENT_MAX_RETRIES){
+                            lastErr.set(tableName, e);
+                            break;
+                        }
+                        let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
+                        this.logSchemaRetry(tableName, delay, attempt);
+                        await this.util.sleep(delay);
+                        attempt++;
+                    }
+                }
+                if(succeeded) progressed = true;
+                else stillPending.push({ tableName, createSql });
+            }
+            if(!progressed) break;
+            pending = stillPending;
+        }
+        if(pending.length){
+            await this.haltOnSchemaFailure(source, this.schemaFailureDetails(pending, lastErr));
             return;
         }
         getLogger().info('Schema applied from ' + source);
@@ -909,53 +943,10 @@ class ClientSync {
         return pending;
     }
 
-    // Retries unapplied tables until a pass makes no progress, so FK ordering misses
-    // clear while genuine faults persist to the fixpoint.
-    async applySchemaTables(pending){
-        let lastErr = new Map();
-        while(pending.length){
-            let stillPending = [];
-            let progressed = false;
-            for(let { tableName, createSql } of pending){
-                if(await this.applySchemaTable(tableName, createSql, lastErr)){
-                    progressed = true;
-                } else {
-                    stillPending.push({ tableName, createSql });
-                }
-            }
-            if(!progressed) break; // fixpoint: nothing advanced this pass
-            pending = stillPending;
-        }
-        return { pending, lastErr };
-    }
-
-    async applySchemaTable(tableName, createSql, lastErr){
-        let attempt = 0;
-        while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
-            try {
-                let exists = await this.db.findTableInSchema(tableName);
-                if(exists.length === 0){
-                    await this.db.doQuery(createSql);
-                    getLogger().info('  Created table: ' + tableName);
-                } else {
-                    // Propagates columns added upstream since bootstrap, outside any snapshot transaction.
-                    await this.db.addMissingColumns(tableName, createSql);
-                }
-                lastErr.delete(tableName);
-                return true;
-            } catch(e){
-                if(e.errno !== SCHEMA_TRANSIENT_ERRNO || attempt >= SCHEMA_TRANSIENT_MAX_RETRIES){
-                    lastErr.set(tableName, e);
-                    return false;
-                }
-                let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
-                getLogger().warn('Schema apply lock-timeout on ' + tableName +
-                    ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
-                    (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
-                await this.util.sleep(delay);
-                attempt++;
-            }
-        }
+    logSchemaRetry(tableName, delay, attempt){
+        getLogger().warn('Schema apply lock-timeout on ' + tableName +
+            ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
+            (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
     }
 
     schemaFailureDetails(pending, lastErr){
