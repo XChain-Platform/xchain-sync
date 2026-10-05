@@ -63,80 +63,113 @@ function isSchemaGapError(e){
     return !!(e && (e.errno === 1146 || e.errno === 1054));
 }
 
+function initializePollerIdentity(poller, chain, network, db, broadcaster,
+    transparencyLog, config, util){
+    poller.chain = chain;
+    // Keep caller `chain` form for routing, payload fields, and logs.
+    // Resolve a ticker separately for per-chain activation lookups.
+
+    // Match state_tree_roots.chain to the ticker written by the source indexer.
+    // Use the same ticker for the state-commitment activation lookup.
+    // Prevent null roots from bypassing the follower commitment check.
+
+    // Preserve caller form for broadcast routing and payload `chain:` fields.
+    // Route log messages under the caller's full chain name.
+    // Keep ticker conversion isolated to fields that require canonical form.
+    poller.coinTicker = coinTicker(chain);
+    poller.network = network;
+    poller.db = db;
+    poller.broadcaster = broadcaster;
+    poller.transparencyLog = transparencyLog;  // null for decoder; non-null for indexer
+    poller.config = config;
+    poller.util = util;
+    poller.dbType = (db && db.dbType) ? db.dbType : 'indexer';
+}
+
+function initializeActivationDelay(poller, chain){
+    // Freeze the per-chain activation delay for forward deactivation stamps.
+    // Support the in-place updated-rows channel with its consensus delay.
+    // Normalize missing delays for unrecognized coins and test harnesses.
+
+    // Let collectUpdatedRows skip the deactivation class without a delay.
+    // Avoid scanning updated rows with an incorrect activation delay.
+    // Keep the stored absence value consistently null.
+    let delay = activationDelayBlocks(chain);
+    poller.activationDelay = (delay === undefined) ? null : delay;
+}
+
+function initializeCursorState(poller, chain, network){
+    poller.lastPolledBlock = null;
+    // Track the source content hash for the last polled block.
+    // Detect net-forward reorgs whose height remains monotonic.
+    // Compare content hashes after rollback and readvance in one interval.
+    poller.lastPolledBlockHash = null;
+
+    // Bound recently broadcast hashes by block index and content hash.
+    // Seed walk-back from the pre-reorg hash for net-forward reorgs.
+    // Continue deep walk-back across later polls.
+
+    // Support both database types without relying on decoder sync metadata.
+    // Retain the chain-specific safe rollback ceiling plus a margin.
+    // Enforce the global minimum window for short rollback configurations.
+
+    // Cap retained entries to recentHashCap heights.
+    // Initialize the map before computing its chain-specific capacity.
+    poller.recentBroadcastHashes = new Map();
+    poller.recentHashCap = Math.max(RECENT_HASH_CAP_FLOOR,
+        envConfig.rollbackDepthSafeCeiling(chain, network) + RECENT_HASH_CAP_MARGIN);
+    poller.running = false;
+}
+
+function initializeTableTopology(poller){
+    // Share replicated topology with row-count completeness checks.
+    // Read every scope from src/schema/replicated_tables.js.
+    let topo = replicatedTables.getTopology(poller.dbType);
+    poller.blockScopedTables = topo.blockScoped;
+    poller.txScopedTables = topo.txScoped;
+    poller.actionScopedTables = topo.actionScoped;
+    poller.indexTables = topo.index;
+}
+
+function initializeInfrastructureTables(poller){
+    if(poller.dbType === 'decoder'){
+        // Leave decoder without cross-chain infrastructure tables.
+        poller.infraTables = new Set();
+        return;
+    }
+
+    // Sync infrastructure tables regardless of subscriber mode.
+    // Provide cross-chain validator, reward, and price-query state.
+
+    // Send only these tables to infra-only subscribers for this chain.
+    // Keep the set identical for every indexer poller instance.
+    poller.infraTables = new Set([
+        'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
+        'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
+    ]);
+}
+
+function initializePollerHealthState(poller){
+    // Count consecutive poll failures for stale /health status.
+    // Reset the count after a successful poll cycle.
+    poller.pollErrorCount = 0;
+
+    // Throttle the action-scoped query-count metric.
+    // Use zero so the first block publishes a baseline.
+    // Update the stamp in reportActionScopedQueryMetric.
+    poller._lastQueryMetricAt = 0;
+}
+
 class ServerPoller {
 
     constructor(chain, network, db, broadcaster, transparencyLog, config, util) {
-        this.chain    = chain;
-        // Canonical TICKER form of `chain` for the per-chain '<TICKER>:<network>'
-        // activation lookup AND the state_tree_roots.chain column (the source indexer
-        // writes tickers there). `this.chain` stays the caller's full-name form because
-        // broadcast routing, payload `chain:` fields, and logging all use it. See
-        // coinTicker: passing the full name here made the gate resolve to "off" and the
-        // roots lookup miss its row, so the server published NULL roots and the
-        // follower's state-commitment check never ran.
-        this.coinTicker = coinTicker(chain);
-        this.network  = network;
-        this.db       = db;
-        this.broadcaster    = broadcaster;
-        this.transparencyLog = transparencyLog;  // null for decoder; non-null for indexer
-        this.config   = config;
-        this.util     = util;
-        this.dbType   = (db && db.dbType) ? db.dbType : 'indexer';
-
-        // Frozen per-chain ACTIVATION_DELAY_BLOCKS, needed to detect forward
-        // deactivation_block stamps for the in-place updated-rows channel (see
-        // updatedRows.js). A coin that is unrecognized (or omitted in a test
-        // harness) yields undefined/null; collectUpdatedRows then skips the
-        // deactivation_block class rather than scanning with a wrong delay.
-        let delay = activationDelayBlocks(chain);
-        this.activationDelay = (delay === undefined) ? null : delay;
-
-        this.lastPolledBlock = null;
-        // Hash of lastPolledBlock's content on the source. A net-forward reorg
-        // (rollback + readvance within one poll interval, which keeps the height
-        // monotonic) is detectable by a changed hash, not just a lower height.
-        this.lastPolledBlockHash = null;
-        // Bounded map of recently broadcast block hashes (block_index -> content
-        // hash WE broadcast for that height). On a net-forward reorg the walk-back
-        // seeds lastPolledBlockHash from the PRE-reorg hash recorded here, so a
-        // reorg deeper than one block keeps walking back over subsequent polls. This
-        // works for both dbTypes (the decoder has no sync_meta to read a recorded
-        // hash from). Capped to the last recentHashCap heights.
-        this.recentBroadcastHashes = new Map();
-        this.recentHashCap = Math.max(RECENT_HASH_CAP_FLOOR,
-            envConfig.rollbackDepthSafeCeiling(chain, network) + RECENT_HASH_CAP_MARGIN);
-        this.running = false;
-
-        // Per-block replicated table topology (single source of truth shared with
-        // the row-count completeness check; see src/schema/replicated_tables.js).
-        let topo = replicatedTables.getTopology(this.dbType);
-        this.blockScopedTables  = topo.blockScoped;
-        this.txScopedTables     = topo.txScoped;
-        this.actionScopedTables = topo.actionScoped;
-        this.indexTables        = topo.index;
-
-        if(this.dbType === 'decoder'){
-            // Decoder doesn't have cross-chain infrastructure tables
-            this.infraTables = new Set();
-        } else {
-            // Infrastructure tables: always synced regardless of subscriber sync mode.
-            // These tables provide cross-chain state that every node needs (validator set,
-            // rewards) or that participate in cross-chain queries (PRICE actions on any chain).
-            // Subscribers in 'infra-only' mode receive ONLY these tables for this chain.
-            this.infraTables = new Set([
-                'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
-                'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
-            ]);
-        }
-
-        // Count of consecutive poll() failures so updateStatus can surface
-        // a stale-status signal to /health callers when the poller is wedged.
-        this.pollErrorCount = 0;
-
-        // Throttle stamp for the action-scoped query-count metric (0 = never emitted,
-        // so the first block of a process publishes a baseline). See
-        // reportActionScopedQueryMetric.
-        this._lastQueryMetricAt = 0;
+        initializePollerIdentity(this, chain, network, db, broadcaster,
+            transparencyLog, config, util);
+        initializeActivationDelay(this, chain);
+        initializeCursorState(this, chain, network);
+        initializeTableTopology(this);
+        initializeInfrastructureTables(this);
+        initializePollerHealthState(this);
     }
 
     async start(){
