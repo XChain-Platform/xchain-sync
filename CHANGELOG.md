@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.4] - 2026-10-05
+
+### Changed
+- Carried the armed oracle round time activation row from the indexer.
+- Synced the gate registry shared rows with the indexer registry.
+- Broadened the rollback sweep parity checks to accept bounded sweep queries.
+
 ## [0.21.3] - 2026-10-03
 
 ### Added
