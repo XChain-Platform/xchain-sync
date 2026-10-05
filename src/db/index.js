@@ -852,16 +852,17 @@ class Database {
     // bootstrapped before the index was added to the source.
     async ensureReplicaSecondaryIndexes(){
         if(this.dbType !== 'indexer') return;
-        // index_tickers.block_index: added by xchain-indexer migration
-        // 2026-06-21-index-tables-block-index-secondary-idx.sql. Used by ClientRollback
-        // (DELETE WHERE block_index >= ?) and the index-map parity checksum
-        // (WHERE block_index IS NOT NULL AND block_index <= ?). Without this index,
-        // both paths degrade to a full table scan on multi-million-row replicas.
-        // state_tree_roots.block_index: added by xchain-indexer migration
-        // 2026-09-12-state-tree-roots-block-index-idx.sql, for the same reason. The
-        // table's two existing keys both lead with (chain, network), so ClientRollback's
-        // DELETE WHERE block_index >= ? scans the entire root history on a replica, which
-        // holds one row per block for the life of the chain.
+        await this.ensureReplicaBlockIndexes();
+        if(this.dbType === 'indexer'){
+            await this.ensureReplicaAttestsIndex();
+            await this.ensureReplicaVotesIndex();
+            await this.ensureReplicaAnchorActionsPrimaryKey();
+            await this.ensureReplicaValidatorRewardsIndex();
+        }
+    }
+
+    // These block indexes keep rollback and parity queries from scanning whole tables.
+    async ensureReplicaBlockIndexes(){
         let ensureIndexes = [
             { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)' },
             { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)' },
@@ -891,235 +892,153 @@ class Database {
                     logger.error(util.format('Failed to add secondary index ' + indexName + ' to ' + table + ':', e));
             }
         }
+    }
 
-        // 5245: Relax the attests UNIQUE(request_id, version) index to non-unique
-        // on replicas that bootstrapped before the v4 migration
-        // (2026-06-17-attests-drop-unique-request-id-version). The v3 schema carried
-        // a UNIQUE index; the v4 migration drops+recreates it non-unique so a request
-        // can carry multiple v1 retry rows. A sync-only replica that bootstrapped
-        // with the stale UNIQUE halts on the first second-v1 row (errno 1062
-        // ER_DUP_ENTRY). Detect a UNIQUE index via information_schema.statistics
-        // (NON_UNIQUE=0) and DROP+recreate as a plain index. Idempotent: already
-        // non-unique (NON_UNIQUE=1) is skipped; index absent is skipped (fresh
-        // replicas bootstrap from the already-correct source DDL). indexer-only.
-        if(this.dbType === 'indexer'){
-            try {
-                let tableCheck = await this.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'attests'",
+    // A non-unique attests index permits multiple retry rows for one request version.
+    async ensureReplicaAttestsIndex(){
+        try {
+            let tableCheck = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'attests'",
+                [this.dbName]
+            );
+            if(tableCheck.length > 0){
+                let idxRows = await this.doQuery(
+                    "SELECT NON_UNIQUE FROM information_schema.statistics " +
+                    "WHERE table_schema = ? AND table_name = 'attests' AND index_name = 'request_id_version' LIMIT 1",
                     [this.dbName]
                 );
-                if(tableCheck.length > 0){
-                    let idxRows = await this.doQuery(
-                        "SELECT NON_UNIQUE FROM information_schema.statistics " +
-                        "WHERE table_schema = ? AND table_name = 'attests' AND index_name = 'request_id_version' LIMIT 1",
-                        [this.dbName]
-                    );
-                    if(idxRows.length > 0){
-                        let nonUnique = Number(idxRows[0].NON_UNIQUE || idxRows[0].non_unique || 0);
-                        if(nonUnique === 0){
-                            // Index is UNIQUE on this replica; relax it.
-                            logger.info('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
-                            await this.doQuery('ALTER TABLE `attests` DROP INDEX `request_id_version`');
-                            await this.doQuery('CREATE INDEX `request_id_version` ON `attests` (request_id, version)');
-                        }
+                if(idxRows.length > 0){
+                    let nonUnique = Number(idxRows[0].NON_UNIQUE || idxRows[0].non_unique || 0);
+                    if(nonUnique === 0){
+                        // A unique index on this replica needs relaxation.
+                        logger.info('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
+                        await this.doQuery('ALTER TABLE `attests` DROP INDEX `request_id_version`');
+                        await this.doQuery('CREATE INDEX `request_id_version` ON `attests` (request_id, version)');
                     }
                 }
-            } catch(e){
-                if(e.errno !== 1146)
-                    logger.error(util.format('Failed to relax attests request_id_version index:', e));
             }
+        } catch(e){
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to relax attests request_id_version index:', e));
+        }
+    }
 
-            // votes append-only migration (indexer 219da33 /
-            // 2026-07-03-votes-append-only-unique-idx). The pre-219da33 schema keyed
-            // votes UNIQUE(poll_index, voter_address_id, choice): one live ballot per
-            // voter, last-write-wins. Append-only re-balloting inserts a NEW
-            // action_index set per re-vote, so the unique key gained action_index
-            // (poll_voter_action_choice). A replica that bootstrapped with the stale
-            // poll_voter_choice key wedges on the first re-ballot row (errno 1062
-            // ER_DUP_ENTRY) because the applier's last-write-wins pre-delete was
-            // removed when votes went append-only, so the collision is unhealable at
-            // apply time. Mirror the indexer's auto-migration here: drop the stale
-            // UNIQUE and add the widened one. Idempotent (drop skipped when absent,
-            // create skipped when present) and safe under the old writer, which held
-            // at most one action_index per (poll, voter) so the widened key cannot
-            // fail on existing rows. indexer-only.
-            try {
-                let votesCheck = await this.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'votes'",
+    // The append-only votes key includes action_index so re-ballots stay distinct.
+    async ensureReplicaVotesIndex(){
+        try {
+            let votesCheck = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'votes'",
+                [this.dbName]
+            );
+            if(votesCheck.length > 0){
+                let staleIdx = await this.doQuery(
+                    "SELECT index_name FROM information_schema.statistics " +
+                    "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_choice' LIMIT 1",
                     [this.dbName]
                 );
-                if(votesCheck.length > 0){
-                    let staleIdx = await this.doQuery(
-                        "SELECT index_name FROM information_schema.statistics " +
-                        "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_choice' LIMIT 1",
-                        [this.dbName]
-                    );
-                    if(staleIdx.length > 0){
-                        logger.info('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
-                        await this.doQuery('ALTER TABLE `votes` DROP INDEX `poll_voter_choice`');
-                    }
-                    let newIdx = await this.doQuery(
-                        "SELECT index_name FROM information_schema.statistics " +
-                        "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_action_choice' LIMIT 1",
-                        [this.dbName]
-                    );
-                    if(newIdx.length === 0){
-                        await this.doQuery('CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes` (poll_index, voter_address_id, action_index, choice)');
-                    }
+                if(staleIdx.length > 0){
+                    logger.info('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
+                    await this.doQuery('ALTER TABLE `votes` DROP INDEX `poll_voter_choice`');
                 }
-            } catch(e){
-                if(e.errno !== 1146)
-                    logger.error(util.format('Failed to migrate votes append-only unique index:', e));
-            }
-
-            // anchor_actions bundle-section key (indexer migration
-            // 2026-08-28-anchor-actions-section-index-pk). ANCHOR v7 bundles every
-            // checkpointed chain into ONE action, stored as N rows sharing an
-            // action_index and separated by section_index, so the source widened
-            // PRIMARY KEY (action_index) to (action_index, section_index).
-            //
-            // The replica's own schema self-heal cannot reach that. addMissingColumns
-            // ADDs section_index (NOT NULL DEFAULT 0) because it is a column gap, and
-            // ensureReplicaSecondaryIndexes above only ever ADDs secondary indexes; a
-            // PRIMARY KEY is neither. So a replica bootstrapped before the migration
-            // ends up with the new column under the OLD single-column key, and the
-            // first v7 bundle wedges it: anchor_actions is in neither ignoreTables nor
-            // upsertFullDumpTables (ClientApplier), so its rows take a plain INSERT and
-            // section 1 collides with section 0 on ER_DUP_ENTRY (1062). 1062 is not in
-            // ClientSync.healSchemaIfStale's {1146, 1054} heal set, so the apply
-            // transaction rolls back and re-fails on every retry, forever. Same
-            // unhealable-at-apply-time shape as the votes append-only key above.
-            //
-            // Widening is the safe direction and cannot fail on existing rows: every
-            // pre-v7 row is a single body at section_index 0 (DEFAULT), so the composite
-            // key is a strict superset of the key it replaces. Detection reads the
-            // PRIMARY's column list from information_schema.statistics; the swap runs as
-            // ONE ALTER so the table is never briefly without a primary key. Idempotent:
-            // a replica already on the composite key (fresh bootstrap from the source's
-            // own DDL) matches neither predicate and is skipped. indexer-only.
-            try {
-                let anchorCheck = await this.doQuery(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'anchor_actions'",
+                let newIdx = await this.doQuery(
+                    "SELECT index_name FROM information_schema.statistics " +
+                    "WHERE table_schema = ? AND table_name = 'votes' AND index_name = 'poll_voter_action_choice' LIMIT 1",
                     [this.dbName]
                 );
-                if(anchorCheck.length > 0){
-                    let pkCols = await this.doQuery(
-                        "SELECT column_name FROM information_schema.statistics " +
-                        "WHERE table_schema = ? AND table_name = 'anchor_actions' AND index_name = 'PRIMARY' " +
-                        "ORDER BY seq_in_index ASC",
-                        [this.dbName]
-                    );
-                    let cols = pkCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
-                    if(cols.length === 1 && cols[0] === 'action_index'){
-                        // The column must already be present or the ADD PRIMARY KEY names
-                        // an unknown column (1072) and the ALTER is refused wholesale,
-                        // leaving the stale key in place. ensureReplicatedColumns runs
-                        // immediately before this in replicateSchema, but SyncService calls
-                        // this method on its own, so re-check and close the gap here rather
-                        // than hand it to a next startup that repeats this same order.
-                        let colRows = await this.doQuery(
-                            "SELECT column_name FROM information_schema.columns " +
-                            "WHERE table_schema = ? AND table_name = 'anchor_actions' AND column_name = 'section_index'",
-                            [this.dbName]
-                        );
-                        let haveColumn = colRows.length > 0 ||
-                            await this.ensureKeyRebuildColumn('anchor_actions', 'section_index');
-                        if(!haveColumn){
-                            logger.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
-                                'the widened key for ANCHOR v7 bundle sections cannot be built on this replica');
-                        } else {
-                            logger.info('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
-                                'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
-                            await this.doQueryStrict(
-                                'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
-                        }
-                    }
+                if(newIdx.length === 0){
+                    await this.doQuery('CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes` (poll_index, voter_address_id, action_index, choice)');
                 }
-            } catch(e){
-                // 1146 (table absent) is a schema-shape difference, not a fault. Anything
-                // else leaves the replica on a key that WILL wedge on the first v7 bundle,
-                // so it is logged loudly; the apply-time 1062 is the backstop signal.
-                if(e.errno !== 1146)
-                    logger.error(util.format('Failed to widen the anchor_actions primary key to (action_index, section_index):', e));
             }
+        } catch(e){
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to migrate votes append-only unique index:', e));
+        }
+    }
 
-            // validator_rewards reward_unique qualifier key (indexer migration
-            // 2026-08-24-validator-rewards-round-qualifier). The reward identity gained
-            // round_qualifier, which carries snapshot_block for 'anchor_archive' and 0 for
-            // every other reward type, so the source's UNIQUE key became
-            // (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier).
-            //
-            // Nothing else converges that key on a replica. sync runs no migrations, and
-            // addMissingColumns ADDs round_qualifier (NOT NULL DEFAULT 0) because it is a
-            // column gap while ensureReplicaSecondaryIndexes above only ever ADDs indexes
-            // that are ABSENT; reward_unique is present under both schemas, just narrower.
-            // A replica bootstrapped before the migration therefore ends up with the new
-            // column under the OLD four-column key, and validator_rewards is in
-            // ClientApplier.ignoreTables, so the apply is INSERT IGNORE: two genuinely
-            // distinct archive rewards differing only in round_qualifier collapse into one
-            // row, silently, with the second row ignored rather than erroring. The table
-            // declares no hash class (tableLifecycle.js), so no ledger/state hash catches
-            // it either; the only tell is the advisory TABLE_COUNT_MISMATCH. Latent while
-            // ANCHOR_REWARD_DERIVE_ACTIVATION is inert, which is why it has to land before
-            // that gate is ratified rather than after.
-            //
-            // Detection is by COLUMN LIST, never by name: the index keeps the name
-            // `reward_unique` under both schemas, so a presence check always reports
-            // "present" and would never heal. Only the exact stale four-column definition
-            // is migrated; an already-correct key is a silent no-op, and any other shape is
-            // left alone and reported rather than guessed at. Widening cannot fail on
-            // existing rows (the new key is a strict superset and round_qualifier is NOT
-            // NULL DEFAULT 0, so every pre-existing row keeps the key it had), and the drop
-            // and the add ride ONE ALTER so the table is never briefly keyless. indexer-only.
-            try {
-                let rewardsCheck = await this.doQueryStrict(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'validator_rewards'",
+    // The composite primary key keeps bundle sections under one action distinct.
+    async ensureReplicaAnchorActionsPrimaryKey(){
+        try {
+            let anchorCheck = await this.doQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'anchor_actions'",
+                [this.dbName]
+            );
+            if(anchorCheck.length > 0){
+                let pkCols = await this.doQuery(
+                    "SELECT column_name FROM information_schema.statistics " +
+                    "WHERE table_schema = ? AND table_name = 'anchor_actions' AND index_name = 'PRIMARY' " +
+                    "ORDER BY seq_in_index ASC",
                     [this.dbName]
                 );
-                if(rewardsCheck.length > 0){
-                    let idxCols = await this.doQueryStrict(
-                        "SELECT column_name FROM information_schema.statistics " +
-                        "WHERE table_schema = ? AND table_name = 'validator_rewards' AND index_name = 'reward_unique' " +
-                        "ORDER BY seq_in_index ASC",
+                let cols = pkCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
+                if(cols.length === 1 && cols[0] === 'action_index'){
+                    // The key rebuild needs section_index to exist first.
+                    let colRows = await this.doQuery(
+                        "SELECT column_name FROM information_schema.columns " +
+                        "WHERE table_schema = ? AND table_name = 'anchor_actions' AND column_name = 'section_index'",
                         [this.dbName]
                     );
-                    let cols  = idxCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
-                    let stale = ['source_id', 'signing_pubkey_id', 'reward_type', 'round_reference'];
-                    if(cols.length === stale.length && cols.every((c, i) => c === stale[i])){
-                        // The ADD names round_qualifier, so an absent column makes the whole
-                        // ALTER errno 1072 and the stale key survives with no signal. The
-                        // column self-heal (ensureReplicatedColumns / addMissingColumns) runs
-                        // earlier in replicateSchema, but SyncService calls this method on its
-                        // own, so re-check and close the gap here rather than hand it to a next
-                        // startup that repeats this same order.
-                        let colRows = await this.doQueryStrict(
-                            "SELECT column_name FROM information_schema.columns " +
-                            "WHERE table_schema = ? AND table_name = 'validator_rewards' AND column_name = 'round_qualifier'",
-                            [this.dbName]
-                        );
-                        let haveColumn = colRows.length > 0 ||
-                            await this.ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
-                        if(!haveColumn){
-                            logger.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
-                                'the archive reward identity stays ambiguous on this replica');
-                        } else {
-                            logger.info('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
-                                'Rebuilding with round_qualifier for the anchor_archive reward identity.');
-                            await this.doQueryStrict(
-                                'ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ' +
-                                'ADD UNIQUE INDEX `reward_unique` ' +
-                                '(`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`)');
-                        }
+                    let haveColumn = colRows.length > 0 ||
+                        await this.ensureKeyRebuildColumn('anchor_actions', 'section_index');
+                    if(!haveColumn){
+                        logger.warn('anchor_actions still on PRIMARY KEY (action_index) and section_index could not be added; ' +
+                            'the widened key for ANCHOR v7 bundle sections cannot be built on this replica');
+                    } else {
+                        logger.info('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
+                            'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
+                        await this.doQueryStrict(
+                            'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
                     }
                 }
-            } catch(e){
-                // 1146 (table absent) is a schema-shape difference, not a fault. Anything
-                // else leaves the replica on a key that silently DEDUPLICATES two distinct
-                // archive rewards, which no hash and no halt would ever surface, so it is
-                // logged loudly.
-                if(e.errno !== 1146)
-                    logger.error(util.format('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e));
             }
+        } catch(e){
+            // An absent table is a schema-shape difference; other errors leave a stale key.
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to widen the anchor_actions primary key to (action_index, section_index):', e));
+        }
+    }
+
+    // The reward key includes round_qualifier so archive snapshots stay distinct.
+    async ensureReplicaValidatorRewardsIndex(){
+        try {
+            let rewardsCheck = await this.doQueryStrict(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = 'validator_rewards'",
+                [this.dbName]
+            );
+            if(rewardsCheck.length > 0){
+                let idxCols = await this.doQueryStrict(
+                    "SELECT column_name FROM information_schema.statistics " +
+                    "WHERE table_schema = ? AND table_name = 'validator_rewards' AND index_name = 'reward_unique' " +
+                    "ORDER BY seq_in_index ASC",
+                    [this.dbName]
+                );
+                let cols  = idxCols.map(r => String(r.column_name || r.COLUMN_NAME || ''));
+                let stale = ['source_id', 'signing_pubkey_id', 'reward_type', 'round_reference'];
+                if(cols.length === stale.length && cols.every((c, i) => c === stale[i])){
+                    // The key rebuild needs round_qualifier to exist first.
+                    let colRows = await this.doQueryStrict(
+                        "SELECT column_name FROM information_schema.columns " +
+                        "WHERE table_schema = ? AND table_name = 'validator_rewards' AND column_name = 'round_qualifier'",
+                        [this.dbName]
+                    );
+                    let haveColumn = colRows.length > 0 ||
+                        await this.ensureKeyRebuildColumn('validator_rewards', 'round_qualifier');
+                    if(!haveColumn){
+                        logger.warn('validator_rewards still on the four-column reward_unique and round_qualifier could not be added; ' +
+                            'the archive reward identity stays ambiguous on this replica');
+                    } else {
+                        logger.info('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
+                            'Rebuilding with round_qualifier for the anchor_archive reward identity.');
+                        await this.doQueryStrict(
+                            'ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ' +
+                            'ADD UNIQUE INDEX `reward_unique` ' +
+                            '(`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`)');
+                    }
+                }
+            }
+        } catch(e){
+            // An absent table is harmless; other errors can leave reward identities ambiguous.
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e));
         }
     }
 
