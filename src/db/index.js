@@ -470,50 +470,52 @@ class Database {
         }
     }
 
-    // Replicate schema from a source database into this database.
-    // Reads all table DDLs from the source via SHOW CREATE TABLE and
-    // creates any missing tables locally. For tables that already exist,
-    // propagates any columns the source has added since the replica was
-    // bootstrapped (see addMissingColumns). This ensures the replica always
-    // matches the authoritative indexer schema (no copied SQL files needed).
-    async replicateSchema(sourceDb){
-        logger.info('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
-
-        let sourceTables = await sourceDb.doQuery(
+    async discoverReplicatedTables(sourceDb){
+        const sourceTables = await sourceDb.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
             [sourceDb.dbName]
         );
 
-        let existingTables = await this.doQuery(
+        const existingTables = await this.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
             [this.dbName]
         );
-        let existingSet = new Set(existingTables.map(r => r.table_name || r.TABLE_NAME));
+        const existingSet = new Set(existingTables.map(r => r.table_name || r.TABLE_NAME));
+        return { sourceTables, existingSet };
+    }
 
-        let created = 0;
-        let columnFailures = [];
-        for(let row of sourceTables){
-            let tableName = row.table_name || row.TABLE_NAME;
-
-            // Validate table name before using in SQL
-            let idCheck = validation.validateIdentifier(tableName);
-            if(!idCheck.valid){
+    async readReplicatedCreateStatement(sourceDb, tableName, retry){
+        // Validate table name before using in SQL
+        const idCheck = validation.validateIdentifier(tableName);
+        if(!idCheck.valid){
+            if(!retry)
                 logger.error('Skipping invalid table name: ' + tableName + ' (' + idCheck.reason + ')');
-                continue;
-            }
+            return null;
+        }
 
-            let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
-            if(ddlRows.length === 0) continue;
+        const ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
+        if(ddlRows.length === 0) return null;
 
-            let createSql = ddlRows[0]['Create Table'];
+        const createSql = ddlRows[0]['Create Table'];
+        if(!createSql) return null;
+
+        // Validate DDL before executing
+        const ddlCheck = validation.validateDdl(createSql);
+        if(!ddlCheck.valid){
+            const suffix = retry ? ' (retry)' : '';
+            logger.error('Rejected DDL for ' + tableName + suffix + ': ' + ddlCheck.reason);
+            return null;
+        }
+        return createSql;
+    }
+
+    async createReplicatedTables(sourceDb, sourceTables, existingSet){
+        let created = 0;
+        const columnFailures = [];
+        for(const row of sourceTables){
+            const tableName = row.table_name || row.TABLE_NAME;
+            const createSql = await this.readReplicatedCreateStatement(sourceDb, tableName, false);
             if(!createSql) continue;
-
-            // Validate DDL before executing
-            let ddlCheck = validation.validateDdl(createSql);
-            if(!ddlCheck.valid){
-                logger.error('Rejected DDL for ' + tableName + ': ' + ddlCheck.reason);
-                continue;
-            }
 
             // Table already exists on the replica: don't recreate it, but
             // propagate any columns the source has added since it was created.
@@ -539,42 +541,34 @@ class Database {
                 logger.info(util.format('Deferred: ' + tableName + ':', e));
             }
         }
+        return { created, columnFailures };
+    }
 
+    async retryDeferredReplicatedTables(sourceDb, sourceTables, existingSet, created){
         // Retry any deferred tables (handles foreign-key ordering)
-        if(created < sourceTables.length - existingSet.size){
-            let retryTables = await this.doQuery(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
-                [this.dbName]
-            );
-            let retrySet = new Set(retryTables.map(r => r.table_name || r.TABLE_NAME));
+        if(!(created < sourceTables.length - existingSet.size)) return;
+        const retryTables = await this.doQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+            [this.dbName]
+        );
+        const retrySet = new Set(retryTables.map(r => r.table_name || r.TABLE_NAME));
 
-            for(let row of sourceTables){
-                let tableName = row.table_name || row.TABLE_NAME;
-                if(retrySet.has(tableName)) continue;
+        for(const row of sourceTables){
+            const tableName = row.table_name || row.TABLE_NAME;
+            if(retrySet.has(tableName)) continue;
 
-                let idCheck = validation.validateIdentifier(tableName);
-                if(!idCheck.valid) continue;
-
-                let ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
-                if(ddlRows.length === 0) continue;
-                let createSql = ddlRows[0]['Create Table'];
-                if(!createSql) continue;
-
-                let ddlCheck = validation.validateDdl(createSql);
-                if(!ddlCheck.valid){
-                    logger.error('Rejected DDL for ' + tableName + ' (retry): ' + ddlCheck.reason);
-                    continue;
-                }
-
-                try {
-                    await this.doQuery(createSql);
-                    logger.info('Created table ' + tableName + ' (retry)');
-                } catch(e){
-                    logger.error(util.format('Failed to create table ' + tableName + ':', e));
-                }
+            const createSql = await this.readReplicatedCreateStatement(sourceDb, tableName, true);
+            if(!createSql) continue;
+            try {
+                await this.doQuery(createSql);
+                logger.info('Created table ' + tableName + ' (retry)');
+            } catch(e){
+                logger.error(util.format('Failed to create table ' + tableName + ':', e));
             }
         }
+    }
 
+    async ensureReplicatedColumnsAndIndexes(){
         // replicateSchema only CREATEs missing tables. It never ALTERs an
         // existing table to add a column introduced after the replica was first
         // built. Run the column self-heal so replicas built before a column was
@@ -590,11 +584,26 @@ class Database {
         // 2026-09-02 raw-wire-field widen keeps utf8mb3 on those columns and halts on the
         // first 4-byte character the widened origin accepts. Converge them here.
         await this.ensureReplicaUtf8mb4Columns();
+    }
 
-        if(columnFailures.length){
-            let err = new Error('Schema replication into ' + this.dbName + ' left columns missing: ' +
-                columnFailures.map(f => f.table + ' (errno ' + f.errno + ')').join(', '));
-            err.columnFailures = columnFailures;
+    // Replicate schema from a source database into this database.
+    // Reads all table DDLs from the source via SHOW CREATE TABLE and
+    // creates any missing tables locally.
+
+    // Propagate source-added columns into existing replica tables.
+    // Keep bootstrapped replicas aligned with the authoritative indexer schema.
+    // Avoid relying on copied SQL files for schema convergence.
+    async replicateSchema(sourceDb){
+        logger.info('Replicating schema from ' + sourceDb.dbName + ' into ' + this.dbName + '...');
+        const { sourceTables, existingSet } = await this.discoverReplicatedTables(sourceDb);
+        const result = await this.createReplicatedTables(sourceDb, sourceTables, existingSet);
+        await this.retryDeferredReplicatedTables(sourceDb, sourceTables, existingSet, result.created);
+        await this.ensureReplicatedColumnsAndIndexes();
+
+        if(result.columnFailures.length){
+            const err = new Error('Schema replication into ' + this.dbName + ' left columns missing: ' +
+                result.columnFailures.map(f => f.table + ' (errno ' + f.errno + ')').join(', '));
+            err.columnFailures = result.columnFailures;
             throw err;
         }
 
