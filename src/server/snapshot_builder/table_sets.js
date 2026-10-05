@@ -193,6 +193,100 @@ function decoderIncrementalSets(){
     };
 }
 
+// Indexer block-scoped set. These tables carry a block_index but no
+// action_index, so the action_index branch below cannot reach them.
+// They must be filtered by block_index here to appear in incremental
+// snapshots. slash_events is block-scoped for the same reason
+// (see ServerPoller.blockScopedTables).
+//
+// Tables with neither a block_index nor an action_index cursor, such as
+// icons (token-icon processing state, keyed by token_id) and
+// price_snapshots (mirrored from the cross-chain hub's price channel,
+// keyed by round_number/coin_pair), cannot be scoped incrementally and
+// are intentionally omitted. They ride along in the full snapshot only;
+// for price_snapshots, live convergence is handled by the hub DB sync
+// mirror, not this block stream.
+// attest_validator_stats, markets, and merkle_epochs are also unscoped
+// but are included in indexerFullDump below so a follower does not
+// freeze those tables at bootstrap height (see comment there).
+//
+// Every block_index-scoped streamed table must be filtered by block_index here:
+// these tables carry NO action_index column (e.g. the slash debit logs key off
+// execution_index / slash_action_index, not action_index), so the action_index
+// branch below cannot reach them. A follower catching up incrementally over their
+// range would hit SELECT ... WHERE action_index >= ? -> ER_BAD_FIELD_ERROR ->
+// caught -> continue, silently dropping every row (short /status count; the reorg
+// restore, which JOINs the debit logs, then finds nothing to restore).
+//
+// Derive the set from the streaming topology (the single source of truth) rather
+// than a hand-maintained literal, so the next block-scoped table added to
+// replicatedTables can never re-open this gap. sync_meta is appended because it is
+// streamed inline by ServerPoller (not via the blockScoped topology) but is still
+// block_index-scoped for incremental catch-up.
+function indexerBlockScopedSet(){
+    return new Set([...replicatedTables.getTopology('indexer').blockScoped, 'sync_meta']);
+}
+
+// Append-only lookup/dedup tables (index_actions, index_addresses,
+// index_transactions, ...). They carry neither a block_index nor an
+// action_index cursor, so they can't be range-scoped. A follower that
+// heals a gap via incremental still needs the index_* rows those blocks
+// reference, or it is left short on them (row-count + ledger-hash mismatch
+// after the heal; blocks/transactions carry *_hash_id FKs into
+// index_transactions, so even action-less blocks need it). They are
+// therefore re-dumped in full; the client applies index_* with INSERT
+// IGNORE (ClientApplier.ignoreTables), so re-sending existing rows is a
+// no-op. Mirrors the decoder full-dump path. Sourced from the replicated
+// topology so it can't drift from the per-block streamed set.
+//
+// Also included:
+//   - merkle_epochs: transparency epoch records with no block_index or
+//     action_index cursor. Absent from every topology bucket, so it never
+//     enters the action_index or block_index scoping branches. Without an
+//     explicit full-dump here, a relay follower's merkle_epochs table
+//     freezes at bootstrap height and getProof returns "epoch not yet
+//     committed" for every post-bootstrap epoch.
+//   - markets: derived OHLCV aggregate keyed by tick pair with no
+//     action_index. Without a full-dump here, a follower's markets table
+//     freezes at bootstrap height. VALUE changes converge post-reorg via
+//     this full-dump UPSERT (ON DUPLICATE KEY UPDATE); ROW REMOVAL cannot,
+//     which is why ClientRollback mirrors both of the source's markets
+//     deletes (orphaned-tick sweep and the pair-scoped IDX-2 delete).
+//   - attest_validator_stats: running per-validator aggregate counters
+//     with no action_index. Without a full-dump here, these counters
+//     freeze at bootstrap height. ClientRollback drops affected rows on
+//     reorg; the next incremental catch-up restores current values.
+//   - events: append-only operational audit log (records REORG events)
+//     with no block_index or action_index cursor, so it never enters the
+//     scoping branches and, without a full-dump here, freezes at bootstrap
+//     height on an incrementally-caught-up follower (source count grows,
+//     replica frozen, and it is replication:'snapshot' so it never shows in
+//     the /status TABLE_COUNT_MISMATCH signal). Mirrors the decoder events
+//     full-dump. It is in ClientApplier.ignoreTables, so the re-dump is
+//     idempotent (INSERT IGNORE on the AUTO_INCREMENT id PK). rollback:
+//     'exempt', so nothing rolls it back; the full re-dump is its only
+//     convergence path.
+//   - pubkeys: INSERT IGNORE cache keyed by address_id, replication:
+//     'snapshot', so streamTopology() puts it in no per-block bucket and
+//     it reaches neither the spread above nor indexerBlockScoped. Without
+//     a full-dump here it fell to the action_index branch, where the
+//     missing column raised errno 1054 and was swallowed as a schema gap,
+//     so it rode NO incremental snapshot and froze at bootstrap height on
+//     every incrementally-caught-up follower (silent: replication:
+//     'snapshot' keeps it out of the /status count check, and it is not
+//     consensus-hashed). Mirrors the decoder pubkeys full-dump. It is in
+//     ClientApplier.ignoreTables, so the re-dump is idempotent.
+function indexerFullDumpSet(){
+    return new Set([
+        ...replicatedTables.getTopology('indexer').index,
+        'merkle_epochs',
+        'markets',
+        'attest_validator_stats',
+        'events',
+        'pubkeys',
+    ]);
+}
+
 module.exports = {
     OPERATOR_LOCAL_TABLES,
     SOURCE_UNSTREAMED_TABLES,
@@ -201,4 +295,6 @@ module.exports = {
     INDEXER_INBAND_PAGED,
     orderSnapshotTables,
     decoderIncrementalSets,
+    indexerBlockScopedSet,
+    indexerFullDumpSet,
 };
