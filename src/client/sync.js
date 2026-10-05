@@ -244,6 +244,28 @@ function stopDivergenceApply(client){
     client._applyTimers.clear();
 }
 
+// Keep the highest numeric height a server reported; null until one arrives.
+function updateLastKnownServerBlock(client, blockIndex){
+    if(typeof blockIndex === 'number' &&
+       (client.lastKnownServerBlock === null || blockIndex > client.lastKnownServerBlock)){
+        client.lastKnownServerBlock = blockIndex;
+    }
+}
+
+// Log a proven gap and return its catch-up start, or null when the status proves none.
+function statusGapStart(client, blockHeight){
+    if(client.lastAppliedBlock === null || !(blockHeight > client.lastAppliedBlock + 1))
+        return null;
+    client.logGap('Block gap detected: local=' + client.lastAppliedBlock + ' remote=' + blockHeight);
+    return client.lastAppliedBlock + 1;
+}
+
+// Decoder-only wall-clock reconcile gate; needs an applied block and no reconcile in flight.
+function shouldReconcileDispensersOnStatus(client){
+    return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
+        !client._dispenserReconcileInFlight && client.dispenserReconcileIntervalDue(Date.now());
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -2738,64 +2760,27 @@ class ClientSync {
 
     async handleEvent(event, sourceIndex){
         if(event.type === 'block'){
-            // Track the server's advancing block height
-            if(typeof event.block_index === 'number' &&
-               (this.lastKnownServerBlock === null || event.block_index > this.lastKnownServerBlock)){
-                this.lastKnownServerBlock = event.block_index;
-            }
+            updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
             await this.handleReorg(event);
         } else if(event.type === 'status'){
-            // Track the server's current block height
-            if(typeof event.block_height === 'number' &&
-               (this.lastKnownServerBlock === null || event.block_height > this.lastKnownServerBlock)){
-                this.lastKnownServerBlock = event.block_height;
-            }
-            // Keep the server's own replication verdict. Unconditional: the height guard
-            // above is exactly what a stalled upstream stops satisfying.
+            updateLastKnownServerBlock(this, event.block_height);
+            // Keep the server's replication verdict even when its height stalls.
+            // Preserve evidence that a frozen upstream reports on later status ticks.
+            // Record the verdict before any gap recovery starts.
             this.recordUpstreamStatus(sourceIndex, event);
-            // Check for gaps on status update. Use a strict '>' (not '>='): a
-            // server exactly one block ahead is the normal steady state (that
-            // next block arrives over the live WS stream), so only a shortfall of
-            // two or more blocks is a real gap worth an out-of-band catch-up. This
-            // mirrors the decoder gap check in handleBlock and avoids firing a
-            // redundant incremental fetch on every status tick during live sync;
-            // a genuinely dropped block is still picked up on the next status tick.
-            // Design corner: after a reconnect the server may be exactly one block
-            // ahead (lastAppliedBlock + 1 === event.block_height). This check
-            // intentionally does NOT fire an incremental catch-up for that case.
-            // The missing block arrives naturally on the next live WS block event;
-            // if the chain is idle and that event never comes, the one-block gap
-            // persists until the next block is mined and verifyChainContinuity
-            // detects the skip and triggers catch-up. This keeps the steady-state
-            // path quiet and avoids spurious snapshot fetches.
-            if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
-                this.logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
-                await this.incrementalCatchUp(this.lastAppliedBlock + 1);
-            }
-            // Wall-clock dispensers reconcile. DISPENSERS_RECONCILE_MAX_INTERVAL_MS was
-            // sampled only from inside incrementalCatchUp, every caller of which is an
-            // exceptional path (resume, block gap, empty-replica refusal, head fork), so
-            // a decoder replica that bootstraps and then follows cleanly never evaluated
-            // it: the one cadence the bound claims to protect against (no catch-ups at
-            // all) was the one it could not reach, and the replica went on serving rows
-            // the source soft-expired or hard-purged for the life of the process. Row
-            // counts cannot substitute (src/schema/replicated_tables.js: a soft-expire leaves counts
-            // equal, a hard-purge leaves the replica ahead, reported for indexer only).
-            // Deliberately NOT folded into maybeVerifyCompleteness: that sweep returns
-            // early when COMPLETENESS_CHECK_INTERVAL is falsy and when the heights differ,
-            // and carries its own throttle, none of which this bound may inherit. Uses the
-            // side-effect-free predicate so the every-Nth catch-up counter is untouched.
-            if(this.dbType === 'decoder' && !this._halted && this.lastAppliedBlock !== null &&
-               !this._dispenserReconcileInFlight && this.dispenserReconcileIntervalDue(Date.now())){
+            let catchUpStart = statusGapStart(this, event.block_height);
+            if(catchUpStart !== null)
+                await this.incrementalCatchUp(catchUpStart);
+            if(shouldReconcileDispensersOnStatus(this)){
                 this._dispenserReconcileInFlight = true;
                 try { await this.reconcileDispensers(this.sources[sourceIndex]); }
                 finally { this._dispenserReconcileInFlight = false; }
             }
-            // Periodic replica-completeness sweep (throttled, equal-heights only). The
-            // status tick is the one recurring signal a live client gets from its own
-            // primary source, which is exactly the source the sweep could not reach.
+            // Sweep completeness on the recurring signal from the primary source.
+            // Apply its own throttle and equal-height policy inside the helper.
+            // Query the same source that sends this status event.
             await this.maybeVerifyCompleteness(this.sources[sourceIndex], event.block_height);
         }
     }
