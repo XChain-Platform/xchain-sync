@@ -2281,6 +2281,28 @@ class ClientSync {
         return shortLookups;
     }
 
+    beginCompletenessSweep(source, remoteHeight){
+        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
+        if(!interval || !source) return false;
+        if(this._halted) return false;                        // nothing to verify onto
+        if(this.lastAppliedBlock === null) return false;       // pre-bootstrap
+        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return false;
+        let now = Date.now();
+        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return false;
+        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
+        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
+        // a second tick run one concurrently against the same source.
+        this._lastCompletenessSweepAt = now;
+        return true;
+    }
+
+    remoteStatusMatchesCompletenessHeight(remoteStatus){
+        // Re-check the height against the status we just fetched: the tick that
+        // triggered this may be seconds old and the source may have advanced.
+        return remoteStatus.block_height == null ||
+            Number(remoteStatus.block_height) === Number(this.lastAppliedBlock);
+    }
+
     // Periodic replica-completeness sweep against the PRIMARY source: the row-count
     // comparison is the only check that sees a follower short rows the consensus hashes
     // structurally cannot cover, since those hashes describe the source's computation
@@ -2296,75 +2318,78 @@ class ClientSync {
     // bootstrap caller's posture) and best-effort, so an unreachable source logs and
     // returns rather than disturbing live following.
     async maybeVerifyCompleteness(source, remoteHeight){
-        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
-        if(!interval || !source) return;
-        if(this._halted) return;                        // nothing to verify onto
-        if(this.lastAppliedBlock === null) return;       // pre-bootstrap
-        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return;
-        let now = Date.now();
-        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return;
-        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
-        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
-        // a second tick run one concurrently against the same source.
-        this._lastCompletenessSweepAt = now;
+        if(!this.beginCompletenessSweep(source, remoteHeight)) return;
         try {
             if(this.dbType === 'decoder'){
-                // Delegate: the decoder variant carries the truncation exclusions its
-                // counts need. dispensers converges only on a reconcile cycle, so it is
-                // excluded here or every sweep reports drift.
-                let decoderShortfalls = await this.verifyDecoderCompleteness(
-                    source, this.lastAppliedBlock, new Set(['dispensers']), { requireEqualHeight: true });
-                // Age and repair the decoder shortfalls too, but ONLY from this periodic
-                // equal-height path: the bootstrap caller runs the same check while the
-                // replica is legitimately mid-dump, and folding those sweeps in would
-                // escalate a gap that the next snapshot page closes. A null return means
-                // the check could not complete (unreachable source, wrong dbType, source
-                // moved on), which is not evidence the gaps closed.
+                let decoderShortfalls = await this.verifyCompletenessDecoder(source);
                 if(Array.isArray(decoderShortfalls)){
                     let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
-                    await this.trackReplicaGaps(decoderShortfalls, {
-                        source: source, blockIndex: this.lastAppliedBlock, repaired: decoderRepairTried
-                    });
+                    await this.trackCompletenessGaps(source, decoderShortfalls, decoderRepairTried);
                 }
                 return;
             }
-            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-            let remoteStatus = response.data;
-            // Re-check the height against the status we just fetched: the tick that
-            // triggered this may be seconds old and the source may have advanced.
-            if(remoteStatus.block_height != null &&
-               Number(remoteStatus.block_height) !== Number(this.lastAppliedBlock)) return;
-            let mismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
-                { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
-            let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
-            let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
+            let remoteStatus = (await this.fetchCompletenessStatus(source)).data;
+            if(!this.remoteStatusMatchesCompletenessHeight(remoteStatus)) return;
+            let mismatches = await this.verifyCompletenessCounts(remoteStatus);
+            let { shortfalls, ahead } = this.partitionCompletenessMismatches(mismatches);
             let repairTried = new Set();
             if(shortfalls.length){
-                getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower may be missing replicated rows:');
-                getLogger().error(JSON.stringify(shortfalls));
+                this.reportCompletenessShortfalls(source, shortfalls);
                 repairTried = await this.repairShortLookups(source, shortfalls);
             }
-            if(ahead.length){
-                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                getLogger().error(JSON.stringify(ahead));
-            }
-            // Age the shortfall set. A repeated TABLE_COUNT_MISMATCH line is the same
-            // severity on sweep 1 and sweep 700, so a gap that no amount of syncing
-            // will close reads exactly like the transient race it is not; this is what
-            // let a mainnet follower sit ~2k index_transactions rows short for weeks
-            // with the detector firing on every pass. Runs on EVERY completed sweep,
-            // shortfalls or not, because a clean sweep is how a gap gets cleared.
-            await this.trackReplicaGaps(shortfalls, {
-                source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
-            });
+            if(ahead.length) this.reportCompletenessAhead(source, ahead);
+            await this.trackCompletenessGaps(source, shortfalls, repairTried);
             if(!mismatches.length && remoteStatus.table_counts)
-                getLogger().info('Table-count verification passed against ' + source);
+                this.reportCompletenessPass(source);
         } catch(e){
             getLogger().error(util.format('Periodic completeness sweep failed against ' + source + ':', e.message || e));
         }
+    }
+
+    // Dispensers converges only on a reconcile cycle, so the decoder sweep excludes it.
+    verifyCompletenessDecoder(source){
+        return this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
+            new Set(['dispensers']), { requireEqualHeight: true });
+    }
+
+    fetchCompletenessStatus(source){
+        let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        return axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+    }
+
+    verifyCompletenessCounts(remoteStatus){
+        return this.verifyTableCounts(remoteStatus.table_counts, undefined,
+            { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
+    }
+
+    partitionCompletenessMismatches(mismatches){
+        return {
+            shortfalls: mismatches.filter(m => m.reason !== 'replica-ahead'),
+            ahead: mismatches.filter(m => m.reason === 'replica-ahead')
+        };
+    }
+
+    reportCompletenessShortfalls(source, shortfalls){
+        getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+            '; follower may be missing replicated rows:');
+        getLogger().error(JSON.stringify(shortfalls));
+    }
+
+    reportCompletenessAhead(source, ahead){
+        getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
+            '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+        getLogger().error(JSON.stringify(ahead));
+    }
+
+    // A clean completed sweep clears tracked gaps, so this runs even without shortfalls.
+    trackCompletenessGaps(source, shortfalls, repairTried){
+        return this.trackReplicaGaps(shortfalls, {
+            source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
+        });
+    }
+
+    reportCompletenessPass(source){
+        getLogger().info('Table-count verification passed against ' + source);
     }
 
     // Read a numeric tunable from config, falling back to the environment and then to
