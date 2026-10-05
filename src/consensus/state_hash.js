@@ -165,188 +165,169 @@ const SLASH_SPECS = copy('stateHash.SLASH_SPECS');
 const REQUEST_STATUS_TABLES = copy('stateHash.REQUEST_STATUS_TABLES');
 const COOLDOWN_TABLES = copy('stateHash.COOLDOWN_TABLES');
 
-async function buildDeactivations(db, B, delay){
+function sectionQuery(target, key, sql, params){
+    return { target, key, sql, params };
+}
+
+function planDeactivations(sections, B, delay){
     let deactivations = {};
+    let queries = [];
+    sections.deactivations = deactivations;
     for(let t of DEACTIVATION_TABLES){
         deactivations[t] = [];
         if(delay == null) continue;
-        try {
-            deactivations[t] = await db.doQuery(
-                "SELECT action_index, deactivation_block FROM `" + t + "` " +
-                "WHERE deactivation_block BETWEEN ? AND ? ORDER BY action_index ASC",
-                [B + delay, B + delay]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
+        queries.push(sectionQuery(deactivations, t,
+            "SELECT action_index, deactivation_block FROM `" + t + "` " +
+            "WHERE deactivation_block BETWEEN ? AND ? ORDER BY action_index ASC",
+            [B + delay, B + delay]));
     }
-    return deactivations;
+    return queries;
 }
 
-async function buildSlashes(db, B){
+function planSlashes(sections, B){
     let slashes = {};
+    let queries = [];
+    sections.slashes = slashes;
     for(let s of SLASH_SPECS){
         slashes[s.table] = [];
-        try {
-            slashes[s.table] = await db.doQuery(
-                "SELECT DISTINCT t.action_index, t.amount FROM `" + s.table + "` t " +
-                "JOIN `" + s.debits + "` d ON d.stake_action_index = t.action_index " +
-                "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ? ORDER BY t.action_index ASC",
-                [s.target, B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table may not exist on older schemas */ }
+        queries.push(sectionQuery(slashes, s.table,
+            "SELECT DISTINCT t.action_index, t.amount FROM `" + s.table + "` t " +
+            "JOIN `" + s.debits + "` d ON d.stake_action_index = t.action_index " +
+            "WHERE d.target_table = ? AND d.block_index BETWEEN ? AND ? ORDER BY t.action_index ASC",
+            [s.target, B, B]));
     }
-    return slashes;
+    return queries;
 }
 
-async function buildRequestStatus(db, B){
+function planRequestStatus(sections, B){
     let request_status = {};
+    let queries = [];
+    sections.request_status = request_status;
     for(let t of REQUEST_STATUS_TABLES){
         request_status[t] = [];
-        try {
-            request_status[t] = await db.doQuery(
-                "SELECT action_index, request_status, resolved_block FROM `" + t + "` " +
-                "WHERE version = 0 AND resolved_block BETWEEN ? AND ? ORDER BY action_index ASC",
-                [B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
+        queries.push(sectionQuery(request_status, t,
+            "SELECT action_index, request_status, resolved_block FROM `" + t + "` " +
+            "WHERE version = 0 AND resolved_block BETWEEN ? AND ? ORDER BY action_index ASC",
+            [B, B]));
     }
-    return request_status;
+    return queries;
 }
 
-async function buildCooldown(db, B){
+function planCooldown(sections, B){
     let cooldown = {};
+    let queries = [];
+    sections.cooldown = cooldown;
     for(let t of COOLDOWN_TABLES){
         cooldown[t] = [];
-        try {
-            cooldown[t] = await db.doQuery(
-                "SELECT t.action_index, s.status AS status FROM `" + t + "` t " +
-                "LEFT JOIN index_statuses s ON (s.id = t.status_id) " +
-                "WHERE t.cooldown_end_block BETWEEN ? AND ? ORDER BY t.action_index ASC",
-                [B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
+        queries.push(sectionQuery(cooldown, t,
+            "SELECT t.action_index, s.status AS status FROM `" + t + "` t " +
+            "LEFT JOIN index_statuses s ON (s.id = t.status_id) " +
+            "WHERE t.cooldown_end_block BETWEEN ? AND ? ORDER BY t.action_index ASC",
+            [B, B]));
     }
-    return cooldown;
+    return queries;
 }
 
-async function buildCredits(db, B, gasTick, completedStatusId){
-    let credits = [];
-    if(completedStatusId != null && completedStatusId !== undefined){
-        try {
-            credits = await db.doQuery(
-                "SELECT action_index, address, tick, amount FROM ( " +
-                    "SELECT c.action_index, a.address AS address, ti.tick AS tick, c.amount " +
-                    "FROM credits c " +
-                    "JOIN unstakes u ON (u.action_index = c.action_index AND u.source_id = c.address_id) " +
-                    "JOIN index_tickers g ON (g.id = c.tick_id AND g.tick = ?) " +
-                    "LEFT JOIN index_addresses a ON (a.id = c.address_id) " +
-                    "LEFT JOIN index_tickers ti ON (ti.id = c.tick_id) " +
-                    "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ? " +
-                    "UNION ALL " +
-                    "SELECT c.action_index, a.address AS address, ti.tick AS tick, c.amount " +
-                    "FROM credits c " +
-                    "JOIN contract_unstakes cu ON (cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id) " +
-                    "LEFT JOIN index_addresses a ON (a.id = c.address_id) " +
-                    "LEFT JOIN index_tickers ti ON (ti.id = c.tick_id) " +
-                    "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ? " +
-                ") x ORDER BY action_index ASC, address COLLATE utf8_bin ASC, tick COLLATE utf8mb4_bin ASC, amount ASC",
-                [gasTick, completedStatusId, B, B, completedStatusId, B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table may not exist on older schemas */ }
-    }
-    return credits;
+function planCredits(sections, B, gasTick, completedStatusId){
+    sections.credits = [];
+    if(completedStatusId == null) return [];
+    return [sectionQuery(sections, 'credits',
+        "SELECT action_index, address, tick, amount FROM ( " +
+            "SELECT c.action_index, a.address AS address, ti.tick AS tick, c.amount " +
+            "FROM credits c " +
+            "JOIN unstakes u ON (u.action_index = c.action_index AND u.source_id = c.address_id) " +
+            "JOIN index_tickers g ON (g.id = c.tick_id AND g.tick = ?) " +
+            "LEFT JOIN index_addresses a ON (a.id = c.address_id) " +
+            "LEFT JOIN index_tickers ti ON (ti.id = c.tick_id) " +
+            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ? " +
+            "UNION ALL " +
+            "SELECT c.action_index, a.address AS address, ti.tick AS tick, c.amount " +
+            "FROM credits c " +
+            "JOIN contract_unstakes cu ON (cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id) " +
+            "LEFT JOIN index_addresses a ON (a.id = c.address_id) " +
+            "LEFT JOIN index_tickers ti ON (ti.id = c.tick_id) " +
+            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ? " +
+        ") x ORDER BY action_index ASC, address COLLATE utf8_bin ASC, tick COLLATE utf8mb4_bin ASC, amount ASC",
+        [gasTick, completedStatusId, B, B, completedStatusId, B, B])];
 }
 
-async function buildAnchorInvalid(db, B, network, coin){
+function planAnchorInvalid(sections, B, network, coin){
     let archiveInvalidActive = isArchiveInvalidStateHashActive(B, network, coin);
     let chunkHeightCol = isArchiveInvalidHeightKeyActive(B, network, coin)
                             ? ARCHIVE_CHUNK_HEIGHT_COL : ARCHIVE_CHUNK_HEIGHT_COL_LEGACY;
-    let anchor_invalid = [];
-    try {
-        anchor_invalid = await db.doQuery(
-            "SELECT p.action_index, s.status AS status FROM anchor_actions p " +
-            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
-            "JOIN index_statuses s ON s.id = p.status_id AND s.status = 'invalid_archive' " +
-            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
-            "WHERE " + (archiveInvalidActive
-                ? archiveHeadPredicate('p') + " AND p.version " + ARCHIVE_HEAD_VERSIONS_SQL
-                : "p.version = 1") +
-            " AND " + chunkHeightCol + " BETWEEN ? AND ? " +
-            "ORDER BY p.action_index ASC",
-            [B, B]);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
-    return anchor_invalid;
+    sections.anchor_invalid = [];
+    return [sectionQuery(sections, 'anchor_invalid',
+        "SELECT p.action_index, s.status AS status FROM anchor_actions p " +
+        "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq " +
+        "JOIN index_statuses s ON s.id = p.status_id AND s.status = 'invalid_archive' " +
+        "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+        "WHERE " + (archiveInvalidActive
+            ? archiveHeadPredicate('p') + " AND p.version " + ARCHIVE_HEAD_VERSIONS_SQL
+            : "p.version = 1") +
+        " AND " + chunkHeightCol + " BETWEEN ? AND ? " +
+        "ORDER BY p.action_index ASC",
+        [B, B])];
 }
 
-async function buildIndexMap(db, B, network){
-    let indexMapActive = isIndexMapStateHashActive(B, network);
-    let index_addresses_new = [];
-    let index_tickers_new   = [];
-    if(indexMapActive){
-        try {
-            index_addresses_new = await db.doQuery(
-                "SELECT id, address FROM index_addresses WHERE block_index = ? ORDER BY id ASC", [B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
-        try {
-            index_tickers_new = await db.doQuery(
-                "SELECT id, tick FROM index_tickers WHERE block_index = ? ORDER BY id ASC", [B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
-    }
-    return { indexMapActive, index_addresses_new, index_tickers_new };
+function planIndexMap(sections, B, network){
+    sections.indexMapActive = isIndexMapStateHashActive(B, network);
+    sections.index_addresses_new = [];
+    sections.index_tickers_new = [];
+    if(!sections.indexMapActive) return [];
+    return [
+        sectionQuery(sections, 'index_addresses_new',
+            "SELECT id, address FROM index_addresses WHERE block_index = ? ORDER BY id ASC", [B]),
+        sectionQuery(sections, 'index_tickers_new',
+            "SELECT id, tick FROM index_tickers WHERE block_index = ? ORDER BY id ASC", [B])
+    ];
 }
 
-async function buildPollFinalize(db, B, network, coin){
-    let pollFinalizeActive = isPollFinalizeStateHashActive(B, network, coin);
-    let poll_finalize = [];
-    if(pollFinalizeActive){
-        try {
-            poll_finalize = await db.doQuery(
-                "SELECT action_index, poll_status, winning_option, total_weight, total_voters, " +
-                "quorum_met, min_voters_met, fail_reason, decided_early, effective_close_block, " +
-                "finalized_action_index, resolved_block, deposit_resolved, callback_execute_action_index " +
-                "FROM polls WHERE resolved_block BETWEEN ? AND ? ORDER BY action_index ASC",
-                [B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
-    }
-    return { pollFinalizeActive, poll_finalize };
+function planPollFinalize(sections, B, network, coin){
+    sections.pollFinalizeActive = isPollFinalizeStateHashActive(B, network, coin);
+    sections.poll_finalize = [];
+    if(!sections.pollFinalizeActive) return [];
+    return [sectionQuery(sections, 'poll_finalize',
+        "SELECT action_index, poll_status, winning_option, total_weight, total_voters, " +
+        "quorum_met, min_voters_met, fail_reason, decided_early, effective_close_block, " +
+        "finalized_action_index, resolved_block, deposit_resolved, callback_execute_action_index " +
+        "FROM polls WHERE resolved_block BETWEEN ? AND ? ORDER BY action_index ASC",
+        [B, B])];
 }
 
-async function buildTokenSupply(db, B, network, coin){
-    let tokenSupplyActive = isTokenSupplyStateHashActive(B, network, coin);
-    let token_supply = [];
-    if(tokenSupplyActive){
-        try {
-            token_supply = await db.doQuery(
-                "SELECT tk.tick AS tick, t.supply AS supply FROM tokens t " +
-                "JOIN index_tickers tk ON (tk.id = t.tick_id) " +
-                "WHERE t.tick_id IN ( " +
-                    "SELECT c.tick_id FROM credits c JOIN actions a ON (a.action_index = c.action_index) WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
-                    "UNION " +
-                    "SELECT d.tick_id FROM debits d JOIN actions a ON (a.action_index = d.action_index) WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
-                    "UNION " +
-                    "SELECT e.tick_id FROM escrows e JOIN actions a ON (a.action_index = e.action_index) WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL " +
-                ") ORDER BY tick COLLATE utf8mb4_bin ASC",
-                [B, B, B, B, B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
-    }
-    return { tokenSupplyActive, token_supply };
+function planTokenSupply(sections, B, network, coin){
+    sections.tokenSupplyActive = isTokenSupplyStateHashActive(B, network, coin);
+    sections.token_supply = [];
+    if(!sections.tokenSupplyActive) return [];
+    return [sectionQuery(sections, 'token_supply',
+        "SELECT tk.tick AS tick, t.supply AS supply FROM tokens t " +
+        "JOIN index_tickers tk ON (tk.id = t.tick_id) " +
+        "WHERE t.tick_id IN ( " +
+            "SELECT c.tick_id FROM credits c JOIN actions a ON (a.action_index = c.action_index) WHERE a.block_index BETWEEN ? AND ? AND c.tick_id IS NOT NULL " +
+            "UNION " +
+            "SELECT d.tick_id FROM debits d JOIN actions a ON (a.action_index = d.action_index) WHERE a.block_index BETWEEN ? AND ? AND d.tick_id IS NOT NULL " +
+            "UNION " +
+            "SELECT e.tick_id FROM escrows e JOIN actions a ON (a.action_index = e.action_index) WHERE a.block_index BETWEEN ? AND ? AND e.tick_id IS NOT NULL " +
+        ") ORDER BY tick COLLATE utf8mb4_bin ASC",
+        [B, B, B, B, B, B])];
 }
 
-async function buildBetStatus(db, B, network, coin){
-    let betStatusActive = isBetStatusStateHashActive(B, network, coin);
-    let bet_feed_status = [];
-    let bet_status = [];
-    if(betStatusActive){
-        try {
-            bet_feed_status = await db.doQuery(
-                "SELECT f.action_index, s.status AS feed_status, f.closed_block, f.terminal_block " +
-                "FROM bet_feeds f JOIN index_statuses s ON (s.id = f.feed_status_id) " +
-                "WHERE f.closed_block = ? OR f.terminal_block = ? ORDER BY f.action_index ASC",
-                [B, B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
-        try {
-            bet_status = await db.doQuery(
-                "SELECT b.action_index, s.status AS bet_status, b.settled_block " +
-                "FROM bets b JOIN index_statuses s ON (s.id = b.bet_status_id) " +
-                "WHERE b.settled_block = ? ORDER BY b.action_index ASC",
-                [B]);
-        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/columns may not exist on older schemas */ }
-    }
-    return { betStatusActive, bet_feed_status, bet_status };
+function planBetStatus(sections, B, network, coin){
+    sections.betStatusActive = isBetStatusStateHashActive(B, network, coin);
+    sections.bet_feed_status = [];
+    sections.bet_status = [];
+    if(!sections.betStatusActive) return [];
+    return [
+        sectionQuery(sections, 'bet_feed_status',
+            "SELECT f.action_index, s.status AS feed_status, f.closed_block, f.terminal_block " +
+            "FROM bet_feeds f JOIN index_statuses s ON (s.id = f.feed_status_id) " +
+            "WHERE f.closed_block = ? OR f.terminal_block = ? ORDER BY f.action_index ASC",
+            [B, B]),
+        sectionQuery(sections, 'bet_status',
+            "SELECT b.action_index, s.status AS bet_status, b.settled_block " +
+            "FROM bets b JOIN index_statuses s ON (s.id = b.bet_status_id) " +
+            "WHERE b.settled_block = ? ORDER BY b.action_index ASC",
+            [B])
+    ];
 }
 
 function assemblePreimage(B, sections){
@@ -377,8 +358,9 @@ function assemblePreimage(B, sections){
     return preimage;
 }
 
-// Build the canonical state-hash preimage object for block B. Each section is
-// awaited in its original order so database calls remain strictly sequential.
+// Build the canonical state-hash preimage object for block B. Each section
+// plans its queries in a fixed order and the single loop below awaits them one
+// at a time, so database calls stay strictly sequential in that order.
 async function buildStateHashData(db, blockIndex, opts){
     let B       = Number(blockIndex);
     let delay   = (opts && opts.activationDelay != null) ? Number(opts.activationDelay) : null;
@@ -387,16 +369,22 @@ async function buildStateHashData(db, blockIndex, opts){
     let coin    = (opts && opts.coin != null) ? opts.coin : null;
     let completedStatusId = await db.getStatusId('completed');
     let sections = {};
-    sections.deactivations = await buildDeactivations(db, B, delay);
-    sections.slashes = await buildSlashes(db, B);
-    sections.request_status = await buildRequestStatus(db, B);
-    sections.cooldown = await buildCooldown(db, B);
-    sections.credits = await buildCredits(db, B, gasTick, completedStatusId);
-    sections.anchor_invalid = await buildAnchorInvalid(db, B, network, coin);
-    Object.assign(sections, await buildIndexMap(db, B, network));
-    Object.assign(sections, await buildPollFinalize(db, B, network, coin));
-    Object.assign(sections, await buildTokenSupply(db, B, network, coin));
-    Object.assign(sections, await buildBetStatus(db, B, network, coin));
+    let queries = [].concat(
+        planDeactivations(sections, B, delay),
+        planSlashes(sections, B),
+        planRequestStatus(sections, B),
+        planCooldown(sections, B),
+        planCredits(sections, B, gasTick, completedStatusId),
+        planAnchorInvalid(sections, B, network, coin),
+        planIndexMap(sections, B, network),
+        planPollFinalize(sections, B, network, coin),
+        planTokenSupply(sections, B, network, coin),
+        planBetStatus(sections, B, network, coin));
+    for(let q of queries){
+        try {
+            q.target[q.key] = await db.doQuery(q.sql, q.params);
+        } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
+    }
     return assemblePreimage(B, sections);
 }
 
