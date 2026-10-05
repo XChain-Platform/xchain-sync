@@ -2700,6 +2700,14 @@ class ClientSync {
     }
 
     connectWebSocket(source, sourceIndex){
+        let ws = this.createWebSocket(source, sourceIndex);
+        if(!ws) return;
+
+        this.registerWebSocketHandlers(ws, source, sourceIndex);
+        this.wsConns[sourceIndex] = ws;
+    }
+
+    createWebSocket(source, sourceIndex){
         // Per-chain sync mode preference: 'full' (default) or 'infra-only', resolved
         // once in the constructor (SYNC_MODE_<CHAIN>), which also refuses the
         // infra-only + halting-verification combination before any connect.
@@ -2723,53 +2731,53 @@ class ClientSync {
             return;
         }
 
-        ws.on('open', () => {
-            getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
-        });
+        return ws;
+    }
 
-        ws.on('message', (data) => {
-            // Serialize event processing in arrival order. ws does not await an async
-            // listener, so without this a burst of block events runs handleEvent
-            // concurrently and races on lastAppliedBlock (the gap/continuity check runs
-            // before withApplyLock), firing spurious gaps that thrash the client into
-            // bulk catch-up (which skips the apply-time state_hash recompute). Chaining
-            // synchronously per message keeps gap-detection and apply atomic and ordered.
-            let event;
-            try {
-                event = JSON.parse(data.toString());
-                let check = validation.validateWsEvent(event);
-                if(!check.valid){
-                    getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
-                    return;
-                }
-            } catch(e){
-                getLogger().error(util.format('Error parsing WebSocket message:', e));
+    registerWebSocketHandlers(ws, source, sourceIndex){
+        ws.on('open', () => this.handleWebSocketOpen(source));
+        ws.on('message', data => this.handleWebSocketMessage(data, source, sourceIndex));
+        ws.on('close', () => this.handleWebSocketClose(source, sourceIndex));
+        ws.on('error', err => this.handleWebSocketError(err, source));
+    }
+
+    handleWebSocketOpen(source){
+        getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+    }
+
+    handleWebSocketMessage(data, source, sourceIndex){
+        // Synchronous chaining keeps gap detection and apply work atomic and ordered
+        // because ws does not await async listeners.
+        let event;
+        try {
+            event = JSON.parse(data.toString());
+            let check = validation.validateWsEvent(event);
+            if(!check.valid){
+                getLogger().error('Invalid WS event from ' + source + ': ' + check.reason);
                 return;
             }
-            // Stamp liveness on receipt (before the serialized apply chain) so the
-            // freshness signal reflects when the server last spoke, not when we
-            // finished applying. Any valid event type counts, including the periodic
-            // status heartbeat that arrives even when no new block is produced.
-            this._lastWsEventAt = Date.now();
-            this._wsEventChain = (this._wsEventChain || Promise.resolve())
-                .then(() => this.handleEvent(event, sourceIndex))
-                .catch(e => this.handleWsChainError(e));
-        });
+        } catch(e){
+            getLogger().error(util.format('Error parsing WebSocket message:', e));
+            return;
+        }
+        // Stamp liveness on receipt so freshness reflects when the server last speaks,
+        // not when apply work finishes. Every valid event type counts.
+        this._lastWsEventAt = Date.now();
+        this._wsEventChain = (this._wsEventChain || Promise.resolve())
+            .then(() => this.handleEvent(event, sourceIndex))
+            .catch(e => this.handleWsChainError(e));
+    }
 
-        ws.on('close', () => {
-            getLogger().info('WebSocket disconnected from ' + source);
-            // A source we are no longer connected to is not evidence about anything.
-            // Keeping its last verdict would let a disconnected server go on certifying
-            // its own freshness, which is the shape of the bug this map exists to fix.
-            this._upstreamStatus.delete(sourceIndex);
-            this.scheduleReconnect(source, sourceIndex);
-        });
+    handleWebSocketClose(source, sourceIndex){
+        getLogger().info('WebSocket disconnected from ' + source);
+        // A disconnected source provides no evidence about upstream freshness, so its
+        // last verdict cannot continue certifying that source.
+        this._upstreamStatus.delete(sourceIndex);
+        this.scheduleReconnect(source, sourceIndex);
+    }
 
-        ws.on('error', (err) => {
-            getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
-        });
-
-        this.wsConns[sourceIndex] = ws;
+    handleWebSocketError(err, source){
+        getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
     }
 
     // Terminal-error gate for the serialized WS event chain. Ordinary handler
