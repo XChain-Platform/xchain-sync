@@ -603,7 +603,13 @@ class ServerPoller {
         let hashRow = await this.db.getBlockHashRow(block_index, conn);
         if(!hashRow) return null;
 
-        let payload = {
+        let payload = this.createBlockPayload(hashRow);
+        this.addPayloadHashFields(payload, hashRow, block_index, viewTip);
+        return this.addPayloadStateRoots(payload, hashRow, block_index, conn, viewTip);
+    }
+
+    createBlockPayload(hashRow){
+        return {
             type: 'block',
             chain: this.chain,
             network: this.network,
@@ -613,87 +619,112 @@ class ServerPoller {
             block_time: Number(hashRow.block_time),
             data: {}
         };
+    }
 
+    // Fourth, replication-integrity hash (the in-place mutations + backdated refund
+    // credits the three hashes can't cover). Optional top-level field, NOT in
+    // sync_meta / the Merkle leaf / the hub-signed checkpoint; a follower with
+
+    // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
+    // for blocks indexed before the feature (the follower then skips the check).
+    //
+
+    // Burst exemption: during a catch-up batch the pinned view sits at the batch
+    // tip, so updated_rows for every block B < viewTip carry row state as of the
+    // tip, not as of B (the tick set is B-scoped but the row read takes every column
+
+    // from the pinned view). The follower's apply-time recompute of state_hash(B) reads those rows
+    // back and would halt on a value the source never committed at B, even though
+    // the replica converges to exact tip state by the end of the batch (each later
+
+    // mutation re-emits its row under its own block). Ship NULL for those blocks so
+    // the follower takes its existing pre-feature skip path -- the same posture the
+    // incremental-snapshot channel has by design (state_hash-exempt, consistent at
+
+    // its own view tip). Steady-state blocks (viewTip == B, the overwhelmingly
+    // common case) keep the full check; ledger/actions/contract hashes and the
+    // state-commitment roots are B-scoped committed rows and stay verified on every
+
+    // path.
+    addPayloadHashFields(payload, hashRow, block_index, viewTip){
         if(this.dbType === 'decoder'){
             // Decoder payload: simpler hash field, tx-scoped joins
             payload.block_hash = hashRow.block_hash;
-        } else {
-            // Indexer payload: three-hash transparency model
-            payload.ledger_hash   = hashRow.ledger_hash;
-            payload.actions_hash  = hashRow.actions_hash;
-            payload.contract_hash = hashRow.contract_hash;
-            // Fourth, replication-integrity hash (the in-place mutations + backdated refund
-            // credits the three hashes can't cover). Optional top-level field, NOT in
-            // sync_meta / the Merkle leaf / the hub-signed checkpoint; a follower with
-            // VERIFY_STATE_HASH recomputes it APPLY-TIME and halts on mismatch. May be NULL
-            // for blocks indexed before the feature (the follower then skips the check).
-            //
-            // Burst exemption: during a catch-up batch the pinned view sits at the batch
-            // tip, so updated_rows for every block B < viewTip carry row state as of the
-            // tip, not as of B (the tick set is B-scoped but the row read takes every column
-            // from the pinned view). The follower's apply-time recompute of state_hash(B) reads those rows
-            // back and would halt on a value the source never committed at B, even though
-            // the replica converges to exact tip state by the end of the batch (each later
-            // mutation re-emits its row under its own block). Ship NULL for those blocks so
-            // the follower takes its existing pre-feature skip path -- the same posture the
-            // incremental-snapshot channel has by design (state_hash-exempt, consistent at
-            // its own view tip). Steady-state blocks (viewTip == B, the overwhelmingly
-            // common case) keep the full check; ledger/actions/contract hashes and the
-            // state-commitment roots are B-scoped committed rows and stay verified on every
-            // path.
-            payload.state_hash = (viewTip != null && Number(viewTip) > block_index)
-                ? null
-                : hashRow.state_hash;
-
-            // Light-client state-commitment roots (SPV spec sec.4-5). Top-level fields
-            // ONLY, like state_hash: NOT in payload.data (the follower computes its own
-            // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
-            // before the flag-day (the follower then skips the check). The follower
-            // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
-            // for the later full-state_root verification (no wire change needed then).
-            if(isStateCommitmentActive(block_index, this.network, this.coinTicker)){
-                let roots = await this.db.getStateRootsRow(this.coinTicker, this.network, block_index, conn);
-                payload.balances_root    = roots ? roots.balances_root    : null;
-                payload.block_merkle_root = roots ? roots.block_merkle_root : null;
-                // state_root folds the BTC-only stakes_root, which the follower recomputes
-                // every block from the live stakes/unstakes tables (stateCommitment
-                // .gatherStakeEntries reading amount/deactivation_block). During a catch-up
-                // burst those columns carry TIP-state (post-slash) values, not the values
-                // committed at block B, so the follower would recompute state_root over a
-                // future amount and durably HALT on a value the source never committed at B.
-                // NULL state_root for burst blocks exactly like state_hash above; the
-                // follower's per-field compare skips a null state_root. balances_root/
-                // block_merkle_root stay live: they derive from B-scoped credit/debit/content
-                // rows applied in block order and are not exposed to the tip-state drift.
-                payload.state_root       = (viewTip != null && Number(viewTip) > block_index)
-                    ? null
-                    : (roots ? roots.state_root : null);
-            } else {
-                payload.balances_root    = null;
-                payload.block_merkle_root = null;
-                payload.state_root       = null;
-            }
-
-            // Replicate the per-block transparency-log row (sync_meta) live. The
-            // table is otherwise only carried by snapshots (SnapshotBuilder includes
-            // it; ClientRollback prunes it on reorg), so without this the replica's
-            // sync_meta drifts behind the source between snapshots. Built inline from
-            // the hashes rather than read from the table: the server's
-            // transparencyLog.recordBlock runs AFTER this payload is built (see
-            // poll), so the row isn't in sync_meta yet at this point. id/logged_at
-            // are node-local and intentionally omitted (the client assigns its own);
-            // the client applies sync_meta with INSERT IGNORE on the unique
-            // block_index, so re-sends are idempotent.
-            payload.data['sync_meta'] = [{
-                block_index:   payload.block_index,
-                block_time:    payload.block_time,
-                ledger_hash:   hashRow.ledger_hash,
-                actions_hash:  hashRow.actions_hash,
-                contract_hash: hashRow.contract_hash
-            }];
+            return;
         }
+        // Indexer payload: three-hash transparency model
+        payload.ledger_hash   = hashRow.ledger_hash;
+        payload.actions_hash  = hashRow.actions_hash;
+        payload.contract_hash = hashRow.contract_hash;
+        payload.state_hash = (viewTip != null && Number(viewTip) > block_index)
+            ? null
+            : hashRow.state_hash;
+    }
 
-        // Block-scoped tables (both indexer and decoder)
+    // Light-client state-commitment roots (SPV spec sec.4-5). Top-level fields
+    // ONLY, like state_hash: NOT in payload.data (the follower computes its own
+    // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
+
+    // before the flag-day (the follower then skips the check). The follower
+    // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
+    // for the later full-state_root verification (no wire change needed then).
+
+    // state_root folds the BTC-only stakes_root, which the follower recomputes
+    // every block from the live stakes/unstakes tables (stateCommitment
+    // .gatherStakeEntries reading amount/deactivation_block). During a catch-up
+
+    // burst those columns carry TIP-state (post-slash) values, not the values
+    // committed at block B, so the follower would recompute state_root over a
+    // future amount and durably HALT on a value the source never committed at B.
+
+    // NULL state_root for burst blocks exactly like state_hash above; the
+    // follower's per-field compare skips a null state_root. balances_root/
+    // block_merkle_root stay live: they derive from B-scoped credit/debit/content
+
+    // rows applied in block order and are not exposed to the tip-state drift.
+    async addPayloadStateRoots(payload, hashRow, block_index, conn, viewTip){
+        if(this.dbType !== 'decoder' && isStateCommitmentActive(block_index, this.network, this.coinTicker)){
+            let roots = await this.db.getStateRootsRow(this.coinTicker, this.network, block_index, conn);
+            payload.balances_root    = roots ? roots.balances_root    : null;
+            payload.block_merkle_root = roots ? roots.block_merkle_root : null;
+            payload.state_root       = (viewTip != null && Number(viewTip) > block_index)
+                ? null
+                : (roots ? roots.state_root : null);
+        } else if(this.dbType !== 'decoder'){
+            payload.balances_root    = null;
+            payload.block_merkle_root = null;
+            payload.state_root       = null;
+        }
+        this.addSyncMetaPayloadRow(payload, hashRow);
+        return this.addBlockScopedPayloadRows(payload, block_index, conn);
+    }
+
+    // Replicate the per-block transparency-log row (sync_meta) live. The
+    // table is otherwise only carried by snapshots (SnapshotBuilder includes
+    // it; ClientRollback prunes it on reorg), so without this the replica's
+
+    // sync_meta drifts behind the source between snapshots. Built inline from
+    // the hashes rather than read from the table: the server's
+    // transparencyLog.recordBlock runs AFTER this payload is built (see
+
+    // poll), so the row isn't in sync_meta yet at this point. id/logged_at
+    // are node-local and intentionally omitted (the client assigns its own);
+    // the client applies sync_meta with INSERT IGNORE on the unique
+
+    // block_index, so re-sends are idempotent.
+    addSyncMetaPayloadRow(payload, hashRow){
+        if(this.dbType === 'decoder') return;
+        payload.data['sync_meta'] = [{
+            block_index:   payload.block_index,
+            block_time:    payload.block_time,
+            ledger_hash:   hashRow.ledger_hash,
+            actions_hash:  hashRow.actions_hash,
+            contract_hash: hashRow.contract_hash
+        }];
+    }
+
+    // Block-scoped tables (both indexer and decoder)
+    async addBlockScopedPayloadRows(payload, block_index, conn){
         for(let table of this.blockScopedTables){
             if(table === 'transactions') continue;  // Handled below
             try {
@@ -706,17 +737,416 @@ class ServerPoller {
                 if(!isSchemaGapError(e)) throw e;
             }
         }
+        return this.addTransactionPayloadRows(payload, block_index, conn);
+    }
 
-        // Transactions (both indexer and decoder)
+    // Transactions (both indexer and decoder)
+    async addTransactionPayloadRows(payload, block_index, conn){
         let txRows = await this.db.getTransactions(block_index, conn);
         if(txRows && txRows.length > 0)
             payload.data['transactions'] = txRows;
+        if(this.dbType === 'decoder')
+            return this.addDecoderPayloadRows(payload, block_index, conn);
+        return this.addActionPayloadRows(payload, block_index, conn);
+    }
 
-        if(this.dbType === 'decoder'){
-            // Decoder: tx-scoped tables (transaction_outputs)
-            for(let table of this.txScopedTables){
+    // Decoder: tx-scoped tables (transaction_outputs)
+    async addDecoderPayloadRows(payload, block_index, conn){
+        for(let table of this.txScopedTables){
+            try {
+                let rows = await this.db.getTxScopedRows(table, block_index, conn);
+                if(rows && rows.length > 0)
+                    payload.data[table] = rows;
+            } catch(e){
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
+            }
+        }
+        return this.addReferencedIndexRows(payload, block_index, conn);
+    }
+
+    // Discover in ONE round-trip which action-scoped tables carry rows this block,
+    // then fetch only those, because the loop below otherwise queries all 86
+    // registry tables, empty ones included, and grows with every table added.
+
+    // Skipping a probe-absent table cannot change payload.data: the probe runs
+    // getActionScopedRows' own predicate, so its verdict IS that fetch's row count,
+    // and an empty fetch is already dropped by the length check below.
+
+    //
+    // scopedTables stays null on ANY probe failure, and on a db without the helper,
+    // which restores the query-every-table behaviour verbatim. Swallowing a
+
+    // transient fault here is safe precisely because the fallback re-issues the
+    // real fetches: a fault that persists throws from those instead, freezing the
+    // cursor rather than broadcasting an incomplete block.
+    async actionScopedProbe(payload, block_index, conn, result){
+        if(typeof this.db.getNonEmptyActionScopedTables === 'function'){
+            try {
+                result.probeQueries = 1;
+                let probed = await this.db.getNonEmptyActionScopedTables(
+                    this.actionScopedTables.filter(t => t !== 'actions' && t !== 'contract_emissions'),
+                    block_index, conn);
+                result.scopedTables = (probed && typeof probed.has === 'function') ? probed : null;
+            } catch(e){
+                result.probeQueries = 0;
+                result.scopedTables = null;
+            }
+        }
+        return this.addActionScopedTableRows(payload, block_index, conn, result);
+    }
+
+    // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
+    // getActionScopedRows joins on action_index and would drop those rows from the
+    // payload, while the consensus hash includes them (via execution_index). A
+
+    // follower would then recompute a divergent contract_hash and halt. Stream them
+    // through the execution_index chain instead, matching BlockHasher exactly.
+    async addActionScopedTableRows(payload, block_index, conn, metric){
+        for(let table of this.actionScopedTables){
+            if(table === 'actions') continue; // Already handled
+            if(table === 'contract_emissions'){
                 try {
-                    let rows = await this.db.getTxScopedRows(table, block_index, conn);
+                    metric.scopedQueries++;
+                    let rows = await this.db.getEmissionRowsForBlock(block_index, conn);
+                    if(rows && rows.length > 0){
+                        payload.data[table] = rows;
+                        metric.scopedNonEmpty++;
+                    }
+                } catch(e){
+                    // Skip a genuine schema gap; re-throw any transient fault so the
+                    // block is retried rather than broadcast incomplete.
+                    if(!isSchemaGapError(e)) throw e;
+                }
+                continue;
+            }
+            // Probe said this table has no rows for this block, so getActionScopedRows
+            // would return [] and the length check below would drop it anyway.
+            if(metric.scopedTables && !metric.scopedTables.has(table)) continue;
+            try {
+                metric.scopedQueries++;
+                let rows = await this.db.getActionScopedRows(table, block_index, conn);
+                if(rows && rows.length > 0){
+                    payload.data[table] = rows;
+                    metric.scopedNonEmpty++;
+                }
+            } catch(e){
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
+            }
+        }
+        this.reportActionScopedQueryMetric(metric.scopedQueries, metric.scopedNonEmpty,
+                                           Date.now() - metric.scopedStartedAt, metric.probeQueries);
+        return this.addCooldownPayloadRows(payload, block_index, conn);
+    }
+
+    async addActionPayloadRows(payload, block_index, conn){
+        // Indexer: actions and action-scoped tables
+        let actionRows = await this.db.getActions(block_index, conn);
+        if(actionRows && actionRows.length > 0)
+            payload.data['actions'] = actionRows;
+        // Counters for the action-scoped query-count metric emitted after the loop.
+        // Read-only bookkeeping: nothing here reaches payload.data.
+        let metric = {
+            scopedQueries: 0,
+            scopedNonEmpty: 0,
+            probeQueries: 0,
+            scopedStartedAt: Date.now(),
+            scopedTables: null
+        };
+        return this.actionScopedProbe(payload, block_index, conn, metric);
+    }
+
+    // Cooldown-maturity refund credits mint AT this block but carry the
+    // unstake's earlier-block action_index (and no block_index), so the
+    // action-scoped join above misses them, leaving followers permanently
+
+    // short by every matured refund. Select them by maturity block
+    // (cooldown_end_block = this block), the forward mirror of
+    // ClientRollback's reverse delete, and merge into the credits payload;
+
+    // ClientApplier then upserts them and rebuilds balances like any other
+    // credit. Disjoint from the action-scoped credits (those carry an action
+    // in THIS block; a refund's action is in an earlier block), but dedup the
+
+    // union defensively on the credit's logical identity. The escrow release
+    // written beside each refund shares its backdated action_index, so it
+    // rides the same way into the escrows payload.
+    async addCooldownPayloadRows(payload, block_index, conn){
+        try {
+            let refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
+            let releases = await collectMaturedCooldownEscrows(this.db, block_index, block_index, conn);
+            if(refunds.length > 0) payload.data['credits'] = mergeMaturedRows(payload.data['credits'], refunds);
+            if(releases.length > 0) payload.data['escrows'] = mergeMaturedRows(payload.data['escrows'], releases);
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addRedrivenRewardPayloadRows(payload, block_index, conn);
+    }
+
+    // The dedup key is the FULL five-column identity. round_qualifier is the
+    // archive leg's snapshot_block, and its round_reference (MATCH_BATCH_SEQ) is
+    // a dense hub counter a rebase reissues, so two distinct archive rewards can
+
+    // share the four older columns; on the narrower key the second is treated as
+    // a duplicate and dropped from the payload before it ever reaches a replica.
+    mergeValidatorRewardRows(payload, rows){
+        let existing = payload.data['validator_rewards'] || [];
+        let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
+        for(let r of rows){
+            let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
+            if(!seen.has(k)){ seen.add(k); existing.push(r); }
+        }
+        payload.data['validator_rewards'] = existing;
+    }
+
+    // Recovery-redriven validator rewards: a reorg re-drain re-materializes a
+    // survivor reward at block_index = earn-block E < B, so the block-scoped
+    // getBlockScopedRows path (forward from B) misses it. Select by applied_block
+
+    // (= this block, the re-drain point), the forward analogue of ClientRollback's
+    // block_index >= B delete, and merge into the validator_rewards payload deduped
+    // on the row's UNIQUE identity. Disjoint from the block-scoped rows (those carry
+
+    // block_index = this block; a survivor's earn-block is earlier).
+    async addRedrivenRewardPayloadRows(payload, block_index, conn){
+        try {
+            let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index, conn);
+            if(redriven.length > 0) this.mergeValidatorRewardRows(payload, redriven);
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addDerivedRewardPayloadRows(payload, block_index, conn);
+    }
+
+    // Derived anchor/archive validator rewards: the BTC-side derivation writes the
+    // row while processing THIS block but stamps block_index = the checkpoint's
+    // SNAPSHOT_BLOCK E (< this block), so getBlockScopedRows never carries it.
+
+    // Select by derive_block_index (= this block, the materialization point), the
+    // forward twin of ClientRollback's derive_block_index >= B delete, and merge
+    // deduped on the UNIQUE identity exactly like the redriven rows above. The
+
+    // reconcile that collapses the round to its winner runs in the same block on the
+    // source, so only survivors are read here; the losers' pre-images ride the
+    // anchor_reward_reconcile_log rows this payload already carries.
+
+    // Five-column identity, same reason as the redriven merge above: the
+    // archive leg is exactly the channel that can present two distinct rewards
+    // differing only in round_qualifier.
+    async addDerivedRewardPayloadRows(payload, block_index, conn){
+        try {
+            let derived = await collectDerivedAnchorRewards(this.db, block_index, block_index, conn);
+            if(derived.length > 0) this.mergeValidatorRewardRows(payload, derived);
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addReferencedIndexRows(payload, block_index, conn);
+    }
+
+    // Index tables: get entries referenced by this block's data.
+    // Both indexer and decoder use this pattern (decoder has fewer index tables).
+    // The client uses INSERT IGNORE so duplicates are harmless.
+
+    // events: decoder-only operational log with no block_index/tx_index
+    // cursor, so it can't be scoped per-block; it is intentionally skipped
+    // here. It converges via snapshots instead: both the full snapshot and
+
+    // every incremental snapshot re-dump the events table in full (the client
+    // applies them with INSERT IGNORE on the AUTO_INCREMENT id PK, so repeated
+    // dumps are idempotent). See SnapshotBuilder.streamIncrementalSnapshot.
+
+    // For other index tables, the generic _id-reference pass below
+    // (indexer only) extracts them; see the comment there.
+    addReferencedIndexRows(payload, block_index, conn, tableIndex = 0){
+        if(tableIndex >= this.indexTables.length)
+            return this.addGenericIndexRows(payload, block_index, conn);
+        let table = this.indexTables[tableIndex];
+        if(table === 'index_transactions')
+            return this.addIndexTransactionRows(payload, table, block_index, conn, tableIndex);
+        if(table === 'index_addresses' && payload.data['transactions'])
+            return this.addIndexAddressRows(payload, table, block_index, conn, tableIndex);
+        if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses'])
+            return this.addIndexPubkeyRows(payload, table, block_index, conn, tableIndex);
+        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
+    }
+
+    // index_transactions: every `*_hash_id` this block's own rows carry, DERIVED
+    // from the column suffix rather than listed. The generic `*_id` scan below
+    // skips this table, so a hash column absent here reaches a follower as a
+
+    // permanently dangling reference: its blocks row is correct, its LEFT JOIN
+    // (getBlockHashRow, and the explorer's identical join) resolves that hash to
+    // NULL for every block above the last snapshot, which is the only thing that
+
+    // re-dumps this table in full. One rule for both dbTypes, so a hash column
+    // added later cannot re-open the gap.
+    async addIndexTransactionRows(payload, table, block_index, conn, tableIndex){
+        try {
+            let ids = [];
+            let collectHashIds = (row) => {
+                for(let col in row){
+                    if(col.length > 8 && col.slice(-8) === '_hash_id' && row[col] != null)
+                        ids.push(row[col]);
+                }
+            };
+            // Decoder: blocks carry block_hash_id + previous_block_hash_id.
+            // Indexer: blocks carry ledger/actions/contract/state hash ids.
+            // Both: transactions carry tx_hash_id.
+            if(payload.data['blocks'])
+                for(let b of payload.data['blocks']) collectHashIds(b);
+            if(payload.data['transactions'])
+                for(let tx of payload.data['transactions']) collectHashIds(tx);
+            if(ids.length > 0){
+                let unique = [...new Set(ids)];
+                let rows = await this.db.findIndexTransactionsByIds(unique, conn);
+                if(rows && rows.length > 0)
+                    payload.data[table] = rows;
+            }
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
+    }
+
+    // index_addresses: collect referenced address IDs from transactions
+    // Decoder: also collect from transaction_outputs
+    // A DISPENSER create interns its GET_ADDRESS and oracle address in
+
+    // this block, but dispensers never streams, so ship those ids here or
+    // the replica's MAX(id) cursor passes them and leaves a hole. Its own
+    // schema-gap guard, so a source without dispensers keeps the tx ids.
+    async addIndexAddressRows(payload, table, block_index, conn, tableIndex){
+        try {
+            let ids = [];
+            for(let tx of payload.data['transactions']){
+                if(tx.source_id) ids.push(tx.source_id);
+                if(tx.destination_id) ids.push(tx.destination_id);
+            }
+            if(this.dbType === 'decoder'){
+                if(payload.data['transaction_outputs']){
+                    for(let o of payload.data['transaction_outputs'])
+                        if(o.destination_id) ids.push(o.destination_id);
+                }
+                let dispenserRows = [];
+                try {
+                    dispenserRows = await this.db.getTxScopedRows('dispensers', block_index, conn);
+                } catch(e){
+                    if(!isSchemaGapError(e)) throw e;
+                }
+                for(let d of (dispenserRows || [])){
+                    if(d.address_id) ids.push(d.address_id);
+                    if(d.oracle_address_id) ids.push(d.oracle_address_id);
+                    if(d.source_address_id) ids.push(d.source_address_id);
+                }
+            }
+            if(ids.length > 0){
+                let unique = [...new Set(ids)];
+                let rows = await this.db.findIndexAddressesByIds(unique, conn);
+                if(rows && rows.length > 0)
+                    payload.data[table] = rows;
+            }
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
+    }
+
+    // pubkeys: decoder-only; fetch any pubkeys for addresses referenced this block
+    async addIndexPubkeyRows(payload, table, block_index, conn, tableIndex){
+        try {
+            let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
+            if(ids.length > 0){
+                let rows = await this.db.findPubkeysByAddressIds(ids, conn);
+                if(rows && rows.length > 0)
+                    payload.data[table] = rows;
+            }
+        } catch(e){
+            // Skip a genuine schema gap; re-throw any transient fault so the
+            // block is retried rather than broadcast incomplete.
+            if(!isSchemaGapError(e)) throw e;
+        }
+        return this.addReferencedIndexRows(payload, block_index, conn, tableIndex + 1);
+    }
+
+    collectPayloadReferenceIds(payload){
+        let refIds = new Set();
+        for(let t in payload.data){
+            let rows = payload.data[t];
+            if(!Array.isArray(rows)) continue;
+            for(let row of rows){
+                for(let col in row){
+                    if(col.length > 3 && col.slice(-3) === '_id'){
+                        let v = row[col];
+                        if(v !== null && v !== undefined) refIds.add(v);
+                    }
+                }
+            }
+        }
+        return refIds;
+    }
+
+    // Indexer only: extract the remaining interned-lookup index tables
+    // (index_actions, index_statuses, index_tickers, index_fiats, index_coins,
+    // index_memos, index_mime_types, index_pubkeys). Each is an append-only
+
+    // string-interning table referenced by `*_id` columns scattered across
+    // dozens of action/block-scoped tables. The references are NOT a clean
+    // suffix convention (e.g. lists.item_id and orders.give_tick_id/get_coin_id
+
+    // all point at index_tickers/index_coins). Hardcoding every referencing
+    // column would silently drop a brand-new interned value the first time a new
+    // action type appears mid-stream, until the next snapshot backfilled it.
+
+    // Instead, pool every `*_id` value present in this block's already-assembled
+    // payload and fetch the matching rows from each remaining index table.
+    // Over-fetch is harmless: the rows exist on the source, the client applies
+
+    // them INSERT IGNORE on the PK (ClientApplier.ignoreTables), so the replica's
+    // index_* set stays a subset of the source's and never overshoots the
+    // row-count completeness check.
+
+    // index_transactions keeps its explicit-only join above (it is referenced by
+    // block-hash/tx-hash IDs the generic _id scan can't see). index_addresses IS
+    // re-fetched here: the explicit join above sees only tx source/dest, but an
+
+    // address can first receive its in-block id via a non-tx column (credits.address_id,
+    // contract_executions.caller_id, XCALL/XEXEC counterparties, action-data recipients),
+    // which only the generic _id scan reaches.
+    async addGenericIndexRows(payload, block_index, conn){
+        if(this.dbType === 'decoder')
+            return this.addBlockScopedIndexRows(payload, block_index, conn);
+        let refIds = this.collectPayloadReferenceIds(payload);
+        if(refIds.size > 0){
+            let idList = [...refIds];
+            for(let table of this.indexTables){
+                // index_transactions carries block-hash/tx-hash IDs the generic _id
+                // scan can't see, so it keeps its explicit join above and is skipped here.
+                if(table === 'index_transactions') continue;
+                // index_addresses is pre-populated tx-only by the explicit join above;
+                // re-fetch it here over the full ref set (a superset of the tx-only set,
+                // since the scan also sees transactions.source_id/destination_id) so a
+
+                // non-tx-interned address is streamed at its intern block. Without this it
+                // is never delivered, forking the follower's index map (reorg-gated
+                // divergence today; a per-block halt once the index-map state_hash class
+
+                // is armed). For every other table the already-populated skip stands.
+                if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
+                try {
+                    let rows = await this.db.findRowsByIds(table, idList, conn);
                     if(rows && rows.length > 0)
                         payload.data[table] = rows;
                 } catch(e){
@@ -725,324 +1155,11 @@ class ServerPoller {
                     if(!isSchemaGapError(e)) throw e;
                 }
             }
-        } else {
-            // Indexer: actions and action-scoped tables
-            let actionRows = await this.db.getActions(block_index, conn);
-            if(actionRows && actionRows.length > 0)
-                payload.data['actions'] = actionRows;
-
-            // Counters for the action-scoped query-count metric emitted after the loop.
-            // Read-only bookkeeping: nothing here reaches payload.data.
-            let scopedQueries = 0, scopedNonEmpty = 0, probeQueries = 0;
-            let scopedStartedAt = Date.now();
-
-            // Discover in ONE round-trip which action-scoped tables carry rows this block,
-            // then fetch only those, because the loop below otherwise queries all 86
-            // registry tables, empty ones included, and grows with every table added.
-            // Skipping a probe-absent table cannot change payload.data: the probe runs
-            // getActionScopedRows' own predicate, so its verdict IS that fetch's row count,
-            // and an empty fetch is already dropped by the length check below.
-            //
-            // scopedTables stays null on ANY probe failure, and on a db without the helper,
-            // which restores the query-every-table behaviour verbatim. Swallowing a
-            // transient fault here is safe precisely because the fallback re-issues the
-            // real fetches: a fault that persists throws from those instead, freezing the
-            // cursor rather than broadcasting an incomplete block.
-            let scopedTables = null;
-            if(typeof this.db.getNonEmptyActionScopedTables === 'function'){
-                try {
-                    probeQueries = 1;
-                    let probed = await this.db.getNonEmptyActionScopedTables(
-                        this.actionScopedTables.filter(t => t !== 'actions' && t !== 'contract_emissions'),
-                        block_index, conn);
-                    scopedTables = (probed && typeof probed.has === 'function') ? probed : null;
-                } catch(e){
-                    probeQueries = 0;
-                    scopedTables = null;
-                }
-            }
-
-            for(let table of this.actionScopedTables){
-                if(table === 'actions') continue; // Already handled
-                // contract_emissions has NULL action_index for internal emissions (e.g. SLASH).
-                // getActionScopedRows joins on action_index and would drop those rows from the
-                // payload, while the consensus hash includes them (via execution_index). A
-                // follower would then recompute a divergent contract_hash and halt. Stream them
-                // through the execution_index chain instead, matching BlockHasher exactly.
-                if(table === 'contract_emissions'){
-                    try {
-                        scopedQueries++;
-                        let rows = await this.db.getEmissionRowsForBlock(block_index, conn);
-                        if(rows && rows.length > 0){
-                            payload.data[table] = rows;
-                            scopedNonEmpty++;
-                        }
-                    } catch(e){
-                        // Skip a genuine schema gap; re-throw any transient fault so the
-                        // block is retried rather than broadcast incomplete.
-                        if(!isSchemaGapError(e)) throw e;
-                    }
-                    continue;
-                }
-                // Probe said this table has no rows for this block, so getActionScopedRows
-                // would return [] and the length check below would drop it anyway.
-                if(scopedTables && !scopedTables.has(table)) continue;
-                try {
-                    scopedQueries++;
-                    let rows = await this.db.getActionScopedRows(table, block_index, conn);
-                    if(rows && rows.length > 0){
-                        payload.data[table] = rows;
-                        scopedNonEmpty++;
-                    }
-                } catch(e){
-                    // Skip a genuine schema gap; re-throw any transient fault so the
-                    // block is retried rather than broadcast incomplete.
-                    if(!isSchemaGapError(e)) throw e;
-                }
-            }
-
-            this.reportActionScopedQueryMetric(scopedQueries, scopedNonEmpty,
-                                               Date.now() - scopedStartedAt, probeQueries);
-
-            // Cooldown-maturity refund credits mint AT this block but carry the
-            // unstake's earlier-block action_index (and no block_index), so the
-            // action-scoped join above misses them, leaving followers permanently
-            // short by every matured refund. Select them by maturity block
-            // (cooldown_end_block = this block), the forward mirror of
-            // ClientRollback's reverse delete, and merge into the credits payload;
-            // ClientApplier then upserts them and rebuilds balances like any other
-            // credit. Disjoint from the action-scoped credits (those carry an action
-            // in THIS block; a refund's action is in an earlier block), but dedup the
-            // union defensively on the credit's logical identity. The escrow release
-            // written beside each refund shares its backdated action_index, so it
-            // rides the same way into the escrows payload.
-            try {
-                let refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
-                let releases = await collectMaturedCooldownEscrows(this.db, block_index, block_index, conn);
-                if(refunds.length > 0) payload.data['credits'] = mergeMaturedRows(payload.data['credits'], refunds);
-                if(releases.length > 0) payload.data['escrows'] = mergeMaturedRows(payload.data['escrows'], releases);
-            } catch(e){
-                // Skip a genuine schema gap; re-throw any transient fault so the
-                // block is retried rather than broadcast incomplete.
-                if(!isSchemaGapError(e)) throw e;
-            }
-
-            // Recovery-redriven validator rewards: a reorg re-drain re-materializes a
-            // survivor reward at block_index = earn-block E < B, so the block-scoped
-            // getBlockScopedRows path (forward from B) misses it. Select by applied_block
-            // (= this block, the re-drain point), the forward analogue of ClientRollback's
-            // block_index >= B delete, and merge into the validator_rewards payload deduped
-            // on the row's UNIQUE identity. Disjoint from the block-scoped rows (those carry
-            // block_index = this block; a survivor's earn-block is earlier).
-            try {
-                let redriven = await collectRedrivenValidatorRewards(this.db, block_index, block_index, conn);
-                if(redriven.length > 0){
-                    let existing = payload.data['validator_rewards'] || [];
-                    // The dedup key is the FULL five-column identity. round_qualifier is the
-                    // archive leg's snapshot_block, and its round_reference (MATCH_BATCH_SEQ) is
-                    // a dense hub counter a rebase reissues, so two distinct archive rewards can
-                    // share the four older columns; on the narrower key the second is treated as
-                    // a duplicate and dropped from the payload before it ever reaches a replica.
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
-                    for(let r of redriven){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
-                        if(!seen.has(k)){ seen.add(k); existing.push(r); }
-                    }
-                    payload.data['validator_rewards'] = existing;
-                }
-            } catch(e){
-                // Skip a genuine schema gap; re-throw any transient fault so the
-                // block is retried rather than broadcast incomplete.
-                if(!isSchemaGapError(e)) throw e;
-            }
-
-            // Derived anchor/archive validator rewards: the BTC-side derivation writes the
-            // row while processing THIS block but stamps block_index = the checkpoint's
-            // SNAPSHOT_BLOCK E (< this block), so getBlockScopedRows never carries it.
-            // Select by derive_block_index (= this block, the materialization point), the
-            // forward twin of ClientRollback's derive_block_index >= B delete, and merge
-            // deduped on the UNIQUE identity exactly like the redriven rows above. The
-            // reconcile that collapses the round to its winner runs in the same block on the
-            // source, so only survivors are read here; the losers' pre-images ride the
-            // anchor_reward_reconcile_log rows this payload already carries.
-            try {
-                let derived = await collectDerivedAnchorRewards(this.db, block_index, block_index, conn);
-                if(derived.length > 0){
-                    let existing = payload.data['validator_rewards'] || [];
-                    // Five-column identity, same reason as the redriven merge above: the
-                    // archive leg is exactly the channel that can present two distinct rewards
-                    // differing only in round_qualifier.
-                    let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
-                    for(let r of derived){
-                        let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
-                        if(!seen.has(k)){ seen.add(k); existing.push(r); }
-                    }
-                    payload.data['validator_rewards'] = existing;
-                }
-            } catch(e){
-                // Skip a genuine schema gap; re-throw any transient fault so the
-                // block is retried rather than broadcast incomplete.
-                if(!isSchemaGapError(e)) throw e;
-            }
         }
+        return this.addBlockScopedIndexRows(payload, block_index, conn);
+    }
 
-        // Index tables: get entries referenced by this block's data.
-        // Both indexer and decoder use this pattern (decoder has fewer index tables).
-        // The client uses INSERT IGNORE so duplicates are harmless.
-        for(let table of this.indexTables){
-            try {
-                // index_transactions: every `*_hash_id` this block's own rows carry, DERIVED
-                // from the column suffix rather than listed. The generic `*_id` scan below
-                // skips this table, so a hash column absent here reaches a follower as a
-                // permanently dangling reference: its blocks row is correct, its LEFT JOIN
-                // (getBlockHashRow, and the explorer's identical join) resolves that hash to
-                // NULL for every block above the last snapshot, which is the only thing that
-                // re-dumps this table in full. One rule for both dbTypes, so a hash column
-                // added later cannot re-open the gap.
-                if(table === 'index_transactions'){
-                    let ids = [];
-                    let collectHashIds = (row) => {
-                        for(let col in row){
-                            if(col.length > 8 && col.slice(-8) === '_hash_id' && row[col] != null)
-                                ids.push(row[col]);
-                        }
-                    };
-                    // Decoder: blocks carry block_hash_id + previous_block_hash_id.
-                    // Indexer: blocks carry ledger/actions/contract/state hash ids.
-                    // Both: transactions carry tx_hash_id.
-                    if(payload.data['blocks'])
-                        for(let b of payload.data['blocks']) collectHashIds(b);
-                    if(payload.data['transactions'])
-                        for(let tx of payload.data['transactions']) collectHashIds(tx);
-                    if(ids.length > 0){
-                        let unique = [...new Set(ids)];
-                        let rows = await this.db.findIndexTransactionsByIds(unique, conn);
-                        if(rows && rows.length > 0)
-                            payload.data[table] = rows;
-                    }
-                }
-                // index_addresses: collect referenced address IDs from transactions
-                else if(table === 'index_addresses' && payload.data['transactions']){
-                    let ids = [];
-                    for(let tx of payload.data['transactions']){
-                        if(tx.source_id) ids.push(tx.source_id);
-                        if(tx.destination_id) ids.push(tx.destination_id);
-                    }
-                    // Decoder: also collect from transaction_outputs
-                    if(this.dbType === 'decoder'){
-                        if(payload.data['transaction_outputs']){
-                            for(let o of payload.data['transaction_outputs'])
-                                if(o.destination_id) ids.push(o.destination_id);
-                        }
-                        // A DISPENSER create interns its GET_ADDRESS and oracle address in
-                        // this block, but dispensers never streams, so ship those ids here or
-                        // the replica's MAX(id) cursor passes them and leaves a hole. Its own
-                        // schema-gap guard, so a source without dispensers keeps the tx ids.
-                        let dispenserRows = [];
-                        try {
-                            dispenserRows = await this.db.getTxScopedRows('dispensers', block_index, conn);
-                        } catch(e){
-                            if(!isSchemaGapError(e)) throw e;
-                        }
-                        for(let d of (dispenserRows || [])){
-                            if(d.address_id) ids.push(d.address_id);
-                            if(d.oracle_address_id) ids.push(d.oracle_address_id);
-                            if(d.source_address_id) ids.push(d.source_address_id);
-                        }
-                    }
-                    if(ids.length > 0){
-                        let unique = [...new Set(ids)];
-                        let rows = await this.db.findIndexAddressesByIds(unique, conn);
-                        if(rows && rows.length > 0)
-                            payload.data[table] = rows;
-                    }
-                }
-                // pubkeys: decoder-only; fetch any pubkeys for addresses referenced this block
-                else if(table === 'pubkeys' && this.dbType === 'decoder' && payload.data['index_addresses']){
-                    let ids = payload.data['index_addresses'].map(a => a.id).filter(id => id != null);
-                    if(ids.length > 0){
-                        let rows = await this.db.findPubkeysByAddressIds(ids, conn);
-                        if(rows && rows.length > 0)
-                            payload.data[table] = rows;
-                    }
-                }
-                // events: decoder-only operational log with no block_index/tx_index
-                // cursor, so it can't be scoped per-block; it is intentionally skipped
-                // here. It converges via snapshots instead: both the full snapshot and
-                // every incremental snapshot re-dump the events table in full (the client
-                // applies them with INSERT IGNORE on the AUTO_INCREMENT id PK, so repeated
-                // dumps are idempotent). See SnapshotBuilder.streamIncrementalSnapshot.
-                // For other index tables, the generic _id-reference pass below
-                // (indexer only) extracts them; see the comment there.
-            } catch(e){
-                // Skip a genuine schema gap; re-throw any transient fault so the
-                // block is retried rather than broadcast incomplete.
-                if(!isSchemaGapError(e)) throw e;
-            }
-        }
-
-        // Indexer only: extract the remaining interned-lookup index tables
-        // (index_actions, index_statuses, index_tickers, index_fiats, index_coins,
-        // index_memos, index_mime_types, index_pubkeys). Each is an append-only
-        // string-interning table referenced by `*_id` columns scattered across
-        // dozens of action/block-scoped tables. The references are NOT a clean
-        // suffix convention (e.g. lists.item_id and orders.give_tick_id/get_coin_id
-        // all point at index_tickers/index_coins). Hardcoding every referencing
-        // column would silently drop a brand-new interned value the first time a new
-        // action type appears mid-stream, until the next snapshot backfilled it.
-        // Instead, pool every `*_id` value present in this block's already-assembled
-        // payload and fetch the matching rows from each remaining index table.
-        // Over-fetch is harmless: the rows exist on the source, the client applies
-        // them INSERT IGNORE on the PK (ClientApplier.ignoreTables), so the replica's
-        // index_* set stays a subset of the source's and never overshoots the
-        // row-count completeness check.
-        // index_transactions keeps its explicit-only join above (it is referenced by
-        // block-hash/tx-hash IDs the generic _id scan can't see). index_addresses IS
-        // re-fetched here: the explicit join above sees only tx source/dest, but an
-        // address can first receive its in-block id via a non-tx column (credits.address_id,
-        // contract_executions.caller_id, XCALL/XEXEC counterparties, action-data recipients),
-        // which only the generic _id scan reaches.
-        if(this.dbType !== 'decoder'){
-            let refIds = new Set();
-            for(let t in payload.data){
-                let rows = payload.data[t];
-                if(!Array.isArray(rows)) continue;
-                for(let row of rows){
-                    for(let col in row){
-                        if(col.length > 3 && col.slice(-3) === '_id'){
-                            let v = row[col];
-                            if(v !== null && v !== undefined) refIds.add(v);
-                        }
-                    }
-                }
-            }
-            if(refIds.size > 0){
-                let idList = [...refIds];
-                for(let table of this.indexTables){
-                    // index_transactions carries block-hash/tx-hash IDs the generic _id
-                    // scan can't see, so it keeps its explicit join above and is skipped here.
-                    if(table === 'index_transactions') continue;
-                    // index_addresses is pre-populated tx-only by the explicit join above;
-                    // re-fetch it here over the full ref set (a superset of the tx-only set,
-                    // since the scan also sees transactions.source_id/destination_id) so a
-                    // non-tx-interned address is streamed at its intern block. Without this it
-                    // is never delivered, forking the follower's index map (reorg-gated
-                    // divergence today; a per-block halt once the index-map state_hash class
-                    // is armed). For every other table the already-populated skip stands.
-                    if(table !== 'index_addresses' && payload.data[table]) continue;  // defensive: already populated
-                    try {
-                        let rows = await this.db.findRowsByIds(table, idList, conn);
-                        if(rows && rows.length > 0)
-                            payload.data[table] = rows;
-                    } catch(e){
-                        // Skip a genuine schema gap; re-throw any transient fault so the
-                        // block is retried rather than broadcast incomplete.
-                        if(!isSchemaGapError(e)) throw e;
-                    }
-                }
-            }
-        }
-
+    async addBlockScopedIndexRows(payload, block_index, conn){
         if(this.dbType !== 'decoder'){
             for(const table of ['index_addresses', 'index_tickers']){
                 try {
@@ -1062,20 +1179,27 @@ class ServerPoller {
                 }
             }
         }
+        return this.addUpdatedPayloadRows(payload, block_index, conn);
+    }
 
-        // In-place mutations to SURVIVING (below-window) rows: deactivation_block
-        // stamps, SLASH amount reductions, and v0 request_status flips are not
-        // reachable by the action_index-scoped joins above (those rows were created
-        // by an earlier block's action). Carry their current full state in a separate
-        // top-level `updated_rows` map so the follower can UPSERT them; without this
-        // every forward in-place mutation is silently dropped on the replica. Indexer
-        // only (decoder has none of these tables). tokens.escrow_action_index rides
-        // along (the tokens class carries the full row); the follower additionally
-        // re-derives it from the replicated offer/status tables when a payload
-        // touches an escrow table (ClientApplier.maybeRederiveEscrow), so the wire
-        // value is a convergent carry, not the gate's only writer. Kept OUT of payload.data so an
-        // old follower that doesn't recognise the field simply ignores it (its apply
-        // loop iterates payload.data only) rather than mis-applying a non-row map.
+    // In-place mutations to SURVIVING (below-window) rows: deactivation_block
+    // stamps, SLASH amount reductions, and v0 request_status flips are not
+    // reachable by the action_index-scoped joins above (those rows were created
+
+    // by an earlier block's action). Carry their current full state in a separate
+    // top-level `updated_rows` map so the follower can UPSERT them; without this
+    // every forward in-place mutation is silently dropped on the replica. Indexer
+
+    // only (decoder has none of these tables). tokens.escrow_action_index rides
+    // along (the tokens class carries the full row); the follower additionally
+    // re-derives it from the replicated offer/status tables when a payload
+
+    // touches an escrow table (ClientApplier.maybeRederiveEscrow), so the wire
+    // value is a convergent carry, not the gate's only writer. Kept OUT of payload.data so an
+    // old follower that doesn't recognise the field simply ignores it (its apply
+
+    // loop iterates payload.data only) rather than mis-applying a non-row map.
+    async addUpdatedPayloadRows(payload, block_index, conn){
         if(this.dbType !== 'decoder'){
             try {
                 // conn matters most HERE: these tables are exactly the ones mutated in
@@ -1092,7 +1216,6 @@ class ServerPoller {
                 if(!isSchemaGapError(e)) throw e;
             }
         }
-
         return payload;
     }
 
