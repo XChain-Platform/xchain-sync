@@ -141,7 +141,7 @@ function initializeDecoderBlockTables(client){
     client.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
 }
 
-function initializeDecoderTxScopedTables(client){
+function initializeDecoderTxScopedTables(){
     // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
     // Also topology-derived. dispensers is absent from the topology's txScoped by
     // design: it is not per-block replicated (the decoder live-prunes it, which
@@ -156,7 +156,7 @@ function initializeDecoderTxScopedTables(client){
     // Deleting its rows on a reorg would corrupt that replicated state with no
     // per-block stream to restore them before the next reconcile, so a reorg leaves
     // dispensers untouched.
-    client.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
+    this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
 }
 
 class ClientRollback {
@@ -167,7 +167,7 @@ class ClientRollback {
         initializeCoin(this, coin);
         initializeRollbackTables(this);
         initializeDecoderBlockTables(this);
-        initializeDecoderTxScopedTables(this);
+        initializeDecoderTxScopedTables.call(this);
     }
 
     // Roll back all data at or after the given block_index.
