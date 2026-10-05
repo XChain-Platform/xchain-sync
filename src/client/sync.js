@@ -56,6 +56,11 @@ const envConfig = require('../config');
 // mechanism. Declared once in replicated_tables.js, which the content-parity plan
 // also reads, so the count and content checks cannot disagree about a table.
 const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
+// Lock-wait timeouts on schema apply retry with exponential backoff before the
+// table counts as a persistent failure.
+const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
+const SCHEMA_TRANSIENT_MAX_RETRIES = 3;
+const SCHEMA_TRANSIENT_BASE_MS = 2000;
 
 // Permanent bootstrap exhaustion. start()-time throws already unwind to
 // SyncService's sync.start().catch(... process.exit(1)) restart contract on their
@@ -237,6 +242,28 @@ function stopDivergenceApply(client){
     client._strictConfirmPending.clear();
     for(let [, timer] of client._applyTimers) clearTimeout(timer);
     client._applyTimers.clear();
+}
+
+// Keep the highest numeric height a server reported; null until one arrives.
+function updateLastKnownServerBlock(client, blockIndex){
+    if(typeof blockIndex === 'number' &&
+       (client.lastKnownServerBlock === null || blockIndex > client.lastKnownServerBlock)){
+        client.lastKnownServerBlock = blockIndex;
+    }
+}
+
+// Log a proven gap and return its catch-up start, or null when the status proves none.
+function statusGapStart(client, blockHeight){
+    if(client.lastAppliedBlock === null || !(blockHeight > client.lastAppliedBlock + 1))
+        return null;
+    client.logGap('Block gap detected: local=' + client.lastAppliedBlock + ' remote=' + blockHeight);
+    return client.lastAppliedBlock + 1;
+}
+
+// Decoder-only wall-clock reconcile gate; needs an applied block and no reconcile in flight.
+function shouldReconcileDispensersOnStatus(client){
+    return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
+        !client._dispenserReconcileInFlight && client.dispenserReconcileIntervalDue(Date.now());
 }
 
 class ClientSync {
@@ -706,98 +733,69 @@ class ClientSync {
     getEvictedSources(){ return [...this._evictedSources].map(i => this.sources[i] || ('#' + i)); }
     getSourcesAgreeing(){ return this._lastSourcesAgreeing; }
 
-    async start(){
-        this.running = true;
-        getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+    installStartupHalt(prior){
+        this._halted = {
+            blockIndex: Number(prior.block_index), reason: prior.reason,
+            mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
+            at: prior.detected_at
+        };
+    }
 
-        this.warnTrustPosture();
+    async waitForStartupHalt(){
+        while(this.running && this._halted){ await this.util.sleep(5000); }
+        return this._halted ? 'stop' : 'restart';
+    }
 
-        // A divergence halt is durable: if a prior run recorded an uncleared halt,
-        // stay halted (do NOT catch up / apply) until an operator clears it. A
-        // halted validator must never silently resume onto a contested chain.
-        try {
-            let prior = await this.db.getActiveHalt(this.dbType);
-            if(prior){
-                this._halted = {
-                    blockIndex: Number(prior.block_index), reason: prior.reason,
-                    mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
-                    at: prior.detected_at
-                };
-                getLogger().error('ClientSync is HALTED on a prior consensus divergence at block ' +
-                    prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
-                    '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
-                // Stay alive but idle so /status can report the halt.
-                while(this.running && this._halted){ await this.util.sleep(5000); }
-                if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
-                return;
+    async retryStartupHaltRead(){
+        let haltRetryDelay = 5000;
+        while(this.running && this._halted && this._halted.reason === 'halt-state-check-failed'){
+            await this.util.sleep(haltRetryDelay);
+            if(!(this.running && this._halted && this._halted.reason === 'halt-state-check-failed')) break;
+            try {
+                const prior = await this.db.getActiveHalt(this.dbType);
+                if(!prior){
+                    getLogger().info('halt-state check recovered for ' + this.chain + '/' + this.network +
+                        '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
+                    this._halted = null;
+                    break;
+                }
+                this.installStartupHalt(prior);
+                getLogger().error('halt-state check recovered for ' + this.chain + '/' + this.network +
+                    '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
+                    prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+                break;
+            } catch(e2){
+                haltRetryDelay = Math.min(haltRetryDelay * 2, 60000);
             }
+        }
+    }
+
+    async resolveStartupHalt(){
+        // A persisted divergence halt keeps the client idle until an operator clears it.
+        try {
+            const prior = await this.db.getActiveHalt(this.dbType);
+            if(!prior) return 'continue';
+            this.installStartupHalt(prior);
+            getLogger().error('ClientSync is HALTED on a prior consensus divergence at block ' +
+                prior.block_index + ' (' + this.chain + '/' + this.network + '/' + this.dbType +
+                '). Not resuming until cleared. Detected at ' + prior.detected_at + '.');
+            return await this.waitForStartupHalt();
         } catch(e){
-            // Fail CLOSED: an uncertain halt-state check (transient DB error while
-            // reading sync_halt) must NOT be treated as "no halt" and resume catch-up -
-            // a durably-halted replica could then silently resume onto a contested
-            // chain. Hold in an idle halted state until a restart can positively read
-            // the halt table (getActiveHalt now fails closed / throws rather than
-            // returning [] on a query error).
+            // An uncertain halt-state read blocks replication until an authoritative read succeeds.
             getLogger().error(util.format('halt-state check failed; staying HALTED (fail-closed) until it can be read:', e));
             this._halted = {
                 blockIndex: -1, reason: 'halt-state-check-failed',
                 mismatches: [], sources: [], at: null
             };
-            // Keep replication blocked, but RE-READ the authoritative halt table each
-            // idle tick instead of idling forever on the one failed read. The original
-            // loop never retried, so a transient MariaDB blip left the replica idle for
-            // good after the database recovered: the process is still running, so
-            // `restart: unless-stopped` never restarts it and nothing else re-reads
-            // sync_halt. The safety invariant is unchanged, because only a POSITIVE read
-            // leaves this state: a definitive null resumes, a returned row installs the
-            // real durable halt, and a throw keeps the synthetic halt and idles on with a
-            // backoff so a sick database is not hammered.
-            let haltRetryDelay = 5000;
-            while(this.running && this._halted && this._halted.reason === 'halt-state-check-failed'){
-                await this.util.sleep(haltRetryDelay);
-                if(!(this.running && this._halted && this._halted.reason === 'halt-state-check-failed')) break;
-                try {
-                    let prior = await this.db.getActiveHalt(this.dbType);
-                    if(!prior){
-                        getLogger().info('halt-state check recovered for ' + this.chain + '/' + this.network +
-                            '/' + this.dbType + ': sync_halt holds no active halt; resuming replication');
-                        this._halted = null;
-                        break;
-                    }
-                    this._halted = {
-                        blockIndex: Number(prior.block_index), reason: prior.reason,
-                        mismatches: this.safeParse(prior.mismatches), sources: this.safeParse(prior.sources),
-                        at: prior.detected_at
-                    };
-                    getLogger().error('halt-state check recovered for ' + this.chain + '/' + this.network +
-                        '/' + this.dbType + ': HALTED on a prior consensus divergence at block ' +
-                        prior.block_index + '. Not resuming until cleared. Detected at ' + prior.detected_at + '.');
-                    break;
-                } catch(e2){
-                    haltRetryDelay = Math.min(haltRetryDelay * 2, 60000);
-                }
-            }
-            // A real durable halt installed above idles here exactly as the prior-halt
-            // branch does; a cleared or never-existent halt falls straight through.
-            while(this.running && this._halted){ await this.util.sleep(5000); }
-            if(!this._halted) return this.start(); // cleared at runtime -> restart cleanly
-            return;
+            await this.retryStartupHaltRead();
+            return this.waitForStartupHalt();
         }
+    }
 
-        // Reload the durable truncation join floor (set by a prior bootstrapFromHeight).
-        // _bootstrapBase is otherwise in-memory only, so after a restart the incremental
-        // resume path below would leave it null: the join-block recompute skip and the
-        // truncation floor would be silently lost. Must run before the resume branch so
-        // verifyRecompute and the depth guard see the persisted floor.
-        await this.loadBootstrapBase();
-
+    async synchronizeStoredReplica(){
         this.lastAppliedBlock = await this.db.getLastBlock();
-
         if(this.lastAppliedBlock === null){
-            // Empty database. Choose the bootstrap strategy: a chain with a
-            // configured SYNC_BOOTSTRAP_DEPTH seeds from a recent height (fast
-            // chains whose full snapshot can't be applied in one pass); everything
-            // else takes the full-history snapshot.
+            // A configured truncation depth selects recent-height bootstrap.
             if(this._truncatedDepth >= 1){
                 getLogger().info('No local data found; bootstrapping ' + this.chain + '/' + this.network +
                     ' from recent height (SYNC_BOOTSTRAP_DEPTH=' + this._truncatedDepth + ', truncated replica)...');
@@ -806,53 +804,49 @@ class ClientSync {
                 getLogger().info('No local data found, bootstrapping from full snapshot...');
                 await this.bootstrapFromSnapshot();
             }
-        } else {
-            // Partial data: incremental catch-up.
-            // Reconcile the schema first. fetchAndApplySchema otherwise runs only at
-            // bootstrap, so a replica bootstrapped BEFORE the source added a table never
-            // receives it on resume; and a zero-row source table (no VOTE / anchor-reconcile
-            // activity on this chain) streams nothing, so neither the apply-path heal nor
-            // the completeness-check heal ever fires to create it. The result is a permanent
-            // ER_NO_SUCH_TABLE on every /status table-count sweep (observed live: polls /
-            // poll_results / vote_delegations / votes / anchor_reward_reconcile_log on the BTC
-            // replicas). Re-applying here is idempotent (replicateSchema only CREATEs missing
-            // tables, never ALTERs or drops) and non-fatal (a fetch failure just logs and
-            // returns), so a restart converges the schema even with no row flow to trigger a heal.
-            await this.fetchAndApplySchema(this.sources[0]);
-            // Pass the next needed block (lastAppliedBlock + 1): the server uses
-            // inclusive >= bounds, so passing lastAppliedBlock re-delivers already
-            // applied rows and the non-ignore INSERT throws a duplicate-key error.
-            getLogger().info('Resuming from block ' + this.lastAppliedBlock);
-            await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+            return;
         }
+        // Resume applies the source schema before incremental rows reach the replica.
+        await this.fetchAndApplySchema(this.sources[0]);
+        getLogger().info('Resuming from block ' + this.lastAppliedBlock);
+        await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+    }
 
-        // Never enter live-follow on an empty replica. bootstrapFromSnapshot now
-        // throws on permanent exhaustion (unwinding before we get here, propagated to
-        // the supervisor for a clean restart), but guard the tip directly too: if for
-        // any reason we reach this point with no committed block, the live WS path
-        // would apply the first block onto an empty DB with every continuity/fork/
-        // duplicate guard disabled (all gated on lastAppliedBlock !== null), silently
-        // orphaning all blocks below it. Refuse rather than corrupt the replica.
+    ensureLiveFollowTip(){
         if(this.lastAppliedBlock === null){
             throw new Error('Refusing to enter live-follow: replica still empty after bootstrap for ' +
                 this.chain + '/' + this.network + '/' + this.dbType);
         }
+    }
 
-        // One loud, one-time signal for a schema gap that would otherwise replicate
-        // silently. Runs after bootstrap / catch-up (both of which apply the source
-        // schema, which CREATEs missing tables), so anything still absent here is a
-        // gap no automatic heal closed, on a replica that is about to enter
-        // live-follow reporting halted:false and lag_blocks:0 for tables that will
-        // never arrive.
+    async prepareLiveFollow(){
+        // Missing-table warnings run after bootstrap or catch-up applies the source schema.
         await this.warnMissingTables();
-
         this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+    }
 
-        // Start the dispensers wall clock at live-follow: a full snapshot seeds the table at parity.
+    beginLiveFollow(){
+        // The dispensers wall clock begins when live-follow begins.
         if(this.dbType === 'decoder') this._dispenserClockArmedAt = Date.now();
         this.connectWebSockets();
+    }
 
-        // Keep alive
+    async start(){
+        this.running = true;
+        getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
+        this.warnTrustPosture();
+
+        const haltAction = await this.resolveStartupHalt();
+        if(haltAction === 'restart') return this.start();
+        if(haltAction === 'stop') return;
+
+        // The persisted truncation floor loads before the resume branch and its depth guard.
+        await this.loadBootstrapBase();
+        await this.synchronizeStoredReplica();
+        this.ensureLiveFollowTip();
+        await this.prepareLiveFollow();
+        this.beginLiveFollow();
+
         while(this.running){
             await this.util.sleep(5000);
         }
@@ -937,8 +931,7 @@ class ClientSync {
         getLogger().info('Fetching schema from ' + source + '...');
         let schema;
         try {
-            let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 30000 });
+            let response = await this.fetchSchema(source);
             schema = response.data;
         } catch(e){
             // A fetch/transport failure is not a schema fault: the source may be
@@ -948,13 +941,63 @@ class ClientSync {
         }
         if(!schema || !schema.tables) return;
 
-        // Validate every table name + DDL up front, then collect the apply set.
-        // Keep the independently validated name set for missing-table checks: a
-        // source on an older release legitimately omits tables known to this build.
+        let pending = this.collectSchemaTables(schema.tables);
+        let lastErr = new Map();
+        while(pending.length){
+            let stillPending = [];
+            let progressed = false;
+            for(let { tableName, createSql } of pending){
+                let attempt = 0;
+                let succeeded = false;
+                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
+                    try {
+                        let exists = await this.db.findTableInSchema(tableName);
+                        if(exists.length === 0){
+                            await this.db.doQuery(createSql);
+                            getLogger().info('  Created table: ' + tableName);
+                        } else {
+                            // Propagates columns added upstream since bootstrap, outside any snapshot transaction.
+                            await this.db.addMissingColumns(tableName, createSql);
+                        }
+                        lastErr.delete(tableName);
+                        succeeded = true;
+                        break;
+                    } catch(e){
+                        if(e.errno !== SCHEMA_TRANSIENT_ERRNO || attempt >= SCHEMA_TRANSIENT_MAX_RETRIES){
+                            lastErr.set(tableName, e);
+                            break;
+                        }
+                        let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
+                        this.logSchemaRetry(tableName, delay, attempt);
+                        await this.util.sleep(delay);
+                        attempt++;
+                    }
+                }
+                if(succeeded) progressed = true;
+                else stillPending.push({ tableName, createSql });
+            }
+            if(!progressed) break;
+            pending = stillPending;
+        }
+        if(pending.length){
+            await this.haltOnSchemaFailure(source, this.schemaFailureDetails(pending, lastErr));
+            return;
+        }
+        getLogger().info('Schema applied from ' + source);
+    }
+
+    fetchSchema(source){
+        let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
+        return axios.get(url, { headers: this.upstreamHeaders(), timeout: 30000 });
+    }
+
+    // Validates every name and DDL up front. The validated name set is kept for
+    // missing-table checks because an older source legitimately omits newer tables.
+    collectSchemaTables(tables){
         let sourceTables = new Set();
         let pending = [];
-        for(let tableName in schema.tables){
-            let createSql = schema.tables[tableName];
+        for(let tableName in tables){
+            let createSql = tables[tableName];
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
                 getLogger().error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
@@ -970,89 +1013,20 @@ class ClientSync {
             pending.push({ tableName, createSql });
         }
         this._sourceTables = sourceTables;
+        return pending;
+    }
 
-        // Multi-pass fixpoint. A CREATE can fail because a table it FK-references
-        // has not been created yet; retrying the not-yet-applied tables until a
-        // full pass makes no progress resolves that ordering deterministically
-        // within this one bootstrap, instead of relying on lucky iteration order
-        // across bootstrap re-routes. Crucially it also SEPARATES ordering misses
-        // (which clear once their dependency lands) from genuine faults (disk-full,
-        // permissions, malformed DDL), which persist to the fixpoint.
-        //
-        // Transient lock-timeout (errno 1205) handling: an ALTER TABLE that hits a
-        // concurrent lock waits and times out is retriable. Instead of letting a
-        // single transient failure roll straight into the fixpoint (no progress ->
-        // halt), each table gets up to SCHEMA_TRANSIENT_MAX_RETRIES extra attempts
-        // with an exponential backoff before it is treated as a persistent failure.
-        // Real faults (disk-full, permission denied, malformed DDL) typically do not
-        // produce errno 1205 and bypass the backoff entirely.
-        const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
-        const SCHEMA_TRANSIENT_MAX_RETRIES = 3;
-        const SCHEMA_TRANSIENT_BASE_MS     = 2000;
-        let lastErr = new Map();
-        while(pending.length){
-            let stillPending = [];
-            let progressed = false;
-            for(let { tableName, createSql } of pending){
-                let attempt = 0;
-                let succeeded = false;
-                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
-                    try {
-                        let exists = await this.db.findTableInSchema(tableName);
-                        if(exists.length === 0){
-                            await this.db.doQuery(createSql);
-                            getLogger().info('  Created table: ' + tableName);
-                        } else {
-                            // Table already exists: propagate any columns the master has
-                            // added since this replica was bootstrapped. Without this the
-                            // path is CREATE-only and a replica that pre-dates a column
-                            // addition stalls on the first snapshot carrying it. Runs
-                            // before the snapshot apply, so the ALTERs are outside any
-                            // snapshot transaction.
-                            await this.db.addMissingColumns(tableName, createSql);
-                        }
-                        lastErr.delete(tableName);
-                        succeeded = true;
-                        break;
-                    } catch(e){
-                        // Transient lock-timeout: retry with backoff up to the cap,
-                        // then fall through to the fixpoint as a persistent failure.
-                        if(e.errno === SCHEMA_TRANSIENT_ERRNO && attempt < SCHEMA_TRANSIENT_MAX_RETRIES){
-                            let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
-                            getLogger().warn('Schema apply lock-timeout on ' + tableName +
-                                ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
-                                (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
-                            await this.util.sleep(delay);
-                            attempt++;
-                        } else {
-                            lastErr.set(tableName, e);
-                            break;
-                        }
-                    }
-                }
-                if(succeeded){
-                    progressed = true;
-                } else {
-                    stillPending.push({ tableName, createSql });
-                }
-            }
-            if(!progressed) break; // fixpoint: nothing advanced this pass
-            pending = stillPending;
-        }
+    logSchemaRetry(tableName, delay, attempt){
+        getLogger().warn('Schema apply lock-timeout on ' + tableName +
+            ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
+            (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
+    }
 
-        if(pending.length){
-            // Genuine DDL faults survived the ordering fixpoint. Fail closed: the
-            // old single-pass catch swallowed these, so the table was never created
-            // and the next snapshot apply looped forever on errno 1146/1054 with
-            // halted:false (no signal). Record a durable halt instead.
-            let failed = pending.map(p => {
-                let e = lastErr.get(p.tableName) || {};
-                return { table: p.tableName, errno: e.errno || null, message: e.message || null };
-            });
-            await this.haltOnSchemaFailure(source, failed);
-            return;
-        }
-        getLogger().info('Schema applied from ' + source);
+    schemaFailureDetails(pending, lastErr){
+        return pending.map(p => {
+            let e = lastErr.get(p.tableName) || {};
+            return { table: p.tableName, errno: e.errno || null, message: e.message || null };
+        });
     }
 
     // Durable halt for an unrecoverable schema apply (distinct from the
@@ -1280,144 +1254,104 @@ class ClientSync {
         }
     }
 
-    // One full pass over the configured sources for a bootstrap. Returns true once a
-    // snapshot has been applied and the tip committed, false if every source failed
-    // this round. `attempt` tracks rotation depth so a multi-source pass tries each
-    // source exactly once and never recurses indefinitely.
+    async bootstrapDownloadSnapshot(source){
+        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
+        let response = await axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 600000, // 10 minute timeout for large snapshots
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try {
+                jsonStr = zlib.gunzipSync(jsonStr);
+            } catch(e){
+                // Axios may already have decompressed the response.
+            }
+        }
+        try {
+            return JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+        }
+    }
+
+    async bootstrapApplySnapshot(snapshotData){
+        if(await this.checkTrainActivation(snapshotData.block_height)) return false;
+        await this.withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
+        this.lastAppliedBlock = snapshotData.block_height;
+        await this.refreshTipHashes();
+        await this.clearBootstrapBase();
+        return true;
+    }
+
+    async bootstrapVerifyIndexerQuorum(){
+        if(!this.config['VERIFY_HASHES']) return true;
+        let need = Math.max(0, this.effectiveQuorum() - 1);
+        let agreed = 0;
+        for(let i = 1; i < this.sources.length && agreed < need; i++){
+            let verdict = await this.verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
+            if(this._halted) return false;
+            if(verdict === 'agree') agreed++;
+        }
+        if(agreed < need){
+            getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
+                ' agreeing source(s) of the ' + this.effectiveQuorum() + ' required for quorum for ' +
+                this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
+                'bootstrap tip is under-verified until live quorum forms.');
+        }
+        return true;
+    }
+
+    async bootstrapVerifySnapshot(){
+        if(this.sources.length <= 1) return true;
+        if(this.dbType === 'indexer') return this.bootstrapVerifyIndexerQuorum();
+        await this.verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
+        return true;
+    }
+
+    async bootstrapHandleSourceFailure(source, attempt, e){
+        if(this.isContentLengthOverflow(e)){
+            await this.haltOnSnapshotTooLarge(source, e);
+            return false;
+        }
+        let retryAfter = this.rateLimitRetryAfterSeconds(e);
+        if(retryAfter !== null){
+            getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
+                this.chain + '/' + this.network + '/' + this.dbType +
+                '; the source will not serve another full snapshot for ' + retryAfter + 's.');
+        }
+        getLogger().error(util.format('Bootstrap failed:', e));
+        if(this.sources.length > 1 && attempt < this.sources.length - 1){
+            getLogger().info('Trying secondary source...');
+            this.sources.push(this.sources.shift());
+            return this.bootstrapRotateSources(attempt + 1);
+        }
+        getLogger().error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
+        return false;
+    }
+
+    // Runs one bounded pass over the configured sources and rotates after failures.
     async bootstrapRotateSources(attempt){
         attempt = attempt || 0;
         let source = this.sources[0];
         if(!source) return false;
 
-        // Fetch and apply schema from a remote sync server
         await this.fetchAndApplySchema(source);
-        // A schema-apply halt means the replica can't build a complete schema;
-        // abort this round (the snapshot apply would only fail 1146/1054).
         if(this._halted) return false;
 
         getLogger().info('Downloading full snapshot from ' + source + '...');
         try {
-            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, {
-                headers: this.upstreamHeaders(),
-                responseType: 'arraybuffer',
-                timeout: 600000, // 10 minute timeout for large snapshots
-                decompress: true,
-                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-            });
-
-            let jsonStr = response.data;
-            if(Buffer.isBuffer(jsonStr)){
-                try {
-                    jsonStr = zlib.gunzipSync(jsonStr);
-                } catch(e){
-                    // May already be decompressed by axios
-                }
-            }
-
-            let snapshotData;
-            try {
-                snapshotData = JSON.parse(jsonStr.toString());
-            } catch(parseErr){
-                throw new Error('Snapshot download truncated or corrupt from ' + source +
-                    ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
-            }
-            // Serialize the full-snapshot apply under the shared write mutex. Bootstrap
-            // at start() is single-threaded, but this same path is the runtime recovery
-            // fallback for an oversized incremental catch-up (runIncrementalCatchUp),
-            // where live-follow is already active: a concurrent live block apply or a
-            // cross-source fallback timer would otherwise open a second write transaction
-            // on the replica and clobber the snapshot's DELETE+reload mid-flight.
-            // Platform-train gate on the snapshot tip first: a full snapshot reseeds
-            // every block up to the tip in one pass, so a tip at or above the boundary
-            // must not be seeded by a build that lacks the rule set. A halt returns
-            // false so bootstrapFromSnapshot stops burning rounds on it.
-            if(await this.checkTrainActivation(snapshotData.block_height)) return false;
-            await this.withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
-            this.lastAppliedBlock = snapshotData.block_height;
-            // Pair lastHashes with the height just set (see refreshTipHashes). A full
-            // snapshot carries its own lookups, so no re-page ordering applies here;
-            // this path is the oversized-catch-up fallback as well as start()'s.
-            await this.refreshTipHashes();
-
-            // A full-history snapshot reseeds complete state and correct SMT roots,
-            // so any prior truncation join floor (set by an earlier bootstrapFromHeight,
-            // e.g. when the oversized-incremental fallback lands here on a chain whose
-            // full snapshot does fit) does not apply to it. Clear the in-memory floor and
-            // its durable marker explicitly so isTruncated() reports false and the
-            // apply-time VERIFY_STATE_COMMITMENT net re-arms on live blocks in the running
-            // process, without waiting for a restart to self-heal.
-            await this.clearBootstrapBase();
-
-            // Verify against secondary sources if available.
-            if(this.sources.length > 1){
-                if(this.dbType === 'indexer'){
-                    // Indexer cross-source hash + table-count check, gated on VERIFY_HASHES.
-                    // Bootstrap Byzantine cross-check: sources[0] supplied the
-                    // applied snapshot (1 vote toward quorum). Seek agreement from enough
-                    // ADDITIONAL sources to reach SOURCE_QUORUM. verifyAgainstSource halts
-                    // durably on a same-height divergence; a transport failure or tip-skew
-                    // to a secondary is tolerated (not counted) so an unreachable spare
-                    // cannot DoS bootstrap, but a shortfall below quorum is warned loudly.
-                    if(this.config['VERIFY_HASHES']){
-                        let need = Math.max(0, this.effectiveQuorum() - 1);
-                        let agreed = 0;
-                        for(let i = 1; i < this.sources.length && agreed < need; i++){
-                            let verdict = await this.verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
-                            if(this._halted) return false; // a divergence halted us
-                            if(verdict === 'agree') agreed++;
-                        }
-                        if(agreed < need){
-                            getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
-                                ' agreeing source(s) of the ' + this.effectiveQuorum() + ' required for quorum for ' +
-                                this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
-                                'bootstrap tip is under-verified until live quorum forms.');
-                        }
-                    }
-                } else {
-                    // Decoder has no synthetic chain-of-state hashes to compare, but a full
-                    // snapshot can still arrive truncated (network cut mid-stream) or stale.
-                    // Cross-check the source's published per-table row counts so an incomplete
-                    // bootstrap fails loudly instead of being accepted as complete. This runs
-                    // independent of VERIFY_HASHES: row counts need no synthetic hashes, so the
-                    // indexer-only hash gate does not apply here.
-                    await this.verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
-                }
-            }
-
+            let snapshotData = await this.bootstrapDownloadSnapshot(source);
+            if(!await this.bootstrapApplySnapshot(snapshotData)) return false;
+            if(!await this.bootstrapVerifySnapshot()) return false;
             getLogger().info('Bootstrap complete at block ' + this.lastAppliedBlock);
             return true;
         } catch(e){
-            // The full-history snapshot no longer fits under SNAPSHOT_MAX_CONTENT.
-            // Halt durably instead of rotating/retrying: every source serves the
-            // same oversized payload, so the rounds exhaust, BootstrapExhaustedError
-            // exits the process, and systemd restarts straight back into the same
-            // wall. That crash loop is what silently froze the DOGE:testnet replica
-            // and then 429'd its own snapshot budget. The operator remedy
-            // (reseed truncated via SYNC_BOOTSTRAP_DEPTH, or raise the ceiling) is
-            // a decision no retry can make.
-            if(this.isContentLengthOverflow(e)){
-                await this.haltOnSnapshotTooLarge(source, e);
-                return false;
-            }
-            // Name a 429 rather than burying it in the axios dump: the snapshot
-            // limiter is hourly (SNAPSHOT_RATE_FULL) while this ladder retries in
-            // seconds, so an operator reading the log must see the wait it implies.
-            let retryAfter = this.rateLimitRetryAfterSeconds(e);
-            if(retryAfter !== null){
-                getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
-                    this.chain + '/' + this.network + '/' + this.dbType +
-                    '; the source will not serve another full snapshot for ' + retryAfter + 's.');
-            }
-            getLogger().error(util.format('Bootstrap failed:', e));
-            // Try next source, but only if we haven't exhausted all sources
-            if(this.sources.length > 1 && attempt < this.sources.length - 1){
-                getLogger().info('Trying secondary source...');
-                this.sources.push(this.sources.shift());
-                return this.bootstrapRotateSources(attempt + 1);
-            }
-            getLogger().error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
-            return false;
+            return this.bootstrapHandleSourceFailure(source, attempt, e);
         }
     }
 
@@ -1573,118 +1507,89 @@ class ClientSync {
         return Math.min(100000, n);
     }
 
-    // Sync the append-only lookup tables (topology `.index` set: index_*) by id
-    // cursor instead of a single full-dump. For each table, start at the replica's
-    // current MAX(id) (0 when empty) and page /snapshot-rows/.../<table>?after_id=
-    // until has_more=false, applying each bounded page. This is the fix for fast/
-    // large chains where one full-dump of e.g. index_transactions (~8.5M rows)
-    // exceeds SNAPSHOT_MAX_CONTENT and aborts the download. Used by BOTH the
-    // truncated bootstrap (max id 0 -> all rows) and truncated catch-up (current
-    // max -> only new rows, since the tables are INSERT-only with monotonic ids).
-    // Each page is applied via the existing incremental surface; index_* are in
-    // ClientApplier.ignoreTables (INSERT IGNORE), so re-sent rows are idempotent.
-    // opts.fromZero: a Set of table names to page from id 0 instead of from the
-    // replica's high-water mark. See the HOLE note below for why that is a distinct
-    // mode and not something the ordinary path can do.
+    fetchLookupPage(source, table, afterId, pageSize){
+        let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
+            this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
+        return axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 600000,
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+    }
+
+    parseLookupPage(response, source, table, expected){
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+        }
+        let page;
+        try {
+            page = JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (lookup page for ' + table + ' failed JSON.parse; likely a network interruption mid-transfer): ' +
+                parseErr.message);
+        }
+        if(page.schema_version !== expected){
+            throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
+                page.schema_version + ' client=' + expected);
+        }
+        return page;
+    }
+
+    applyLookupPage(table, rows, expected, repairing){
+        return this.withApplyLock(() => this.applier.applyIncrementalSnapshot({
+            schema_version: expected,
+            tables: { [table]: rows }
+        }, repairing ? { strictIgnoreCheck: true } : undefined));
+    }
+
+    advanceLookupCursor(table, page, afterId){
+        let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
+        if(nextAfter <= afterId){
+            getLogger().warn('Lookup paging for ' + table + ' made no progress past id ' +
+                afterId + '; stopping');
+            return null;
+        }
+        return nextAfter;
+    }
+
+    // Pages append-only lookup tables from their current high-water cursors.
+    // A from-zero pass fills holes below a table's high-water mark.
     async syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this.lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
         let fromZero = (opts && opts.fromZero) || null;
         for(let table of tables){
-            // Replica's current high-water cursor for this table (0 if empty/absent).
-            // Cursor column is the monotonic AUTO_INCREMENT `id` for every lookup table,
-            // including decoder pubkeys. pubkeys.address_id is non-monotonic (assigned at
-            // first-SEEN, inserted at first-SPEND) and was retired as a cursor; see
-            // lookupCursorColumn in replicatedTables.js.
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
-
-            // HOLES ARE NOT REACHABLE FROM THIS CURSOR, which is why fromZero exists.
-            // Seeding at MAX(id) and requesting only `after_id=<max>` extends a table
-            // but can never fill a gap BELOW the high-water mark, so re-paging repairs
-            // nothing however many times it runs.
-            //
-            // That is not hypothetical. A BTC mainnet replica held a 1969-row gap in
-            // index_transactions covering blocks 961908-963876: one bootstrap left it
-            // complete, then every live-followed block streamed three of its four
-            // *_hash_id rows and never the state one, until the source ran a build
-            // carrying ca170ee. Each re-page walked straight past the gap, because
-            // every missing id sat below MAX(id) from the moment the next block landed,
-            // and the public explorer answered state_hash null for all 1969 blocks.
-            // A from-zero pass is idempotent (index_* apply with INSERT IGNORE), only
-            // slower, so it is used solely for a table measured to be short.
             let repairing = !!(fromZero && fromZero.has(table));
             if(repairing){
                 getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
             } else {
-            try {
-                let r = await this.db.getMaxColumnValue(table, col);
-                if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
-            } catch(e){
-                afterId = 0; // table not present yet -> treat as empty (schema applied earlier)
-            }
+                try {
+                    let r = await this.db.getMaxColumnValue(table, col);
+                    if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
+                } catch(e){
+                    afterId = 0;
+                }
             }
             let pages = 0;
             while(true){
-                let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
-                    this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
-                let response = await axios.get(url, {
-                    headers: this.upstreamHeaders(),
-                    responseType: 'arraybuffer',
-                    timeout: 600000,
-                    decompress: true,
-                    maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-                });
-                let jsonStr = response.data;
-                if(Buffer.isBuffer(jsonStr)){
-                    try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
-                }
-                let page;
-                try {
-                    page = JSON.parse(jsonStr.toString());
-                } catch(parseErr){
-                    throw new Error('Snapshot download truncated or corrupt from ' + source +
-                        ' (lookup page for ' + table + ' failed JSON.parse; likely a network interruption mid-transfer): ' +
-                        parseErr.message);
-                }
-                if(page.schema_version !== expected){
-                    throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
-                        page.schema_version + ' client=' + expected);
-                }
+                let response = await this.fetchLookupPage(source, table, afterId, pageSize);
+                let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
-                    // Apply through the existing incremental surface, carrying just this
-                    // table. index_* are INSERT IGNORE, so re-sent rows no-op; a lookup
-                    // page has no credits/debits/updated_rows, so the balance/escrow
-                    // rebuilds inside applyIncrementalSnapshot are skipped.
-                    //
-                    // strictIgnoreCheck only on a repairing (fromZero) pass:
-                    // this table was just measured short, so every row here is expected
-                    // to be either already-correct or genuinely missing, never a silent
-                    // conflict. If INSERT IGNORE instead swallows a collision against some
-                    // OTHER row's key, ClientApplier throws with the exact table/row so it
-                    // surfaces here (and up through maybeVerifyCompleteness's catch)
-                    // instead of the sweep reporting the same short count forever. The
-                    // ordinary cursor-seeded path never sets this: every block re-sends
-                    // these tables' current tail by design, and the extra SHOW WARNINGS
-                    // round trip per batch must stay off that hot path.
-                    await this.withApplyLock(() => this.applier.applyIncrementalSnapshot({
-                        schema_version: expected,
-                        tables: { [table]: rows }
-                    }, repairing ? { strictIgnoreCheck: true } : undefined));
+                    await this.applyLookupPage(table, rows, expected, repairing);
                 }
                 pages++;
                 if(!page.has_more) break;
-                // Advance the cursor; max_id is the server's last returned id. Guard
-                // against non-progress so a misbehaving server can't spin us forever.
-                let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
-                if(nextAfter <= afterId){
-                    getLogger().warn('Lookup paging for ' + table + ' made no progress past id ' +
-                        afterId + '; stopping');
-                    break;
-                }
+                let nextAfter = this.advanceLookupCursor(table, page, afterId);
+                if(nextAfter == null) break;
                 afterId = nextAfter;
             }
             if(pages > 1) getLogger().info('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
@@ -2376,6 +2281,28 @@ class ClientSync {
         return shortLookups;
     }
 
+    beginCompletenessSweep(source, remoteHeight){
+        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
+        if(!interval || !source) return false;
+        if(this._halted) return false;                        // nothing to verify onto
+        if(this.lastAppliedBlock === null) return false;       // pre-bootstrap
+        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return false;
+        let now = Date.now();
+        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return false;
+        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
+        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
+        // a second tick run one concurrently against the same source.
+        this._lastCompletenessSweepAt = now;
+        return true;
+    }
+
+    remoteStatusMatchesCompletenessHeight(remoteStatus){
+        // Re-check the height against the status we just fetched: the tick that
+        // triggered this may be seconds old and the source may have advanced.
+        return remoteStatus.block_height == null ||
+            Number(remoteStatus.block_height) === Number(this.lastAppliedBlock);
+    }
+
     // Periodic replica-completeness sweep against the PRIMARY source: the row-count
     // comparison is the only check that sees a follower short rows the consensus hashes
     // structurally cannot cover, since those hashes describe the source's computation
@@ -2391,75 +2318,78 @@ class ClientSync {
     // bootstrap caller's posture) and best-effort, so an unreachable source logs and
     // returns rather than disturbing live following.
     async maybeVerifyCompleteness(source, remoteHeight){
-        let interval = this.config['COMPLETENESS_CHECK_INTERVAL'];
-        if(!interval || !source) return;
-        if(this._halted) return;                        // nothing to verify onto
-        if(this.lastAppliedBlock === null) return;       // pre-bootstrap
-        if(Number(remoteHeight) !== Number(this.lastAppliedBlock)) return;
-        let now = Date.now();
-        if(this._lastCompletenessSweepAt && (now - this._lastCompletenessSweepAt) < interval) return;
-        // Stamp BEFORE the await: ticks keep arriving during a sweep that issues a
-        // COUNT(*) per replicated table on both sides, and a stamp set afterwards lets
-        // a second tick run one concurrently against the same source.
-        this._lastCompletenessSweepAt = now;
+        if(!this.beginCompletenessSweep(source, remoteHeight)) return;
         try {
             if(this.dbType === 'decoder'){
-                // Delegate: the decoder variant carries the truncation exclusions its
-                // counts need. dispensers converges only on a reconcile cycle, so it is
-                // excluded here or every sweep reports drift.
-                let decoderShortfalls = await this.verifyDecoderCompleteness(
-                    source, this.lastAppliedBlock, new Set(['dispensers']), { requireEqualHeight: true });
-                // Age and repair the decoder shortfalls too, but ONLY from this periodic
-                // equal-height path: the bootstrap caller runs the same check while the
-                // replica is legitimately mid-dump, and folding those sweeps in would
-                // escalate a gap that the next snapshot page closes. A null return means
-                // the check could not complete (unreachable source, wrong dbType, source
-                // moved on), which is not evidence the gaps closed.
+                let decoderShortfalls = await this.verifyCompletenessDecoder(source);
                 if(Array.isArray(decoderShortfalls)){
                     let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
-                    await this.trackReplicaGaps(decoderShortfalls, {
-                        source: source, blockIndex: this.lastAppliedBlock, repaired: decoderRepairTried
-                    });
+                    await this.trackCompletenessGaps(source, decoderShortfalls, decoderRepairTried);
                 }
                 return;
             }
-            let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
-            let remoteStatus = response.data;
-            // Re-check the height against the status we just fetched: the tick that
-            // triggered this may be seconds old and the source may have advanced.
-            if(remoteStatus.block_height != null &&
-               Number(remoteStatus.block_height) !== Number(this.lastAppliedBlock)) return;
-            let mismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
-                { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
-            let shortfalls = mismatches.filter(m => m.reason !== 'replica-ahead');
-            let ahead      = mismatches.filter(m => m.reason === 'replica-ahead');
+            let remoteStatus = (await this.fetchCompletenessStatus(source)).data;
+            if(!this.remoteStatusMatchesCompletenessHeight(remoteStatus)) return;
+            let mismatches = await this.verifyCompletenessCounts(remoteStatus);
+            let { shortfalls, ahead } = this.partitionCompletenessMismatches(mismatches);
             let repairTried = new Set();
             if(shortfalls.length){
-                getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower may be missing replicated rows:');
-                getLogger().error(JSON.stringify(shortfalls));
+                this.reportCompletenessShortfalls(source, shortfalls);
                 repairTried = await this.repairShortLookups(source, shortfalls);
             }
-            if(ahead.length){
-                getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
-                    '; follower holds rows the source deleted (un-replicated forward DELETE?):');
-                getLogger().error(JSON.stringify(ahead));
-            }
-            // Age the shortfall set. A repeated TABLE_COUNT_MISMATCH line is the same
-            // severity on sweep 1 and sweep 700, so a gap that no amount of syncing
-            // will close reads exactly like the transient race it is not; this is what
-            // let a mainnet follower sit ~2k index_transactions rows short for weeks
-            // with the detector firing on every pass. Runs on EVERY completed sweep,
-            // shortfalls or not, because a clean sweep is how a gap gets cleared.
-            await this.trackReplicaGaps(shortfalls, {
-                source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
-            });
+            if(ahead.length) this.reportCompletenessAhead(source, ahead);
+            await this.trackCompletenessGaps(source, shortfalls, repairTried);
             if(!mismatches.length && remoteStatus.table_counts)
-                getLogger().info('Table-count verification passed against ' + source);
+                this.reportCompletenessPass(source);
         } catch(e){
             getLogger().error(util.format('Periodic completeness sweep failed against ' + source + ':', e.message || e));
         }
+    }
+
+    // Dispensers converges only on a reconcile cycle, so the decoder sweep excludes it.
+    verifyCompletenessDecoder(source){
+        return this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
+            new Set(['dispensers']), { requireEqualHeight: true });
+    }
+
+    fetchCompletenessStatus(source){
+        let url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        return axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+    }
+
+    verifyCompletenessCounts(remoteStatus){
+        return this.verifyTableCounts(remoteStatus.table_counts, undefined,
+            { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
+    }
+
+    partitionCompletenessMismatches(mismatches){
+        return {
+            shortfalls: mismatches.filter(m => m.reason !== 'replica-ahead'),
+            ahead: mismatches.filter(m => m.reason === 'replica-ahead')
+        };
+    }
+
+    reportCompletenessShortfalls(source, shortfalls){
+        getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+            '; follower may be missing replicated rows:');
+        getLogger().error(JSON.stringify(shortfalls));
+    }
+
+    reportCompletenessAhead(source, ahead){
+        getLogger().error('TABLE_COUNT_REPLICA_AHEAD at block ' + this.lastAppliedBlock + ' against ' + source +
+            '; follower holds rows the source deleted (un-replicated forward DELETE?):');
+        getLogger().error(JSON.stringify(ahead));
+    }
+
+    // A clean completed sweep clears tracked gaps, so this runs even without shortfalls.
+    trackCompletenessGaps(source, shortfalls, repairTried){
+        return this.trackReplicaGaps(shortfalls, {
+            source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
+        });
+    }
+
+    reportCompletenessPass(source){
+        getLogger().info('Table-count verification passed against ' + source);
     }
 
     // Read a numeric tunable from config, falling back to the environment and then to
@@ -2855,64 +2785,27 @@ class ClientSync {
 
     async handleEvent(event, sourceIndex){
         if(event.type === 'block'){
-            // Track the server's advancing block height
-            if(typeof event.block_index === 'number' &&
-               (this.lastKnownServerBlock === null || event.block_index > this.lastKnownServerBlock)){
-                this.lastKnownServerBlock = event.block_index;
-            }
+            updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
             await this.handleReorg(event);
         } else if(event.type === 'status'){
-            // Track the server's current block height
-            if(typeof event.block_height === 'number' &&
-               (this.lastKnownServerBlock === null || event.block_height > this.lastKnownServerBlock)){
-                this.lastKnownServerBlock = event.block_height;
-            }
-            // Keep the server's own replication verdict. Unconditional: the height guard
-            // above is exactly what a stalled upstream stops satisfying.
+            updateLastKnownServerBlock(this, event.block_height);
+            // Keep the server's replication verdict even when its height stalls.
+            // Preserve evidence that a frozen upstream reports on later status ticks.
+            // Record the verdict before any gap recovery starts.
             this.recordUpstreamStatus(sourceIndex, event);
-            // Check for gaps on status update. Use a strict '>' (not '>='): a
-            // server exactly one block ahead is the normal steady state (that
-            // next block arrives over the live WS stream), so only a shortfall of
-            // two or more blocks is a real gap worth an out-of-band catch-up. This
-            // mirrors the decoder gap check in handleBlock and avoids firing a
-            // redundant incremental fetch on every status tick during live sync;
-            // a genuinely dropped block is still picked up on the next status tick.
-            // Design corner: after a reconnect the server may be exactly one block
-            // ahead (lastAppliedBlock + 1 === event.block_height). This check
-            // intentionally does NOT fire an incremental catch-up for that case.
-            // The missing block arrives naturally on the next live WS block event;
-            // if the chain is idle and that event never comes, the one-block gap
-            // persists until the next block is mined and verifyChainContinuity
-            // detects the skip and triggers catch-up. This keeps the steady-state
-            // path quiet and avoids spurious snapshot fetches.
-            if(this.lastAppliedBlock !== null && event.block_height > this.lastAppliedBlock + 1){
-                this.logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + event.block_height);
-                await this.incrementalCatchUp(this.lastAppliedBlock + 1);
-            }
-            // Wall-clock dispensers reconcile. DISPENSERS_RECONCILE_MAX_INTERVAL_MS was
-            // sampled only from inside incrementalCatchUp, every caller of which is an
-            // exceptional path (resume, block gap, empty-replica refusal, head fork), so
-            // a decoder replica that bootstraps and then follows cleanly never evaluated
-            // it: the one cadence the bound claims to protect against (no catch-ups at
-            // all) was the one it could not reach, and the replica went on serving rows
-            // the source soft-expired or hard-purged for the life of the process. Row
-            // counts cannot substitute (src/schema/replicated_tables.js: a soft-expire leaves counts
-            // equal, a hard-purge leaves the replica ahead, reported for indexer only).
-            // Deliberately NOT folded into maybeVerifyCompleteness: that sweep returns
-            // early when COMPLETENESS_CHECK_INTERVAL is falsy and when the heights differ,
-            // and carries its own throttle, none of which this bound may inherit. Uses the
-            // side-effect-free predicate so the every-Nth catch-up counter is untouched.
-            if(this.dbType === 'decoder' && !this._halted && this.lastAppliedBlock !== null &&
-               !this._dispenserReconcileInFlight && this.dispenserReconcileIntervalDue(Date.now())){
+            let catchUpStart = statusGapStart(this, event.block_height);
+            if(catchUpStart !== null)
+                await this.incrementalCatchUp(catchUpStart);
+            if(shouldReconcileDispensersOnStatus(this)){
                 this._dispenserReconcileInFlight = true;
                 try { await this.reconcileDispensers(this.sources[sourceIndex]); }
                 finally { this._dispenserReconcileInFlight = false; }
             }
-            // Periodic replica-completeness sweep (throttled, equal-heights only). The
-            // status tick is the one recurring signal a live client gets from its own
-            // primary source, which is exactly the source the sweep could not reach.
+            // Sweep completeness on the recurring signal from the primary source.
+            // Apply its own throttle and equal-height policy inside the helper.
+            // Query the same source that sends this status event.
             await this.maybeVerifyCompleteness(this.sources[sourceIndex], event.block_height);
         }
     }
@@ -2974,95 +2867,271 @@ class ClientSync {
         return true;
     }
 
-    async handleBlock(event, sourceIndex){
+    refuseLiveBlockOnEmptyReplica(event){
         let blockIndex = event.block_index;
 
-        // Defense in depth: refuse to apply a live block onto an empty replica.
-        // start() bootstraps before live-follow, so reaching here with no committed
-        // tip means bootstrap was skipped or silently failed. Applying the first live
-        // block now would leave every block below it permanently missing (and because
-        // the duplicate/continuity/fork guards below are ALL gated on
-        // lastAppliedBlock !== null, control would otherwise fall straight through to
-        // applyBlockEvent). block_index 0 (true genesis) is the one legitimate
-        // from-empty apply; for anything above it, refuse and trigger a catch-up to
-        // rebuild from the source rather than orphaning the blocks beneath it.
-        if(this.lastAppliedBlock === null && blockIndex > 0){
-            getLogger().error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
-                this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
-                'triggering catch-up instead of orphaning blocks below it');
-            await this.incrementalCatchUp(blockIndex);
-            return;
+        // Refuse a live block above genesis when the replica has no committed tip.
+        // start() bootstraps before live-follow, so this state means bootstrap is
+        // skipped or fails without establishing a tip.
+
+        // Allow block_index 0 as the only legitimate from-empty application.
+        if(this.lastAppliedBlock !== null || blockIndex <= 0) return null;
+
+        // Applying here leaves every lower block missing because the duplicate,
+        // continuity, and fork guards only run after a tip exists.
+        // Rebuild from the source instead of orphaning the lower blocks.
+
+        // Trigger catch-up at the incoming height so the source can fill the replica.
+        getLogger().error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
+            this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
+            'triggering catch-up instead of orphaning blocks below it');
+        return { completion: this.incrementalCatchUp(blockIndex) };
+    }
+
+    handleDecoderHeadDuplicate(event){
+        let blockIndex = event.block_index;
+
+        // Treat a different hash at the committed tip as a short reorg that the live
+        // stream does not report. A silent skip pins the replica to the orphaned tip.
+        // The next block's previous-hash link catches a fork with no tip re-delivery.
+
+        // Match the indexer's head-fork protection through the decoder's block hash.
+        if(blockIndex !== this.lastAppliedBlock ||
+           !this.lastHashes || !this.lastHashes.block_hash ||
+           !event.block_hash || event.block_hash === this.lastHashes.block_hash) return null;
+
+        getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
+            '; stored block_hash ' + this.lastHashes.block_hash +
+            ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
+        return this.rewindForkedHead(blockIndex);
+    }
+
+    handleIndexerHeadDuplicate(event){
+        let blockIndex = event.block_index;
+
+        // Restrict hash comparison to a re-delivery of the committed head.
+        // Leave older duplicate heights on the ordinary silent-skip path.
+        if(blockIndex !== this.lastAppliedBlock || !this.lastHashes) return null;
+
+        // Compare the three chain-of-state hashes because indexer events carry no
+        // block_hash. A mismatch identifies a one-block reorg across a socket drop.
+        // Keep null fields out of the comparison because they do not supply evidence.
+        let lh = this.lastHashes;
+        let mismatch =
+            (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
+            (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
+            (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
+        if(!mismatch) return null;
+
+        // Rewind before catch-up so the orphaned predecessor cannot enter local hash
+        // recomputation. Matching duplicates remain silent skips.
+        // Route both database types through the same rollback and catch-up sequence.
+        getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
+            '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
+        return this.rewindForkedHead(blockIndex);
+    }
+
+    handlePreviouslyAppliedBlock(event){
+        let blockIndex = event.block_index;
+        if(this.lastAppliedBlock === null || blockIndex > this.lastAppliedBlock) return null;
+
+        // Check a duplicate at the current head for a fork before skipping it.
+        // Skip older heights without a fork check because they cannot replace the tip.
+        let completion = null;
+        if(this.dbType === 'decoder') completion = this.handleDecoderHeadDuplicate(event);
+        else if(this.dbType === 'indexer') completion = this.handleIndexerHeadDuplicate(event);
+        return { completion };
+    }
+
+    handleIndexerBlockContinuity(event){
+        let continuity = this.hashVerifier.verifyChainContinuity(
+            this.lastAppliedBlock, this.lastHashes, event
+        );
+        if(continuity.valid) return null;
+
+        // Treat ordinary trailing-tip lag as an informational gap; the separate head
+        // duplicate check reports a genuine head fork as an error.
+        // Catch up from the first height after the committed tip.
+        this.logGap('Catch-up lag (indexer): ' + continuity.reason);
+        return { completion: this.incrementalCatchUp(this.lastAppliedBlock + 1) };
+    }
+
+    handleDecoderBlockGap(event){
+        let blockIndex = event.block_index;
+        if(blockIndex <= this.lastAppliedBlock + 1) return null;
+
+        // Detect dropped decoder blocks even though decoder rows have no synthetic
+        // chain hashes for the indexer continuity verifier.
+        // Catch up before applying the incoming block over the missing range.
+        this.logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
+        return { completion: this.incrementalCatchUp(this.lastAppliedBlock + 1) };
+    }
+
+    recordPendingBlockHash(event, sourceIndex){
+        let blockIndex = event.block_index;
+
+        // Record the current source's chain-of-state tuple for this height.
+        // Keep each source's report available until quorum resolves or times out.
+        // Replace a source's earlier report when the same height arrives again.
+        if(!this.pendingHashes.has(blockIndex)) this.pendingHashes.set(blockIndex, {});
+        this.pendingHashes.get(blockIndex)[sourceIndex] = {
+            ledger_hash: event.ledger_hash,
+            actions_hash: event.actions_hash,
+            contract_hash: event.contract_hash
+        };
+        return this.pendingHashes.get(blockIndex);
+    }
+
+    tallyPendingBlockHashes(pending){
+        // Group reported, non-evicted sources by hash tuple.
+        // Count only active reports when deciding whether every source has answered.
+        let groups = new Map(); // hashKey -> [sourceIndex...]
+        let reportedCount = 0;
+        for(let idxStr of Object.keys(pending)){
+            let idx = Number(idxStr);
+            if(this._evictedSources.has(idx)) continue;
+            reportedCount++;
+            let key = this.hashTupleKey(pending[idxStr]);
+            if(!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(idx);
+        }
+        return { groups, reportedCount };
+    }
+
+    acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup){
+        // Strike every reported dissenter and record the applied majority.
+        // Clear pending confirmation state and cancel its liveness timer.
+        for(let idxStr of Object.keys(pending)){
+            let idx = Number(idxStr);
+            if(this._evictedSources.has(idx)) continue;
+            if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
+        }
+        this._lastSourcesAgreeing = currentGroup.length;
+        this.pendingHashes.delete(blockIndex);
+        this._strictConfirmPending.delete(blockIndex);
+        let timer = this._applyTimers.get(blockIndex);
+        if(timer){ clearTimeout(timer); this._applyTimers.delete(blockIndex); }
+
+        // Continue to block application only after confirmation state is cleared.
+    }
+
+    rejectBlockWithoutQuorum(blockIndex, groups){
+        // Reject a contested block after every active source reports and no group
+        // reaches quorum, because the replica cannot determine the true payload.
+        // Clear the pending confirmation state before halting or logging the split.
+        this.pendingHashes.delete(blockIndex);
+        this._strictConfirmPending.delete(blockIndex);
+        let timer = this._applyTimers.get(blockIndex);
+        if(timer){ clearTimeout(timer); this._applyTimers.delete(blockIndex); }
+        let summary = [...groups.entries()].map(([key, sources]) => ({
+            hash: key,
+            sources: sources.map(index => this.sources[index])
+        }));
+
+        // Halt fail-closed when divergence handling is enabled.
+        if(this.config['HALT_ON_DIVERGENCE']){
+            return this.haltOnDivergence(blockIndex, summary,
+                [...groups.values()].reduce((all, sources) => all.concat(sources.map(index => this.sources[index])), []),
+                'no-source-quorum');
         }
 
-        // Skip if we already have this block, but first guard against a fork at the
-        // current head. A block re-delivered at our committed tip with a DIFFERENT
-        // block_hash than the one we stored means the source replaced that block (a
-        // short reorg we never observed on the live stream). Silently skipping it
-        // would pin this replica to an orphaned tip, so treat it as a continuity
-        // error and catch up (symmetric with the indexer's hash-continuity check
-        // below, which catches the same class of fault via its chain hashes). A fork
-        // the head is never re-delivered for is caught one block later, by the
-        // previous-hash link check on the next block (decoderTipReplaced).
-        if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock){
-            if(this.dbType === 'decoder' &&
-               blockIndex === this.lastAppliedBlock &&
-               this.lastHashes && this.lastHashes.block_hash &&
-               event.block_hash && event.block_hash !== this.lastHashes.block_hash){
-                getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
-                    '; stored block_hash ' + this.lastHashes.block_hash +
-                    ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
-                await this.rewindForkedHead(blockIndex);
-            } else if(this.dbType === 'indexer' &&
-               blockIndex === this.lastAppliedBlock &&
-               this.lastHashes){
-                // Indexer head-fork mirror of the decoder branch. The indexer event
-                // carries no block_hash, but it does carry the three chain-of-state
-                // hashes, and this.lastHashes holds the committed ones for the tip. A
-                // tip re-delivery whose ledger/actions/contract hash differs is a
-                // 1-block reorg whose `reorg` event was lost across a WS drop; without
-                // this check it falls through to the silent skip, verifyChainContinuity
-                // (index-ordering only, no hash linkage) then accepts block N+1 onto the
-                // orphaned tip, and VERIFY_RECOMPUTE folds the orphaned predecessor into
-                // a durable local-recompute-divergence halt (or, with VERIFY_RECOMPUTE
-                // off, silently retains the orphaned block). Route the mismatch through
-                // the same rollback/catch-up path the decoder uses. A true duplicate
-                // (all three hashes equal) still skips silently.
-                let lh = this.lastHashes;
-                let mismatch =
-                    (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
-                    (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
-                    (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
-                if(mismatch){
-                    getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
-                        '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
-                    await this.rewindForkedHead(blockIndex);
+        // Keep log-only mode from applying a payload with no source quorum.
+        getLogger().error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
+            '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
+        getLogger().error(util.format('groups:', JSON.stringify(summary)));
+        return null;
+    }
+
+    armBlockQuorumTimer(event){
+        let blockIndex = event.block_index;
+        if(this._applyTimers.has(blockIndex)) return;
+
+        // Arm one liveness fallback while another source is silent or slow.
+        // A split is rejected when all active sources report.
+        // Apply the available payload only when strict confirmation is disabled.
+        let timer = setTimeout(async () => {
+            // Remove the timer marker before examining confirmation state so a later
+            // arrival can create a fresh timer when the block remains unresolved.
+            this._applyTimers.delete(blockIndex);
+
+            // Skip fallback after another path applies the height or clears its tuple.
+            if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
+                if(this.config['HASH_CONFIRM_STRICT']){
+                    getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
+                        ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
+
+                    // Retain pending hashes so a later delivery can complete quorum,
+                    // and block single-source catch-up in the meantime.
+                    // Mark the height strict-pending until another source confirms it.
+                    this._strictConfirmPending.add(blockIndex);
+                } else {
+                    getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
+                    try {
+                        await this.applyBlockEvent(event);
+                    } catch(e){
+                        getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
+                    }
+                    this.pendingHashes.delete(blockIndex);
                 }
             }
+        }, this.config['HASH_CONFIRM_TIMEOUT']);
+        this._applyTimers.set(blockIndex, timer);
+    }
+
+    handleBlockQuorum(event, sourceIndex){
+        // Require tuple quorum only for a multi-source indexer with hash verification.
+        // Keep decoder, disabled-verification, and single-source application direct.
+        // Preserve the two-source unanimous case and larger-set majority behavior.
+        if(this.dbType !== 'indexer' || !this.config['VERIFY_HASHES'] || this.activeSourceCount() <= 1)
+            return null;
+
+        // Ignore an evicted source's in-flight delivery.
+        // Exclude decoder and single-source paths because they need no tuple quorum.
+        if(this._evictedSources.has(sourceIndex)) return {};
+
+        let blockIndex = event.block_index;
+        let pending = this.recordPendingBlockHash(event, sourceIndex);
+        let { groups, reportedCount } = this.tallyPendingBlockHashes(pending);
+
+        // Gate application on the current arrival's group so the accepted tuple always
+        // belongs to the payload held by this call. The majority winner is unique.
+        // Strike dissenters only after the current tuple reaches the effective quorum.
+        let currentKey = this.hashTupleKey(pending[sourceIndex]);
+        let currentGroup = groups.get(currentKey) || [];
+        if(currentGroup.length >= this.effectiveQuorum()){
+            this.acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup);
+            return null;
+        }
+        if(reportedCount >= this.activeSourceCount()){
+            return { completion: this.rejectBlockWithoutQuorum(blockIndex, groups) };
+        }
+        // Wait when more active reports can still produce a quorum.
+        this.armBlockQuorumTimer(event);
+        return {};
+    }
+
+    async handleBlock(event, sourceIndex){
+        let action = this.refuseLiveBlockOnEmptyReplica(event);
+        if(action){
+            if(action.completion) await action.completion;
             return;
         }
 
-        // Both dbTypes require block-height continuity: indexer uses chain hashes to detect
-        // gaps and forks; decoder has no synthetic hashes but still needs gap detection so
-        // blocks silently dropped between bootstrap and the first WS event are caught up.
+        action = this.handlePreviouslyAppliedBlock(event);
+        if(action){
+            if(action.completion) await action.completion;
+            return;
+        }
+
         if(this.lastAppliedBlock !== null){
-            if(this.dbType === 'indexer'){
-                let continuity = this.hashVerifier.verifyChainContinuity(
-                    this.lastAppliedBlock, this.lastHashes, event
-                );
-                if(!continuity.valid){
-                    // Normal trailing-tip lag on a fast chain (server ahead of our
-                    // committed height): not a fault. Log throttled at info level;
-                    // a genuine fork at our head is caught separately above as an error.
-                    this.logGap('Catch-up lag (indexer): ' + continuity.reason);
-                    await this.incrementalCatchUp(this.lastAppliedBlock + 1);
-                    return;
-                }
-            } else if(blockIndex > this.lastAppliedBlock + 1){
-                this.logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
-                await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+            action = this.dbType === 'indexer' ? this.handleIndexerBlockContinuity(event) :
+                this.handleDecoderBlockGap(event);
+            if(action){
+                if(action.completion) await action.completion;
                 return;
-            } else if(await this.decoderTipReplaced(event)){
-                getLogger().error('Chain continuity error (decoder): previous-hash mismatch at block ' + blockIndex +
+            }
+            if(this.dbType !== 'indexer' && await this.decoderTipReplaced(event)){
+                getLogger().error('Chain continuity error (decoder): previous-hash mismatch at block ' + event.block_index +
                     '; the committed tip ' + this.lastAppliedBlock + ' was replaced by a reorg this replica missed; ' +
                     'rewinding the orphaned tip and catching up');
                 await this.rewindForkedHead(this.lastAppliedBlock);
@@ -3070,109 +3139,11 @@ class ClientSync {
             }
         }
 
-        // Cross-source M-of-N quorum verification: indexer only (decoder has no
-        // synthetic chain hashes). Apply a block once SOURCE_QUORUM active sources
-        // publish the SAME hash tuple; strike (and eventually evict) dissenters instead
-        // of halting on any disagreement; halt (no-source-quorum) only when every active
-        // source has reported and no group can reach quorum. The 2-source case behaves
-        // exactly as before (quorum 2; a 1-1 split has no majority and halts), while a
-        // larger set tolerates a Byzantine minority.
-        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1){
-            // An evicted source's in-flight delivery is ignored for the tally.
-            if(this._evictedSources.has(sourceIndex)) return;
-
-            // Record this source's hash tuple.
-            if(!this.pendingHashes.has(blockIndex)) this.pendingHashes.set(blockIndex, {});
-            this.pendingHashes.get(blockIndex)[sourceIndex] = {
-                ledger_hash: event.ledger_hash,
-                actions_hash: event.actions_hash,
-                contract_hash: event.contract_hash
-            };
-
-            // Tally reported, non-evicted sources by hash tuple.
-            let pending = this.pendingHashes.get(blockIndex);
-            let groups = new Map(); // hashKey -> [sourceIndex...]
-            let reportedCount = 0;
-            for(let idxStr of Object.keys(pending)){
-                let idx = Number(idxStr);
-                if(this._evictedSources.has(idx)) continue;
-                reportedCount++;
-                let key = this.hashTupleKey(pending[idxStr]);
-                if(!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(idx);
-            }
-            let quorum  = this.effectiveQuorum();
-            let activeN = this.activeSourceCount();
-
-            // The CURRENT arrival's own group. Applying is gated on IT reaching quorum,
-            // so we only ever apply the block payload we actually hold, and (under the
-            // majority default) the winning group is unique.
-            let currentKey   = this.hashTupleKey(pending[sourceIndex]);
-            let currentGroup = groups.get(currentKey) || [];
-
-            if(currentGroup.length >= quorum){
-                // Quorum reached on the current arrival's hash. Strike every reported
-                // dissenter, record the applied majority, and apply this event.
-                for(let idxStr of Object.keys(pending)){
-                    let idx = Number(idxStr);
-                    if(this._evictedSources.has(idx)) continue;
-                    if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
-                }
-                this._lastSourcesAgreeing = currentGroup.length;
-                this.pendingHashes.delete(blockIndex);
-                this._strictConfirmPending.delete(blockIndex);
-                let t = this._applyTimers.get(blockIndex);
-                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
-                // fall through to apply
-            } else if(reportedCount >= activeN){
-                // Every active source reported and no group reached quorum: genuinely
-                // contested, the replica cannot determine truth. Fail-stop.
-                this.pendingHashes.delete(blockIndex);
-                this._strictConfirmPending.delete(blockIndex);
-                let t = this._applyTimers.get(blockIndex);
-                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
-                let summary = [...groups.entries()].map(([k, arr]) => ({ hash: k, sources: arr.map(i => this.sources[i]) }));
-                if(this.config['HALT_ON_DIVERGENCE']){
-                    await this.haltOnDivergence(blockIndex, summary,
-                        [...groups.values()].reduce((a, arr) => a.concat(arr.map(i => this.sources[i])), []),
-                        'no-source-quorum');
-                    return;
-                }
-                getLogger().error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
-                    '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
-                getLogger().error(util.format('groups:', JSON.stringify(summary)));
-                return; // Don't apply contested blocks (log-only mode)
-            } else {
-                // Not enough sources have reported to reach quorum yet. Arm the fallback
-                // timer once per block (liveness fallback for a silent/slow source; a
-                // genuine split is caught above once all active sources report).
-                if(!this._applyTimers.has(blockIndex)){
-                    let timer = setTimeout(async () => {
-                        this._applyTimers.delete(blockIndex);
-                        if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
-                            if(this.config['HASH_CONFIRM_STRICT']){
-                                getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
-                                    ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
-                                // Retain the pending hashes so a later delivery can still
-                                // complete quorum; block single-source catch-up meanwhile.
-                                this._strictConfirmPending.add(blockIndex);
-                            } else {
-                                getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
-                                try {
-                                    await this.applyBlockEvent(event);
-                                } catch(e){
-                                    getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
-                                }
-                                this.pendingHashes.delete(blockIndex);
-                            }
-                        }
-                    }, this.config['HASH_CONFIRM_TIMEOUT']);
-                    this._applyTimers.set(blockIndex, timer);
-                }
-                return;
-            }
+        action = this.handleBlockQuorum(event, sourceIndex);
+        if(action){
+            if(action.completion) await action.completion;
+            return;
         }
-
         await this.applyBlockEvent(event);
     }
 
@@ -3548,72 +3519,109 @@ class ClientSync {
         return was;
     }
 
+    carryUnverifiedRoots(event){
+        // Preserve computed roots across retryable verification errors without
+        // treating snapshot roots as a live block's commitments.
+        let computedRoots = this.applier._lastComputedRoots;
+        if(!computedRoots && this._unverifiedRoots
+                && this._unverifiedRoots.blockIndex === event.block_index)
+            computedRoots = this._unverifiedRoots.roots;
+        this._unverifiedRoots = computedRoots
+            ? { blockIndex: event.block_index, roots: computedRoots }
+            : null;
+        return computedRoots;
+    }
+
+    addStateHashClassDetails(mismatch, preimage){
+        // Record each mutable-state class digest for mismatch diagnosis.
+        mismatch.local_classes = classDigests(
+            preimage, data => this.util.getDataHash(data));
+        for(let detail of mismatch.local_classes){
+            getLogger().error('state_hash local class ' + detail.class +
+                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
+                ' digest=' + detail.digest);
+        }
+    }
+
+    stateCommitmentDivergence(event, computed){
+        // Treat missing required roots as divergence while allowing an omitted
+        // state root for catch-up blocks whose stake state is already newer.
+        let missing = [];
+        if(event.balances_root == null)
+            missing.push({ field: 'balances_root', a: null, b: computed.balances_root });
+        if(event.block_merkle_root == null)
+            missing.push({ field: 'block_merkle_root', a: null, b: computed.block_merkle_root });
+        if(missing.length)
+            return { mismatches: missing, reason: 'state-commitment-missing' };
+
+        let mismatches = [];
+        if(computed.balances_root !== event.balances_root)
+            mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
+        if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
+            mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
+        if(event.state_root != null && computed.state_root !== event.state_root)
+            mismatches.push({ field: 'state_root', a: event.state_root, b: computed.state_root });
+        if(mismatches.length)
+            return { mismatches, reason: 'state-commitment-divergence' };
+        return null;
+    }
+
+    finishAppliedBlock(event){
+        // Advance the verified tip and publish its hashes to local status consumers.
+        this._unverifiedRoots     = null;
+        this.lastAppliedBlock     = event.block_index;
+        this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
+        this.scheduleHeartbeat();
+        if(this.dbType === 'decoder'){
+            this.lastHashes = { block_hash: event.block_hash };
+        } else {
+            this.lastHashes = {
+                ledger_hash: event.ledger_hash,
+                actions_hash: event.actions_hash,
+                contract_hash: event.contract_hash
+            };
+        }
+    }
+
+    clearAppliedBlockWork(){
+        // Remove pending hashes and fallback timers at or below the verified tip.
+        for(let [key] of this.pendingHashes){
+            if(key <= this.lastAppliedBlock)
+                this.pendingHashes.delete(key);
+        }
+        for(let [key, timer] of this._applyTimers){
+            if(key <= this.lastAppliedBlock){
+                clearTimeout(timer);
+                this._applyTimers.delete(key);
+            }
+        }
+    }
+
+    checkpointQuorumIsDue(){
+        // Check whether the verified tip reaches the next checkpoint interval.
+        return this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
+            && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL'];
+    }
+
     async applyBlockEvent(event){
-        // Refuse to apply anything once halted on a divergence: never replicate
-        // onto a chain we could not agree with the fleet on.
+        // Refuse new blocks while the client is halted on a consensus divergence.
         if(this._halted){
             getLogger().error('Refusing to apply block ' + (event && event.block_index) +
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
-        // Platform-train activation gate, BEFORE anything about the block is written:
-        // the decision is "may this build apply block N at all", not "what does N
-        // contain". Halted here means lastAppliedBlock stays put and nothing landed.
+        // Check train activation before writing any part of the block.
         if(await this.checkTrainActivation(event.block_index)) return;
         try {
             await this.withApplyLock(() => this.applier.applyBlock(event));
-            // Carry the block's computed SMT roots across a post-commit verification
-            // ERROR, so a retry of the same height cannot launder the commitment gate.
-            //
-            // applyBlock COMMITS the block and only then do the gates below run, so a
-            // throw from any of them (the computeStateHash read is the reachable one)
-            // leaves the block committed with lastAppliedBlock unadvanced. On the
-            // redelivery that gap detection then triggers, applyBlock takes its
-            // duplicate early return, which clears _lastComputedRoots to null, and the
-            // commitment gate below is gated on those roots being set: it is skipped,
-            // and the tip advances with the source's balances_root/block_merkle_root/
-            // state_root never compared to anything. Database presence is not proof of
-            // verification.
-            //
-            // So stash the roots the FIRST apply computed, keyed by height, and restore
-            // them when the duplicate path returns null for that same height. The
-            // comparison then runs on the retry against exactly the values it would
-            // have used on the first pass. The stash is replaced on every apply and
-            // cleared once all gates pass, so it can never carry a stale height, and
-            // nothing is read back out of storage (a seeded snapshot roots row is never
-            // a live block's committed roots and must not be compared to one).
-            let computedRoots = this.applier._lastComputedRoots;
-            if(!computedRoots && this._unverifiedRoots
-                    && this._unverifiedRoots.blockIndex === event.block_index)
-                computedRoots = this._unverifiedRoots.roots;
-            this._unverifiedRoots = computedRoots
-                ? { blockIndex: event.block_index, roots: computedRoots }
-                : null;
-            // Independent recomputation (validator track). The block's raw rows are
-            // now in the replica; recompute its consensus hashes and confirm they
-            // match the committed hashes the source published for it. A mismatch
-            // means the replicated DATA does not hash to the committed hash
-            // (replication corruption, a partial apply, or a source serving rows
-            // inconsistent with its own committed hash), so HALT durably rather
-            // than advance onto unverifiable state.
+            let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event);
                 if(mismatches){
-                    await this.haltOnDivergence(event.block_index, mismatches,
-                        this.sources.slice(0, 1), 'local-recompute-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    await this.haltOnDivergence(event.block_index, mismatches, this.sources.slice(0, 1), 'local-recompute-divergence');
+                    return;
                 }
             }
-            // Replication-integrity check (validator track): the three hashes above cover
-            // only immutable block-scoped rows. The state_hash covers the in-place mutations
-            // + backdated refund credits the updated_rows / cooldownCredits channels carry,
-            // so a follower that silently dropped one of those applies now HALTS instead of
-            // serving divergent balances/status until the next full snapshot. APPLY-TIME ONLY:
-            // the mutated rows are in their block-`event.block_index` state at exactly this
-            // instant (just applied, before lastAppliedBlock advances). This must NEVER move
-            // into the historical verifyRecompute paths (catch-up / cross-source), where
-            // those rows have since been mutated again. NULL state_hash (pre-feature blocks)
-            // is skipped.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
                 let delay = activationDelayBlocks(this.chain);
                 let localState = await this.blockHasher.computeStateHash(
@@ -3623,144 +3631,47 @@ class ClientSync {
                     try {
                         let preimage = await this.blockHasher.computeStateHashPreimage(
                             event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
-                        mismatch.local_classes = classDigests(
-                            preimage, data => this.util.getDataHash(data));
-                        for(let detail of mismatch.local_classes){
-                            getLogger().error('state_hash local class ' + detail.class +
-                                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
-                                ' digest=' + detail.digest);
-                        }
+                        this.addStateHashClassDetails(mismatch, preimage);
                     } catch(e){
-                        getLogger().error(util.format(
-                            'state_hash local class detail failed at block ' + event.block_index + ':', e));
+                        getLogger().error(util.format('state_hash local class detail failed at block ' + event.block_index + ':', e));
                     }
-                    await this.haltOnDivergence(event.block_index,
-                        [mismatch],
-                        this.sources.slice(0, 1), 'state-hash-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    await this.haltOnDivergence(event.block_index, [mismatch], this.sources.slice(0, 1), 'state-hash-divergence');
+                    return;
                 }
             }
-            // Light-client state-commitment check (SPV spec sec.4-5). applyBlock recomputed
-            // + persisted the per-block SMT roots over the replica INSIDE its txn (atomic
-            // with the data apply) and exposed them on applier._lastComputedRoots. Compare
-            // to the source's committed roots and HALT durably on divergence, the same as
-            // the state_hash check. APPLY-TIME ONLY (the roots were computed against the
-            // just-applied replica state). Verifies balances_root + block_merkle_root +
-            // state_root; state_root folds the BTC-only stakes_root (now recomputed by the
-            // follower, see stateCommitment.gatherStakeEntries), so a stakes divergence
-            // surfaces as a state_root mismatch. A null _lastComputedRoots (block before
-            // the flag-day per the replica's OWN map, or a skipped/duplicate apply already
-            // verified when first applied) is skipped, never a divergence; a NULL
-            // event.balances_root while _lastComputedRoots is set is the opposite, a
-            // withheld commitment, and halts (see the fail-closed block below).
-            // Skip on a truncated replica: buildFullBalancesRoot sums the full credits/debits
-            // history, which a truncated base does not retain, so its recomputed root cannot
-            // match the source's full-history root and would false-halt every block. The
-            // truncation state is surfaced on /status (SyncService truncated flag) so operators
-            // can see the replica is not running the apply-time commitment check.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
-                    && !this.isTruncated()
-                    && computedRoots){
-                let computed   = computedRoots;
-                // Fail closed on WITHHELD roots (uuid:4b95ddef). Reaching here means the
-                // replica's OWN bundled flag-day map says the commitment is live at this
-                // height: ClientApplier.applyBlock sets _lastComputedRoots solely under
-                // isStateCommitmentActive and clears it at entry, so it is never stale.
-                // state_tree_roots.balances_root and .block_merkle_root are NOT NULL
-                // columns, so a null on the wire means the source served no roots row at
-                // an ACTIVE height. Reading that as "nothing to check" let a failed,
-                // re-seeded, or hostile source skip the one control that writes a
-                // sync_halt marker. Same posture as checkpoint.js commitmentMissing().
-                // state_root stays exempt: ServerPoller deliberately NULLs it for
-                // catch-up-burst blocks (viewTip > B), where the follower would otherwise
-                // recompute it over tip-state stakes and halt on a value the source never
-                // committed at B. VERIFY_STATE_COMMITMENT=false is the operator override.
-                let missing = [];
-                if(event.balances_root == null)
-                    missing.push({ field: 'balances_root', a: null, b: computed.balances_root });
-                if(event.block_merkle_root == null)
-                    missing.push({ field: 'block_merkle_root', a: null, b: computed.block_merkle_root });
-                if(missing.length){
-                    await this.haltOnDivergence(event.block_index, missing,
-                        this.sources.slice(0, 1), 'state-commitment-missing');
-                    return; // halted: do not advance lastAppliedBlock
-                }
-                let mismatches = [];
-                if(computed.balances_root !== event.balances_root)
-                    mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
-                if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
-                    mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
-                if(event.state_root != null && computed.state_root !== event.state_root)
-                    mismatches.push({ field: 'state_root', a: event.state_root, b: computed.state_root });
-                if(mismatches.length){
-                    await this.haltOnDivergence(event.block_index, mismatches,
-                        this.sources.slice(0, 1), 'state-commitment-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    && !this.isTruncated() && computedRoots){
+                let divergence = this.stateCommitmentDivergence(event, computedRoots);
+                if(divergence){
+                    if(divergence.reason === 'state-commitment-missing')
+                        await this.haltOnDivergence(event.block_index, divergence.mismatches, this.sources.slice(0, 1), 'state-commitment-missing');
+                    else
+                        await this.haltOnDivergence(event.block_index, divergence.mismatches,
+                            this.sources.slice(0, 1), 'state-commitment-divergence');
+                    return;
                 }
             }
-            // Every gate passed, so the committed block is now a VERIFIED block and the
-            // carried-roots stash has nothing left to protect.
-            this._unverifiedRoots     = null;
-            this.lastAppliedBlock     = event.block_index;
-            this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
-            // Report our applied height back to the source(s), debounced.
-            this.scheduleHeartbeat();
-            if(this.dbType === 'decoder'){
-                this.lastHashes = { block_hash: event.block_hash };
-            } else {
-                this.lastHashes = {
-                    ledger_hash: event.ledger_hash,
-                    actions_hash: event.actions_hash,
-                    contract_hash: event.contract_hash
-                };
-            }
-
-            // Clean up old pending hashes and any armed fallback timers for
-            // blocks we have now applied (or that are older than our applied tip).
-            for(let [key] of this.pendingHashes){
-                if(key <= this.lastAppliedBlock)
-                    this.pendingHashes.delete(key);
-            }
-            for(let [key, timer] of this._applyTimers){
-                if(key <= this.lastAppliedBlock){
-                    clearTimeout(timer);
-                    this._applyTimers.delete(key);
-                }
-            }
-
-            // SPV checkpoint-quorum anchor (opt-in, throttled): confirm the replica's
-            // OWN recomputed state_root matches a federation-quorum-signed checkpoint,
-            // verified against an out-of-band pinned set. Transport errors never halt;
-            // only a genuine quorum / state_root divergence does.
-            if(this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
-                    && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL']){
+            this.finishAppliedBlock(event);
+            this.clearAppliedBlockWork();
+            if(this.checkpointQuorumIsDue()){
                 this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
                 await this.verifyCheckpointQuorum();
             }
         } catch(e){
             getLogger().error(util.format('Error applying block %s:', event.block_index, e));
-            // Heal a schema gap but don't re-apply the block inline: the
-            // skipped block leaves a gap that the next status event's gap
-            // detection closes via incremental catch-up, post-heal.
+            // Heal schema gaps and let later status events drive catch-up.
             await this.healSchemaIfStale(e);
         }
     }
 
-    // SPV: fetch the source's latest signed checkpoint, verify its quorum against the
-    // OUT-OF-BAND pinned validator set, and assert its committed state_root equals the
-    // replica's OWN recomputed state_tree_roots row at that height. This anchors the
-    // replica to the federation quorum: a single lying source cannot forge a quorum of
-    // signatures, so it cannot make a fabricated state_root pass. Skips silently (INERT)
-    // when there is no pinned set, no checkpoint yet, or the replica has not reached the
-    // checkpoint height. NEVER halts on a transport error (404 / network), only on a
-    // real quorum failure or state_root divergence.
+    // SPV: verify the source's latest signed checkpoint quorum against the pinned validator
+    // set and assert its state_root equals the replica's own recomputed root at that height.
+    // Inert without a pinned set or checkpoint; halts only on a real quorum or root failure.
     async verifyCheckpointQuorum(){
         if(this._halted) return;
         let validators = getPinnedValidators(this.chain, this.network);
         if(!validators || !validators.length) return;            // inert: no out-of-band trust root
-        // Fetch the anchor out-of-band when configured (hub/federation), NOT from the very
-        // source we audit, so a single source cannot withhold the checkpoints that would
-        // catch a forged tail. Falls back to sources[0] when no out-of-band URL is set.
+        // The anchor comes from the out-of-band URL when set, so the audited source cannot withhold it.
         let source = this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
         if(!source) return;
         let cp;
@@ -3769,91 +3680,27 @@ class ClientSync {
             let resp = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
             cp = resp && resp.data;
         } catch(e){
-            // Transport fault / 404 is not proof of divergence, so it never halts. But it
-            // is no longer SWALLOWED: a source that withholds the anchor must be visible,
-            // otherwise a forged tail past the last served checkpoint goes unanchored.
-            getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
-                this.network + ' from ' + source + ' (' + e.message + '); anchor not refreshed this cycle');
+            this.warnCheckpointFetchFailure(source, e);
             return;
         }
         if(!cp) return;
-        // A ROOTLESS checkpoint. Below the commitment flag-day that is normal and there
-        // is nothing to anchor. At or above it the federation never signs one, so a
-        // rootless row served there is stale, forged, or a source withholding the
-        // anchorable material (uuid:c9dfc3d9). Deciding that on the WIRE's missing
-        // state_root alone also returned before the seq-regression and freshness guards
-        // below, leaving no trace at all. Decide it on the replica's OWN bundled
-        // flag-day map instead, via the same predicate checkpoint.verifyCheckpoint
-        // fail-closes on, and make the active-height case visible. Still a return and
-        // never a halt: absence is not proof of forgery, matching the freshness guard's
-        // documented advisory stance a few lines down.
-        if(checkpointVerifier.commitmentMissing(cp)){
-            getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
-                this.chain + '/' + this.network + ' at block ' + cp.block_index +
-                ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
-                '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
-                'source may be withholding anchorable checkpoints, not anchoring this cycle');
+        if(this.checkpointSkipsAnchoring(cp)) return;
+        let freshnessMismatches = this.checkpointFreshnessMismatches(cp);
+        if(freshnessMismatches){
+            await this.haltOnDivergence(cp.block_index, freshnessMismatches,
+                this.sources.slice(0, 1), 'checkpoint-freshness-stale');
             return;
-        }
-        if(cp.state_root == null) return;                        // pre-commitment: nothing to anchor
-        if(typeof cp.block_index !== 'number') return;           // malformed: no height to anchor
-        // Reject a checkpoint_seq regression: a genuine federation sequence only advances,
-        // so a lower seq than one already anchored means the source rewound (withholding
-        // newer checkpoints). Do not anchor it; surface the rewind.
-        if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
-                && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
-            getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
-                ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
-                '); source may be withholding newer checkpoints, not anchoring');
-            return;
-        }
-        // Freshness: if the newest quorum checkpoint trails the tip by more than the bound,
-        // the anchor cannot catch a forged tail near the tip. Advisory by default (never a
-        // halt): withholding is not proof of forgery and halting on absence is a DoS vector.
-        // CHECKPOINT_FRESHNESS_STRICT promotes it to enforced: a replica that has
-        // opted in refuses to serve the unanchored tail and HALTs. Only enforced once at
-        // least one checkpoint has been verified (the federation is demonstrably live), so a
-        // replica that has never anchored is not halted at startup.
-        if(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS']){
-            getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
-                ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
-                ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
-            if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
-                await this.haltOnDivergence(cp.block_index,
-                    [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
-                       b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }],
-                    this.sources.slice(0, 1), 'checkpoint-freshness-stale');
-                return;
-            }
         }
         if(cp.block_index > this.lastAppliedBlock) return;       // not caught up to this checkpoint yet
-
-        // 1. The checkpoint must meet the federation quorum. Try the PINNED launch set
-        //    first (the launch epoch). If it no longer signs (the federation rotated
-        //    its keys), roll the trust root FORWARD from the pinned SEED checkpoint over
-        //    BTC's stakes_root (spec §7.3) IF a seed is configured; otherwise preserve
-        //    the original behavior (a quorum failure is a divergence).
         let q = checkpointVerifier.verifyCheckpoint(cp, validators);
         if(!q.valid){
             let seed = getPinnedCheckpoint(this.chain, this.network);
             if(seed){
                 let r = await this.followCheckpointForward(cp, seed, source);
-                if(r.verdict === 'ok'){
-                    this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
-                    getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
-                        this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
-                    return;
-                }
-                if(r.verdict === 'divergence'){
-                    await this.haltOnDivergence(cp.block_index, r.mismatches,
-                        this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
-                    return;
-                }
-                // 'wait': cannot anchor across rotation yet. Log it like the other withholding
-                // paths, so a source stalling the rotation walk is visible, never silent.
-                getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
-                    this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
-                    ': ' + (r.reason || 'inconclusive') + '; anchor not refreshed this cycle');
+                let rotationMismatches = this.processRotationFollow(cp, source, r);
+                if(!rotationMismatches) return;
+                await this.haltOnDivergence(cp.block_index, rotationMismatches,
+                    this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
                 return;
             }
             await this.haltOnDivergence(cp.block_index,
@@ -3861,7 +3708,7 @@ class ClientSync {
                 this.sources.slice(0, 1), 'checkpoint-quorum-divergence');
             return;
         }
-        // 2. Its committed roots must equal the replica's OWN recomputed roots at that height.
+        // Its committed roots must equal the replica's OWN recomputed roots at that height.
         let cmp = await this.checkpointRootsMatchLocal(cp);
         if(cmp.status === 'missing') return;                     // height not recomputed here (truncated bootstrap)
         if(cmp.status === 'mismatch'){
@@ -3873,6 +3720,65 @@ class ClientSync {
         getLogger().info('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
+    }
+
+    // A transport fault or 404 never halts, but the failed refresh stays visible.
+    warnCheckpointFetchFailure(source, error){
+        getLogger().warn('Checkpoint-quorum anchor: failed to fetch checkpoint for ' + this.chain + '/' +
+            this.network + ' from ' + source + ' (' + error.message + '); anchor not refreshed this cycle');
+    }
+
+    // True when the checkpoint cannot be anchored this cycle: rootless, malformed, or a seq
+    // regression. Rootless at or above the flag-day is logged; none of these ever halts.
+    checkpointSkipsAnchoring(cp){
+        if(checkpointVerifier.commitmentMissing(cp)){
+            getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
+                this.chain + '/' + this.network + ' at block ' + cp.block_index +
+                ' (seq ' + cp.checkpoint_seq + ', snapshot_block ' + cp.snapshot_block +
+                '), at/above the checkpoint-commitment flag-day where the federation never signs one; ' +
+                'source may be withholding anchorable checkpoints, not anchoring this cycle');
+            return true;
+        }
+        if(cp.state_root == null) return true;                   // pre-commitment: nothing to anchor
+        if(typeof cp.block_index !== 'number') return true;      // malformed: no height to anchor
+        // A genuine federation sequence only advances, so a lower seq means the source rewound.
+        if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
+                && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
+            getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
+                ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
+                '); source may be withholding newer checkpoints, not anchoring');
+            return true;
+        }
+        return false;
+    }
+
+    // Freshness is advisory by default. Strict mode returns a mismatch after one checkpoint
+    // verifies so the caller can halt on the stale anchor.
+    checkpointFreshnessMismatches(cp){
+        if(!(this.lastAppliedBlock - cp.block_index > this.config['CHECKPOINT_FRESHNESS_BLOCKS'])) return null;
+        getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
+            ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
+            ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
+        if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
+            return [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
+                b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }];
+        }
+        return null;
+    }
+
+    // Record a successful rotation follow, return divergence mismatches, or log a wait.
+    processRotationFollow(cp, source, result){
+        if(result.verdict === 'ok'){
+            this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
+            getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
+                this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ')');
+            return null;
+        }
+        if(result.verdict === 'divergence') return result.mismatches;
+        getLogger().warn('Checkpoint-quorum anchor: cannot follow validator rotation to ' + this.chain + '/' +
+            this.network + ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ') via ' + source +
+            ': ' + (result.reason || 'inconclusive') + '; anchor not refreshed this cycle');
+        return null;
     }
 
     // Advance the high-water mark of verified checkpoint sequences. Monotonic: a later
