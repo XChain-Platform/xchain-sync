@@ -1380,59 +1380,26 @@ class ClientSync {
         }
     }
 
-    // Seed a TRUNCATED replica from a recent height instead of full history.
-    // Opt-in per chain (SYNC_BOOTSTRAP_DEPTH_<CHAIN>_<NETWORK>) for fast chains
-    // whose full-history snapshot cannot be buffered+applied in one client pass.
-    // Returns true once the tip is committed; throws on a failure the caller can
-    // retry. Works for BOTH dbTypes: the terminal-block recompute below is a no-op
-    // for the decoder (verifyRecompute returns null; it has no synthetic chain
-    // hashes), so the decoder simply seeds [base..tip] and live-follows by block_hash
-    // continuity, which only needs the immediate predecessor (present from base up).
-    //
-    // CONSENSUS NOTE (load-bearing, indexer): the join block `base` has no `base-1`
-    // predecessor on a truncated replica, so BlockHasher.computeBlockHashes(base)
-    // folds a NULL previous_hash and would false-HALT on recompute. We record
-    // this._bootstrapBase so verifyRecompute skips recompute for ONLY that one
-    // block; base's committed hashes arrive verbatim in the snapshot, and every
-    // block > base recomputes normally (each folds its predecessor's committed
-    // hash, which is present in [base..tip] and replicated verbatim). The chained
-    // verification is therefore intact from base+1 upward.
-    async bootstrapFromHeight(depth){
-        let source = this.sources[0];
-        if(!source) throw new Error('Bootstrap-from-height: no sync source');
-
-        // 1. Discover the source tip.
-        let statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
-        let statusResp = await axios.get(statusUrl, { headers: this.upstreamHeaders(), timeout: 30000 });
-        let status = statusResp.data || {};
-        // A server reports block_height (last broadcast position) and source_height
-        // (DB tip). The incremental snapshot is built from the DB, so prefer the DB
-        // tip; fall back to block_height. Either way `base` only needs to be recent.
-        let tip = (typeof status.source_height === 'number') ? status.source_height
+    async discoverBootstrapRange(source, depth){
+        const statusUrl = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        const statusResp = await axios.get(statusUrl, { headers: this.upstreamHeaders(), timeout: 30000 });
+        const status = statusResp.data || {};
+        // The incremental snapshot comes from the DB tip, with the last broadcast
+        // position as a fallback when the source does not expose source_height.
+        const tip = (typeof status.source_height === 'number') ? status.source_height
                 : (typeof status.block_height === 'number') ? status.block_height : null;
         if(typeof tip !== 'number'){
             throw new Error('Bootstrap-from-height: source tip unavailable from ' + statusUrl);
         }
-        let base = Math.max(0, tip - depth);
+        const base = Math.max(0, tip - depth);
         getLogger().info('Bootstrap-from-height: source tip=' + tip + ', depth=' + depth +
             ', base=' + base + ' for ' + this.chain + '/' + this.network);
+        return { tip, base };
+    }
 
-        // 2. Apply schema before any data (same as the full-bootstrap path).
-        await this.fetchAndApplySchema(source);
-
-        // 3. Sync the append-only lookup tables (index_*) by id-cursor paging BEFORE
-        //    the block window. A single full-dump of e.g. index_transactions (~8.5M
-        //    rows on DOGE testnet) exceeds SNAPSHOT_MAX_CONTENT and aborts the
-        //    download; paging keeps each request bounded. Done first so the block
-        //    window's FK targets (blocks.*_hash_id -> index_transactions) are present.
-        await this.syncLookupTablesPaged(source);
-
-        // 4. Fetch and apply the block window from `base` with skip_lookups=1 (the
-        //    lookups were just paged in). Bounded by the truncation window, so this
-        //    response stays small. applyIncrementalSnapshot also applies updated_rows,
-        //    cooldown credits, and rebuilds touched balances (all still bundled here).
-        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
-        let response = await axios.get(url, {
+    async fetchBootstrapWindow(source, base){
+        const url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + base + '?skip_lookups=1';
+        const response = await axios.get(url, {
             headers: this.upstreamHeaders(),
             responseType: 'arraybuffer',
             timeout: 600000,
@@ -1443,84 +1410,74 @@ class ClientSync {
         if(Buffer.isBuffer(jsonStr)){
             try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
         }
-        let snapshotData;
         try {
-            snapshotData = JSON.parse(jsonStr.toString());
+            return JSON.parse(jsonStr.toString());
         } catch(parseErr){
             throw new Error('Snapshot download truncated or corrupt from ' + source +
                 ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
         }
+    }
 
-        // Platform-train gate on the window tip, before the join floor is recorded or
-        // any row lands: a window whose top is at or above the boundary must not be
-        // seeded by a build that lacks the rule set. Returns false so the retry
-        // wrapper sees the halt and stops instead of re-fetching the same window.
-        if(await this.checkTrainActivation(
-                (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : tip))
-            return false;
+    async applyBootstrapWindow(snapshotData, base, tip){
+        const activationHeight = (typeof snapshotData.block_height === 'number')
+            ? snapshotData.block_height : tip;
+        if(await this.checkTrainActivation(activationHeight)) return false;
 
-        // Record the join block BEFORE apply so a recompute triggered during/after
-        // apply already sees the skip. since_block is authoritative (the server
-        // echoes the exact bound it served); fall back to our requested base.
+        // since_block is the exact bound served; base is the requested fallback.
         this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
-        // Persist the join floor durably. _bootstrapBase is otherwise an in-memory-
-        // only field: after a restart the incremental path leaves it null, dropping
-        // both the join-block recompute skip (a false-HALT on the join block) and the
-        // truncation floor. Reloaded by loadBootstrapBase() at startup.
         await this.persistBootstrapBase(this._bootstrapBase);
-
         await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
         if(typeof snapshotData.block_height === 'number'){
             this.lastAppliedBlock = snapshotData.block_height;
         }
+        return true;
+    }
 
-        // 4b. Re-page the append-only lookups AFTER the block window. Step 3 paged
-        //     index_* up to the source's high-water T1, but the step-4 snapshot is a
-        //     fresh REPEATABLE READ at the source's CURRENT tip T2, which is higher
-        //     whenever the source produced a block during paging (the normal case on
-        //     a fast chain like DOGE testnet, where paging spans millions of rows /
-        //     many seconds). Blocks (T1..T2] then carry blocks.*_hash_id pointing at
-        //     index_transactions rows that were never paged in; getBlockHashRow
-        //     resolves them as NULL (LEFT JOIN miss), which (a) commits gap blocks
-        //     with unresolvable consensus hashes, (b) silently skips the terminal
-        //     recompute below (its NULL-ledger_hash guard goes false), and (c) halts
-        //     the first live block when it folds a NULL predecessor hash. Re-paging
-        //     now (cursor = current MAX(id), so only the new (T1..T2] rows) fills
-        //     those FK targets before recompute + live-follow. Idempotent and cheap
-        //     when no block landed (one MAX(id) probe per table, zero pages).
-        //     <SYNC-LOOKUP-REPAGE> keep aligned with runIncrementalCatchUp.
-        await this.syncLookupTablesPaged(source);
-
-        // Pair lastHashes with the height set above (see refreshTipHashes). start()
-        // re-reads it anyway, but this path is also the oversized-catch-up fallback,
-        // reached with live-follow already running.
-        await this.refreshTipHashes();
-
-        // 4. Verify the TERMINAL block (folds tip-1's committed hash, which is
-        //    present in [base..tip]). The join block `base` is intentionally NOT
-        //    recomputed here (no base-1 predecessor); verifyRecompute skips it.
+    async verifyBootstrapTerminalBlock(){
         if(this.config['VERIFY_RECOMPUTE'] && typeof this.lastAppliedBlock === 'number' &&
            this.lastAppliedBlock > this._bootstrapBase){
-            if(await this.verifyRangeBoundary(this.lastAppliedBlock)){
-                // Halted: leave lastAppliedBlock as-is so start()'s empty-replica
-                // guard does not fire; the durable halt blocks all further applies.
-                return true;
-            }
+            return await this.verifyRangeBoundary(this.lastAppliedBlock);
         }
+        return false;
+    }
 
-        // Decoder: seed + converge `dispensers` (never carried by the incremental
-        // block window or the id-cursor lookup paging) and verify the replica is
-        // row-complete against the source. Without this a truncated decoder replica
-        // starts with ZERO dispenser rows and no completeness signal ever fires.
-        // Best-effort; the reconcile leaves the local table intact on failure.
-        if(this.dbType === 'decoder'){
-            await this.reconcileDispensers(source);
-            await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
-        }
+    async reconcileBootstrapDecoder(source){
+        await this.reconcileDispensers(source);
+        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
+    }
 
+    logBootstrapFromHeightComplete(){
         getLogger().info('Bootstrap-from-height complete: ' + this.chain + '/' + this.network +
             ' replica holds [' + this._bootstrapBase + '..' + this.lastAppliedBlock + ']' +
             ' (truncated; pre-' + this._bootstrapBase + ' history and full-history aggregates unavailable)');
+    }
+
+    // Seed a truncated replica from a recent height instead of full history.
+    // Both DB types live-follow from the immediate predecessor in the window.
+
+    // The indexer join block has no predecessor, so recompute skips only that block.
+    // Later blocks fold their committed predecessors and retain chained verification.
+    async bootstrapFromHeight(depth){
+        const source = this.sources[0];
+        if(!source) throw new Error('Bootstrap-from-height: no sync source');
+
+        const { tip, base } = await this.discoverBootstrapRange(source, depth);
+        await this.fetchAndApplySchema(source);
+        await this.syncLookupTablesPaged(source);
+
+        const snapshotData = await this.fetchBootstrapWindow(source, base);
+        if(!await this.applyBootstrapWindow(snapshotData, base, tip)) return false;
+
+        // Re-page lookups so rows added during the window request exist locally.
+        await this.syncLookupTablesPaged(source);
+        await this.refreshTipHashes();
+
+        if(await this.verifyBootstrapTerminalBlock()) return true;
+        if(this.dbType === 'decoder'){
+            await this.reconcileBootstrapDecoder(source);
+        }
+
+        this.logBootstrapFromHeightComplete();
         return true;
     }
 
