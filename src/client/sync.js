@@ -1718,13 +1718,26 @@ class ClientSync {
     async downloadIncrementalCatchUp(source, sinceBlock){
         getLogger().info('Incremental catch-up from block ' + sinceBlock + '...');
         // Sync append-only lookups separately for bounded replicas so the block
-        // snapshot stays below the content limit.
+        // snapshot stays below the content limit. The local maximum id acts as
+        // the cursor, so this request transfers only lookup rows not held locally.
+
+        // Keep lookup tables in the bundled snapshot for full-history replicas.
+        // Their normal incremental window stays bounded without a separate paging
+        // pass, preserving the single-request path for those chains.
         let skipLookups = this._truncatedDepth >= 1;
         if(skipLookups){
             await this.syncLookupTablesPaged(source);
         }
+
+        // Tell a bounded source to omit the multi-million-row lookup tables after
+        // paging them independently. Re-dumping those append-only tables on every
+        // catch-up can exceed the configured response cap.
         let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network + '/since/' + sinceBlock +
             (skipLookups ? '?skip_lookups=1' : '');
+
+        // Request a binary response because sources may return a compressed payload.
+        // Keep decompression enabled for transport encoding while retaining explicit
+        // gzip handling for snapshot bodies delivered as raw buffers.
         let response = await axios.get(url, {
             headers: this.upstreamHeaders(),
             responseType: 'arraybuffer',
@@ -1732,10 +1745,18 @@ class ClientSync {
             decompress: true,
             maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
         });
+
+        // Accept both plain JSON buffers and gzip-compressed buffers. A failed gzip
+        // probe leaves the original bytes intact so the JSON parser can decide
+        // whether the source returned a valid uncompressed snapshot.
         let jsonStr = response.data;
         if(Buffer.isBuffer(jsonStr)){
             try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
         }
+
+        // Convert parse failures into a source-specific transfer error. A response
+        // interrupted in transit often reaches this point as a syntactically
+        // incomplete buffer rather than an axios transport exception.
         let snapshotData;
         try {
             snapshotData = JSON.parse(jsonStr.toString());
@@ -1748,36 +1769,75 @@ class ClientSync {
 
     async applyIncrementalCatchUpSnapshot(source, snapshotData, sinceBlock, dbTip, skipLookups){
         // Refuse a range whose tip crosses the active platform-train boundary.
+        // The whole window lands in one transaction, so no part of a crossing
+        // window may apply before the activation gate completes.
         if(await this.checkTrainActivation(
                 (typeof snapshotData.block_height === 'number') ? snapshotData.block_height : sinceBlock))
             return true;
+
         // Rewind a decoder tip when the downloaded range does not build on it.
+        // This handles a reorg that occurs while the client is disconnected and
+        // therefore cannot arrive through the live block event stream.
         if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, skipLookups ? source : null)) return true;
+
+        // Apply the entire incremental snapshot under the same lock as live events.
+        // The lock prevents an event from interleaving writes with this range and
+        // exposing a partially advanced replica.
         await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+
+        // Clear duplicate-key attribution after a successful apply and advance the
+        // in-memory cursor only when the source supplies a numeric terminal height.
+        // This keeps diagnostics and live-event gap checks aligned with the database.
         this._upsertDupKeyTarget = null;
         if(typeof snapshotData.block_height === 'number')
             this.lastAppliedBlock = snapshotData.block_height;
+
         // Fill lookup rows created while the source prepared the block snapshot.
+        // The first paging pass ends at high-water T1 while the snapshot may observe
+        // a later source tip T2, so referenced rows can exist in the interval.
+
+        // Run this second pass before hash refresh and boundary verification. Missing
+        // index rows can make the local block-hash lookup null, which would otherwise
+        // skip the range audit instead of proving the applied state.
         if(skipLookups){
             await this.syncLookupTablesPaged(source);
         }
+
         // Keep the cached hashes at the applied height before live events read them.
+        // Refresh only after the lookup re-page so every hash input referenced by the
+        // newly applied range is locally available.
         await this.refreshTipHashes();
         return false;
     }
 
     async verifyIncrementalCatchUpRange(snapshotData, sinceBlock){
         // Audit the local resume point because it folds the committed predecessor.
+        // The live path recomputes every block, while catch-up applies a whole range
+        // without a per-block recompute.
+
+        // Derive the join from this replica's committed tip rather than trusting the
+        // source echo. Recomputing that boundary is what detects a range joined onto
+        // a locally orphaned predecessor after a disconnected reorg.
         let joinBlock = sinceBlock;
-        // Reject a source that shifts the audited range boundary.
+
+        // Reject a source that shifts the audited range boundary. Omitting the echo
+        // still audits the local boundary, while an explicit disagreement indicates
+        // a buggy source or an attempt to move the check inside the served range.
         if(typeof snapshotData.since_block === 'number' && snapshotData.since_block !== sinceBlock){
             await this.haltOnDivergence(joinBlock,
                 [{ field: 'since_block', a: sinceBlock, b: snapshotData.since_block }],
                 this.sources.slice(0, 1), 'catchup-since-block-mismatch');
             return true;
         }
+
+        // Recompute the join before considering the terminal block. Its chained
+        // hashes include the committed predecessor, so an orphan stitch cannot
+        // reproduce the stored boundary and triggers the durable halt contract.
         if(await this.verifyRangeBoundary(joinBlock)) return true;
+
         // Audit the terminal block when chained hashes cover more than the join.
+        // Its committed hashes fold the applied range through the chained metadata,
+        // detecting interior corruption that leaves the first block intact.
         let terminalBlock = snapshotData.block_height;
         if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
             if(await this.verifyRangeBoundary(terminalBlock)) return true;
@@ -1786,17 +1846,32 @@ class ClientSync {
     }
 
     async verifyIncrementalCatchUpDecoder(source){
+        // Reconcile dispensers on the configured cadence because this table cannot
+        // converge through the block stream or append-only lookup paging. Its bounded
+        // purge depth keeps the periodic atomic replacement affordable.
         let didReconcile = this.shouldReconcileDispensers(Date.now());
         if(didReconcile) await this.reconcileDispensers(source);
+
         // Check dispensers only after reconciliation to avoid interim drift reports.
+        // Other decoder tables converge through streamed blocks or full dumps and
+        // remain part of every completeness check.
         await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
             didReconcile ? null : new Set(['dispensers']));
     }
 
     async handleIncrementalCatchUpFailure(source, sinceBlock, error){
+        // Separate response-cap failures from ordinary transport and apply failures.
+        // A deeply lagged replica cannot reduce an already oversized catch-up window
+        // by retrying the identical request.
         let isSizeError = this.isContentLengthOverflow(error);
         if(isSizeError){
             // Use the bounded bootstrap for replicas whose full snapshot exceeds the cap.
+            // Their configured depth exists because buffering and applying complete
+            // chain history cannot fit beneath the snapshot limit.
+
+            // Avoid routing bounded replicas through the full bootstrap. That path can
+            // hit the same cap, exhaust retries, and enter a permanent process restart
+            // loop without making synchronization progress.
             if(this._truncatedDepth >= 1){
                 getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                     '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
@@ -1804,36 +1879,77 @@ class ClientSync {
                 await this.bootstrapFromHeightRetry(this._truncatedDepth);
                 return;
             }
+
             // Use the full bootstrap when a full-history catch-up window exceeds the cap.
+            // A full snapshot can still fit when the incremental response covering a
+            // very wide range is the object that crosses the limit.
             getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                 '; falling back to full bootstrap.');
             await this.bootstrapFromSnapshot();
             return;
         }
+
+        // Attribute duplicate-key failures before attempting schema recovery. The
+        // duplicate-key path may halt or classify the source and therefore owns the
+        // failure when it recognizes one.
         getLogger().error(util.format('Incremental catch-up failed:', error));
         if(await this.noteUpsertDuplicateKey(source, error)) return;
+
         // Retry once after a schema repair; the repair debounce bounds recursion.
+        // A second schema-shaped failure inside that window falls through instead of
+        // nesting another catch-up attempt.
         if(await this.healSchemaIfStale(error))
             return this.runIncrementalCatchUp();
     }
 
     async runIncrementalCatchUp(){
+        // Use the first configured source for the entire pass so download, recovery,
+        // and optional verification share one upstream identity. An empty source list
+        // leaves the replica untouched and lets later triggers retry.
         let source = this.sources[0];
         if(!source) return;
+
+        // Keep the resume values outside the try body because failure handling reports
+        // the attempted boundary even when reading the database tip itself fails.
         let dbTip = null;
         let sinceBlock = 0;
         try {
             // Rethrow tip-read faults so recovery handles them instead of resuming at one.
+            // The database helper normally logs and returns an empty result, which is
+            // indistinguishable here from a genuinely empty replica.
+
+            // Read the committed tip again instead of trusting the in-memory cursor.
+            // A lagging cursor could request already applied rows and collide with
+            // ledger tables that accept plain inserts rather than ignores or upserts.
+
+            // Keep this read inside the recovery boundary so transient query faults
+            // abort the pass and schema faults reach the debounced repair path. WebSocket
+            // event callers do not catch a rejection escaping the in-flight runner.
             dbTip = await this.db.getLastBlock(null, { rethrow: true });
             sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
+
+            // Preserve the server's inclusive since-bound by starting one block after
+            // the committed tip. A null tip maps to block one through the zero seed.
             let { snapshotData, skipLookups } = await this.downloadIncrementalCatchUp(source, sinceBlock);
+
+            // Stop immediately when activation or fork handling consumes the pass.
+            // Both checks occur before any later verification or decoder reconciliation.
             if(await this.applyIncrementalCatchUpSnapshot(
                     source, snapshotData, sinceBlock, dbTip, skipLookups)) return;
+
+            // Gate consensus recomputation to indexers that explicitly enable it.
+            // Boundary verification can durably halt the replica, so its true result
+            // prevents all remaining work in this pass.
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock)) return;
             }
+
+            // Run decoder completeness work only after snapshot application and any
+            // indexer-only range audit. The database type makes these paths exclusive.
             if(this.dbType === 'decoder') await this.verifyIncrementalCatchUpDecoder(source);
         } catch(error){
+            // Await recovery through the returned promise so fallback bootstraps and a
+            // possible schema-heal retry retain their original completion semantics.
             return this.handleIncrementalCatchUpFailure(source, sinceBlock, error);
         }
     }
