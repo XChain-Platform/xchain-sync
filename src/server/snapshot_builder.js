@@ -376,6 +376,68 @@ class SnapshotBuilder {
         }
     }
 
+    setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow){
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('X-Block-Height', lastBlock);
+        res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
+        if(hashRow){
+            res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
+            res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
+            res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
+        }
+    }
+
+    createFullSnapshotWriter(res){
+        let gzip = zlib.createGzip();
+        gzip.pipe(res);
+        return new SnapshotStreamWriter(gzip, res);
+    }
+
+    async streamFullSnapshotTables(db, conn, writer){
+        let tableOrder = await this.getOrderedTables(db, conn);
+        let first = true;
+        let totalRows = 0;
+        // Any table read error aborts the snapshot before its closing frame.
+        for(let table of tableOrder){
+            let count = await db.getTableCount(table, conn);
+            if(count === 0) continue;
+
+            if(!first) await writer.write(',');
+            first = false;
+            await writer.write('"' + table + '":[');
+
+            let firstRow = true;
+            let rowStream = db.streamTableRows(table, conn);
+            try {
+                for await (let row of rowStream){
+                    if(!firstRow) await writer.write(',');
+                    firstRow = false;
+                    await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+                    totalRows++;
+                }
+            } finally {
+                // An abort stops the driver from buffering unread rows.
+                rowStream.destroy();
+            }
+
+            await writer.write(']');
+        }
+        return totalRows;
+    }
+
+    recordFullSnapshotSuccess(db, lastBlock, totalRows, startedAt){
+        let duration = Date.now() - startedAt;
+        let chain  = (db && db.chain)  || '?';
+        let network = (db && db.network) || '?';
+        logger.info('[SnapshotBuilder] full-snapshot served: dbType=' + (db && db.dbType) +
+            ' chain=' + chain + '/' + network +
+            ' block_height=' + lastBlock +
+            ' rows=' + totalRows +
+            ' duration=' + duration + 'ms');
+        this.snapshotsServed = (this.snapshotsServed || 0) + 1;
+    }
+
     async streamFullSnapshotLocked(db, res){
         let startedAt = Date.now();
         let conn = await db.beginReadSnapshot();
@@ -394,73 +456,11 @@ class SnapshotBuilder {
             let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Content-Encoding', 'gzip');
-            res.setHeader('X-Block-Height', lastBlock);
-            res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
-            if(hashRow){
-                res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
-                res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
-                res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
-            }
-
-            let gzip = zlib.createGzip();
-            gzip.pipe(res);
-            writer = new SnapshotStreamWriter(gzip, res);
+            this.setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow);
+            writer = this.createFullSnapshotWriter(res);
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
-
-            let tableOrder = await this.getOrderedTables(db, conn);
-            let first = true;
-            let totalRows = 0;
-            // NO per-table catch: any read error here fails the WHOLE snapshot. Logging the
-            // error and continuing would publish syntactically valid JSON with that table
-            // simply absent (a COUNT(*) lock-wait or timeout on one large table is enough)
-            // while still advertising block_height at the tip. ClientApplier.applyFullSnapshot
-            // DELETEs every snapshot-eligible local table and re-inserts only the tables the
-            // payload carries, so a populated `actions`/`markets` would reach the replica
-            // EMPTY and the replica would then advance to the advertised tip; a single-source
-            // deployment runs no post-apply content check to notice
-            // (ClientSync.bootstrapRotateSources cross-verifies only when sources.length > 1),
-            // so that divergence would be permanent and silent.
-            //
-            // So it fails loud: the outer catch disposes the writer, the closing '}}' is
-            // never emitted, and the client's JSON.parse of the truncated download throws
-            // and retries. The legitimate `if(count === 0) continue;` below stands - a
-            // genuinely empty table is still omitted; only real errors abort. A
-            // client-disconnect abort breaks out of the loop through this same path.
-            for(let table of tableOrder){
-                let count = await db.getTableCount(table, conn);
-                if(count === 0) continue;
-
-                if(!first) await writer.write(',');
-                first = false;
-                await writer.write('"' + table + '":[');
-
-                // One ordered streaming pass per table (no LIMIT/OFFSET repaging):
-                // most replicated tables are keyless with a non-unique first
-                // column, so offset paging by `ORDER BY 1` had no total order and
-                // could duplicate or skip a page-boundary tie (see
-                // db.streamTableRows). A single query execution reads each row
-                // exactly once; for-await gives row-at-a-time backpressure so a
-                // multi-million-row table never lands in the driver array.
-                let firstRow = true;
-                let rowStream = db.streamTableRows(table, conn);
-                try {
-                    for await (let row of rowStream){
-                        if(!firstRow) await writer.write(',');
-                        firstRow = false;
-                        await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
-                        totalRows++;
-                    }
-                } finally {
-                    // On a writer abort mid-table, stop the driver from buffering
-                    // the rest of the result set (no-op once the stream has ended).
-                    rowStream.destroy();
-                }
-
-                await writer.write(']');
-            }
+            let totalRows = await this.streamFullSnapshotTables(db, conn, writer);
 
             // Release the read view only after the final page is read. The data
             // is already buffered into gzip, so committing before gzip.end()
@@ -469,33 +469,15 @@ class SnapshotBuilder {
             await db.commitReadSnapshot(conn);
             snapshotOpen = false;
 
-            // Record completion: log dbType/chain/block_height/duration/rows and
-            // increment the lifetime served counter exposed on /status.
-            let duration = Date.now() - startedAt;
-            let chain  = (db && db.chain)  || '?';
-            let network = (db && db.network) || '?';
-            logger.info('[SnapshotBuilder] full-snapshot served: dbType=' + (db && db.dbType) +
-                ' chain=' + chain + '/' + network +
-                ' block_height=' + lastBlock +
-                ' rows=' + totalRows +
-                ' duration=' + duration + 'ms');
-            this.snapshotsServed = (this.snapshotsServed || 0) + 1;
-
+            this.recordFullSnapshotSuccess(db, lastBlock, totalRows, startedAt);
             writer.finish();
         } catch(e){
             if(writer) writer.dispose();
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);
-            // A client abort mid-stream is not a server error: the read view is
-            // already released, and the response is gone, so return quietly rather
-            // than surfacing a 500-shaped error to the (absent) caller.
+            // A client abort returns quietly after releasing the read view.
             if(e && e.aborted) return;
-            // Tear the response down once the headers are out. writer.dispose()
-            // destroys the gzip stream, but pipe() does not propagate a destroy to
-            // its destination, so `res` would stay open with no further writes and
-            // the client would sit on it until SNAPSHOT download timeout (600s) -
-            // one stalled attempt per source, per retry. Destroying the socket makes
-            // the truncated transfer fail immediately so the bootstrap retry ladder
-            // moves. Headers-not-sent is left to the route, which answers 500.
+            // Destroying a started response makes a truncated transfer fail immediately.
+            // The route handles errors that occur before headers are sent.
             if(res.headersSent && typeof res.destroy === 'function') res.destroy();
             throw e;
         }
