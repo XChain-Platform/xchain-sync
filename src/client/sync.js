@@ -3548,72 +3548,109 @@ class ClientSync {
         return was;
     }
 
+    carryUnverifiedRoots(event){
+        // Preserve computed roots across retryable verification errors without
+        // treating snapshot roots as a live block's commitments.
+        let computedRoots = this.applier._lastComputedRoots;
+        if(!computedRoots && this._unverifiedRoots
+                && this._unverifiedRoots.blockIndex === event.block_index)
+            computedRoots = this._unverifiedRoots.roots;
+        this._unverifiedRoots = computedRoots
+            ? { blockIndex: event.block_index, roots: computedRoots }
+            : null;
+        return computedRoots;
+    }
+
+    addStateHashClassDetails(mismatch, preimage){
+        // Record each mutable-state class digest for mismatch diagnosis.
+        mismatch.local_classes = classDigests(
+            preimage, data => this.util.getDataHash(data));
+        for(let detail of mismatch.local_classes){
+            getLogger().error('state_hash local class ' + detail.class +
+                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
+                ' digest=' + detail.digest);
+        }
+    }
+
+    stateCommitmentDivergence(event, computed){
+        // Treat missing required roots as divergence while allowing an omitted
+        // state root for catch-up blocks whose stake state is already newer.
+        let missing = [];
+        if(event.balances_root == null)
+            missing.push({ field: 'balances_root', a: null, b: computed.balances_root });
+        if(event.block_merkle_root == null)
+            missing.push({ field: 'block_merkle_root', a: null, b: computed.block_merkle_root });
+        if(missing.length)
+            return { mismatches: missing, reason: 'state-commitment-missing' };
+
+        let mismatches = [];
+        if(computed.balances_root !== event.balances_root)
+            mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
+        if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
+            mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
+        if(event.state_root != null && computed.state_root !== event.state_root)
+            mismatches.push({ field: 'state_root', a: event.state_root, b: computed.state_root });
+        if(mismatches.length)
+            return { mismatches, reason: 'state-commitment-divergence' };
+        return null;
+    }
+
+    finishAppliedBlock(event){
+        // Advance the verified tip and publish its hashes to local status consumers.
+        this._unverifiedRoots     = null;
+        this.lastAppliedBlock     = event.block_index;
+        this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
+        this.scheduleHeartbeat();
+        if(this.dbType === 'decoder'){
+            this.lastHashes = { block_hash: event.block_hash };
+        } else {
+            this.lastHashes = {
+                ledger_hash: event.ledger_hash,
+                actions_hash: event.actions_hash,
+                contract_hash: event.contract_hash
+            };
+        }
+    }
+
+    clearAppliedBlockWork(){
+        // Remove pending hashes and fallback timers at or below the verified tip.
+        for(let [key] of this.pendingHashes){
+            if(key <= this.lastAppliedBlock)
+                this.pendingHashes.delete(key);
+        }
+        for(let [key, timer] of this._applyTimers){
+            if(key <= this.lastAppliedBlock){
+                clearTimeout(timer);
+                this._applyTimers.delete(key);
+            }
+        }
+    }
+
+    checkpointQuorumIsDue(){
+        // Check whether the verified tip reaches the next checkpoint interval.
+        return this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
+            && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL'];
+    }
+
     async applyBlockEvent(event){
-        // Refuse to apply anything once halted on a divergence: never replicate
-        // onto a chain we could not agree with the fleet on.
+        // Refuse new blocks while the client is halted on a consensus divergence.
         if(this._halted){
             getLogger().error('Refusing to apply block ' + (event && event.block_index) +
                 '; client is HALTED on a consensus divergence at block ' + this._halted.blockIndex);
             return;
         }
-        // Platform-train activation gate, BEFORE anything about the block is written:
-        // the decision is "may this build apply block N at all", not "what does N
-        // contain". Halted here means lastAppliedBlock stays put and nothing landed.
+        // Check train activation before writing any part of the block.
         if(await this.checkTrainActivation(event.block_index)) return;
         try {
             await this.withApplyLock(() => this.applier.applyBlock(event));
-            // Carry the block's computed SMT roots across a post-commit verification
-            // ERROR, so a retry of the same height cannot launder the commitment gate.
-            //
-            // applyBlock COMMITS the block and only then do the gates below run, so a
-            // throw from any of them (the computeStateHash read is the reachable one)
-            // leaves the block committed with lastAppliedBlock unadvanced. On the
-            // redelivery that gap detection then triggers, applyBlock takes its
-            // duplicate early return, which clears _lastComputedRoots to null, and the
-            // commitment gate below is gated on those roots being set: it is skipped,
-            // and the tip advances with the source's balances_root/block_merkle_root/
-            // state_root never compared to anything. Database presence is not proof of
-            // verification.
-            //
-            // So stash the roots the FIRST apply computed, keyed by height, and restore
-            // them when the duplicate path returns null for that same height. The
-            // comparison then runs on the retry against exactly the values it would
-            // have used on the first pass. The stash is replaced on every apply and
-            // cleared once all gates pass, so it can never carry a stale height, and
-            // nothing is read back out of storage (a seeded snapshot roots row is never
-            // a live block's committed roots and must not be compared to one).
-            let computedRoots = this.applier._lastComputedRoots;
-            if(!computedRoots && this._unverifiedRoots
-                    && this._unverifiedRoots.blockIndex === event.block_index)
-                computedRoots = this._unverifiedRoots.roots;
-            this._unverifiedRoots = computedRoots
-                ? { blockIndex: event.block_index, roots: computedRoots }
-                : null;
-            // Independent recomputation (validator track). The block's raw rows are
-            // now in the replica; recompute its consensus hashes and confirm they
-            // match the committed hashes the source published for it. A mismatch
-            // means the replicated DATA does not hash to the committed hash
-            // (replication corruption, a partial apply, or a source serving rows
-            // inconsistent with its own committed hash), so HALT durably rather
-            // than advance onto unverifiable state.
+            let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event);
                 if(mismatches){
-                    await this.haltOnDivergence(event.block_index, mismatches,
-                        this.sources.slice(0, 1), 'local-recompute-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    await this.haltOnDivergence(event.block_index, mismatches, this.sources.slice(0, 1), 'local-recompute-divergence');
+                    return;
                 }
             }
-            // Replication-integrity check (validator track): the three hashes above cover
-            // only immutable block-scoped rows. The state_hash covers the in-place mutations
-            // + backdated refund credits the updated_rows / cooldownCredits channels carry,
-            // so a follower that silently dropped one of those applies now HALTS instead of
-            // serving divergent balances/status until the next full snapshot. APPLY-TIME ONLY:
-            // the mutated rows are in their block-`event.block_index` state at exactly this
-            // instant (just applied, before lastAppliedBlock advances). This must NEVER move
-            // into the historical verifyRecompute paths (catch-up / cross-source), where
-            // those rows have since been mutated again. NULL state_hash (pre-feature blocks)
-            // is skipped.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
                 let delay = activationDelayBlocks(this.chain);
                 let localState = await this.blockHasher.computeStateHash(
@@ -3623,125 +3660,35 @@ class ClientSync {
                     try {
                         let preimage = await this.blockHasher.computeStateHashPreimage(
                             event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
-                        mismatch.local_classes = classDigests(
-                            preimage, data => this.util.getDataHash(data));
-                        for(let detail of mismatch.local_classes){
-                            getLogger().error('state_hash local class ' + detail.class +
-                                ': rows=' + (detail.rows === null ? 'n/a' : detail.rows) +
-                                ' digest=' + detail.digest);
-                        }
+                        this.addStateHashClassDetails(mismatch, preimage);
                     } catch(e){
-                        getLogger().error(util.format(
-                            'state_hash local class detail failed at block ' + event.block_index + ':', e));
+                        getLogger().error(util.format('state_hash local class detail failed at block ' + event.block_index + ':', e));
                     }
-                    await this.haltOnDivergence(event.block_index,
-                        [mismatch],
-                        this.sources.slice(0, 1), 'state-hash-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    await this.haltOnDivergence(event.block_index, [mismatch], this.sources.slice(0, 1), 'state-hash-divergence');
+                    return;
                 }
             }
-            // Light-client state-commitment check (SPV spec sec.4-5). applyBlock recomputed
-            // + persisted the per-block SMT roots over the replica INSIDE its txn (atomic
-            // with the data apply) and exposed them on applier._lastComputedRoots. Compare
-            // to the source's committed roots and HALT durably on divergence, the same as
-            // the state_hash check. APPLY-TIME ONLY (the roots were computed against the
-            // just-applied replica state). Verifies balances_root + block_merkle_root +
-            // state_root; state_root folds the BTC-only stakes_root (now recomputed by the
-            // follower, see stateCommitment.gatherStakeEntries), so a stakes divergence
-            // surfaces as a state_root mismatch. A null _lastComputedRoots (block before
-            // the flag-day per the replica's OWN map, or a skipped/duplicate apply already
-            // verified when first applied) is skipped, never a divergence; a NULL
-            // event.balances_root while _lastComputedRoots is set is the opposite, a
-            // withheld commitment, and halts (see the fail-closed block below).
-            // Skip on a truncated replica: buildFullBalancesRoot sums the full credits/debits
-            // history, which a truncated base does not retain, so its recomputed root cannot
-            // match the source's full-history root and would false-halt every block. The
-            // truncation state is surfaced on /status (SyncService truncated flag) so operators
-            // can see the replica is not running the apply-time commitment check.
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
-                    && !this.isTruncated()
-                    && computedRoots){
-                let computed   = computedRoots;
-                // Fail closed on WITHHELD roots (uuid:4b95ddef). Reaching here means the
-                // replica's OWN bundled flag-day map says the commitment is live at this
-                // height: ClientApplier.applyBlock sets _lastComputedRoots solely under
-                // isStateCommitmentActive and clears it at entry, so it is never stale.
-                // state_tree_roots.balances_root and .block_merkle_root are NOT NULL
-                // columns, so a null on the wire means the source served no roots row at
-                // an ACTIVE height. Reading that as "nothing to check" let a failed,
-                // re-seeded, or hostile source skip the one control that writes a
-                // sync_halt marker. Same posture as checkpoint.js commitmentMissing().
-                // state_root stays exempt: ServerPoller deliberately NULLs it for
-                // catch-up-burst blocks (viewTip > B), where the follower would otherwise
-                // recompute it over tip-state stakes and halt on a value the source never
-                // committed at B. VERIFY_STATE_COMMITMENT=false is the operator override.
-                let missing = [];
-                if(event.balances_root == null)
-                    missing.push({ field: 'balances_root', a: null, b: computed.balances_root });
-                if(event.block_merkle_root == null)
-                    missing.push({ field: 'block_merkle_root', a: null, b: computed.block_merkle_root });
-                if(missing.length){
-                    await this.haltOnDivergence(event.block_index, missing,
-                        this.sources.slice(0, 1), 'state-commitment-missing');
-                    return; // halted: do not advance lastAppliedBlock
-                }
-                let mismatches = [];
-                if(computed.balances_root !== event.balances_root)
-                    mismatches.push({ field: 'balances_root', a: event.balances_root, b: computed.balances_root });
-                if(event.block_merkle_root != null && computed.block_merkle_root !== event.block_merkle_root)
-                    mismatches.push({ field: 'block_merkle_root', a: event.block_merkle_root, b: computed.block_merkle_root });
-                if(event.state_root != null && computed.state_root !== event.state_root)
-                    mismatches.push({ field: 'state_root', a: event.state_root, b: computed.state_root });
-                if(mismatches.length){
-                    await this.haltOnDivergence(event.block_index, mismatches,
-                        this.sources.slice(0, 1), 'state-commitment-divergence');
-                    return; // halted: do not advance lastAppliedBlock
+                    && !this.isTruncated() && computedRoots){
+                let divergence = this.stateCommitmentDivergence(event, computedRoots);
+                if(divergence){
+                    if(divergence.reason === 'state-commitment-missing')
+                        await this.haltOnDivergence(event.block_index, divergence.mismatches, this.sources.slice(0, 1), 'state-commitment-missing');
+                    else
+                        await this.haltOnDivergence(event.block_index, divergence.mismatches,
+                            this.sources.slice(0, 1), 'state-commitment-divergence');
+                    return;
                 }
             }
-            // Every gate passed, so the committed block is now a VERIFIED block and the
-            // carried-roots stash has nothing left to protect.
-            this._unverifiedRoots     = null;
-            this.lastAppliedBlock     = event.block_index;
-            this.lastAppliedBlockTime = (typeof event.block_time === 'number') ? event.block_time : null;
-            // Report our applied height back to the source(s), debounced.
-            this.scheduleHeartbeat();
-            if(this.dbType === 'decoder'){
-                this.lastHashes = { block_hash: event.block_hash };
-            } else {
-                this.lastHashes = {
-                    ledger_hash: event.ledger_hash,
-                    actions_hash: event.actions_hash,
-                    contract_hash: event.contract_hash
-                };
-            }
-
-            // Clean up old pending hashes and any armed fallback timers for
-            // blocks we have now applied (or that are older than our applied tip).
-            for(let [key] of this.pendingHashes){
-                if(key <= this.lastAppliedBlock)
-                    this.pendingHashes.delete(key);
-            }
-            for(let [key, timer] of this._applyTimers){
-                if(key <= this.lastAppliedBlock){
-                    clearTimeout(timer);
-                    this._applyTimers.delete(key);
-                }
-            }
-
-            // SPV checkpoint-quorum anchor (opt-in, throttled): confirm the replica's
-            // OWN recomputed state_root matches a federation-quorum-signed checkpoint,
-            // verified against an out-of-band pinned set. Transport errors never halt;
-            // only a genuine quorum / state_root divergence does.
-            if(this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
-                    && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL']){
+            this.finishAppliedBlock(event);
+            this.clearAppliedBlockWork();
+            if(this.checkpointQuorumIsDue()){
                 this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
                 await this.verifyCheckpointQuorum();
             }
         } catch(e){
             getLogger().error(util.format('Error applying block %s:', event.block_index, e));
-            // Heal a schema gap but don't re-apply the block inline: the
-            // skipped block leaves a gap that the next status event's gap
-            // detection closes via incremental catch-up, post-heal.
+            // Heal schema gaps and let later status events drive catch-up.
             await this.healSchemaIfStale(e);
         }
     }
