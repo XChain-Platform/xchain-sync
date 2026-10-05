@@ -48,91 +48,126 @@ const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
 // require indexer code, so the value is restated rather than imported.
 const MARKET_NATIVE_TICK_ID = 0;
 
+function initializeDependencies(client, db, util){
+    client.db   = db;
+    client.util = util;
+}
+
+function initializeNetwork(client, network){
+    // The replica's own network, the key for the publisher-scoped archive reset below.
+    // MANDATORY since ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION armed (2026-09-09): an
+    // omitted or misspelled network resolves to no threshold and so reads as inactive,
+
+    // which would silently run the legacy unscoped reset on a fleet whose source
+    // indexer runs the scoped one. That is the divergence this gate exists to prevent,
+    // so an un-wired construction site must fail loudly at construction instead.
+
+    // The production wiring (SyncService.startClientSyncForChain) passes cfg.network.
+    if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
+        throw new Error('ClientRollback: network is required and must be one of ' +
+            Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
+            ' (got ' + JSON.stringify(network) + '); the publisher-scoped archive reset ' +
+            'is armed and an unknown network would silently fall back to the legacy unscoped rule');
+    }
+    client.network = network;
+}
+
+function initializeCoin(client, coin){
+    // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
+    // indexer's reorg deactivation_block re-NULL resets (see rollbackIndexer). A wrong
+    // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
+
+    // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
+    // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
+    // skipped (with a warning) rather than run with a wrong value. The production wiring
+
+    // (SyncService.startClientSyncForChain) always passes cfg.coin.
+    client.coin = coin;
+    let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
+    if(delay === undefined){
+        throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+    }
+    client.activationDelay = delay;
+}
+
+function initializeRollbackTables(client){
+    // Generic rollback table lists, generated from the table-lifecycle
+    // registry (src/table_lifecycle.js, the byte-identical twin of the
+    // xchain-indexer copy). replicaRollbackTables() yields exactly the
+
+    // source indexer's generic lists minus indexer-local tables that never
+    // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
+    // can no longer drift apart table-by-table: a table added to the
+
+    // registry joins both sides at once. Per-table rationale lives with
+    // the registry entries; the bespoke in-place resets/restores below
+    // stay hand-written (and remain drift-guarded by the parity tests in
+
+    // test/unit/rollback_coverage.test.js).
+    let rollbackLists = lifecycle.replicaRollbackTables();
+    client.blockTables  = rollbackLists.blockTables;
+    client.indexTables  = rollbackLists.indexTables;
+    client.dataTables   = rollbackLists.dataTables;
+}
+
+function initializeDecoderBlockTables(client){
+    // ── Decoder-DB rollback (used by rollbackDecoder) ──
+    // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
+    // are deleted before the block-scoped transactions row that gave them their
+
+    // tx_index scope. index_*/pubkeys/events are append-only and left untouched
+    // (the sync stream re-introduces them with INSERT IGNORE).
+    //
+
+    // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
+    // purely local artifacts that no longer feed any consensus value: under the
+    // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
+
+    // (address/tick/action/status), not from address_id/tick_id/etc. (see
+    // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/client/block_hasher.js). If a
+    // lookup id is ever reintroduced into a consensus-visible projection, these orphan
+
+    // rows would silently fork hashes after a reorg and this skip would become a bug.
+
+    // Block-scoped tables, deleted by block_index. Derived from the decoder
+    // replication topology (the same source ServerPoller streams from) so the
+    // stream and rollback sides can no longer drift apart table-by-table,
+
+    // mirroring the lifecycle-derived indexer lists above. Order matters:
+    // rollback deletes transactions before blocks (tx rows scope the tx-scoped
+    // tables above them), while the topology lists blocks first - hence the
+
+    // copy-and-reverse.
+    client.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
+}
+
+function initializeDecoderTxScopedTables(){
+    // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
+    // Also topology-derived. dispensers is absent from the topology's txScoped by
+    // design: it is not per-block replicated (the decoder live-prunes it, which
+
+    // the block stream can't model (see src/schema/replicated_tables.js)); it SEEDS from
+    // the full snapshot and is then held in parity by the periodic apply-side reconcile
+    // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace), which
+
+    // the dispensers (decoder) carve-out in src/schema/replicated_tables.js names as
+    // the whole of its parity story.
+
+    // Deleting its rows on a reorg would corrupt that replicated state with no
+    // per-block stream to restore them before the next reconcile, so a reorg leaves
+    // dispensers untouched.
+    this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
+}
+
 class ClientRollback {
 
     constructor(db, util, coin, network) {
-        this.db   = db;
-        this.util = util;
-
-        // The replica's own network, the key for the publisher-scoped archive reset below.
-        // MANDATORY since ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION armed (2026-09-09): an
-        // omitted or misspelled network resolves to no threshold and so reads as inactive,
-        // which would silently run the legacy unscoped reset on a fleet whose source
-        // indexer runs the scoped one. That is the divergence this gate exists to prevent,
-        // so an un-wired construction site must fail loudly at construction instead.
-        // The production wiring (SyncService.startClientSyncForChain) passes cfg.network.
-        if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
-            throw new Error('ClientRollback: network is required and must be one of ' +
-                Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
-                ' (got ' + JSON.stringify(network) + '); the publisher-scoped archive reset ' +
-                'is armed and an unknown network would silently fall back to the legacy unscoped rule');
-        }
-        this.network = network;
-
-        // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
-        // indexer's reorg deactivation_block re-NULL resets (see rollbackIndexer). A wrong
-        // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
-        // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
-        // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
-        // skipped (with a warning) rather than run with a wrong value. The production wiring
-        // (SyncService.startClientSyncForChain) always passes cfg.coin.
-        this.coin = coin;
-        let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
-        if(delay === undefined){
-            throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
-        }
-        this.activationDelay = delay;
-
-        // Generic rollback table lists, generated from the table-lifecycle
-        // registry (src/table_lifecycle.js, the byte-identical twin of the
-        // xchain-indexer copy). replicaRollbackTables() yields exactly the
-        // source indexer's generic lists minus indexer-local tables that never
-        // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
-        // can no longer drift apart table-by-table: a table added to the
-        // registry joins both sides at once. Per-table rationale lives with
-        // the registry entries; the bespoke in-place resets/restores below
-        // stay hand-written (and remain drift-guarded by the parity tests in
-        // test/unit/rollback_coverage.test.js).
-        let rollbackLists = lifecycle.replicaRollbackTables();
-        this.blockTables  = rollbackLists.blockTables;
-        this.indexTables  = rollbackLists.indexTables;
-        this.dataTables   = rollbackLists.dataTables;
-
-        // ── Decoder-DB rollback (used by rollbackDecoder) ──
-        // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
-        // are deleted before the block-scoped transactions row that gave them their
-        // tx_index scope. index_*/pubkeys/events are append-only and left untouched
-        // (the sync stream re-introduces them with INSERT IGNORE).
-        //
-        // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
-        // purely local artifacts that no longer feed any consensus value: under the
-        // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
-        // (address/tick/action/status), not from address_id/tick_id/etc. (see
-        // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/client/block_hasher.js). If a
-        // lookup id is ever reintroduced into a consensus-visible projection, these orphan
-        // rows would silently fork hashes after a reorg and this skip would become a bug.
-
-        // Block-scoped tables, deleted by block_index. Derived from the decoder
-        // replication topology (the same source ServerPoller streams from) so the
-        // stream and rollback sides can no longer drift apart table-by-table,
-        // mirroring the lifecycle-derived indexer lists above. Order matters:
-        // rollback deletes transactions before blocks (tx rows scope the tx-scoped
-        // tables above them), while the topology lists blocks first - hence the
-        // copy-and-reverse.
-        this.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
-
-        // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
-        // Also topology-derived. dispensers is absent from the topology's txScoped by
-        // design: it is not per-block replicated (the decoder live-prunes it, which
-        // the block stream can't model (see src/schema/replicated_tables.js)); it SEEDS from
-        // the full snapshot and is then held in parity by the periodic apply-side reconcile
-        // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace), which
-        // the dispensers (decoder) carve-out in src/schema/replicated_tables.js names as
-        // the whole of its parity story.
-        // Deleting its rows on a reorg would corrupt that replicated state with no
-        // per-block stream to restore them before the next reconcile, so a reorg leaves
-        // dispensers untouched.
-        this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
+        initializeDependencies(this, db, util);
+        initializeNetwork(this, network);
+        initializeCoin(this, coin);
+        initializeRollbackTables(this);
+        initializeDecoderBlockTables(this);
+        initializeDecoderTxScopedTables.call(this);
     }
 
     // Roll back all data at or after the given block_index.
