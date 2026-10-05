@@ -257,91 +257,38 @@ class ClientApplier {
      *                         { table: [rows] } map) and any updated_rows
      */
     async applyBlock(payload){
-        // Clear any prior block's computed roots up front: on an early return
-        // (malformed payload or an already-applied duplicate) ClientSync must NOT
-        // compare stale roots against this event. A null here means "not recomputed
-        // this apply" and the state-commitment check is skipped, never treated as a
-        // divergence (a duplicate block was already verified when first applied).
+        // Clear computed roots before every attempt so early returns cannot expose
+        // roots from an earlier block to ClientSync.
         this._lastComputedRoots = null;
-        // block_index is null-checked (not truthiness-checked): the genesis block is
-        // a legitimate block_index 0 (ServerPoller emits Number(0)), and ClientSync
-        // documents block 0 as the one valid from-empty apply target. `!0` would
-        // silently drop it before any transaction opened.
+        // A null check keeps the genesis block_index 0 valid.
         if(!payload || !payload.data || payload.block_index == null) return;
 
-        // Schema-version gate: reject live block payloads with a mismatched schema
-        // version the same way snapshot applies do, so a server-side schema bump
-        // fails closed on live blocks rather than silently accepting rows whose
-        // encoding or column set the local replica cannot correctly apply.
-        // Gated on schema_version != null so old payloads (pre-5250) pass through.
-        let dbType = (this.db && this.db.dbType) || 'indexer';
-        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
-            throw new Error('Schema version mismatch: server=' + payload.schema_version +
-                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
-        }
-
-        // rethrow, not the fail-soft default: this guard runs before beginTransaction, where
-        // doQuery turns a query error into [], so a transient fault would read as "block not
-        // applied yet" and re-run insertRows for a block already in the replica - credits,
-        // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
-        // upsertFullDumpTables), and rebuildBalancesTouchedBy would then run over the
-        // duplicated rows. Let the error propagate: applyBlockEvent's catch logs it and
-        // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
+        this.assertBlockSchemaVersion(payload);
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             logger.info('Block ' + payload.block_index + ' already exists, skipping');
             return;
         }
 
+        await this.applyBlockTransaction(payload);
+    }
+
+    assertBlockSchemaVersion(payload){
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
+            throw new Error('Schema version mismatch: server=' + payload.schema_version +
+                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
+        }
+    }
+
+    async applyBlockTransaction(payload){
         await this.db.beginTransaction();
         try {
             let data = payload.data;
-            for(let table in data){
-                let rows = data[table];
-                if(!rows || rows.length === 0) continue;
-                await this.insertRows(table, rows);
-            }
-            // Rebuild balances if this payload touched credits/debits.
-            // ServerPoller's per-block payload can't scope balances via the
-            // action-scoped JOIN (the balances table has no action_index
-            // column), so the only way the replica's balances table can stay
-            // consistent with credits/debits during live sync is to recompute
-            // it from the (now-updated) credit/debit data, scoped to the ids
-            // the new rows touched where possible. Indexer-shaped DBs only;
-            // decoder has no balances/credits/debits tables.
+            await this.insertBlockRows(data);
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer'){
-                // Apply in-place mutations to SURVIVING rows (deactivation_block,
-                // SLASH amounts, request_status) the action-scoped insert loop above
-                // can't reach (they live on rows created by an earlier block). Without
-                // this UPSERT every forward in-place mutation is silently dropped.
-                if(payload.updated_rows)
-                    await this.applyUpdatedRows(payload.updated_rows);
-                // Mirror the anchor-reward winner collapse: the source DELETEd the
-                // loser validator_rewards rows this block's reconcile-log rows pre-image
-                // (rows from EARLIER blocks the action-scoped delete never reaches).
-                if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
-                    await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
-                // Re-derive tokens.escrow_action_index when this block moved any
-                // offer/status (the gate is replica-derived, not wire-carried).
-                await this.maybeRederiveEscrow(data);
-                if(data.credits || data.debits)
-                    await this.rebuildBalancesTouchedBy(data.credits, data.debits);
-                // Light-client state commitment (SPV spec sec.4-5): recompute + persist
-                // the per-block SMT roots over the replica INSIDE this txn (atomic with
-                // the data apply, so block B+1's incremental update always finds B's
-                // balances_root). The touched (address,tick) set comes from the applied
-                // event rows (credits/debits/escrows; cooldown refunds already merged by
-                // the source), mirroring the indexer's ledger-choke-point set. ClientSync
-                // reads _lastComputedRoots after commit and HALTs on divergence.
-                if(isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
-                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
-                    let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
-                    this._lastComputedRoots = await computeFollowerRoots(
-                        this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
-                } else {
-                    this._lastComputedRoots = null;
-                }
+                await this.applyIndexerBlockState(payload, data);
             } else {
                 this._lastComputedRoots = null;
             }
@@ -351,6 +298,36 @@ class ClientApplier {
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
+    }
+
+    async insertBlockRows(data){
+        for(let table in data){
+            let rows = data[table];
+            if(!rows || rows.length === 0) continue;
+            await this.insertRows(table, rows);
+        }
+    }
+
+    async applyIndexerBlockState(payload, data){
+        if(payload.updated_rows)
+            await this.applyUpdatedRows(payload.updated_rows);
+        if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
+            await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
+        await this.maybeRederiveEscrow(data);
+        if(data.credits || data.debits)
+            await this.rebuildBalancesTouchedBy(data.credits, data.debits);
+        await this.updateBlockStateCommitment(payload, data);
+    }
+
+    async updateBlockStateCommitment(payload, data){
+        if(!isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
+            this._lastComputedRoots = null;
+            return;
+        }
+        let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
+        let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
+        this._lastComputedRoots = await computeFollowerRoots(
+            this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
     }
 
     // Collect the distinct (keyField, tick_id) ids touched by freshly applied
