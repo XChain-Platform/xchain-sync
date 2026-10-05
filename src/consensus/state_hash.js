@@ -170,10 +170,10 @@ function sectionQuery(target, key, sql, params){
 }
 
 function planDeactivations(sections, B, delay){
-    let deactivations = {};
-    let queries = [];
+    const deactivations = {};
+    const queries = [];
     sections.deactivations = deactivations;
-    for(let t of DEACTIVATION_TABLES){
+    for(const t of DEACTIVATION_TABLES){
         deactivations[t] = [];
         if(delay == null) continue;
         queries.push(sectionQuery(deactivations, t,
@@ -185,10 +185,10 @@ function planDeactivations(sections, B, delay){
 }
 
 function planSlashes(sections, B){
-    let slashes = {};
-    let queries = [];
+    const slashes = {};
+    const queries = [];
     sections.slashes = slashes;
-    for(let s of SLASH_SPECS){
+    for(const s of SLASH_SPECS){
         slashes[s.table] = [];
         queries.push(sectionQuery(slashes, s.table,
             "SELECT DISTINCT t.action_index, t.amount FROM `" + s.table + "` t " +
@@ -200,12 +200,12 @@ function planSlashes(sections, B){
 }
 
 function planRequestStatus(sections, B){
-    let request_status = {};
-    let queries = [];
-    sections.request_status = request_status;
-    for(let t of REQUEST_STATUS_TABLES){
-        request_status[t] = [];
-        queries.push(sectionQuery(request_status, t,
+    const requestStatus = {};
+    const queries = [];
+    sections.request_status = requestStatus;
+    for(const t of REQUEST_STATUS_TABLES){
+        requestStatus[t] = [];
+        queries.push(sectionQuery(requestStatus, t,
             "SELECT action_index, request_status, resolved_block FROM `" + t + "` " +
             "WHERE version = 0 AND resolved_block BETWEEN ? AND ? ORDER BY action_index ASC",
             [B, B]));
@@ -214,10 +214,10 @@ function planRequestStatus(sections, B){
 }
 
 function planCooldown(sections, B){
-    let cooldown = {};
-    let queries = [];
+    const cooldown = {};
+    const queries = [];
     sections.cooldown = cooldown;
-    for(let t of COOLDOWN_TABLES){
+    for(const t of COOLDOWN_TABLES){
         cooldown[t] = [];
         queries.push(sectionQuery(cooldown, t,
             "SELECT t.action_index, s.status AS status FROM `" + t + "` t " +
@@ -252,8 +252,8 @@ function planCredits(sections, B, gasTick, completedStatusId){
 }
 
 function planAnchorInvalid(sections, B, network, coin){
-    let archiveInvalidActive = isArchiveInvalidStateHashActive(B, network, coin);
-    let chunkHeightCol = isArchiveInvalidHeightKeyActive(B, network, coin)
+    const archiveInvalidActive = isArchiveInvalidStateHashActive(B, network, coin);
+    const chunkHeightCol = isArchiveInvalidHeightKeyActive(B, network, coin)
                             ? ARCHIVE_CHUNK_HEIGHT_COL : ARCHIVE_CHUNK_HEIGHT_COL_LEGACY;
     sections.anchor_invalid = [];
     return [sectionQuery(sections, 'anchor_invalid',
@@ -331,7 +331,7 @@ function planBetStatus(sections, B, network, coin){
 }
 
 function assemblePreimage(B, sections){
-    let preimage = {
+    const preimage = {
         deactivations:      sections.deactivations,
         slashes:            sections.slashes,
         request_status:     sections.request_status,
@@ -362,14 +362,14 @@ function assemblePreimage(B, sections){
 // plans its queries in a fixed order and the single loop below awaits them one
 // at a time, so database calls stay strictly sequential in that order.
 async function buildStateHashData(db, blockIndex, opts){
-    let B       = Number(blockIndex);
-    let delay   = (opts && opts.activationDelay != null) ? Number(opts.activationDelay) : null;
-    let gasTick = (opts && opts.gasTick != null) ? opts.gasTick : null;
-    let network = (opts && opts.network != null) ? opts.network : null;
-    let coin    = (opts && opts.coin != null) ? opts.coin : null;
-    let completedStatusId = await db.getStatusId('completed');
-    let sections = {};
-    let queries = [].concat(
+    const B       = Number(blockIndex);
+    const delay   = (opts && opts.activationDelay != null) ? Number(opts.activationDelay) : null;
+    const gasTick = (opts && opts.gasTick != null) ? opts.gasTick : null;
+    const network = (opts && opts.network != null) ? opts.network : null;
+    const coin    = (opts && opts.coin != null) ? opts.coin : null;
+    const completedStatusId = await db.getStatusId('completed');
+    const sections = {};
+    const queries = [].concat(
         planDeactivations(sections, B, delay),
         planSlashes(sections, B),
         planRequestStatus(sections, B),
@@ -380,7 +380,7 @@ async function buildStateHashData(db, blockIndex, opts){
         planPollFinalize(sections, B, network, coin),
         planTokenSupply(sections, B, network, coin),
         planBetStatus(sections, B, network, coin));
-    for(let q of queries){
+    for(const q of queries){
         try {
             q.target[q.key] = await db.doQuery(q.sql, q.params);
         } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; /* table/column may not exist on older schemas */ }
