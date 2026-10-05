@@ -1196,144 +1196,104 @@ class ClientSync {
         }
     }
 
-    // One full pass over the configured sources for a bootstrap. Returns true once a
-    // snapshot has been applied and the tip committed, false if every source failed
-    // this round. `attempt` tracks rotation depth so a multi-source pass tries each
-    // source exactly once and never recurses indefinitely.
+    async bootstrapDownloadSnapshot(source){
+        let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
+        let response = await axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 600000, // 10 minute timeout for large snapshots
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try {
+                jsonStr = zlib.gunzipSync(jsonStr);
+            } catch(e){
+                // Axios may already have decompressed the response.
+            }
+        }
+        try {
+            return JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
+        }
+    }
+
+    async bootstrapApplySnapshot(snapshotData){
+        if(await this.checkTrainActivation(snapshotData.block_height)) return false;
+        await this.withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
+        this.lastAppliedBlock = snapshotData.block_height;
+        await this.refreshTipHashes();
+        await this.clearBootstrapBase();
+        return true;
+    }
+
+    async bootstrapVerifyIndexerQuorum(){
+        if(!this.config['VERIFY_HASHES']) return true;
+        let need = Math.max(0, this.effectiveQuorum() - 1);
+        let agreed = 0;
+        for(let i = 1; i < this.sources.length && agreed < need; i++){
+            let verdict = await this.verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
+            if(this._halted) return false;
+            if(verdict === 'agree') agreed++;
+        }
+        if(agreed < need){
+            getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
+                ' agreeing source(s) of the ' + this.effectiveQuorum() + ' required for quorum for ' +
+                this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
+                'bootstrap tip is under-verified until live quorum forms.');
+        }
+        return true;
+    }
+
+    async bootstrapVerifySnapshot(){
+        if(this.sources.length <= 1) return true;
+        if(this.dbType === 'indexer') return this.bootstrapVerifyIndexerQuorum();
+        await this.verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
+        return true;
+    }
+
+    async bootstrapHandleSourceFailure(source, attempt, e){
+        if(this.isContentLengthOverflow(e)){
+            await this.haltOnSnapshotTooLarge(source, e);
+            return false;
+        }
+        let retryAfter = this.rateLimitRetryAfterSeconds(e);
+        if(retryAfter !== null){
+            getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
+                this.chain + '/' + this.network + '/' + this.dbType +
+                '; the source will not serve another full snapshot for ' + retryAfter + 's.');
+        }
+        getLogger().error(util.format('Bootstrap failed:', e));
+        if(this.sources.length > 1 && attempt < this.sources.length - 1){
+            getLogger().info('Trying secondary source...');
+            this.sources.push(this.sources.shift());
+            return this.bootstrapRotateSources(attempt + 1);
+        }
+        getLogger().error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
+        return false;
+    }
+
+    // Runs one bounded pass over the configured sources and rotates after failures.
     async bootstrapRotateSources(attempt){
         attempt = attempt || 0;
         let source = this.sources[0];
         if(!source) return false;
 
-        // Fetch and apply schema from a remote sync server
         await this.fetchAndApplySchema(source);
-        // A schema-apply halt means the replica can't build a complete schema;
-        // abort this round (the snapshot apply would only fail 1146/1054).
         if(this._halted) return false;
 
         getLogger().info('Downloading full snapshot from ' + source + '...');
         try {
-            let url = source + '/snapshot/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, {
-                headers: this.upstreamHeaders(),
-                responseType: 'arraybuffer',
-                timeout: 600000, // 10 minute timeout for large snapshots
-                decompress: true,
-                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-            });
-
-            let jsonStr = response.data;
-            if(Buffer.isBuffer(jsonStr)){
-                try {
-                    jsonStr = zlib.gunzipSync(jsonStr);
-                } catch(e){
-                    // May already be decompressed by axios
-                }
-            }
-
-            let snapshotData;
-            try {
-                snapshotData = JSON.parse(jsonStr.toString());
-            } catch(parseErr){
-                throw new Error('Snapshot download truncated or corrupt from ' + source +
-                    ' (JSON.parse failed; likely a network interruption mid-transfer): ' + parseErr.message);
-            }
-            // Serialize the full-snapshot apply under the shared write mutex. Bootstrap
-            // at start() is single-threaded, but this same path is the runtime recovery
-            // fallback for an oversized incremental catch-up (runIncrementalCatchUp),
-            // where live-follow is already active: a concurrent live block apply or a
-            // cross-source fallback timer would otherwise open a second write transaction
-            // on the replica and clobber the snapshot's DELETE+reload mid-flight.
-            // Platform-train gate on the snapshot tip first: a full snapshot reseeds
-            // every block up to the tip in one pass, so a tip at or above the boundary
-            // must not be seeded by a build that lacks the rule set. A halt returns
-            // false so bootstrapFromSnapshot stops burning rounds on it.
-            if(await this.checkTrainActivation(snapshotData.block_height)) return false;
-            await this.withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
-            this.lastAppliedBlock = snapshotData.block_height;
-            // Pair lastHashes with the height just set (see refreshTipHashes). A full
-            // snapshot carries its own lookups, so no re-page ordering applies here;
-            // this path is the oversized-catch-up fallback as well as start()'s.
-            await this.refreshTipHashes();
-
-            // A full-history snapshot reseeds complete state and correct SMT roots,
-            // so any prior truncation join floor (set by an earlier bootstrapFromHeight,
-            // e.g. when the oversized-incremental fallback lands here on a chain whose
-            // full snapshot does fit) does not apply to it. Clear the in-memory floor and
-            // its durable marker explicitly so isTruncated() reports false and the
-            // apply-time VERIFY_STATE_COMMITMENT net re-arms on live blocks in the running
-            // process, without waiting for a restart to self-heal.
-            await this.clearBootstrapBase();
-
-            // Verify against secondary sources if available.
-            if(this.sources.length > 1){
-                if(this.dbType === 'indexer'){
-                    // Indexer cross-source hash + table-count check, gated on VERIFY_HASHES.
-                    // Bootstrap Byzantine cross-check: sources[0] supplied the
-                    // applied snapshot (1 vote toward quorum). Seek agreement from enough
-                    // ADDITIONAL sources to reach SOURCE_QUORUM. verifyAgainstSource halts
-                    // durably on a same-height divergence; a transport failure or tip-skew
-                    // to a secondary is tolerated (not counted) so an unreachable spare
-                    // cannot DoS bootstrap, but a shortfall below quorum is warned loudly.
-                    if(this.config['VERIFY_HASHES']){
-                        let need = Math.max(0, this.effectiveQuorum() - 1);
-                        let agreed = 0;
-                        for(let i = 1; i < this.sources.length && agreed < need; i++){
-                            let verdict = await this.verifyAgainstSource(this.sources[i], this.lastAppliedBlock);
-                            if(this._halted) return false; // a divergence halted us
-                            if(verdict === 'agree') agreed++;
-                        }
-                        if(agreed < need){
-                            getLogger().warn('SECURITY: bootstrap cross-check reached only ' + (agreed + 1) +
-                                ' agreeing source(s) of the ' + this.effectiveQuorum() + ' required for quorum for ' +
-                                this.chain + '/' + this.network + '/indexer; proceeding on reachable sources, but the ' +
-                                'bootstrap tip is under-verified until live quorum forms.');
-                        }
-                    }
-                } else {
-                    // Decoder has no synthetic chain-of-state hashes to compare, but a full
-                    // snapshot can still arrive truncated (network cut mid-stream) or stale.
-                    // Cross-check the source's published per-table row counts so an incomplete
-                    // bootstrap fails loudly instead of being accepted as complete. This runs
-                    // independent of VERIFY_HASHES: row counts need no synthetic hashes, so the
-                    // indexer-only hash gate does not apply here.
-                    await this.verifyDecoderCompleteness(this.sources[1], this.lastAppliedBlock);
-                }
-            }
-
+            let snapshotData = await this.bootstrapDownloadSnapshot(source);
+            if(!await this.bootstrapApplySnapshot(snapshotData)) return false;
+            if(!await this.bootstrapVerifySnapshot()) return false;
             getLogger().info('Bootstrap complete at block ' + this.lastAppliedBlock);
             return true;
         } catch(e){
-            // The full-history snapshot no longer fits under SNAPSHOT_MAX_CONTENT.
-            // Halt durably instead of rotating/retrying: every source serves the
-            // same oversized payload, so the rounds exhaust, BootstrapExhaustedError
-            // exits the process, and systemd restarts straight back into the same
-            // wall. That crash loop is what silently froze the DOGE:testnet replica
-            // and then 429'd its own snapshot budget. The operator remedy
-            // (reseed truncated via SYNC_BOOTSTRAP_DEPTH, or raise the ceiling) is
-            // a decision no retry can make.
-            if(this.isContentLengthOverflow(e)){
-                await this.haltOnSnapshotTooLarge(source, e);
-                return false;
-            }
-            // Name a 429 rather than burying it in the axios dump: the snapshot
-            // limiter is hourly (SNAPSHOT_RATE_FULL) while this ladder retries in
-            // seconds, so an operator reading the log must see the wait it implies.
-            let retryAfter = this.rateLimitRetryAfterSeconds(e);
-            if(retryAfter !== null){
-                getLogger().error('Bootstrap rate-limited (HTTP 429) by ' + source + ' for ' +
-                    this.chain + '/' + this.network + '/' + this.dbType +
-                    '; the source will not serve another full snapshot for ' + retryAfter + 's.');
-            }
-            getLogger().error(util.format('Bootstrap failed:', e));
-            // Try next source, but only if we haven't exhausted all sources
-            if(this.sources.length > 1 && attempt < this.sources.length - 1){
-                getLogger().info('Trying secondary source...');
-                this.sources.push(this.sources.shift());
-                return this.bootstrapRotateSources(attempt + 1);
-            }
-            getLogger().error('All sync sources exhausted after ' + (attempt + 1) + ' attempt(s)');
-            return false;
+            return this.bootstrapHandleSourceFailure(source, attempt, e);
         }
     }
 
