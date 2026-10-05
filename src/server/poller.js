@@ -251,6 +251,9 @@ class ServerPoller {
         let currentBlock = await this.db.getLastBlock(null, { rethrow: true });
         if(currentBlock === null) return;
 
+        // Cursor initialization observes the current source tip without replaying it.
+        // Later polls compare its content hash before considering height movement,
+        // which detects replacement blocks even when the source remains ahead.
         if(this.lastPolledBlock === null){
             await this.initializePollCursor(currentBlock);
             return;
@@ -277,12 +280,18 @@ class ServerPoller {
     }
 
     async initializePollCursor(currentBlock){
+        // A fresh cursor begins at the visible tip and records that tip's content hash.
+        // Status publication follows both reads, so observers never see an initialized
+        // height paired with an uninitialized reorg guard.
         this.lastPolledBlock = currentBlock;
         this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
         await this.updateStatus();
     }
 
     async handleNetForwardReorg(){
+        // The guard compares the last broadcast content with the source's current row.
+        // A missing source row leaves height-drop handling to a later poll, while an
+        // equal hash proves that this specific height still belongs to the same branch.
         let srcHash = await this.sourceBlockHash(this.lastPolledBlock);
         if(srcHash === null || srcHash === this.lastPolledBlockHash) return false;
 
@@ -291,6 +300,9 @@ class ServerPoller {
         logger.info('Net-forward reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ' at block ' + forkBlock + ' (content hash changed)');
         if(this.transparencyLog)
             await this.transparencyLog.pruneFrom(forkBlock);
+        // Pruning completes before publication so clients cannot begin rollback while
+        // the server still exposes orphaned transparency leaves. The cursor then moves
+        // below the fork, making the next forward pass replay every replacement block.
         this.broadcastReorg(forkBlock);
         this.lastPolledBlock = forkBlock - 1;
         // A recorded pre-reorg hash keeps deeper rewrites visible on the next poll.
@@ -301,12 +313,18 @@ class ServerPoller {
     }
 
     async handleHeightDropReorg(currentBlock){
+        // A falling tip can expose replacement content below the new height, so the
+        // recorded window determines the fork instead of treating currentBlock + 1 as
+        // authoritative. This keeps the rollback event deep enough for joined hashes.
         // Walking recorded hashes makes the event identify the true fork point.
         let forkBlock = await this.resolveForkPoint(currentBlock + 1);
         logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
         if(this.transparencyLog)
             await this.transparencyLog.pruneFrom(forkBlock);
 
+        // The broadcast occurs only after transparency cleanup succeeds. Any cleanup
+        // error leaves the cursor untouched, allowing the enclosing poll loop to retry
+        // the complete prune, notification, cursor, hash and status sequence.
         this.broadcastReorg(forkBlock);
         this.lastPolledBlock = forkBlock - 1;
         // The source hash is a fallback when the bounded recorded window has no entry.
@@ -317,6 +335,9 @@ class ServerPoller {
     }
 
     broadcastReorg(forkBlock){
+        // block_index identifies the first orphaned height, so a subscriber removes
+        // that height and every successor before accepting replacement block events.
+        // dbType routes the rollback when one subscriber follows both database tracks.
         this.broadcaster.broadcast(this.chain, this.network, {
             type: 'reorg',
             chain: this.chain,
@@ -327,6 +348,9 @@ class ServerPoller {
     }
 
     async streamNewBlocks(currentBlock){
+        // The result carries both progress and logging bounds back to poll. Keeping the
+        // outer read as the initial ceiling preserves idle behavior when the snapshot
+        // reports no usable tip, while a visible snapshot tip becomes authoritative.
         let result = {
             blocksProcessed: 0,
             catchUpStart: this.lastPolledBlock,
@@ -339,10 +363,16 @@ class ServerPoller {
             // The snapshot tip bounds the batch when a block or reorg races the first read.
             let snapTip = await this.db.getLastBlock(snapConn);
             if(snapTip != null) result.streamTo = snapTip;
+            // The hundred-block cap yields control to the service loop without changing
+            // snapshot consistency inside this batch. start() skips its sleep when the
+            // cap is reached, allowing a backlog to continue on a newly pinned view.
             while(this.lastPolledBlock < result.streamTo && result.blocksProcessed < 100){
                 let nextBlock = this.lastPolledBlock + 1;
                 let payload = await this.buildBlockPayload(nextBlock, snapConn, snapTip);
                 if(payload){
+                    // Transparency recording precedes publication, ensuring a delivered
+                    // indexer block already has its durable proof leaf. Decoder payloads
+                    // omit that step because their source block hash is canonical.
                     if(this.transparencyLog){
                         await this.transparencyLog.recordBlock(
                             payload.block_index, payload.block_time,
@@ -351,26 +381,44 @@ class ServerPoller {
                     }
                     this.publishBlockPayload(payload, nextBlock);
                 } else {
+                    // A vanished block disables content comparison for this cursor step.
+                    // Retaining an older hash here could turn an incomplete snapshot read
+                    // into a false net-forward reorg on the next polling iteration.
                     this.lastPolledBlockHash = null;
                 }
+                // Cursor advancement happens after all payload awaits and publication.
+                // The ordering keeps a rejected record operation retryable and counts a
+                // missing payload as examined without claiming a broadcast hash for it.
                 this.lastPolledBlock = nextBlock;
                 result.blocksProcessed++;
             }
         } finally {
+            // Snapshot release is the final await in forward processing and also runs
+            // when payload construction or transparency recording throws. A release
+            // failure propagates so the polling loop reports the database fault.
             await this.db.commitReadSnapshot(snapConn);
         }
         return result;
     }
 
     publishBlockPayload(payload, nextBlock){
+        // Publication happens before local hash bookkeeping, matching the externally
+        // visible event order. The selected hash is the same content identity that the
+        // next poll reads from each source database type.
         this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
         this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
+        // The bounded map retains enough pre-reorg identities for the configured source
+        // ceiling plus its safety margin. Eviction removes only the single height that
+        // falls beyond the moving window after a successful publication.
         if(nextBlock > this.recentHashCap)
             this.recentBroadcastHashes.delete(nextBlock - this.recentHashCap - 1);
     }
 
     logSyncedBlocks(blocksProcessed, catchUpStart, streamTo){
+        // Idle polls stay silent. Multi-block ranges and capped batches produce one
+        // summary, while normal tip following retains the concise single-block event
+        // that operators use to confirm steady source progress.
         if(blocksProcessed === 0) return;
 
         let isBatch = (streamTo - catchUpStart) > 1 || blocksProcessed >= 100;
