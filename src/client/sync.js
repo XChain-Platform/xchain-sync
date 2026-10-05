@@ -1532,118 +1532,89 @@ class ClientSync {
         return Math.min(100000, n);
     }
 
-    // Sync the append-only lookup tables (topology `.index` set: index_*) by id
-    // cursor instead of a single full-dump. For each table, start at the replica's
-    // current MAX(id) (0 when empty) and page /snapshot-rows/.../<table>?after_id=
-    // until has_more=false, applying each bounded page. This is the fix for fast/
-    // large chains where one full-dump of e.g. index_transactions (~8.5M rows)
-    // exceeds SNAPSHOT_MAX_CONTENT and aborts the download. Used by BOTH the
-    // truncated bootstrap (max id 0 -> all rows) and truncated catch-up (current
-    // max -> only new rows, since the tables are INSERT-only with monotonic ids).
-    // Each page is applied via the existing incremental surface; index_* are in
-    // ClientApplier.ignoreTables (INSERT IGNORE), so re-sent rows are idempotent.
-    // opts.fromZero: a Set of table names to page from id 0 instead of from the
-    // replica's high-water mark. See the HOLE note below for why that is a distinct
-    // mode and not something the ordinary path can do.
+    fetchLookupPage(source, table, afterId, pageSize){
+        let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
+            this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
+        return axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 600000,
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+    }
+
+    parseLookupPage(response, source, table, expected){
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+        }
+        let page;
+        try {
+            page = JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Snapshot download truncated or corrupt from ' + source +
+                ' (lookup page for ' + table + ' failed JSON.parse; likely a network interruption mid-transfer): ' +
+                parseErr.message);
+        }
+        if(page.schema_version !== expected){
+            throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
+                page.schema_version + ' client=' + expected);
+        }
+        return page;
+    }
+
+    applyLookupPage(table, rows, expected, repairing){
+        return this.withApplyLock(() => this.applier.applyIncrementalSnapshot({
+            schema_version: expected,
+            tables: { [table]: rows }
+        }, repairing ? { strictIgnoreCheck: true } : undefined));
+    }
+
+    advanceLookupCursor(table, page, afterId){
+        let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
+        if(nextAfter <= afterId){
+            getLogger().warn('Lookup paging for ' + table + ' made no progress past id ' +
+                afterId + '; stopping');
+            return null;
+        }
+        return nextAfter;
+    }
+
+    // Pages append-only lookup tables from their current high-water cursors.
+    // A from-zero pass fills holes below a table's high-water mark.
     async syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this.lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
         let fromZero = (opts && opts.fromZero) || null;
         for(let table of tables){
-            // Replica's current high-water cursor for this table (0 if empty/absent).
-            // Cursor column is the monotonic AUTO_INCREMENT `id` for every lookup table,
-            // including decoder pubkeys. pubkeys.address_id is non-monotonic (assigned at
-            // first-SEEN, inserted at first-SPEND) and was retired as a cursor; see
-            // lookupCursorColumn in replicatedTables.js.
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
-
-            // HOLES ARE NOT REACHABLE FROM THIS CURSOR, which is why fromZero exists.
-            // Seeding at MAX(id) and requesting only `after_id=<max>` extends a table
-            // but can never fill a gap BELOW the high-water mark, so re-paging repairs
-            // nothing however many times it runs.
-            //
-            // That is not hypothetical. A BTC mainnet replica held a 1969-row gap in
-            // index_transactions covering blocks 961908-963876: one bootstrap left it
-            // complete, then every live-followed block streamed three of its four
-            // *_hash_id rows and never the state one, until the source ran a build
-            // carrying ca170ee. Each re-page walked straight past the gap, because
-            // every missing id sat below MAX(id) from the moment the next block landed,
-            // and the public explorer answered state_hash null for all 1969 blocks.
-            // A from-zero pass is idempotent (index_* apply with INSERT IGNORE), only
-            // slower, so it is used solely for a table measured to be short.
             let repairing = !!(fromZero && fromZero.has(table));
             if(repairing){
                 getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
             } else {
-            try {
-                let r = await this.db.getMaxColumnValue(table, col);
-                if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
-            } catch(e){
-                afterId = 0; // table not present yet -> treat as empty (schema applied earlier)
-            }
+                try {
+                    let r = await this.db.getMaxColumnValue(table, col);
+                    if(r && r[0] && r[0].m != null) afterId = Number(r[0].m);
+                } catch(e){
+                    afterId = 0;
+                }
             }
             let pages = 0;
             while(true){
-                let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
-                    this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
-                let response = await axios.get(url, {
-                    headers: this.upstreamHeaders(),
-                    responseType: 'arraybuffer',
-                    timeout: 600000,
-                    decompress: true,
-                    maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-                });
-                let jsonStr = response.data;
-                if(Buffer.isBuffer(jsonStr)){
-                    try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
-                }
-                let page;
-                try {
-                    page = JSON.parse(jsonStr.toString());
-                } catch(parseErr){
-                    throw new Error('Snapshot download truncated or corrupt from ' + source +
-                        ' (lookup page for ' + table + ' failed JSON.parse; likely a network interruption mid-transfer): ' +
-                        parseErr.message);
-                }
-                if(page.schema_version !== expected){
-                    throw new Error('Lookup page schema mismatch for ' + table + ': server=' +
-                        page.schema_version + ' client=' + expected);
-                }
+                let response = await this.fetchLookupPage(source, table, afterId, pageSize);
+                let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
-                    // Apply through the existing incremental surface, carrying just this
-                    // table. index_* are INSERT IGNORE, so re-sent rows no-op; a lookup
-                    // page has no credits/debits/updated_rows, so the balance/escrow
-                    // rebuilds inside applyIncrementalSnapshot are skipped.
-                    //
-                    // strictIgnoreCheck only on a repairing (fromZero) pass:
-                    // this table was just measured short, so every row here is expected
-                    // to be either already-correct or genuinely missing, never a silent
-                    // conflict. If INSERT IGNORE instead swallows a collision against some
-                    // OTHER row's key, ClientApplier throws with the exact table/row so it
-                    // surfaces here (and up through maybeVerifyCompleteness's catch)
-                    // instead of the sweep reporting the same short count forever. The
-                    // ordinary cursor-seeded path never sets this: every block re-sends
-                    // these tables' current tail by design, and the extra SHOW WARNINGS
-                    // round trip per batch must stay off that hot path.
-                    await this.withApplyLock(() => this.applier.applyIncrementalSnapshot({
-                        schema_version: expected,
-                        tables: { [table]: rows }
-                    }, repairing ? { strictIgnoreCheck: true } : undefined));
+                    await this.applyLookupPage(table, rows, expected, repairing);
                 }
                 pages++;
                 if(!page.has_more) break;
-                // Advance the cursor; max_id is the server's last returned id. Guard
-                // against non-progress so a misbehaving server can't spin us forever.
-                let nextAfter = (typeof page.max_id === 'number') ? page.max_id : afterId;
-                if(nextAfter <= afterId){
-                    getLogger().warn('Lookup paging for ' + table + ' made no progress past id ' +
-                        afterId + '; stopping');
-                    break;
-                }
+                let nextAfter = this.advanceLookupCursor(table, page, afterId);
+                if(nextAfter == null) break;
                 afterId = nextAfter;
             }
             if(pages > 1) getLogger().info('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
