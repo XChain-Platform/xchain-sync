@@ -84,7 +84,10 @@ describe('merkle: SPV light-client primitives @regression', function(){
         it('rejects a 0x00-bearing field (injectivity guard)', function(){
             const nulField = 'a\u0000b';
             assert.strictEqual(nulField.charCodeAt(1), 0);
-            assert.throws(() => M.joinFields(['XCHAIN_BAL', nulField]));
+            assert.throws(
+                () => M.joinFields(['XCHAIN_BAL', nulField]),
+                /field contains 0x00, breaks injective join/
+            );
         });
         it('field boundaries are unambiguous: shifting a split point changes the encoding', function(){
             // SPV conformance vector: ['AB','C'] and ['A','BC'] concatenate to the
