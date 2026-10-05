@@ -50,7 +50,9 @@ describe('applyProtocolHaltFreshness', () => {
     it('calls getActiveHalt once with the dbType', async () => {
         const calls = [];
         const db = { getActiveHalt: async (...args) => { calls.push(args); return false; } };
-        await applyProtocolHaltFreshness(baseRow(), db, 'sqlite');
+        const row = baseRow();
+        const out = await applyProtocolHaltFreshness(row, db, 'sqlite');
+        assert.strictEqual(out, row);
         assert.deepStrictEqual(calls, [['sqlite']]);
     });
 
