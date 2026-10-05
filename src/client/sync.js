@@ -56,6 +56,11 @@ const envConfig = require('../config');
 // mechanism. Declared once in replicated_tables.js, which the content-parity plan
 // also reads, so the count and content checks cannot disagree about a table.
 const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
+// Lock-wait timeouts on schema apply retry with exponential backoff before the
+// table counts as a persistent failure.
+const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
+const SCHEMA_TRANSIENT_MAX_RETRIES = 3;
+const SCHEMA_TRANSIENT_BASE_MS = 2000;
 
 // Permanent bootstrap exhaustion. start()-time throws already unwind to
 // SyncService's sync.start().catch(... process.exit(1)) restart contract on their
@@ -904,8 +909,7 @@ class ClientSync {
         getLogger().info('Fetching schema from ' + source + '...');
         let schema;
         try {
-            let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
-            let response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 30000 });
+            let response = await this.fetchSchema(source);
             schema = response.data;
         } catch(e){
             // A fetch/transport failure is not a schema fault: the source may be
@@ -915,13 +919,63 @@ class ClientSync {
         }
         if(!schema || !schema.tables) return;
 
-        // Validate every table name + DDL up front, then collect the apply set.
-        // Keep the independently validated name set for missing-table checks: a
-        // source on an older release legitimately omits tables known to this build.
+        let pending = this.collectSchemaTables(schema.tables);
+        let lastErr = new Map();
+        while(pending.length){
+            let stillPending = [];
+            let progressed = false;
+            for(let { tableName, createSql } of pending){
+                let attempt = 0;
+                let succeeded = false;
+                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
+                    try {
+                        let exists = await this.db.findTableInSchema(tableName);
+                        if(exists.length === 0){
+                            await this.db.doQuery(createSql);
+                            getLogger().info('  Created table: ' + tableName);
+                        } else {
+                            // Propagates columns added upstream since bootstrap, outside any snapshot transaction.
+                            await this.db.addMissingColumns(tableName, createSql);
+                        }
+                        lastErr.delete(tableName);
+                        succeeded = true;
+                        break;
+                    } catch(e){
+                        if(e.errno !== SCHEMA_TRANSIENT_ERRNO || attempt >= SCHEMA_TRANSIENT_MAX_RETRIES){
+                            lastErr.set(tableName, e);
+                            break;
+                        }
+                        let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
+                        this.logSchemaRetry(tableName, delay, attempt);
+                        await this.util.sleep(delay);
+                        attempt++;
+                    }
+                }
+                if(succeeded) progressed = true;
+                else stillPending.push({ tableName, createSql });
+            }
+            if(!progressed) break;
+            pending = stillPending;
+        }
+        if(pending.length){
+            await this.haltOnSchemaFailure(source, this.schemaFailureDetails(pending, lastErr));
+            return;
+        }
+        getLogger().info('Schema applied from ' + source);
+    }
+
+    fetchSchema(source){
+        let url = source + '/schema/' + this.dbType + '/' + this.chain + '/' + this.network;
+        return axios.get(url, { headers: this.upstreamHeaders(), timeout: 30000 });
+    }
+
+    // Validates every name and DDL up front. The validated name set is kept for
+    // missing-table checks because an older source legitimately omits newer tables.
+    collectSchemaTables(tables){
         let sourceTables = new Set();
         let pending = [];
-        for(let tableName in schema.tables){
-            let createSql = schema.tables[tableName];
+        for(let tableName in tables){
+            let createSql = tables[tableName];
             let idCheck = validation.validateIdentifier(tableName);
             if(!idCheck.valid){
                 getLogger().error('Rejected table name from schema: ' + tableName + ' (' + idCheck.reason + ')');
@@ -937,89 +991,20 @@ class ClientSync {
             pending.push({ tableName, createSql });
         }
         this._sourceTables = sourceTables;
+        return pending;
+    }
 
-        // Multi-pass fixpoint. A CREATE can fail because a table it FK-references
-        // has not been created yet; retrying the not-yet-applied tables until a
-        // full pass makes no progress resolves that ordering deterministically
-        // within this one bootstrap, instead of relying on lucky iteration order
-        // across bootstrap re-routes. Crucially it also SEPARATES ordering misses
-        // (which clear once their dependency lands) from genuine faults (disk-full,
-        // permissions, malformed DDL), which persist to the fixpoint.
-        //
-        // Transient lock-timeout (errno 1205) handling: an ALTER TABLE that hits a
-        // concurrent lock waits and times out is retriable. Instead of letting a
-        // single transient failure roll straight into the fixpoint (no progress ->
-        // halt), each table gets up to SCHEMA_TRANSIENT_MAX_RETRIES extra attempts
-        // with an exponential backoff before it is treated as a persistent failure.
-        // Real faults (disk-full, permission denied, malformed DDL) typically do not
-        // produce errno 1205 and bypass the backoff entirely.
-        const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
-        const SCHEMA_TRANSIENT_MAX_RETRIES = 3;
-        const SCHEMA_TRANSIENT_BASE_MS     = 2000;
-        let lastErr = new Map();
-        while(pending.length){
-            let stillPending = [];
-            let progressed = false;
-            for(let { tableName, createSql } of pending){
-                let attempt = 0;
-                let succeeded = false;
-                while(attempt <= SCHEMA_TRANSIENT_MAX_RETRIES){
-                    try {
-                        let exists = await this.db.findTableInSchema(tableName);
-                        if(exists.length === 0){
-                            await this.db.doQuery(createSql);
-                            getLogger().info('  Created table: ' + tableName);
-                        } else {
-                            // Table already exists: propagate any columns the master has
-                            // added since this replica was bootstrapped. Without this the
-                            // path is CREATE-only and a replica that pre-dates a column
-                            // addition stalls on the first snapshot carrying it. Runs
-                            // before the snapshot apply, so the ALTERs are outside any
-                            // snapshot transaction.
-                            await this.db.addMissingColumns(tableName, createSql);
-                        }
-                        lastErr.delete(tableName);
-                        succeeded = true;
-                        break;
-                    } catch(e){
-                        // Transient lock-timeout: retry with backoff up to the cap,
-                        // then fall through to the fixpoint as a persistent failure.
-                        if(e.errno === SCHEMA_TRANSIENT_ERRNO && attempt < SCHEMA_TRANSIENT_MAX_RETRIES){
-                            let delay = SCHEMA_TRANSIENT_BASE_MS * Math.pow(2, attempt);
-                            getLogger().warn('Schema apply lock-timeout on ' + tableName +
-                                ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
-                                (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
-                            await this.util.sleep(delay);
-                            attempt++;
-                        } else {
-                            lastErr.set(tableName, e);
-                            break;
-                        }
-                    }
-                }
-                if(succeeded){
-                    progressed = true;
-                } else {
-                    stillPending.push({ tableName, createSql });
-                }
-            }
-            if(!progressed) break; // fixpoint: nothing advanced this pass
-            pending = stillPending;
-        }
+    logSchemaRetry(tableName, delay, attempt){
+        getLogger().warn('Schema apply lock-timeout on ' + tableName +
+            ' (errno 1205), retrying in ' + delay + 'ms (attempt ' +
+            (attempt + 1) + '/' + SCHEMA_TRANSIENT_MAX_RETRIES + ')');
+    }
 
-        if(pending.length){
-            // Genuine DDL faults survived the ordering fixpoint. Fail closed: the
-            // old single-pass catch swallowed these, so the table was never created
-            // and the next snapshot apply looped forever on errno 1146/1054 with
-            // halted:false (no signal). Record a durable halt instead.
-            let failed = pending.map(p => {
-                let e = lastErr.get(p.tableName) || {};
-                return { table: p.tableName, errno: e.errno || null, message: e.message || null };
-            });
-            await this.haltOnSchemaFailure(source, failed);
-            return;
-        }
-        getLogger().info('Schema applied from ' + source);
+    schemaFailureDetails(pending, lastErr){
+        return pending.map(p => {
+            let e = lastErr.get(p.tableName) || {};
+            return { table: p.tableName, errno: e.errno || null, message: e.message || null };
+        });
     }
 
     // Durable halt for an unrecoverable schema apply (distinct from the
