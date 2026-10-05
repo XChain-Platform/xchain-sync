@@ -239,6 +239,28 @@ function stopDivergenceApply(client){
     client._applyTimers.clear();
 }
 
+// Keep the highest numeric height a server reported; null until one arrives.
+function updateLastKnownServerBlock(client, blockIndex){
+    if(typeof blockIndex === 'number' &&
+       (client.lastKnownServerBlock === null || blockIndex > client.lastKnownServerBlock)){
+        client.lastKnownServerBlock = blockIndex;
+    }
+}
+
+// Log a proven gap and return its catch-up start, or null when the status proves none.
+function statusGapStart(client, blockHeight){
+    if(client.lastAppliedBlock === null || blockHeight <= client.lastAppliedBlock + 1)
+        return null;
+    client.logGap('Block gap detected: local=' + client.lastAppliedBlock + ' remote=' + blockHeight);
+    return client.lastAppliedBlock + 1;
+}
+
+// Decoder-only wall-clock reconcile gate; needs an applied block and no reconcile in flight.
+function shouldReconcileDispensersOnStatus(client){
+    return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
+        !client._dispenserReconcileInFlight && client.dispenserReconcileIntervalDue(Date.now());
+}
+
 class ClientSync {
 
     constructor(chain, network, db, applier, rollback, hashVerifier, config, util) {
@@ -2853,77 +2875,22 @@ class ClientSync {
         }, this.config['CLIENT_RECONNECT_DELAY']);
     }
 
-    // Track only numeric heights reported by a server.
-    // Keep the highest observed height so delayed events cannot move it backward.
-    // Preserve null until the server supplies a usable height.
-    updateLastKnownServerBlock(blockIndex){
-        if(typeof blockIndex === 'number' &&
-           (this.lastKnownServerBlock === null || blockIndex > this.lastKnownServerBlock)){
-            this.lastKnownServerBlock = blockIndex;
-        }
-    }
-
-    // Treat a one-block lead as the normal live-stream steady state.
-    // Reserve catch-up for a shortfall of two or more blocks.
-    // Mirror the decoder gap threshold enforced by handleBlock.
-
-    // Let the next live block close a one-block gap after reconnect.
-    // Detect a persistent skip through verifyChainContinuity when another block arrives.
-    // Avoid a redundant incremental snapshot on every status tick.
-
-    // Log a proven gap before calculating its catch-up start.
-    // Read lastAppliedBlock after logging so any synchronous state effect is preserved.
-    // Return null when the status does not prove a gap.
-
-    // Preserve the direct catch-up await in handleEvent.
-    // Keep promise scheduling identical on status ticks with no proven gap.
-    // Propagate catch-up failures through the original event-handler await.
-    statusGapStart(blockHeight){
-        if(this.lastAppliedBlock === null || blockHeight <= this.lastAppliedBlock + 1)
-            return null;
-        this.logGap('Block gap detected: local=' + this.lastAppliedBlock + ' remote=' + blockHeight);
-        return this.lastAppliedBlock + 1;
-    }
-
-    // Reconcile decoder dispensers on the wall-clock cadence during clean live sync.
-    // Reach this cadence from status ticks even when no exceptional catch-up runs.
-    // Keep soft-expired and hard-purged source rows from remaining locally active.
-
-    // Reject row counts as a substitute for reconciliation.
-    // Recognize that soft expiry keeps counts equal and hard purge leaves the replica ahead.
-    // Keep this path decoder-only because the indexer reports the relevant count mismatch.
-
-    // Keep the reconciliation cadence independent from completeness sweeps.
-    // Ignore the completeness interval, height-equality guard and separate throttle here.
-    // Use the side-effect-free due predicate without advancing the catch-up counter.
-
-    // Evaluate the clock only after the decoder and state guards pass.
-    // Preserve short-circuit behavior for status ticks that cannot reconcile.
-    // Leave in-flight ownership to handleEvent around its direct await.
-
-    // Require an applied block before reconciling dispenser state.
-    // Block concurrent reconciliation through the shared in-flight flag.
-    shouldReconcileDispensersOnStatus(){
-        return this.dbType === 'decoder' && !this._halted && this.lastAppliedBlock !== null &&
-            !this._dispenserReconcileInFlight && this.dispenserReconcileIntervalDue(Date.now());
-    }
-
     async handleEvent(event, sourceIndex){
         if(event.type === 'block'){
-            this.updateLastKnownServerBlock(event.block_index);
+            updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
             await this.handleReorg(event);
         } else if(event.type === 'status'){
-            this.updateLastKnownServerBlock(event.block_height);
+            updateLastKnownServerBlock(this, event.block_height);
             // Keep the server's replication verdict even when its height stalls.
             // Preserve evidence that a frozen upstream reports on later status ticks.
             // Record the verdict before any gap recovery starts.
             this.recordUpstreamStatus(sourceIndex, event);
-            let catchUpStart = this.statusGapStart(event.block_height);
+            let catchUpStart = statusGapStart(this, event.block_height);
             if(catchUpStart !== null)
                 await this.incrementalCatchUp(catchUpStart);
-            if(this.shouldReconcileDispensersOnStatus()){
+            if(shouldReconcileDispensersOnStatus(this)){
                 this._dispenserReconcileInFlight = true;
                 try { await this.reconcileDispensers(this.sources[sourceIndex]); }
                 finally { this._dispenserReconcileInFlight = false; }
