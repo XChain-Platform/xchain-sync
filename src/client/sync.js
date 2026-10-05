@@ -2872,95 +2872,271 @@ class ClientSync {
         return true;
     }
 
-    async handleBlock(event, sourceIndex){
+    refuseLiveBlockOnEmptyReplica(event){
         let blockIndex = event.block_index;
 
-        // Defense in depth: refuse to apply a live block onto an empty replica.
-        // start() bootstraps before live-follow, so reaching here with no committed
-        // tip means bootstrap was skipped or silently failed. Applying the first live
-        // block now would leave every block below it permanently missing (and because
-        // the duplicate/continuity/fork guards below are ALL gated on
-        // lastAppliedBlock !== null, control would otherwise fall straight through to
-        // applyBlockEvent). block_index 0 (true genesis) is the one legitimate
-        // from-empty apply; for anything above it, refuse and trigger a catch-up to
-        // rebuild from the source rather than orphaning the blocks beneath it.
-        if(this.lastAppliedBlock === null && blockIndex > 0){
-            getLogger().error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
-                this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
-                'triggering catch-up instead of orphaning blocks below it');
-            await this.incrementalCatchUp(blockIndex);
-            return;
+        // Refuse a live block above genesis when the replica has no committed tip.
+        // start() bootstraps before live-follow, so this state means bootstrap is
+        // skipped or fails without establishing a tip.
+
+        // Allow block_index 0 as the only legitimate from-empty application.
+        if(this.lastAppliedBlock !== null || blockIndex <= 0) return null;
+
+        // Applying here leaves every lower block missing because the duplicate,
+        // continuity, and fork guards only run after a tip exists.
+        // Rebuild from the source instead of orphaning the lower blocks.
+
+        // Trigger catch-up at the incoming height so the source can fill the replica.
+        getLogger().error('Refusing to apply block ' + blockIndex + ' onto an empty replica (' +
+            this.chain + '/' + this.network + '/' + this.dbType + '). Bootstrap did not complete; ' +
+            'triggering catch-up instead of orphaning blocks below it');
+        return { completion: this.incrementalCatchUp(blockIndex) };
+    }
+
+    handleDecoderHeadDuplicate(event){
+        let blockIndex = event.block_index;
+
+        // Treat a different hash at the committed tip as a short reorg that the live
+        // stream does not report. A silent skip pins the replica to the orphaned tip.
+        // The next block's previous-hash link catches a fork with no tip re-delivery.
+
+        // Match the indexer's head-fork protection through the decoder's block hash.
+        if(blockIndex !== this.lastAppliedBlock ||
+           !this.lastHashes || !this.lastHashes.block_hash ||
+           !event.block_hash || event.block_hash === this.lastHashes.block_hash) return null;
+
+        getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
+            '; stored block_hash ' + this.lastHashes.block_hash +
+            ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
+        return this.rewindForkedHead(blockIndex);
+    }
+
+    handleIndexerHeadDuplicate(event){
+        let blockIndex = event.block_index;
+
+        // Restrict hash comparison to a re-delivery of the committed head.
+        // Leave older duplicate heights on the ordinary silent-skip path.
+        if(blockIndex !== this.lastAppliedBlock || !this.lastHashes) return null;
+
+        // Compare the three chain-of-state hashes because indexer events carry no
+        // block_hash. A mismatch identifies a one-block reorg across a socket drop.
+        // Keep null fields out of the comparison because they do not supply evidence.
+        let lh = this.lastHashes;
+        let mismatch =
+            (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
+            (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
+            (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
+        if(!mismatch) return null;
+
+        // Rewind before catch-up so the orphaned predecessor cannot enter local hash
+        // recomputation. Matching duplicates remain silent skips.
+        // Route both database types through the same rollback and catch-up sequence.
+        getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
+            '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
+        return this.rewindForkedHead(blockIndex);
+    }
+
+    handlePreviouslyAppliedBlock(event){
+        let blockIndex = event.block_index;
+        if(this.lastAppliedBlock === null || blockIndex > this.lastAppliedBlock) return null;
+
+        // Check a duplicate at the current head for a fork before skipping it.
+        // Skip older heights without a fork check because they cannot replace the tip.
+        let completion = null;
+        if(this.dbType === 'decoder') completion = this.handleDecoderHeadDuplicate(event);
+        else if(this.dbType === 'indexer') completion = this.handleIndexerHeadDuplicate(event);
+        return { completion };
+    }
+
+    handleIndexerBlockContinuity(event){
+        let continuity = this.hashVerifier.verifyChainContinuity(
+            this.lastAppliedBlock, this.lastHashes, event
+        );
+        if(continuity.valid) return null;
+
+        // Treat ordinary trailing-tip lag as an informational gap; the separate head
+        // duplicate check reports a genuine head fork as an error.
+        // Catch up from the first height after the committed tip.
+        this.logGap('Catch-up lag (indexer): ' + continuity.reason);
+        return { completion: this.incrementalCatchUp(this.lastAppliedBlock + 1) };
+    }
+
+    handleDecoderBlockGap(event){
+        let blockIndex = event.block_index;
+        if(blockIndex <= this.lastAppliedBlock + 1) return null;
+
+        // Detect dropped decoder blocks even though decoder rows have no synthetic
+        // chain hashes for the indexer continuity verifier.
+        // Catch up before applying the incoming block over the missing range.
+        this.logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
+        return { completion: this.incrementalCatchUp(this.lastAppliedBlock + 1) };
+    }
+
+    recordPendingBlockHash(event, sourceIndex){
+        let blockIndex = event.block_index;
+
+        // Record the current source's chain-of-state tuple for this height.
+        // Keep each source's report available until quorum resolves or times out.
+        // Replace a source's earlier report when the same height arrives again.
+        if(!this.pendingHashes.has(blockIndex)) this.pendingHashes.set(blockIndex, {});
+        this.pendingHashes.get(blockIndex)[sourceIndex] = {
+            ledger_hash: event.ledger_hash,
+            actions_hash: event.actions_hash,
+            contract_hash: event.contract_hash
+        };
+        return this.pendingHashes.get(blockIndex);
+    }
+
+    tallyPendingBlockHashes(pending){
+        // Group reported, non-evicted sources by hash tuple.
+        // Count only active reports when deciding whether every source has answered.
+        let groups = new Map(); // hashKey -> [sourceIndex...]
+        let reportedCount = 0;
+        for(let idxStr of Object.keys(pending)){
+            let idx = Number(idxStr);
+            if(this._evictedSources.has(idx)) continue;
+            reportedCount++;
+            let key = this.hashTupleKey(pending[idxStr]);
+            if(!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(idx);
+        }
+        return { groups, reportedCount };
+    }
+
+    acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup){
+        // Strike every reported dissenter and record the applied majority.
+        // Clear pending confirmation state and cancel its liveness timer.
+        for(let idxStr of Object.keys(pending)){
+            let idx = Number(idxStr);
+            if(this._evictedSources.has(idx)) continue;
+            if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
+        }
+        this._lastSourcesAgreeing = currentGroup.length;
+        this.pendingHashes.delete(blockIndex);
+        this._strictConfirmPending.delete(blockIndex);
+        let timer = this._applyTimers.get(blockIndex);
+        if(timer){ clearTimeout(timer); this._applyTimers.delete(blockIndex); }
+
+        // Continue to block application only after confirmation state is cleared.
+    }
+
+    rejectBlockWithoutQuorum(blockIndex, groups){
+        // Reject a contested block after every active source reports and no group
+        // reaches quorum, because the replica cannot determine the true payload.
+        // Clear the pending confirmation state before halting or logging the split.
+        this.pendingHashes.delete(blockIndex);
+        this._strictConfirmPending.delete(blockIndex);
+        let timer = this._applyTimers.get(blockIndex);
+        if(timer){ clearTimeout(timer); this._applyTimers.delete(blockIndex); }
+        let summary = [...groups.entries()].map(([key, sources]) => ({
+            hash: key,
+            sources: sources.map(index => this.sources[index])
+        }));
+
+        // Halt fail-closed when divergence handling is enabled.
+        if(this.config['HALT_ON_DIVERGENCE']){
+            return this.haltOnDivergence(blockIndex, summary,
+                [...groups.values()].reduce((all, sources) => all.concat(sources.map(index => this.sources[index])), []),
+                'no-source-quorum');
         }
 
-        // Skip if we already have this block, but first guard against a fork at the
-        // current head. A block re-delivered at our committed tip with a DIFFERENT
-        // block_hash than the one we stored means the source replaced that block (a
-        // short reorg we never observed on the live stream). Silently skipping it
-        // would pin this replica to an orphaned tip, so treat it as a continuity
-        // error and catch up (symmetric with the indexer's hash-continuity check
-        // below, which catches the same class of fault via its chain hashes). A fork
-        // the head is never re-delivered for is caught one block later, by the
-        // previous-hash link check on the next block (decoderTipReplaced).
-        if(this.lastAppliedBlock !== null && blockIndex <= this.lastAppliedBlock){
-            if(this.dbType === 'decoder' &&
-               blockIndex === this.lastAppliedBlock &&
-               this.lastHashes && this.lastHashes.block_hash &&
-               event.block_hash && event.block_hash !== this.lastHashes.block_hash){
-                getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
-                    '; stored block_hash ' + this.lastHashes.block_hash +
-                    ' != incoming ' + event.block_hash + '; rewinding the orphaned tip and catching up');
-                await this.rewindForkedHead(blockIndex);
-            } else if(this.dbType === 'indexer' &&
-               blockIndex === this.lastAppliedBlock &&
-               this.lastHashes){
-                // Indexer head-fork mirror of the decoder branch. The indexer event
-                // carries no block_hash, but it does carry the three chain-of-state
-                // hashes, and this.lastHashes holds the committed ones for the tip. A
-                // tip re-delivery whose ledger/actions/contract hash differs is a
-                // 1-block reorg whose `reorg` event was lost across a WS drop; without
-                // this check it falls through to the silent skip, verifyChainContinuity
-                // (index-ordering only, no hash linkage) then accepts block N+1 onto the
-                // orphaned tip, and VERIFY_RECOMPUTE folds the orphaned predecessor into
-                // a durable local-recompute-divergence halt (or, with VERIFY_RECOMPUTE
-                // off, silently retains the orphaned block). Route the mismatch through
-                // the same rollback/catch-up path the decoder uses. A true duplicate
-                // (all three hashes equal) still skips silently.
-                let lh = this.lastHashes;
-                let mismatch =
-                    (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
-                    (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
-                    (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
-                if(mismatch){
-                    getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
-                        '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
-                    await this.rewindForkedHead(blockIndex);
+        // Keep log-only mode from applying a payload with no source quorum.
+        getLogger().error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
+            '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
+        getLogger().error(util.format('groups:', JSON.stringify(summary)));
+        return null;
+    }
+
+    armBlockQuorumTimer(event){
+        let blockIndex = event.block_index;
+        if(this._applyTimers.has(blockIndex)) return;
+
+        // Arm one liveness fallback while another source is silent or slow.
+        // A split is rejected when all active sources report.
+        // Apply the available payload only when strict confirmation is disabled.
+        let timer = setTimeout(async () => {
+            // Remove the timer marker before examining confirmation state so a later
+            // arrival can create a fresh timer when the block remains unresolved.
+            this._applyTimers.delete(blockIndex);
+
+            // Skip fallback after another path applies the height or clears its tuple.
+            if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
+                if(this.config['HASH_CONFIRM_STRICT']){
+                    getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
+                        ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
+
+                    // Retain pending hashes so a later delivery can complete quorum,
+                    // and block single-source catch-up in the meantime.
+                    // Mark the height strict-pending until another source confirms it.
+                    this._strictConfirmPending.add(blockIndex);
+                } else {
+                    getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
+                    try {
+                        await this.applyBlockEvent(event);
+                    } catch(e){
+                        getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
+                    }
+                    this.pendingHashes.delete(blockIndex);
                 }
             }
+        }, this.config['HASH_CONFIRM_TIMEOUT']);
+        this._applyTimers.set(blockIndex, timer);
+    }
+
+    handleBlockQuorum(event, sourceIndex){
+        // Require tuple quorum only for a multi-source indexer with hash verification.
+        // Keep decoder, disabled-verification, and single-source application direct.
+        // Preserve the two-source unanimous case and larger-set majority behavior.
+        if(this.dbType !== 'indexer' || !this.config['VERIFY_HASHES'] || this.activeSourceCount() <= 1)
+            return null;
+
+        // Ignore an evicted source's in-flight delivery.
+        // Exclude decoder and single-source paths because they need no tuple quorum.
+        if(this._evictedSources.has(sourceIndex)) return {};
+
+        let blockIndex = event.block_index;
+        let pending = this.recordPendingBlockHash(event, sourceIndex);
+        let { groups, reportedCount } = this.tallyPendingBlockHashes(pending);
+
+        // Gate application on the current arrival's group so the accepted tuple always
+        // belongs to the payload held by this call. The majority winner is unique.
+        // Strike dissenters only after the current tuple reaches the effective quorum.
+        let currentKey = this.hashTupleKey(pending[sourceIndex]);
+        let currentGroup = groups.get(currentKey) || [];
+        if(currentGroup.length >= this.effectiveQuorum()){
+            this.acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup);
+            return null;
+        }
+        if(reportedCount >= this.activeSourceCount()){
+            return { completion: this.rejectBlockWithoutQuorum(blockIndex, groups) };
+        }
+        // Wait when more active reports can still produce a quorum.
+        this.armBlockQuorumTimer(event);
+        return {};
+    }
+
+    async handleBlock(event, sourceIndex){
+        let action = this.refuseLiveBlockOnEmptyReplica(event);
+        if(action){
+            if(action.completion) await action.completion;
             return;
         }
 
-        // Both dbTypes require block-height continuity: indexer uses chain hashes to detect
-        // gaps and forks; decoder has no synthetic hashes but still needs gap detection so
-        // blocks silently dropped between bootstrap and the first WS event are caught up.
+        action = this.handlePreviouslyAppliedBlock(event);
+        if(action){
+            if(action.completion) await action.completion;
+            return;
+        }
+
         if(this.lastAppliedBlock !== null){
-            if(this.dbType === 'indexer'){
-                let continuity = this.hashVerifier.verifyChainContinuity(
-                    this.lastAppliedBlock, this.lastHashes, event
-                );
-                if(!continuity.valid){
-                    // Normal trailing-tip lag on a fast chain (server ahead of our
-                    // committed height): not a fault. Log throttled at info level;
-                    // a genuine fork at our head is caught separately above as an error.
-                    this.logGap('Catch-up lag (indexer): ' + continuity.reason);
-                    await this.incrementalCatchUp(this.lastAppliedBlock + 1);
-                    return;
-                }
-            } else if(blockIndex > this.lastAppliedBlock + 1){
-                this.logGap('Block gap detected (decoder): local=' + this.lastAppliedBlock + ' incoming=' + blockIndex);
-                await this.incrementalCatchUp(this.lastAppliedBlock + 1);
+            action = this.dbType === 'indexer' ? this.handleIndexerBlockContinuity(event) :
+                this.handleDecoderBlockGap(event);
+            if(action){
+                if(action.completion) await action.completion;
                 return;
-            } else if(await this.decoderTipReplaced(event)){
-                getLogger().error('Chain continuity error (decoder): previous-hash mismatch at block ' + blockIndex +
+            }
+            if(this.dbType !== 'indexer' && await this.decoderTipReplaced(event)){
+                getLogger().error('Chain continuity error (decoder): previous-hash mismatch at block ' + event.block_index +
                     '; the committed tip ' + this.lastAppliedBlock + ' was replaced by a reorg this replica missed; ' +
                     'rewinding the orphaned tip and catching up');
                 await this.rewindForkedHead(this.lastAppliedBlock);
@@ -2968,109 +3144,11 @@ class ClientSync {
             }
         }
 
-        // Cross-source M-of-N quorum verification: indexer only (decoder has no
-        // synthetic chain hashes). Apply a block once SOURCE_QUORUM active sources
-        // publish the SAME hash tuple; strike (and eventually evict) dissenters instead
-        // of halting on any disagreement; halt (no-source-quorum) only when every active
-        // source has reported and no group can reach quorum. The 2-source case behaves
-        // exactly as before (quorum 2; a 1-1 split has no majority and halts), while a
-        // larger set tolerates a Byzantine minority.
-        if(this.dbType === 'indexer' && this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1){
-            // An evicted source's in-flight delivery is ignored for the tally.
-            if(this._evictedSources.has(sourceIndex)) return;
-
-            // Record this source's hash tuple.
-            if(!this.pendingHashes.has(blockIndex)) this.pendingHashes.set(blockIndex, {});
-            this.pendingHashes.get(blockIndex)[sourceIndex] = {
-                ledger_hash: event.ledger_hash,
-                actions_hash: event.actions_hash,
-                contract_hash: event.contract_hash
-            };
-
-            // Tally reported, non-evicted sources by hash tuple.
-            let pending = this.pendingHashes.get(blockIndex);
-            let groups = new Map(); // hashKey -> [sourceIndex...]
-            let reportedCount = 0;
-            for(let idxStr of Object.keys(pending)){
-                let idx = Number(idxStr);
-                if(this._evictedSources.has(idx)) continue;
-                reportedCount++;
-                let key = this.hashTupleKey(pending[idxStr]);
-                if(!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(idx);
-            }
-            let quorum  = this.effectiveQuorum();
-            let activeN = this.activeSourceCount();
-
-            // The CURRENT arrival's own group. Applying is gated on IT reaching quorum,
-            // so we only ever apply the block payload we actually hold, and (under the
-            // majority default) the winning group is unique.
-            let currentKey   = this.hashTupleKey(pending[sourceIndex]);
-            let currentGroup = groups.get(currentKey) || [];
-
-            if(currentGroup.length >= quorum){
-                // Quorum reached on the current arrival's hash. Strike every reported
-                // dissenter, record the applied majority, and apply this event.
-                for(let idxStr of Object.keys(pending)){
-                    let idx = Number(idxStr);
-                    if(this._evictedSources.has(idx)) continue;
-                    if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
-                }
-                this._lastSourcesAgreeing = currentGroup.length;
-                this.pendingHashes.delete(blockIndex);
-                this._strictConfirmPending.delete(blockIndex);
-                let t = this._applyTimers.get(blockIndex);
-                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
-                // fall through to apply
-            } else if(reportedCount >= activeN){
-                // Every active source reported and no group reached quorum: genuinely
-                // contested, the replica cannot determine truth. Fail-stop.
-                this.pendingHashes.delete(blockIndex);
-                this._strictConfirmPending.delete(blockIndex);
-                let t = this._applyTimers.get(blockIndex);
-                if(t){ clearTimeout(t); this._applyTimers.delete(blockIndex); }
-                let summary = [...groups.entries()].map(([k, arr]) => ({ hash: k, sources: arr.map(i => this.sources[i]) }));
-                if(this.config['HALT_ON_DIVERGENCE']){
-                    await this.haltOnDivergence(blockIndex, summary,
-                        [...groups.values()].reduce((a, arr) => a.concat(arr.map(i => this.sources[i])), []),
-                        'no-source-quorum');
-                    return;
-                }
-                getLogger().error('NO-QUORUM ALERT: sources split with no majority at block ' + blockIndex +
-                    '; not applying (HALT_ON_DIVERGENCE=false, log-only)');
-                getLogger().error(util.format('groups:', JSON.stringify(summary)));
-                return; // Don't apply contested blocks (log-only mode)
-            } else {
-                // Not enough sources have reported to reach quorum yet. Arm the fallback
-                // timer once per block (liveness fallback for a silent/slow source; a
-                // genuine split is caught above once all active sources report).
-                if(!this._applyTimers.has(blockIndex)){
-                    let timer = setTimeout(async () => {
-                        this._applyTimers.delete(blockIndex);
-                        if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
-                            if(this.config['HASH_CONFIRM_STRICT']){
-                                getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
-                                    ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
-                                // Retain the pending hashes so a later delivery can still
-                                // complete quorum; block single-source catch-up meanwhile.
-                                this._strictConfirmPending.add(blockIndex);
-                            } else {
-                                getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
-                                try {
-                                    await this.applyBlockEvent(event);
-                                } catch(e){
-                                    getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
-                                }
-                                this.pendingHashes.delete(blockIndex);
-                            }
-                        }
-                    }, this.config['HASH_CONFIRM_TIMEOUT']);
-                    this._applyTimers.set(blockIndex, timer);
-                }
-                return;
-            }
+        action = this.handleBlockQuorum(event, sourceIndex);
+        if(action){
+            if(action.completion) await action.completion;
+            return;
         }
-
         await this.applyBlockEvent(event);
     }
 
