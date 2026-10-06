@@ -1889,6 +1889,15 @@ class ClientSync {
             return;
         }
 
+        // A 404 means the source holds no rows at or past this height yet (the resume
+        // tip is already current). That is expected and self-clearing, so it logs one
+        // warn line instead of an error and skips duplicate-key and schema recovery.
+        if(error && error.response && error.response.status === 404){
+            getLogger().warn('Incremental catch-up from block ' + sinceBlock +
+                ' found nothing newer on ' + source + ' (404); replica is current or source is behind.');
+            return;
+        }
+
         // Attribute duplicate-key failures before attempting schema recovery. The
         // duplicate-key path may halt or classify the source and therefore owns the
         // failure when it recognizes one.
