@@ -669,7 +669,8 @@ class ClientSync {
     // Stable comparison key for a source's committed hash tuple.
     hashTupleKey(h){
         if(!h) return 'null';
-        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash);
+        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash) +
+            '|' + String(h.state_hash == null ? null : h.state_hash);
     }
 
     // Sources still eligible to vote (configured minus evicted).
@@ -3030,7 +3031,8 @@ class ClientSync {
         this.pendingHashes.get(blockIndex)[sourceIndex] = {
             ledger_hash: event.ledger_hash,
             actions_hash: event.actions_hash,
-            contract_hash: event.contract_hash
+            contract_hash: event.contract_hash,
+            state_hash: event.state_hash
         };
         return this.pendingHashes.get(blockIndex);
     }
