@@ -14,7 +14,7 @@
 
 const {
     assert, sinon, axios, registerClientSyncHooks
-} = require('../support');
+} = require('./support');
 
 let sync, db, applier;
 
