@@ -90,6 +90,23 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
+        // A fault on the truncation-floor read must not read as "full history": that
+        // runs the COINPay re-derive and the market sweep on a truncated replica.
+        it('reads the truncation floor fail-CLOSED (opts.rethrow)', async function(){
+            db.getSyncState = sinon.stub().resolves(null);
+            await rollback.rollback(100);
+            assert.strictEqual(db.getSyncState.firstCall.args[0], 'bootstrap_base:indexer');
+            assert.deepStrictEqual(db.getSyncState.firstCall.args[1], { rethrow: true });
+        });
+
+        it('aborts before the transaction when the truncation-floor read faults', async function(){
+            let err = new Error('lock wait timeout'); err.errno = 1205;
+            db.getSyncState = sinon.stub().rejects(err);
+            await assert.rejects(() => rollback.rollback(100), /lock wait timeout/);
+            assert.strictEqual(db.beginTransaction.called, false);
+            assert.strictEqual(db.commitTransaction.called, false);
+        });
+
     });
 });
 

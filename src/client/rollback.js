@@ -205,9 +205,11 @@ class ClientRollback {
         // floor"; it is skipped there rather than deleting a market the source keeps.
         // Guarded on the method existing, mirroring ClientSync.persistBootstrapBase,
         // so db instances without the durable store degrade to full-history behaviour.
+        // rethrow, as the first-action read above: a fault read as "unset" would run the
+        // COINPay re-derive and the market sweep on a truncated replica's partial history.
         let truncatedReplica = false;
         if(this.db && typeof this.db.getSyncState === 'function'){
-            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'));
+            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'), { rethrow: true });
             truncatedReplica = (base !== null && base !== undefined && parseInt(base, 10) > 0);
         }
 
