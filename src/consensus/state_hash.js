@@ -52,6 +52,112 @@
  * the pair. The selection predicates also mirror xchain-sync/src/updatedRows.js +
  * cooldownCredits.js (forward) and ClientRollback.js + rollback.js (reverse).
  *
+ * MODULE MAP (the facade owns only the composition and the public surface):
+ *   state_hash/activation.js            flag-day gates, archive-head predicates and
+ *                                       the per-class constants. Every gate fails
+ *                                       inert: below its height, or on an unknown
+ *                                       network, the class is omitted and the
+ *                                       preimage stays byte-identical to the
+ *                                       pre-feature shape.
+ *   state_hash/mutation_sections.js     the five ungated in-place classes
+ *                                       (deactivations, slashes, request_status,
+ *                                       cooldown, credits).
+ *   state_hash/archive_invalid_section.js  the anchor_invalid class, which has two
+ *                                       separate flag days of its own.
+ *   state_hash/gated_sections.js        the four classes folded in only at or after
+ *                                       a per-chain height (index map, poll
+ *                                       finalize, token supply, bet status).
+ *   state_hash/tolerant_query.js        the shared query wrapper that degrades a
+ *                                       class to empty on an older schema.
+ *
+ * PER-CLASS CONTRACT. Every collector takes the database handle and the block
+ * height B and returns plain rows (or a small object of row lists) whose values
+ * are already resolved to canonical strings:
+ *   - deactivations: a stamp written at block B carries the value B + delay, so
+ *     the selection is deactivation_block = B + delay on the four stake and
+ *     delegation tables. It is skipped (empty) when the delay is unknown, which
+ *     mirrors the forward updated_rows collector on the source side.
+ *   - slashes: the slashed stake or unstake row, reached through its debit-log
+ *     entry for this block. DISTINCT collapses several debits against one stake,
+ *     because the cut amount is functionally determined by the action_index.
+ *   - request_status: the v0 attest and xcall rows whose resolved_block stamp is B.
+ *   - cooldown: unstake and contract-unstake rows whose maturity block is B, with
+ *     the status resolved to its name.
+ *   - credits: the backdated cooldown refunds, capability GAS plus the contract's
+ *     own tick, keyed by the matured unstake's cooldown_end_block. A null gasTick
+ *     makes the GAS join match nothing, so the capability branch empties while the
+ *     contract branch still runs.
+ *   - anchor_invalid: the archive-head parent rows stamped invalid_archive when the
+ *     completing chunk of a chunked batch fails its CRC. Its version predicate and
+ *     its chunk-height key are gated on separate heights, so a repair of either one
+ *     moves the preimage only on its own flag day.
+ *   - index map: the (id, string) pairs whose deterministic id was first assigned
+ *     at B. It deliberately hashes the surrogate id, the very value under
+ *     protection, which is sound only because every assignment path is now
+ *     deterministic.
+ *   - poll_finalize: polls whose terminal flip landed at B, keyed by resolved_block,
+ *     the same key the forward channel selects by and the rollback re-open resets.
+ *   - token_supply: (tick, supply) for every tick a credit, debit or escrow touched
+ *     at B, since supply is derived from those ledgers and this is exactly the set
+ *     of supplies that may have moved.
+ *   - bet status: feeds latched or terminal at B and bets settled at B, keyed by
+ *     the stamp columns, with the status strings resolved through index_statuses.
+ *
+ * QUERY ORDER. The ungated classes run first, in the order the preimage lists
+ * them, and the gated classes run after every ungated query. A gated class issues
+ * no query at all while inert, so an inert block makes exactly the doQuery calls
+ * it made before the classes existed and a recorded call sequence stays valid.
+ *
+ * ORDERING INSIDE A CLASS. Each selection ends in an ORDER BY over keys that form
+ * a total order (the on-chain action_index where a row has one, a BINARY-pinned
+ * string key where it does not), so two nodes with different default collations
+ * produce the same row sequence and therefore the same hash.
+ *
+ * PUBLIC SURFACE. The re-exports at the bottom keep the names the source
+ * indexer, the follower and the test suites already require, so splitting the
+ * implementation across the state_hash/ directory moves no import site. A
+ * consumer that wants a table list, an activation map or a predicate reads it
+ * from here and never from the part that owns it.
+ *
+ * PREIMAGE SHAPE. The object returned by buildStateHashData has a fixed key
+ * order, and that order is the hash input, so it is written out in one place
+ * and never derived from iteration:
+ *   1. deactivations, slashes, request_status, cooldown, credits, anchor_invalid,
+ *      always present, always in that order, each an array that is empty when the
+ *      class found nothing or the schema predates it.
+ *   2. index_addresses_new and index_tickers_new, only once the index-map gate is
+ *      active for the block and network.
+ *   3. poll_finalize, then token_supply, then bet_feed_status and bet_status, each
+ *      only once its own gate is active.
+ *   4. block_index and state_hash_version, always last.
+ * A gated key is inserted before block_index only when its gate is active, never
+ * as a null placeholder, because a present-but-null key would serialize
+ * differently from an absent one and break byte identity on every inert block.
+ *
+ * WHY THE PREIMAGE IS NOT CHAINED. The three adjacent consensus hashes already
+ * carry chain continuity. Chaining this one on the previous state_hash would make
+ * a NULL backfill of historical blocks poison every successor, so each block's
+ * state hash depends on that block's mutated rows alone.
+ *
+ * DEGRADING ON OLDER SCHEMAS. A class whose table or column does not exist yet
+ * (errno 1146 or 1054) contributes an empty array instead of failing the block,
+ * so a node that has not run a later migration still computes a hash. Any other
+ * numeric errno is rethrown, and an error with no numeric errno is swallowed,
+ * which is the behaviour the monolithic module had before it was split.
+ *
+ * RULES FOR CHANGING THIS MODULE. A new class needs a gate in activation.js, a
+ * collector in the matching section module, an entry in the composition below and
+ * a hash-class declaration in table_lifecycle.js. The copy in the follower must
+ * change in the same step, the golden vectors must be regenerated for any active
+ * class, and the carrier-logic pin must be re-pinned with a reason.
+ *
+ * HOW A BLOCK IS VERIFIED. The source indexer computes and stores the hash while
+ * it indexes block B. A follower replays the same block, recomputes the hash from
+ * its own rows through the identical code and compares the two values, halting on
+ * any mismatch. A class that is missing, gated differently or ordered differently
+ * on one side therefore shows up as a fleet halt rather than as silent drift,
+ * which is why every edit here is a consensus change and not a refactor.
+ *
  ********************************************************************/
 
 const A = require('./state_hash/activation');
