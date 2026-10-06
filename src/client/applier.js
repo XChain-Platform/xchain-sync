@@ -1014,4 +1014,3 @@ class ClientApplier {
 }
 
 module.exports = ClientApplier;
-module.exports.REPLICA_LEDGER_TABLES = REPLICA_LEDGER_TABLES;
