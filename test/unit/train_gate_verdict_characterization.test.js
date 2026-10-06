@@ -133,6 +133,10 @@ describe('train gate verdict characterization, unproven boundary', function () {
             });
     });
 
+});
+
+describe('train gate verdict characterization, reached boundary', function () {
+
     [[970000, 'at the boundary'], [970005, 'above the boundary']].forEach(function ([height, where]) {
         it('halts ' + where, function () {
             assert.deepStrictEqual(
