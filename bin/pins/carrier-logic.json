@@ -64,7 +64,7 @@
     },
     "train_activation": {
       "path": "src/consensus/gates/train_gate.js",
-      "hash": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
+      "hash": "304a6c9b8b255c674afd19cc50cccbc89185572c943e9af99a6ba54174e97de5",
       "twins": [
         "xchain-indexer"
       ]
@@ -358,6 +358,13 @@
       "to": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
       "reason": "restore effective archive version-set discriminator",
       "date": "2026-09-27"
+    },
+    {
+      "id": "train_activation",
+      "from": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
+      "to": "304a6c9b8b255c674afd19cc50cccbc89185572c943e9af99a6ba54174e97de5",
+      "reason": "copy the split train gate from its indexer canonical",
+      "date": "2026-10-06"
     }
   ]
 }

@@ -170,79 +170,69 @@ function readManifestTrainActivation(manifest){
     };
 }
 
-function validateTrainActivationInputs(opts){
-    let o = opts || {};
-    let network = (o.network === null || o.network === undefined) ? null : String(o.network);
-    let activation = o.activation || TRAIN_ACTIVATION;
-    let clock = asHeight(o.height);
-    let active = resolveRuleSet(clock, network, activation);
-
+function normalizeTrainRequirement(o){
     let required = o.required !== undefined ? o.required : readManifestTrainActivation(o.manifest);
     if(required && required.ruleSetVersion === undefined && required.malformed === undefined)
         required = readManifestTrainActivation(required);
-    return { network, activation, clock, active, required };
+    return required;
 }
 
-function clearTrainActivationVerdict(input){
+function baseTrainVerdict(active, network, clock){
     return {
         status: 'clear',
-        activeRuleSet: input.active,
+        activeRuleSet: active,
         requiredRuleSet: null,
         requiredAtHeight: null,
-        network: input.network,
-        height: input.clock,
+        network: network,
+        height: clock,
         classification: null,
         reason: null
     };
 }
 
-// A manifest block this code cannot read is fail-closed. The alternative is
-// treating an unreadable requirement as no requirement, which is the silent
-// fork the whole section exists to prevent.
-function malformedRequirementVerdict(base, malformed){
-    return Object.assign(base, {
-        status: 'halt',
-        reason: 'train_activation: the release manifest carries a trainActivation block this build ' +
-                'cannot read (' + malformed + '), so the required rule set cannot be ' +
-                'determined; refusing to advance'
-    });
-}
+// The build does NOT implement the required rule set, so everything here is about
+// whether the boundary has been crossed yet.
+function unsupportedTrainVerdict(base, required, network, clock){
+    const wanted = required.ruleSetVersion;
+    let at = required.heights ? asHeight(required.heights[network]) : null;
 
-function missingActivationHeightVerdict(base, wanted, network, carries){
-    return Object.assign(base, {
-        status: 'halt',
-        requiredRuleSet: wanted,
-        reason: 'train_activation: the release manifest requires rule set ' + wanted + ', which this ' +
-                'build does not implement, and names no activation height for network ' +
-                JSON.stringify(network) + ', so the boundary cannot be proven to be ahead. ' + carries
-    });
-}
+    const carries = 'platform version ' + wanted + ' carries it; recover with the node update command, ' +
+                    'which installs the pinned component set from the signed manifest';
 
-// No clock. Cannot prove the boundary is still ahead, so it is treated as
-// reached. Deliberately stricter than the BTC case; see the header.
-function missingClockVerdict(base, wanted, at, network, carries){
-    return Object.assign(base, {
-        status: 'halt',
-        requiredRuleSet: wanted,
-        requiredAtHeight: at,
-        reason: 'train_activation: the release manifest requires rule set ' + wanted + ' at BTC height ' +
-                at + ' on ' + network + ', which this build does not implement, and this service has no ' +
-                'BTC height to compare against, so the boundary cannot be proven to be ahead. ' + carries
-    });
-}
+    if(at === null){
+        return Object.assign(base, {
+            status: 'halt',
+            requiredRuleSet: wanted,
+            reason: 'train_activation: the release manifest requires rule set ' + wanted + ', which this ' +
+                    'build does not implement, and names no activation height for network ' +
+                    JSON.stringify(network) + ', so the boundary cannot be proven to be ahead. ' + carries
+        });
+    }
 
-function activatedRequirementVerdict(base, wanted, at, network, clock, carries){
-    return Object.assign(base, {
-        status: 'halt',
-        requiredRuleSet: wanted,
-        requiredAtHeight: at,
-        reason: 'train_activation: block at BTC height ' + clock + ' is at or above the ' + wanted +
-                ' activation height ' + at + ' on ' + network + ', and this build does not implement ' +
-                'rule set ' + wanted + '. Applying it under the old rules would fork. ' + carries
-    });
-}
+    // No clock. Cannot prove the boundary is still ahead, so it is treated as
+    // reached. Deliberately stricter than the BTC case; see the header.
+    if(clock === null){
+        return Object.assign(base, {
+            status: 'halt',
+            requiredRuleSet: wanted,
+            requiredAtHeight: at,
+            reason: 'train_activation: the release manifest requires rule set ' + wanted + ' at BTC height ' +
+                    at + ' on ' + network + ', which this build does not implement, and this service has no ' +
+                    'BTC height to compare against, so the boundary cannot be proven to be ahead. ' + carries
+        });
+    }
 
-function pendingRequirementVerdict(base, wanted, at, network, clock, carries){
+    if(clock >= at){
+        return Object.assign(base, {
+            status: 'halt',
+            requiredRuleSet: wanted,
+            requiredAtHeight: at,
+            reason: 'train_activation: block at BTC height ' + clock + ' is at or above the ' + wanted +
+                    ' activation height ' + at + ' on ' + network + ', and this build does not implement ' +
+                    'rule set ' + wanted + '. Applying it under the old rules would fork. ' + carries
+        });
+    }
+
     return Object.assign(base, {
         status: 'pending',
         requiredRuleSet: wanted,
@@ -265,32 +255,34 @@ function pendingRequirementVerdict(base, wanted, at, network, clock, carries){
 // manifest, which is read here for convenience). `height` is the BTC height of the
 // block about to be applied, or null when this service has no BTC clock.
 function evaluateTrainActivation(opts){
-    const input = validateTrainActivationInputs(opts);
-    const { network, activation, clock, required } = input;
-    const base = clearTrainActivationVerdict(input);
+    let o = opts || {};
+    let network = (o.network === null || o.network === undefined) ? null : String(o.network);
+    let activation = o.activation || TRAIN_ACTIVATION;
+    let clock = asHeight(o.height);
+    let required = normalizeTrainRequirement(o);
+    const base = baseTrainVerdict(resolveRuleSet(clock, network, activation), network, clock);
 
     if(!required) return base;
 
-    if(required.malformed) return malformedRequirementVerdict(base, required.malformed);
+    // A manifest block this code cannot read is fail-closed. The alternative is
+    // treating an unreadable requirement as no requirement, which is the silent
+    // fork the whole section exists to prevent.
+    if(required.malformed){
+        return Object.assign(base, {
+            status: 'halt',
+            reason: 'train_activation: the release manifest carries a trainActivation block this build ' +
+                    'cannot read (' + required.malformed + '), so the required rule set cannot be ' +
+                    'determined; refusing to advance'
+        });
+    }
 
-    const wanted = required.ruleSetVersion;
     base.classification = required.classification || null;
 
     // The manifest requires a rule set this build implements. Nothing to do, at any
     // height, with or without a clock: this node can apply both sides of the boundary.
-    if(implementedRuleSets(activation).indexOf(wanted) !== -1) return base;
+    if(implementedRuleSets(activation).indexOf(required.ruleSetVersion) !== -1) return base;
 
-    // From here the build does NOT implement the required rule set. Everything below
-    // is about whether the boundary has been crossed yet.
-    let at = required.heights ? asHeight(required.heights[network]) : null;
-
-    const carries = 'platform version ' + wanted + ' carries it; recover with the node update command, ' +
-                    'which installs the pinned component set from the signed manifest';
-
-    if(at === null) return missingActivationHeightVerdict(base, wanted, network, carries);
-    if(clock === null) return missingClockVerdict(base, wanted, at, network, carries);
-    if(clock >= at) return activatedRequirementVerdict(base, wanted, at, network, clock, carries);
-    return pendingRequirementVerdict(base, wanted, at, network, clock, carries);
+    return unsupportedTrainVerdict(base, required, network, clock);
 }
 
 module.exports = {
