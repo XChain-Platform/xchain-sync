@@ -564,11 +564,11 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
-            icons:   /DELETE FROM icons WHERE token_id NOT IN \(SELECT id FROM tokens\)/,
+            icons:   /DELETE FROM icons WHERE (?:token_id > \? AND )?token_id NOT IN \(SELECT id FROM tokens\)/,
             // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
             // side that has no ticker); without them the sweep deletes live markets.
-            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
-            pubkeys: /DELETE FROM pubkeys WHERE address_id NOT IN \(SELECT id FROM index_addresses\)/,
+            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND (?:tick1_id > \? AND )?tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND (?:tick2_id > \? AND )?tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
+            pubkeys: /DELETE FROM pubkeys WHERE (?:address_id > \? AND )?address_id NOT IN \(SELECT id FROM index_addresses\)/,
         };
         const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
         assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
