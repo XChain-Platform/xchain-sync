@@ -10,7 +10,7 @@
 
 const {
     assert, sinon, axios, ClientSync, createMockDb, registerClientSyncHooks
-} = require('./support');
+} = require('../support');
 
 let sync, db, applier, rollback, hashVerifier, config, util;
 
