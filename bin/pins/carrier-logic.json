@@ -36,7 +36,7 @@
     },
     "stateHash": {
       "path": "src/consensus/state_hash.js",
-      "hash": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
+      "hash": "3b5cb6a37f58cb40b0020e2c0440d34e21810b9b316c3e71a5b0c2861a18eb21",
       "twins": [
         "xchain-indexer"
       ]
@@ -358,6 +358,13 @@
       "to": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
       "reason": "restore effective archive version-set discriminator",
       "date": "2026-09-27"
+    },
+    {
+      "id": "stateHash",
+      "from": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
+      "to": "3b5cb6a37f58cb40b0020e2c0440d34e21810b9b316c3e71a5b0c2861a18eb21",
+      "reason": "copy the split state hash from its indexer canonical",
+      "date": "2026-10-06"
     },
     {
       "id": "stake_weighted_quorum",
