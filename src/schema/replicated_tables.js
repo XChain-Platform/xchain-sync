@@ -58,6 +58,14 @@
  *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
  *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
+ *   - dispenser_extension_undo        decoder-local reorg journal: the pre-image of each row a
+ *                                     format-2 expiration extend touched, written and consumed
+ *                                     on the decoder's own block transaction (restored then
+ *                                     deleted by block on reorg, pruned below the safe height).
+ *                                     The replica rolls dispensers back through the full-table
+ *                                     reconcile, never through this journal, so it is neither
+ *                                     streamed, counted nor content-checked, and it must stay
+ *                                     out of every channel like mempool_transactions.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
  *     cross_chain_matches,            processing, and pushed or retracted by the hub out
  *     oracle_prices,                  of band with block apply (its price and dex reorg
