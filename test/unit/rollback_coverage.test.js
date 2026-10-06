@@ -1221,6 +1221,44 @@ describe('Rollback coverage guard @regression', function(){
         });
     }
 
+    // The substantive assertions of those three suites live in their parts directories, so
+    // the entry pin above locks only thin shells. Walk each directory on both sides with no
+    // hard-coded list: a part present on one side only, or edited on one side only, fails.
+    const listTree = (root) => {
+        const fs = require('fs'), out = [];
+        (function walk(rel){
+            for(const ent of fs.readdirSync(pathMod.join(root, rel), { withFileTypes: true })){
+                const child = rel ? rel + '/' + ent.name : ent.name;
+                if(ent.isDirectory()) walk(child); else out.push(child);
+            }
+        })('');
+        return out.sort();
+    };
+    for(const parts of [
+        'state_subtree_activation.test',
+        'contract_state_subtree.test',
+        'escrow_leaf_subtree.test',
+    ]){
+        it(parts + '/ holds the same files with the same masked bytes in xchain-sync and xchain-indexer (cross-repo twin parts)', function(){
+            const fs = require('fs');
+            const syncDir    = pathMod.resolve(__dirname, '../../test/unit/' + parts);
+            const indexerDir = indexerFile('test/unit/' + parts);
+            if(!requireSibling(this, indexerDir)) return;
+            const syncFiles = listTree(syncDir), indexerFiles = listTree(indexerDir);
+            assert.ok(syncFiles.length > 0, parts + '/ is empty; the walk would compare nothing');
+            assert.deepStrictEqual(syncFiles, indexerFiles, parts + '/ lists differ; only in sync: ' +
+                syncFiles.filter(f => !indexerFiles.includes(f)).join(', ') + '; only in indexer: ' +
+                indexerFiles.filter(f => !syncFiles.includes(f)).join(', '));
+            for(const rel of syncFiles){
+                const mine = maskTwinDepth(fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'));
+                assert.ok(mine.trim().length > 0, parts + '/' + rel + ' is empty');
+                assert.strictEqual(mine, maskTwinDepth(fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8')),
+                    parts + '/' + rel + ' drifted between xchain-sync and xchain-indexer; edit the indexer copy '
+                    + 'and carry it across, keeping only the src/<feature>/ segment of its requires different');
+            }
+        });
+    }
+
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
     // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
     // block columns, or the integrity hash covers a different row set than it protects.

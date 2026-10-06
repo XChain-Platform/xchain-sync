@@ -29,7 +29,7 @@ const balanceHelpers = require('../db/balance_helpers');
 const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
-const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const util = require('node:util');
@@ -82,7 +82,9 @@ function initializeCoin(client, coin){
     // skipped (with a warning) rather than run with a wrong value. The production wiring
 
     // (SyncService.startClientSyncForChain) always passes cfg.coin.
-    client.coin = coin;
+    // Store the TICKER: cfg.coin is the full name, while the source binds source_chain
+    // and tests COIN === 'BTC' in ticker form, so the reorg mirror deletes need it too.
+    client.coin = coinTicker(coin);
     let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
     if(delay === undefined){
         throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
