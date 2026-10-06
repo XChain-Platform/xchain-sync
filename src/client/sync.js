@@ -56,6 +56,7 @@ const envConfig = require('../config');
 // mechanism. Declared once in replicated_tables.js, which the content-parity plan
 // also reads, so the count and content checks cannot disagree about a table.
 const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
+const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
 // Lock-wait timeouts on schema apply retry with exponential backoff before the
 // table counts as a persistent failure.
 const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
@@ -1511,9 +1512,10 @@ class ClientSync {
         return Math.min(100000, n);
     }
 
-    fetchLookupPage(source, table, afterId, pageSize){
+    fetchLookupPage(source, table, afterId, pageSize, maxBlock){
         let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
             this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
+        if(maxBlock != null) url += '&max_block=' + maxBlock;
         return axios.get(url, {
             headers: this.upstreamHeaders(),
             responseType: 'arraybuffer',
@@ -1561,7 +1563,9 @@ class ClientSync {
     }
 
     // Pages append-only lookup tables from their current high-water cursors.
-    // A from-zero pass fills holes below a table's high-water mark.
+    // A from-zero pass fills holes below a table's high-water mark. Tables that
+    // reissue ids on a reorg are paged only up to the replica's applied tip, so the
+    // replica never holds a row its own reorg rollback would not delete and reissue.
     async syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this.lookupPageSize();
@@ -1571,6 +1575,8 @@ class ClientSync {
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
             let repairing = !!(fromZero && fromZero.has(table));
+            let tip = this.lastAppliedBlock;
+            let maxBlock = (REISSUING_LOOKUPS.has(table) && Number.isInteger(tip) && tip >= 0) ? tip : null;
             if(repairing){
                 getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
@@ -1584,7 +1590,7 @@ class ClientSync {
             }
             let pages = 0;
             while(true){
-                let response = await this.fetchLookupPage(source, table, afterId, pageSize);
+                let response = await this.fetchLookupPage(source, table, afterId, pageSize, maxBlock);
                 let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
