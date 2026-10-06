@@ -188,10 +188,8 @@ class SyncService {
     }
 
     // Discover chains from the hub and create DB pools for both indexer
-    // and decoder DBs. Decoder DBs use the same connection/sync machinery
-    // as indexer DBs but skip the transparency log (decoder content is
-    // deterministic from the coin node; no synthetic chain-of-state hash
-    // needed).
+    // and decoder DBs. Decoder DBs skip the transparency log: their content
+    // is deterministic from the coin node.
     async discoverChains(){
         let indexerConfigs = await this.hubClient.getIndexerConfigs();
         let decoderConfigs = await this.hubClient.getDecoderConfigs();
@@ -202,10 +200,8 @@ class SyncService {
             let key = cfg.coin + ':' + cfg.network + ':' + cfg.dbType;
             if(this.databases.has(key)) continue;
 
-            // Per-chain exclude (SYNC_EXCLUDE): drop a chain the client must not
-            // replicate (e.g. a fast chain that cannot full-snapshot bootstrap).
-            // Skipped before any DB pool / ClientSync is created, so an excluded
-            // chain can never crash-loop the process.
+            // SYNC_EXCLUDE drops a chain before any DB pool or ClientSync exists,
+            // so an excluded chain cannot crash-loop the process.
             if(this.config['SYNC_EXCLUDE'] && this.config['SYNC_EXCLUDE'].includes(key)){
                 getLogger().info('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
                 continue;
@@ -227,143 +223,124 @@ class SyncService {
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
-                // The replica keeps the source's db_name but uses the client's own creds.
-                db = new Database(
-                    this.config['REPLICA_DB_HOST'],
-                    this.config['REPLICA_DB_PORT'],
-                    cfg.db_name,
-                    this.config['REPLICA_DB_USER'],
-                    this.config['REPLICA_DB_PASS'],
-                    this.util,
-                    cfg.dbType
-                );
-                await db.createDatabase();
-                // Schema replication: try direct DB connection first (faster), fall back to
-                // server's /schema endpoint during ClientSync bootstrap if DB is unreachable
-                let sourceDb = null;
-                try {
-                    sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
-                    // Single-attempt probe: a node-internal source DB host is often
-                    // unreachable from the replica box, and verifyDatabase() would
-                    // retry forever, hanging discovery instead of falling through to
-                    // the server /schema fetch below.
-                    let sourceExists = await sourceDb.verifyDatabaseOnce();
-                    if(sourceExists){
-                        await db.replicateSchema(sourceDb);
-                    }
-                } catch(e){
-                    // A column self-heal the server REFUSED is not an unreachable source:
-                    // the schema really is behind and the /schema fetch will not fix it, so
-                    // it must not be filed under the reachability message. Say so loudly and
-                    // let ClientSync's schema apply record the durable halt.
-                    if(e && e.columnFailures){
-                        getLogger().error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
-                            ' left columns missing on the replica: ' + e.message);
-                    } else {
-                        // Source DB not reachable; schema will be fetched from server via /schema endpoint
-                        getLogger().info('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
-                    }
-                } finally {
-                    // Close in finally: a thrown replicateSchema used to leak the source
-                    // pool, and a refused ALTER now throws.
-                    if(sourceDb){
-                        try { await sourceDb.close(); } catch(closeErr){ /* pool already gone */ }
-                    }
-                }
-                // Sync-owned tables: verifySyncTables is dbType-aware. Indexer
-                // replicas get the full set (sync_meta/merkle_epochs/sync_halt),
-                // decoder replicas get only sync_halt (the durable divergence
-                // halt applies to both shapes; the transparency log does not).
-                await db.verifySyncTables();
-                // Sync runs no migrations, so legacy timestamp columns must be retyped here.
-                await db.ensureDatetimeColumns({ includeFollowerDerived: true });
-                // Self-heal column drift on a pre-existing replica before any row
-                // data is accepted. Runs regardless of which schema path applied
-                // above (direct replicateSchema or, when the source DB is
-                // unreachable, the server /schema fetch during ClientSync
-                // bootstrap) since it derives columns from authoritative
-                // definitions rather than the source DB. No-op when the table is
-                // absent or already current.
-                await db.ensureReplicatedColumns();
-                // Same rationale for secondary-index drift (missing indexes AND stale
-                // UNIQUE keys, e.g. the votes append-only migration): the direct
-                // replicateSchema path calls this, but the common client topology has
-                // the source DB unreachable and bootstraps schema from the server
-                // /schema fetch, which never carries index changes. Run it here so
-                // both paths self-heal. Idempotent, so the double-call on the
-                // direct-DB path is a cheap no-op.
-                await db.ensureReplicaSecondaryIndexes();
-                // Same again for the raw-wire-field charset widen: neither self-heal above
-                // retypes an existing column, so a replica bootstrapped before the
-                // 2026-09-02 indexer migration keeps utf8mb3 on contracts.code and the
-                // grammar-constrained fields and halts on the first 4-byte character the
-                // widened origin accepts. Idempotent, so the double-call on the direct-DB
-                // path is a cheap no-op.
-                await db.ensureReplicaUtf8mb4Columns();
-                // Fail closed on collation drift in the columns the stake-weight
-                // snapshot orders on. The follower rebuilds stakes_root from the
-                // byte-mirrored cappedStakeWeightsSql, whose window caps truncate on
-                // that order, so a replica whose index_addresses.address collation
-                // deviates from the source's picks different cap survivors and then
-                // halts on a root it computed wrong. Runs AFTER the schema self-heal
-                // above, so a replica that was going to be repaired is judged on its
-                // repaired state. Twin of xchain-indexer's
-                // assertStakeWeightOrderingCollation.
-                await db.assertStakeWeightOrderingCollation();
+                db = await this.openClientReplica(cfg);
             } else {
-                // Server mode: connect to the DB this server polls + serves.
-                // Default: the authoritative DB at the hub-provided coordinates.
-                // Override: when REPLICA_DB_HOST is set, serve from a LOCAL replica
-                // (same db_name from the hub) using REPLICA_DB_* creds instead of the
-                // hub's coordinates. This lets a box that pulled the DBs as a client
-                // (e.g. sync.xchain.io) re-serve those local replicas to downstream
-                // clients, while still enumerating chains/db_names from the hub.
-                if(this.config['REPLICA_DB_HOST']){
-                    db = new Database(this.config['REPLICA_DB_HOST'], this.config['REPLICA_DB_PORT'], cfg.db_name, this.config['REPLICA_DB_USER'], this.config['REPLICA_DB_PASS'], this.util, cfg.dbType);
-                } else {
-                    db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
-                }
-                // Sync-owned tables (dbType-aware: indexer = full set, decoder =
-                // sync_halt only); same rationale as the client branch above.
-                await db.verifySyncTables();
-                // Leave the indexer's own table to the indexer by excluding follower-derived columns.
-                await db.ensureDatetimeColumns({ includeFollowerDerived: false });
-                await db.assertStakeWeightOrderingCollation();
+                db = await this.openServerDatabase(cfg);
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
             newChains.push({ key, db, config: cfg });
         }
 
-        // REFUSE a SYNC_BOOTSTRAP_DEPTH_* key that names no chain the hub published,
-        // BEFORE any ClientSync starts. An unmatched key is not inert: the lookup falls
-        // through to depth 0, which is the full-history snapshot branch, so a typo'd or
-        // stale key silently starts exactly the unbounded bootstrap the key existed to
-        // prevent. Client mode only (the env var governs nothing on a server) and only
-        // on the first discovery pass, so a later hub re-poll cannot kill a process that
-        // already validated and is happily replicating.
+        this.validateFirstDiscoveryPass();
+        this.startDiscoveredChains(newChains);
+
+        return newChains;
+    }
+
+    // Client mode: the replica keeps the source's db_name but uses the client's own creds.
+    async openClientReplica(cfg){
+        let db = new Database(
+            this.config['REPLICA_DB_HOST'],
+            this.config['REPLICA_DB_PORT'],
+            cfg.db_name,
+            this.config['REPLICA_DB_USER'],
+            this.config['REPLICA_DB_PASS'],
+            this.util,
+            cfg.dbType
+        );
+        await db.createDatabase();
+        await this.replicateSchemaFromSource(db, cfg);
+        await this.healReplicaSchema(db);
+        return db;
+    }
+
+    // Tries the source DB directly (faster); when it is unreachable the schema
+    // arrives from the server /schema endpoint during ClientSync bootstrap.
+    async replicateSchemaFromSource(db, cfg){
+        let sourceDb = null;
+        try {
+            sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
+            // Single attempt: verifyDatabase() would retry forever against a
+            // node-internal host and hang discovery.
+            let sourceExists = await sourceDb.verifyDatabaseOnce();
+            if(sourceExists){
+                await db.replicateSchema(sourceDb);
+            }
+        } catch(e){
+            // A refused column self-heal is not an unreachable source: the /schema
+            // fetch will not fix it, so report it and let ClientSync record the halt.
+            if(e && e.columnFailures){
+                getLogger().error('Schema replication for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType +
+                    ' left columns missing on the replica: ' + e.message);
+            } else {
+                getLogger().info('Source DB not reachable for ' + cfg.coin + '/' + cfg.network + '/' + cfg.dbType + '; schema will be fetched from sync server');
+            }
+        } finally {
+            // Close in finally: a thrown replicateSchema would otherwise leak the source pool.
+            if(sourceDb){
+                try { await sourceDb.close(); } catch(closeErr){ /* pool already gone */ }
+            }
+        }
+    }
+
+    // Runs on both schema paths (direct replicateSchema or the server /schema
+    // fetch), so every step is idempotent.
+    async healReplicaSchema(db){
+        // dbType-aware: indexer replicas get the full sync set, decoder replicas only sync_halt.
+        await db.verifySyncTables();
+        // Sync runs no migrations, so legacy timestamp columns are retyped here.
+        await db.ensureDatetimeColumns({ includeFollowerDerived: true });
+        // Derives columns from authoritative definitions, not the source DB.
+        await db.ensureReplicatedColumns();
+        // The /schema fetch never carries index changes, so heal secondary indexes here.
+        await db.ensureReplicaSecondaryIndexes();
+        // Neither heal above retypes an existing column; widen raw-wire charsets here.
+        await db.ensureReplicaUtf8mb4Columns();
+        // Fail closed on collation drift in the stake-weight ordering columns,
+        // judged after the repairs above. Twin of xchain-indexer's
+        // assertStakeWeightOrderingCollation.
+        await db.assertStakeWeightOrderingCollation();
+    }
+
+    // Server mode: connect to the DB this server polls and serves. With
+    // REPLICA_DB_HOST set it serves a local replica (same db_name from the hub)
+    // instead of the hub-provided coordinates.
+    async openServerDatabase(cfg){
+        let db;
+        if(this.config['REPLICA_DB_HOST']){
+            db = new Database(this.config['REPLICA_DB_HOST'], this.config['REPLICA_DB_PORT'], cfg.db_name, this.config['REPLICA_DB_USER'], this.config['REPLICA_DB_PASS'], this.util, cfg.dbType);
+        } else {
+            db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
+        }
+        await db.verifySyncTables();
+        // Leave the indexer's own table to the indexer by excluding follower-derived columns.
+        await db.ensureDatetimeColumns({ includeFollowerDerived: false });
+        await db.assertStakeWeightOrderingCollation();
+        return db;
+    }
+
+    // Client mode, first pass only: an unmatched SYNC_BOOTSTRAP_DEPTH_* key falls
+    // through to depth 0 (the full-history snapshot), so refuse it before any
+    // ClientSync starts.
+    validateFirstDiscoveryPass(){
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
             this._bootstrapDepthChecked = true;
             assertBootstrapDepthChains(this.config, this.getChains());
-            // REFUSE a present-but-invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value on
-            // the same pass, and for the same reason: it is not inert either. It resolves to
-            // the null an ABSENT override resolves to, so verifyCheckpointQuorum skips the
-            // anchor on a replica whose operator armed VERIFY_CHECKPOINT_QUORUM. Client mode
-            // only (a server reads no pinned set) and before any ClientSync is constructed.
+            // An invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value resolves like an
+            // absent one and would skip the quorum anchor, so refuse it on the same pass.
             assertPinnedEnvOverrides();
         }
+    }
 
-        if(newChains.length > 0){
-            for(let { key, db, config: cfg } of newChains){
-                if(this.config['SYNC_MODE'] === 'server'){
-                    this.startPollerForChain(key, db, cfg);
-                } else {
-                    this.startClientSyncForChain(key, db, cfg);
-                }
+    startDiscoveredChains(newChains){
+        for(let { key, db, config: cfg } of newChains){
+            if(this.config['SYNC_MODE'] === 'server'){
+                this.startPollerForChain(key, db, cfg);
+            } else {
+                this.startClientSyncForChain(key, db, cfg);
             }
         }
-
-        return newChains;
     }
 
     async startServerMode(){

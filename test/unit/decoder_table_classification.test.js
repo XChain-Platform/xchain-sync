@@ -69,7 +69,9 @@ function requireSibling(ctx){
 //
 // mempool_transactions: node-local, non-deterministic observation state; its own
 // schema comment forbids sharing raw values across nodes.
-const DECODER_EXCLUDED = new Set(['mempool_transactions']);
+// dispenser_extension_undo: local reorg bookkeeping for dispenser expiration extends,
+// not replicated state.
+const DECODER_EXCLUDED = new Set(['mempool_transactions', 'dispenser_extension_undo']);
 
 const ADD_INSTRUCTIONS =
     '\n\nEither add it to TOPOLOGY.decoder in src/schema/replicated_tables.js (and update the ' +
