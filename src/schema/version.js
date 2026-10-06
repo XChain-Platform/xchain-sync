@@ -164,7 +164,7 @@
  *       fails the block, and where it flows through, every leg lands on the implicit
  *       default and the follower answers leg order from nothing while its source
  *       answers from the wire. Nothing here enters a block-hash preimage: `destroys`
- *       and `sends` are DERIVED in src/tableLifecycle.js, a deterministic projection
+ *       and `sends` are DERIVED in src/table_lifecycle.js, a deterministic projection
  *       of already-hashed actions in no hash class of their own, rolled back by
  *       `action_index >= ?`, which is agnostic to the row's column set. The
  *       migration is mode=auto, so it self-heals fleet-wide on the forced restart.
