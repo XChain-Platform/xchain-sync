@@ -81,4 +81,25 @@ function transactionsDataWidthReason(row){
            'to store a 4-byte payload; widen the column before running this chain.';
 }
 
-module.exports = { previousBlockHash, decoderLinkBroken, decoderLinkState, transactionsDataWidthReason };
+// Reads the replica's transactions.data charset and throws the width reason when it is
+// too narrow. Decoder replicas only; any other dbType returns. The read rethrows so a
+// transient driver fault surfaces instead of reading as an absent column and passing.
+// The caller runs it per chain so one narrow replica halts only its own chain.
+async function assertTransactionsDataWidth(db){
+    if(!db || db.dbType !== 'decoder') return;
+    let rows = await db.doQuery(
+        "SELECT CHARACTER_SET_NAME FROM information_schema.columns " +
+        "WHERE table_schema = ? AND table_name = 'transactions' AND column_name = 'data'",
+        [db.dbName],
+        null,
+        { rethrow: true }
+    );
+    if(!rows || rows.length === 0) return;
+    let reason = transactionsDataWidthReason(rows[0]);
+    if(reason) throw new Error(reason);
+}
+
+module.exports = {
+    previousBlockHash, decoderLinkBroken, decoderLinkState,
+    transactionsDataWidthReason, assertTransactionsDataWidth
+};
