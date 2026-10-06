@@ -52,6 +52,25 @@ function streamIncrementalSnapshotStatusTests(){
         assert.strictEqual(res.status.calledWith(404), true);
     });
 
+    // An unrecognized coin has no frozen activation delay, so the catch-up would
+    // silently omit the deactivation_block updated rows; refuse before any byte.
+    it('rejects an indexer catch-up for an unrecognized coin before opening the snapshot', async function(){
+        let db = createMockDb();
+        db.getLastBlock.resolves(100);
+        let res = createMockRes();
+        await assert.rejects(() => builder.streamIncrementalSnapshot(db, 80, res, 'NOT-A-COIN'),
+            /unrecognized coin "NOT-A-COIN"/);
+        assert.strictEqual(db.beginReadSnapshot.called, false, 'no read snapshot opened');
+        assert.strictEqual(res.setHeader.called, false, 'no header written');
+    });
+
+    it('rejects the updated-rows write for an unrecognized coin', async function(){
+        let writer = { write: sinon.stub().resolves() };
+        await assert.rejects(() => builder.writeIncrementalUpdatedRows(writer, createMockDb(), 'indexer', 80, 100, 'NOT-A-COIN', null),
+            /unrecognized coin "NOT-A-COIN"/);
+        assert.strictEqual(writer.write.called, false);
+    });
+
     it('streams incremental data with since_block field', async function(){
         let db = createMockDb();
         db.getLastBlock.resolves(100);
