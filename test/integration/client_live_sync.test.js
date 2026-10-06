@@ -23,6 +23,7 @@ const BlockBroadcaster = require('../../src/server/block_broadcaster');
 const TransparencyLog  = require('../../src/server/transparency_log');
 const SnapshotBuilder  = require('../../src/server/snapshot_builder');
 const ClientApplier    = require('../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 const ClientRollback   = require('../../src/client/rollback');
 const HashVerifier     = require('../../src/client/hash_verifier');
 const clientSync = require('../../src/client/sync');
@@ -216,7 +217,7 @@ describe('Integration: Client Live Sync', function() {
             if (!payload) {
                 poller.lastPolledBlock = 4;
                 await poller.poll();
-                payload = { block_index: 5, data: {} };
+                payload = { schema_version: SCHEMA_VERSION.indexer, block_index: 5, data: {} };
             }
 
             await applier.applyBlock(payload);

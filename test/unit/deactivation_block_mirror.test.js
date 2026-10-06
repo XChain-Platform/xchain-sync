@@ -34,10 +34,21 @@ function createMockDb(){
     };
 }
 
-// The four deactivation_block re-NULL statements, identified by the SET clause.
-function deactivationResets(db){
+// Every deactivation_block re-NULL statement, identified by the SET clause.
+function allDeactivationResets(db){
     return db.doQuery.getCalls().filter(c =>
         typeof c.args[0] === 'string' && c.args[0].includes('deactivation_block = NULL'));
+}
+
+// The four in-place-flip resets; the ROLLCALL eviction repair keys on rollcall_absences
+// instead and is pinned on its own below.
+function deactivationResets(db){
+    return allDeactivationResets(db).filter(c => !c.args[0].includes('rollcall_absences'));
+}
+
+// The ROLLCALL eviction repair, mirror of the source's repairRollcallEvictions.
+function evictionRepair(db){
+    return allDeactivationResets(db).find(c => c.args[0].includes('JOIN rollcall_absences'));
 }
 
 describe('deactivation_block sync-mirror', function(){
@@ -140,8 +151,62 @@ describe('deactivation_block sync-mirror', function(){
             const db = createMockDb();
             const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest'); // no coin
             await rollback.rollback(100);
-            assert.strictEqual(deactivationResets(db).length, 0);
+            assert.strictEqual(allDeactivationResets(db).length, 0);
             assert.ok(warn.getCalls().some(c => String(c.args[0]).includes('deactivation_block re-NULL mirror skipped')));
+        });
+    });
+});
+
+describe('deactivation_block sync-mirror', function(){
+
+    afterEach(function(){ sinon.restore(); });
+
+    // An eviction over all-zero stakes stamps delegations with no actions row, so an
+    // action-free reorg leaves firstActionIndex null and only this repair can undo it.
+    describe('ROLLCALL eviction repair runs on every rollback, ahead of the absences delete', function(){
+        let db, rollback;
+        beforeEach(function(){
+            sinon.stub(console, 'log');
+            sinon.stub(console, 'warn');
+            sinon.stub(console, 'error');
+            db = createMockDb();
+            rollback = new ClientRollback(db, new Utility(), 'BTC', 'regtest');
+        });
+
+        function assertRepairPrecedesAbsencesDelete(){
+            const calls = db.doQuery.getCalls();
+            const repair = evictionRepair(db);
+            assert.ok(repair, 'the eviction repair must run');
+            assert.ok(repair.args[0].includes('ra.evicted = 1'));
+            assert.ok(repair.args[0].includes('d.deactivation_block = ra.close_block + ?'));
+            assert.ok(!repair.args[0].includes('action_index'), 'keyed purely on block heights');
+            assert.deepStrictEqual(repair.args[1], [100, 6]);
+            const delIdx = calls.findIndex(c => /DELETE FROM rollcall_absences/.test(c.args[0]));
+            assert.ok(delIdx >= 0, 'expected the rollcall_absences delete');
+            assert.ok(calls.indexOf(repair) < delIdx, 'the repair must precede the delete of its join key');
+        }
+
+        it('runs when firstActionIndex is null (an action-free orphaned range)', async function(){
+            db.getFirstActionIndex.resolves(null);
+            await rollback.rollback(100);
+            assertRepairPrecedesAbsencesDelete();
+        });
+
+        it('runs when firstActionIndex is set', async function(){
+            await rollback.rollback(100);
+            assertRepairPrecedesAbsencesDelete();
+        });
+
+        it('rethrows a non-schema fault and swallows only a schema gap', async function(){
+            const deadlock = Object.assign(new Error('deadlock'), { errno: 1213 });
+            db.doQuery.withArgs(sinon.match(/JOIN rollcall_absences/)).rejects(deadlock);
+            await assert.rejects(rollback.rollback(100), /deadlock/);
+
+            const db2 = createMockDb();
+            const gap = Object.assign(new Error('no such table'), { errno: 1146 });
+            db2.doQuery.withArgs(sinon.match(/JOIN rollcall_absences/)).rejects(gap);
+            await new ClientRollback(db2, new Utility(), 'BTC', 'regtest').rollback(100);
+            assert.ok(db2.commitTransaction.calledOnce, 'a schema gap must not abort the rollback');
         });
     });
 });

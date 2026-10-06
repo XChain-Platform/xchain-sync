@@ -53,7 +53,7 @@ describe('Boundary: Rollback Scope', function(){
     let rollback, db;
     beforeEach(function(){
         db = createMockDb();
-        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        rollback = new ClientRollback(db, new Utility(), 'bitcoin', 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
@@ -91,7 +91,9 @@ describe('Boundary: Rollback Scope', function(){
         // generic loop cut from. bridge_transfers is one-sided (one src_chain/src_action_index
         // pair), cross_chain_matches is two-sided (a_* and b_*), so bind counts differ and
         // only the VALUES are pinned, per table.
-        let coin = rollback.coin;
+        // Pin the literal ticker: production passes the hub's full name ('bitcoin'), and the
+        // source writes these columns as 'BTC', so reading the coin back off the object would pass on either.
+        let coin = 'BTC';
         let expectedMirrorBinds = {
             cross_chain_calls:   [coin, 100],
             cross_chain_matches: [coin, 100, coin, 100],

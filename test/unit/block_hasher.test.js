@@ -198,3 +198,20 @@ describe('BlockHasher: special-address canonicalization reaches the preimage @re
         });
     }
 });
+
+// Every gather resolves its call-site template to a BLOCK_HASH_QUERIES entry. A one-sided
+// edit of either copy makes consensusSql throw, so this case goes red instead of the
+// recompute hashing an empty row set for that table.
+describe('BlockHasher: every gather resolves a non-empty SQL @regression', function(){
+    for(const [label, args] of [['no network/coin', [1]],
+                                ['unarmed (mainnet placeholder)', [900000, 'mainnet', 'BTC']],
+                                ['armed (regtest)', [1, 'regtest', 'BTC']]]){
+        it('issues 11 resolved queries, ' + label, async function(){
+            const calls = [];
+            await capturingHasher(calls).computeBlockHashes(...args);
+            assert.strictEqual(calls.length, 11, 'ten preimage gathers plus the previous-hash read');
+            for(const q of calls)
+                assert.ok(typeof q === 'string' && q.trim().length > 0, 'unresolved gather SQL: ' + q);
+        });
+    }
+});
