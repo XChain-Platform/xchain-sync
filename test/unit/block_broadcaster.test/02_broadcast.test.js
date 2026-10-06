@@ -141,3 +141,38 @@ describe('BlockBroadcaster', function(){
         });
     });
 });
+
+describe('BlockBroadcaster', function(){
+    registerHooks();
+
+    describe('broadcast to an infra-only subscriber', function(){
+        // buildInfraMessage encodes the RAW event on its own, apart from the full
+        // subscriber's wire event, so each of its two encodeTables calls needs its own pin.
+        it('sends binary columns in data and updated_rows as the __xbin__ wire sentinel', function(){
+            let infra = mockWs();
+            broadcaster.addSubscription(infra, mockReq('3.4.5.6'), 'bitcoin', 'mainnet');
+            infra._syncMode = 'infra-only';
+            let event = { type: 'block', block_index: 9,
+                data: {
+                    stakes:  [{ id: 1, blob: Buffer.from('infra-data'), amount: 12345678901234567890n }],
+                    actions: [{ id: 2, blob: Buffer.from('dropped') }]
+                },
+                updated_rows: {
+                    stakes:          [{ action_index: 1, payload: Buffer.from('infra-upd') }],
+                    contract_stakes: [{ action_index: 2, payload: Buffer.from('x') }]
+                }};
+            broadcaster.broadcast('bitcoin', 'mainnet', event, new Set(['stakes']));
+            let raw = infra.send.firstCall.args[0];
+            // A Buffer that skipped the codec serializes as {"type":"Buffer",...} and corrupts the blob.
+            assert.ok(!raw.includes('"type":"Buffer"'), 'no raw Buffer may reach the infra-only wire');
+            let msg = JSON.parse(raw);
+            assert.strictEqual(msg.sync_mode, 'infra-only');
+            assert.strictEqual(msg.data.stakes[0].blob.__xbin__, Buffer.from('infra-data').toString('base64'));
+            assert.strictEqual(msg.updated_rows.stakes[0].payload.__xbin__, Buffer.from('infra-upd').toString('base64'));
+            // BigInt columns leave as decimal strings through the infra path's own replacer.
+            assert.strictEqual(msg.data.stakes[0].amount, '12345678901234567890');
+            assert.deepStrictEqual(Object.keys(msg.data), ['stakes']);
+            assert.deepStrictEqual(Object.keys(msg.updated_rows), ['stakes']);
+        });
+    });
+});

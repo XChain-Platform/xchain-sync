@@ -315,6 +315,7 @@ describe('ClientApplier security', function(){
         it('applies data with valid table name', async function(){
             db.getBlockHashRow.resolves(null);
             let payload = {
+                schema_version: SCHEMA_VERSION.indexer,
                 block_index: 100,
                 data: {
                     blocks: [{ block_index: 100, block_time: 1000 }]
@@ -327,6 +328,7 @@ describe('ClientApplier security', function(){
         it('rejects a block carrying an invalid table name key (fail closed, transaction rolled back)', async function(){
             db.getBlockHashRow.resolves(null);
             let payload = {
+                schema_version: SCHEMA_VERSION.indexer,
                 block_index: 100,
                 data: {
                     'evil;DROP TABLE blocks': [{ id: 1 }]

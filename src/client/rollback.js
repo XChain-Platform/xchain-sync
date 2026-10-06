@@ -1079,6 +1079,30 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
+            // Re-NULL delegation stamps a ROLLCALL eviction in the orphaned range wrote, mirror of
+            // repairRollcallEvictions (xchain-indexer/src/db/rollback/purge.js). Runs UNCONDITIONALLY:
+            // an eviction over all-zero stakes mints no actions row, so firstActionIndex can be null.
+            // It must precede the rollcall_absences delete below, which removes its only join key.
+            if(this.activationDelay == null){
+                logger.warn('ClientRollback: rollcall eviction delegation repair skipped (no coin supplied)');
+            } else {
+                try {
+                    await this.db.doQuery(
+                        "UPDATE delegations d " +
+                        "JOIN rollcall_absences ra ON ra.source_id = d.source_id " +
+                        "SET d.deactivation_block = NULL " +
+                        "WHERE ra.evicted = 1 " +
+                        "  AND ra.close_block >= ? " +
+                        "  AND d.deactivation_block IS NOT NULL " +
+                        "  AND d.deactivation_block = ra.close_block + ?",
+                        [block_index, this.activationDelay]
+                    );
+                } catch(e){
+                    // Skip only a schema gap (a replica predating the ROLLCALL tables holds no eviction).
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+            }
+
             // The three BTC-side ROLLCALL tables key their block scope on close_block,
             // not block_index, so like price_snapshots they fall outside the generic
             // blockTables loop and need their own delete mirroring the source indexer's.

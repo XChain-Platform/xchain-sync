@@ -12,6 +12,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ServerPoller  = require('../../../src/server/poller');
 const ClientApplier = require('../../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../../src/schema/version');
 const HashVerifier  = require('../../../src/client/hash_verifier');
 const Utility       = require('../../../src/util');
 const { withDbMixins } = require('../../helpers/db_mixins.js');
@@ -78,7 +79,7 @@ describe('Boundary: Block Index Values', function(){
         it('duplicate detection: block_index 0 is skipped if exists', async function(){
             let applier = new ClientApplier(db, util);
             db.getBlockHashRow.resolves({ block_index: 0, ledger_hash: 'abc' });
-            await applier.applyBlock({ block_index: 0, data: { blocks: [{ block_index: 0 }] } });
+            await applier.applyBlock({ schema_version: SCHEMA_VERSION.indexer, block_index: 0, data: { blocks: [{ block_index: 0 }] } });
             assert.strictEqual(db.beginTransaction.called, false);
         });
     });
