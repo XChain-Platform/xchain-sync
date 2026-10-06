@@ -10,11 +10,10 @@
 
 const assert     = require('assert');
 const sinon      = require('sinon');
-const axios      = require('axios');
-const ClientSync = require('../../../src/client/sync');
-const Utility    = require('../../../src/util');
-const HashVerifier = require('../../../src/client/hash_verifier');
-const { withDbMixins } = require('../../helpers/db_mixins.js');
+const ClientSync = require('../../../../src/client/sync');
+const Utility    = require('../../../../src/util');
+const HashVerifier = require('../../../../src/client/hash_verifier');
+const { withDbMixins } = require('../../../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
@@ -62,43 +61,46 @@ function makeSync(configOverrides, dbOverrides){
     let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
-describe('ClientSync: decoder completeness check on a truncated replica', function(){
-    let sync, db;
+describe('ClientSync verifyRecompute join-block skip', function(){
+    let sync;
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('truncated decoder: block-windowed tables are excluded from the count check, lookups stay strict @regression', async function(){
-        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
-        sync._bootstrapBase = 950000; // isTruncated() -> true
-        assert.ok(sync.isTruncated(), 'replica is truncated');
-        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
-        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1, index_transactions: 1 } } });
+    it('skips recompute for the bootstrap join block (no base-1 predecessor)', async function(){
+        ({ sync } = makeSync());
+        sync._bootstrapBase = 950000;
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes');
 
-        await sync.verifyDecoderCompleteness('http://src1:3006', 100);
+        let result = await sync.verifyRecompute({ block_index: 950000 }, { ledger_hash: 'lh' });
 
-        assert.ok(vtc.calledOnce);
-        let excludes = vtc.firstCall.args[1];
-        assert.ok(excludes instanceof Set, 'an exclusion Set is passed when truncated');
-        for(let t of ['blocks', 'transactions', 'transaction_outputs'])
-            assert.ok(excludes.has(t), t + ' (block-windowed) must be excluded on a truncated replica');
-        assert.strictEqual(excludes.has('index_transactions'), false,
-            'append-only lookups stay under the strict count check');
+        assert.strictEqual(result, null, 'join block treated as clean');
+        assert.strictEqual(compute.called, false, 'computeBlockHashes never invoked for the join block');
     });
 
-    it('full-history decoder: no windowed exclusion, caller excludes pass through unchanged @regression', async function(){
-        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
-        sync._bootstrapBase = null; // isTruncated() -> false
-        assert.strictEqual(sync.isTruncated(), false);
-        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
-        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1 } } });
+    it('still recomputes every block above the join block', async function(){
+        ({ sync } = makeSync());
+        sync._bootstrapBase = 950000;
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
+            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
-        await sync.verifyDecoderCompleteness('http://src1:3006', 100, new Set(['dispensers']));
+        let result = await sync.verifyRecompute({ block_index: 950001 },
+            { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
 
-        let excludes = vtc.firstCall.args[1];
-        assert.ok(excludes.has('dispensers'), 'caller-supplied excludes pass through');
-        assert.strictEqual(excludes.has('blocks'), false, 'block-windowed tables NOT excluded when full-history');
+        assert.strictEqual(result, null, 'matching block is clean');
+        assert.ok(compute.calledOnceWith(950001), 'block above the join is recomputed');
+    });
+
+    it('full-history replica (null base) recomputes the lowest block too', async function(){
+        ({ sync } = makeSync());
+        // _bootstrapBase stays null
+        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
+            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        await sync.verifyRecompute({ block_index: 0 }, { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        assert.ok(compute.calledOnceWith(0), 'no skip when not a truncated replica');
     });
 });

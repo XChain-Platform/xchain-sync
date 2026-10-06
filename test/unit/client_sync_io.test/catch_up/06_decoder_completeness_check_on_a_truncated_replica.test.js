@@ -11,10 +11,10 @@
 const assert     = require('assert');
 const sinon      = require('sinon');
 const axios      = require('axios');
-const ClientSync = require('../../../src/client/sync');
-const Utility    = require('../../../src/util');
-const HashVerifier = require('../../../src/client/hash_verifier');
-const { withDbMixins } = require('../../helpers/db_mixins.js');
+const ClientSync = require('../../../../src/client/sync');
+const Utility    = require('../../../../src/util');
+const HashVerifier = require('../../../../src/client/hash_verifier');
+const { withDbMixins } = require('../../../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
@@ -62,22 +62,43 @@ function makeSync(configOverrides, dbOverrides){
     let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
-describe('ClientSync: verifyDecoderCompleteness catch', function(){
+describe('ClientSync: decoder completeness check on a truncated replica', function(){
     let sync, db;
-
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('logs "Decoder completeness check failed" when axios.get rejects', async function(){
+    it('truncated decoder: block-windowed tables are excluded from the count check, lookups stay strict @regression', async function(){
         ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
-        sinon.stub(axios, 'get').rejects(new Error('decoder fail'));
+        sync._bootstrapBase = 950000; // isTruncated() -> true
+        assert.ok(sync.isTruncated(), 'replica is truncated');
+        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
+        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1, index_transactions: 1 } } });
 
-        await sync.verifyDecoderCompleteness('http://src2:3006', 100);
+        await sync.verifyDecoderCompleteness('http://src1:3006', 100);
 
-        let errCalls = console.error.getCalls().map(c => c.args[0]);
-        assert.ok(errCalls.some(m => m && m.indexOf('Decoder completeness check failed') !== -1));
+        assert.ok(vtc.calledOnce);
+        let excludes = vtc.firstCall.args[1];
+        assert.ok(excludes instanceof Set, 'an exclusion Set is passed when truncated');
+        for(let t of ['blocks', 'transactions', 'transaction_outputs'])
+            assert.ok(excludes.has(t), t + ' (block-windowed) must be excluded on a truncated replica');
+        assert.strictEqual(excludes.has('index_transactions'), false,
+            'append-only lookups stay under the strict count check');
+    });
+
+    it('full-history decoder: no windowed exclusion, caller excludes pass through unchanged @regression', async function(){
+        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
+        sync._bootstrapBase = null; // isTruncated() -> false
+        assert.strictEqual(sync.isTruncated(), false);
+        let vtc = sinon.stub(sync, 'verifyTableCounts').resolves([]);
+        sinon.stub(axios, 'get').resolves({ data: { table_counts: { blocks: 1 } } });
+
+        await sync.verifyDecoderCompleteness('http://src1:3006', 100, new Set(['dispensers']));
+
+        let excludes = vtc.firstCall.args[1];
+        assert.ok(excludes.has('dispensers'), 'caller-supplied excludes pass through');
+        assert.strictEqual(excludes.has('blocks'), false, 'block-windowed tables NOT excluded when full-history');
     });
 });

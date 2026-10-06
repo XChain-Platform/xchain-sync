@@ -10,10 +10,11 @@
 
 const assert     = require('assert');
 const sinon      = require('sinon');
-const ClientSync = require('../../../src/client/sync');
-const Utility    = require('../../../src/util');
-const HashVerifier = require('../../../src/client/hash_verifier');
-const { withDbMixins } = require('../../helpers/db_mixins.js');
+const axios      = require('axios');
+const ClientSync = require('../../../../src/client/sync');
+const Utility    = require('../../../../src/util');
+const HashVerifier = require('../../../../src/client/hash_verifier');
+const { withDbMixins } = require('../../../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
@@ -61,46 +62,22 @@ function makeSync(configOverrides, dbOverrides){
     let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
-describe('ClientSync verifyRecompute join-block skip', function(){
-    let sync;
+describe('ClientSync: verifyDecoderCompleteness catch', function(){
+    let sync, db;
+
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('skips recompute for the bootstrap join block (no base-1 predecessor)', async function(){
-        ({ sync } = makeSync());
-        sync._bootstrapBase = 950000;
-        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes');
+    it('logs "Decoder completeness check failed" when axios.get rejects', async function(){
+        ({ sync, db } = makeSync({}, { dbType: 'decoder' }));
+        sinon.stub(axios, 'get').rejects(new Error('decoder fail'));
 
-        let result = await sync.verifyRecompute({ block_index: 950000 }, { ledger_hash: 'lh' });
+        await sync.verifyDecoderCompleteness('http://src2:3006', 100);
 
-        assert.strictEqual(result, null, 'join block treated as clean');
-        assert.strictEqual(compute.called, false, 'computeBlockHashes never invoked for the join block');
-    });
-
-    it('still recomputes every block above the join block', async function(){
-        ({ sync } = makeSync());
-        sync._bootstrapBase = 950000;
-        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
-            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-
-        let result = await sync.verifyRecompute({ block_index: 950001 },
-            { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-
-        assert.strictEqual(result, null, 'matching block is clean');
-        assert.ok(compute.calledOnceWith(950001), 'block above the join is recomputed');
-    });
-
-    it('full-history replica (null base) recomputes the lowest block too', async function(){
-        ({ sync } = makeSync());
-        // _bootstrapBase stays null
-        let compute = sinon.stub(sync.blockHasher, 'computeBlockHashes')
-            .resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-
-        await sync.verifyRecompute({ block_index: 0 }, { ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-
-        assert.ok(compute.calledOnceWith(0), 'no skip when not a truncated replica');
+        let errCalls = console.error.getCalls().map(c => c.args[0]);
+        assert.ok(errCalls.some(m => m && m.indexOf('Decoder completeness check failed') !== -1));
     });
 });

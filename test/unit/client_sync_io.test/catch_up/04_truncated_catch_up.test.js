@@ -11,12 +11,12 @@
 const assert     = require('assert');
 const sinon      = require('sinon');
 const axios      = require('axios');
-const ClientSync = require('../../../src/client/sync');
-const { SCHEMA_VERSION } = require('../../../src/schema/version');
-const Utility    = require('../../../src/util');
-const HashVerifier = require('../../../src/client/hash_verifier');
-const realConfig = require('../../../src/config');
-const { withDbMixins } = require('../../helpers/db_mixins.js');
+const ClientSync = require('../../../../src/client/sync');
+const { SCHEMA_VERSION } = require('../../../../src/schema/version');
+const Utility    = require('../../../../src/util');
+const HashVerifier = require('../../../../src/client/hash_verifier');
+const realConfig = require('../../../../src/config');
+const { withDbMixins } = require('../../../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
