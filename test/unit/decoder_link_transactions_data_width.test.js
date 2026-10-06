@@ -48,24 +48,32 @@ describe('decoder transactions.data width', function(){
         });
     });
 
+    describe('readTransactionsDataCharset', function(){
+        it('queries information_schema with rethrow', async function(){
+            let q = sinon.stub().resolves([]);
+            await Database.prototype.readTransactionsDataCharset.call({ dbName: 'd', doQuery: q });
+            assert.deepStrictEqual(q.firstCall.args[1], ['d']);
+            assert.deepStrictEqual(q.firstCall.args[3], { rethrow: true });
+        });
+    });
+
     describe('assertTransactionsDataWidth', function(){
         function fakeDb(rows, dbType){
-            return { dbType: dbType || 'decoder', dbName: 'd', doQuery: sinon.stub().resolves(rows) };
+            return { dbType: dbType || 'decoder', dbName: 'd', readTransactionsDataCharset: sinon.stub().resolves(rows) };
         }
-        it('throws for a narrow decoder column and reads with rethrow', async function(){
+        it('throws for a narrow decoder column', async function(){
             let db = fakeDb([{ CHARACTER_SET_NAME: 'utf8mb3' }]);
             await assert.rejects(assertTransactionsDataWidth(db), /utf8mb4/);
-            assert.deepStrictEqual(db.doQuery.firstCall.args[3], { rethrow: true });
         });
         it('passes a utf8mb4 column, an absent column, and skips indexer replicas', async function(){
             await assertTransactionsDataWidth(fakeDb([{ CHARACTER_SET_NAME: 'utf8mb4' }]));
             await assertTransactionsDataWidth(fakeDb([]));
             let idx = fakeDb([{ CHARACTER_SET_NAME: 'utf8mb3' }], 'indexer');
             await assertTransactionsDataWidth(idx);
-            assert.strictEqual(idx.doQuery.called, false);
+            assert.strictEqual(idx.readTransactionsDataCharset.called, false);
         });
         it('propagates a driver fault instead of passing', async function(){
-            let db = { dbType: 'decoder', dbName: 'd', doQuery: sinon.stub().rejects(new Error('conn lost')) };
+            let db = { dbType: 'decoder', dbName: 'd', readTransactionsDataCharset: sinon.stub().rejects(new Error('conn lost')) };
             await assert.rejects(assertTransactionsDataWidth(db), /conn lost/);
         });
     });
@@ -87,7 +95,7 @@ describe('decoder transactions.data width', function(){
                 sinon.stub(Database.prototype, m).resolves(false);
             sinon.stub(Database.prototype, 'close').resolves();
             sinon.stub(service, 'startClientSyncForChain');
-            sinon.stub(Database.prototype, 'doQuery').callsFake(async function(){
+            sinon.stub(Database.prototype, 'readTransactionsDataCharset').callsFake(async function(){
                 let narrow = this.dbName === 'narrowcoin_dec';
                 return [{ CHARACTER_SET_NAME: narrow ? 'utf8mb3' : 'utf8mb4' }];
             });
