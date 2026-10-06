@@ -1460,8 +1460,11 @@ class ClientSync {
     }
 
     async reconcileBootstrapDecoder(source){
-        await this.reconcileDispensers(source);
-        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
+        // A truncated bootstrap never seeds dispensers, so after a FAILED reconcile the
+        // table is still empty: leave it out of the count check rather than blame the snapshot.
+        let reconciled = await this.reconcileDispensers(source) === true;
+        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
+            reconciled ? undefined : new Set(['dispensers']));
     }
 
     logBootstrapFromHeightComplete(){
@@ -1849,14 +1852,15 @@ class ClientSync {
         // Reconcile dispensers on the configured cadence because this table cannot
         // converge through the block stream or append-only lookup paging. Its bounded
         // purge depth keeps the periodic atomic replacement affordable.
-        let didReconcile = this.shouldReconcileDispensers(Date.now());
-        if(didReconcile) await this.reconcileDispensers(source);
+        let reconciled = this.shouldReconcileDispensers(Date.now()) &&
+            await this.reconcileDispensers(source) === true;
 
-        // Check dispensers only after reconciliation to avoid interim drift reports.
+        // Check dispensers only after a SUCCESSFUL reconciliation to avoid interim drift
+        // reports: a failed one leaves the drifted table in place and is logged on its own.
         // Other decoder tables converge through streamed blocks or full dumps and
         // remain part of every completeness check.
         await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
-            didReconcile ? null : new Set(['dispensers']));
+            reconciled ? null : new Set(['dispensers']));
     }
 
     async handleIncrementalCatchUpFailure(source, sinceBlock, error){
@@ -2663,9 +2667,10 @@ class ClientSync {
     // checked against SCHEMA_VERSION like the lookup-page and snapshot channels, so a
     // code-version mismatch aborts before the replace (the status-tick caller has no
     // earlier version-checked apply in front of it).
+    // Returns true only once the replace has committed, false on every skip or failure.
     async reconcileDispensers(source){
-        if(this.dbType !== 'decoder') return;
-        if(!source) return;
+        if(this.dbType !== 'decoder') return false;
+        if(!source) return false;
         // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
         this._lastDispenserReconcileAttemptAt = Date.now();
         let expected = SCHEMA_VERSION[this.dbType];
@@ -2703,10 +2708,12 @@ class ClientSync {
             this._lastDispenserReconcileAt = Date.now();
             getLogger().info('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
+            return true;
         } catch(e){
             // Best-effort: leave the existing local dispensers intact on any failure.
             getLogger().error(util.format('Dispensers reconcile failed against ' + source +
                 ' (local table left intact):', (e && e.message) ? e.message : e));
+            return false;
         }
     }
 

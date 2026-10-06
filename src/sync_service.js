@@ -33,7 +33,7 @@ const HashVerifier    = require('./client/hash_verifier');
 const stateCommitment = require('./state_commitment');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
-const { coinTicker }  = require('./consensus-constants');
+const { coinTicker, activationDelayBlocks } = require('./consensus-constants');
 const Utility         = require('./util');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
@@ -57,6 +57,9 @@ class SyncService {
 
         this.pollers = new Map();
         this.clientSyncs = new Map();
+
+        // Keys of indexer chains skipped for an unrecognized coin, so a hub re-poll logs each once.
+        this.unrecognizedCoinKeys = new Set();
 
         this.broadcaster    = null;
         this.snapshotBuilder = null;
@@ -205,6 +208,18 @@ class SyncService {
             // chain can never crash-loop the process.
             if(this.config['SYNC_EXCLUDE'] && this.config['SYNC_EXCLUDE'].includes(key)){
                 getLogger().info('Skipping excluded chain (SYNC_EXCLUDE): ' + key);
+                continue;
+            }
+
+            // Refuse to serve an indexer coin this bundle has no frozen activation delay for.
+            // Its payloads would silently omit the deactivation_block updated rows, so skip the
+            // chain alone before any pool opens; a bundle upgrade picks it up on the next start.
+            if(this.config['SYNC_MODE'] === 'server' && cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
+                if(!this.unrecognizedCoinKeys.has(key)){
+                    this.unrecognizedCoinKeys.add(key);
+                    getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
+                        '" is not in this server\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to serve it');
+                }
                 continue;
             }
 

@@ -29,6 +29,10 @@ function createMockDb(){
 
 let applier, db, util;
 
+// The schema version this replica expects, stamped on every live block payload the
+// real server sends (the applier refuses a block without it).
+function liveVersion(){ return SCHEMA_VERSION[(db && db.dbType) || 'indexer']; }
+
 function registerHooks(){
     beforeEach(function(){
         db = createMockDb();
@@ -58,6 +62,7 @@ function registerApplyBlockCases1(){
     });
     it('applies the genesis block (block_index 0) instead of silently dropping it', async function(){
         await applier.applyBlock({
+            schema_version: liveVersion(),
             block_index: 0,
             data: { blocks: [{ block_index: 0, block_time: 0 }] }
         });
@@ -66,27 +71,28 @@ function registerApplyBlockCases1(){
     });
     it('skips existing block (duplicate detection)', async function(){
         db.getBlockHashRow.resolves({ block_index: 1, ledger_hash: 'abc' });
-        await applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
         assert.strictEqual(db.beginTransaction.called, false);
     });
     // A fail-soft read answers "block absent" for a DB blip too, and that answer
     // re-INSERTs the block's credits/debits/escrows (plain INSERT) and rebuilds
     // balances over the duplicates.
     it('reads the duplicate guard fail-CLOSED (opts.rethrow)', async function(){
-        await applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
         assert.deepStrictEqual(db.getBlockHashRow.firstCall.args[2], { rethrow: true });
     });
     it('never opens a transaction when the duplicate guard read faults', async function(){
         let err = new Error('deadlock found'); err.errno = 1213;
         db.getBlockHashRow.rejects(err);
         await assert.rejects(
-            () => applier.applyBlock({ block_index: 1, data: { blocks: [{ block_index: 1 }] } }),
+            () => applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } }),
             /deadlock found/
         );
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('applies block in a transaction', async function(){
         let payload = {
+            schema_version: liveVersion(),
             block_index: 5,
             data: {
                 blocks: [{ block_index: 5, block_time: 100 }],
@@ -119,12 +125,26 @@ function registerApplyBlockCases2(){
         await applier.applyBlock(payload);
         assert.strictEqual(db.beginTransaction.calledOnce, true);
     });
-    it('accepts a live block payload without schema_version (pre-5250 server)', async function(){
-        let payload = {
-            block_index: 5,
-            data: { blocks: [{ block_index: 5 }] }
-        };
-        await applier.applyBlock(payload); // must not throw
+    // Fail closed like the snapshot and page gates: a server that omits the field is on
+    // an older wire format than this client, so its rows must not be applied.
+    it('rejects a live block payload without schema_version, before any read or transaction', async function(){
+        let payload = { block_index: 5, data: { blocks: [{ block_index: 5 }] } };
+        await assert.rejects(() => applier.applyBlock(payload), /Schema version missing on live block 5/);
+        assert.strictEqual(db.getBlockHashRow.called, false);
+        assert.strictEqual(db.beginTransaction.called, false);
+    });
+    it('rejects a null or string schema_version on a live block payload', async function(){
+        for(let v of [null, String(SCHEMA_VERSION.indexer)]){
+            let payload = { block_index: 5, schema_version: v, data: { blocks: [{ block_index: 5 }] } };
+            await assert.rejects(() => applier.applyBlock(payload), /Schema version (missing|mismatch)/, String(v));
+        }
+        assert.strictEqual(db.beginTransaction.called, false);
+    });
+    it('checks a decoder replica against the decoder schema version', async function(){
+        db.dbType = 'decoder';
+        let wrong = { block_index: 5, schema_version: SCHEMA_VERSION.indexer, data: { blocks: [{ block_index: 5 }] } };
+        await assert.rejects(() => applier.applyBlock(wrong), /Schema version mismatch/);
+        await applier.applyBlock({ block_index: 5, schema_version: SCHEMA_VERSION.decoder, data: { blocks: [{ block_index: 5 }] } });
         assert.strictEqual(db.beginTransaction.calledOnce, true);
     });
 }
@@ -136,6 +156,7 @@ function registerApplyBlockCases3(){
         // never did, so a replica holding the loser stayed AHEAD forever (#5605/#5610).
         db.dbType = 'indexer';
         await applier.applyBlock({
+            schema_version: liveVersion(),
             block_index: 961700,
             data: {
                 blocks: [{ block_index: 961700 }],
@@ -165,12 +186,13 @@ function registerApplyBlockCases3(){
     });
     it('does not issue the reconcile delete mirror when the block carries no reconcile-log rows', async function(){
         db.dbType = 'indexer';
-        await applier.applyBlock({ block_index: 5, data: { blocks: [{ block_index: 5 }], validator_rewards: [{ id: 1, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 1, amount: '1', block_index: 5 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { blocks: [{ block_index: 5 }], validator_rewards: [{ id: 1, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 1, amount: '1', block_index: 5 }] } });
         assert.ok(!db.doQuery.getCalls().some(c => /^DELETE vr FROM validator_rewards/.test(c.args[0])));
     });
     it('rolls back on error', async function(){
         db.doQuery.rejects(new Error('insert fail'));
         let payload = {
+            schema_version: liveVersion(),
             block_index: 5,
             data: { blocks: [{ block_index: 5 }] }
         };
@@ -179,6 +201,7 @@ function registerApplyBlockCases3(){
     });
     it('skips empty table arrays', async function(){
         let payload = {
+            schema_version: liveVersion(),
             block_index: 5,
             data: { blocks: [], transactions: [{ tx_index: 1 }] }
         };
@@ -192,13 +215,13 @@ function registerApplyBlockCases4(){
     it('rebuilds balances when an indexer payload touches credits/debits', async function(){
         db.dbType = 'indexer';
         let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-        await applier.applyBlock({ block_index: 5, data: { credits: [{ id: 1 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { credits: [{ id: 1 }] } });
         assert.strictEqual(rb.calledOnce, true);
     });
     it('does NOT rebuild balances on a decoder replica', async function(){
         db.dbType = 'decoder';
         let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-        await applier.applyBlock({ block_index: 5, data: { credits: [{ id: 1 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { credits: [{ id: 1 }] } });
         assert.strictEqual(rb.called, false);
     });
 }
@@ -218,7 +241,7 @@ function registerScopedBalanceCases1(){
     beforeEach(function(){ db.dbType = 'indexer'; });
     it('passes the distinct touched (address_id, tick_id) ids to rebuildBalances', async function(){
         let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-        await applier.applyBlock({ block_index: 5, data: {
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: {
             credits: [{ address_id: 7, tick_id: 3, amount: '1' }, { address_id: 7, tick_id: 3, amount: '2' }],
             debits:  [{ address_id: 9, tick_id: 3, amount: '1' }]
         }});
@@ -227,7 +250,7 @@ function registerScopedBalanceCases1(){
     });
     it('falls back to the FULL rebuild when a row is missing its ids', async function(){
         let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-        await applier.applyBlock({ block_index: 5, data: {
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: {
             credits: [{ address_id: 7, tick_id: 3 }, { address_id: null, tick_id: 3 }]
         }});
         assert.strictEqual(rb.calledOnce, true);
@@ -237,13 +260,13 @@ function registerScopedBalanceCases1(){
         let rb = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
         let credits = [];
         for(let i = 0; i < 1001; i++) credits.push({ address_id: i + 1, tick_id: 1, amount: '1' });
-        await applier.applyBlock({ block_index: 5, data: { credits } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { credits } });
         assert.strictEqual(rb.calledOnce, true);
         assert.strictEqual(rb.firstCall.args[1], undefined);
     });
     it('skips the rebuild entirely when the touched tables are empty arrays', async function(){
         let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
-        await applier.applyBlock({ block_index: 5, data: { credits: [], deposits: [], blocks: [{ block_index: 5 }] } });
+        await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { credits: [], deposits: [], blocks: [{ block_index: 5 }] } });
         assert.strictEqual(rb.called, false);
     });
     it('scopes the incremental catch-up rebuild the same way', async function(){
