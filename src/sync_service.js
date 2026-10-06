@@ -208,23 +208,23 @@ class SyncService {
 
             let db;
             if(this.config['SYNC_MODE'] === 'client'){
-                db = await this._openClientReplica(cfg);
+                db = await this.openClientReplica(cfg);
             } else {
-                db = await this._openServerDatabase(cfg);
+                db = await this.openServerDatabase(cfg);
             }
 
             this.databases.set(key, { db, config: cfg, dbType: cfg.dbType });
             newChains.push({ key, db, config: cfg });
         }
 
-        this._validateFirstDiscoveryPass();
-        this._startDiscoveredChains(newChains);
+        this.validateFirstDiscoveryPass();
+        this.startDiscoveredChains(newChains);
 
         return newChains;
     }
 
     // Client mode: the replica keeps the source's db_name but uses the client's own creds.
-    async _openClientReplica(cfg){
+    async openClientReplica(cfg){
         let db = new Database(
             this.config['REPLICA_DB_HOST'],
             this.config['REPLICA_DB_PORT'],
@@ -235,14 +235,14 @@ class SyncService {
             cfg.dbType
         );
         await db.createDatabase();
-        await this._replicateSchemaFromSource(db, cfg);
-        await this._healReplicaSchema(db);
+        await this.replicateSchemaFromSource(db, cfg);
+        await this.healReplicaSchema(db);
         return db;
     }
 
     // Tries the source DB directly (faster); when it is unreachable the schema
     // arrives from the server /schema endpoint during ClientSync bootstrap.
-    async _replicateSchemaFromSource(db, cfg){
+    async replicateSchemaFromSource(db, cfg){
         let sourceDb = null;
         try {
             sourceDb = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
@@ -271,7 +271,7 @@ class SyncService {
 
     // Runs on both schema paths (direct replicateSchema or the server /schema
     // fetch), so every step is idempotent.
-    async _healReplicaSchema(db){
+    async healReplicaSchema(db){
         // dbType-aware: indexer replicas get the full sync set, decoder replicas only sync_halt.
         await db.verifySyncTables();
         // Sync runs no migrations, so legacy timestamp columns are retyped here.
@@ -291,7 +291,7 @@ class SyncService {
     // Server mode: connect to the DB this server polls and serves. With
     // REPLICA_DB_HOST set it serves a local replica (same db_name from the hub)
     // instead of the hub-provided coordinates.
-    async _openServerDatabase(cfg){
+    async openServerDatabase(cfg){
         let db;
         if(this.config['REPLICA_DB_HOST']){
             db = new Database(this.config['REPLICA_DB_HOST'], this.config['REPLICA_DB_PORT'], cfg.db_name, this.config['REPLICA_DB_USER'], this.config['REPLICA_DB_PASS'], this.util, cfg.dbType);
@@ -308,7 +308,7 @@ class SyncService {
     // Client mode, first pass only: an unmatched SYNC_BOOTSTRAP_DEPTH_* key falls
     // through to depth 0 (the full-history snapshot), so refuse it before any
     // ClientSync starts.
-    _validateFirstDiscoveryPass(){
+    validateFirstDiscoveryPass(){
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
             this._bootstrapDepthChecked = true;
             assertBootstrapDepthChains(this.config, this.getChains());
@@ -318,7 +318,7 @@ class SyncService {
         }
     }
 
-    _startDiscoveredChains(newChains){
+    startDiscoveredChains(newChains){
         for(let { key, db, config: cfg } of newChains){
             if(this.config['SYNC_MODE'] === 'server'){
                 this.startPollerForChain(key, db, cfg);
