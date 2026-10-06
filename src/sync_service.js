@@ -30,6 +30,7 @@ const ClientSync      = require('./client/sync');
 const ClientApplier   = require('./client/applier');
 const ClientRollback  = require('./client/rollback');
 const HashVerifier    = require('./client/hash_verifier');
+const { assertTransactionsDataWidth } = require('./client/decoder_link');
 const stateCommitment = require('./state_commitment');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
@@ -295,6 +296,17 @@ class SyncService {
                 // repaired state. Twin of xchain-indexer's
                 // assertStakeWeightOrderingCollation.
                 await db.assertStakeWeightOrderingCollation();
+                // A decoder replica whose transactions.data cannot store a 4-byte payload
+                // would halt on the first such row. Refuse this chain only: it is closed
+                // and left unregistered (re-judged on the next hub re-poll) while every
+                // other chain keeps syncing.
+                try {
+                    await assertTransactionsDataWidth(db);
+                } catch(widthErr){
+                    getLogger().error(util.format('Refusing to start ' + key + ':', widthErr));
+                    try { await db.close(); } catch(closeErr){ /* pool already gone */ }
+                    continue;
+                }
             } else {
                 // Server mode: connect to the DB this server polls + serves.
                 // Default: the authoritative DB at the hub-provided coordinates.
