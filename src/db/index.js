@@ -643,6 +643,13 @@ class Database {
     // xchain-indexer/migrations/20260531_contract_emissions_action_index_nullable.sql.
     async ensureReplicatedColumns(){
         if(this.dbType !== 'indexer') return;
+        await this.addMissingReplicatedColumns();
+        await this.relaxReplicatedColumnNullability();
+        await this.repairReplicatedAutoIncrement();
+        await this.widenReplicatedAttestsRequestStatus();
+    }
+
+    async addMissingReplicatedColumns(){
         // state_tree_roots.contract_state_root is here for a DIFFERENT reason than
         // the four ownership columns, and the difference is worth stating because
         // it is what makes this entry non-obvious. state_tree_roots is
@@ -692,7 +699,9 @@ class Database {
             logger.info('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding ' + definition + '.');
             await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` ' + definition);
         }
+    }
 
+    async relaxReplicatedColumnNullability(){
         // Nullability relaxations: each entry's column must be nullable upstream;
         // we relax it on the replica iff it is currently NOT NULL. `type` is the
         // authoritative column type (sans NOT NULL) used for the MODIFY.
@@ -711,14 +720,12 @@ class Database {
             logger.info('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
             await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
         }
+    }
 
-        // AUTO_INCREMENT repair for hub-mirror id cursors. The indexer reconciler
-        // previously stripped AUTO_INCREMENT from the id column of these four tables
-        // on every startup (migration 2026-06-10-mirror-id-autoincrement-repair).
-        // Origins self-heal via that migration, but replicas bootstrapped from a
-        // stripped-state origin cloned the stripped DDL and have no automated path.
-        // Detect a missing AUTO_INCREMENT on the id column and restore it here.
-        // Idempotent: MODIFY to the same definition is a no-op; table absent = skip.
+    async repairReplicatedAutoIncrement(){
+        // AUTO_INCREMENT repair for hub-mirror id cursors. An origin migration restores
+        // the attribute, but a replica bootstrapped from stripped DDL has no automated path.
+        // Detect and restore it here; the same definition is a no-op and an absent table skips.
         let autoIncTables = [
             'price_snapshots',
             'cross_chain_matches',
@@ -762,7 +769,9 @@ class Database {
                 logger.error(util.format('Failed to repair AUTO_INCREMENT on ' + table + '.id:', e));
             }
         }
+    }
 
+    async widenReplicatedAttestsRequestStatus(){
         // 5244: Widen attests.request_status ENUM to include 'rejected' on replicas
         // that bootstrapped before the v4 schema migration
         // (2026-06-13-attests-request-status-add-rejected). A v3-schema replica holds

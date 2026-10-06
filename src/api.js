@@ -254,136 +254,154 @@ function clientMissingTables(syncService, chain, network, dbType){
         ? sync.getMissingTables() : null;
 }
 
-// Build the status row for one (db, dbType, chain, network) tuple.
-//
-// Module-scope (not a closure inside startApi) and exported so the row shape is
-// unit-testable against a mock SyncService/Database: the fields here are the
-// contract a monitor keys off, and `missing_tables` in particular exists to be
-// alerted on, so it must be verifiable without standing up the service.
-async function buildStatusRow(syncService, db, dbType, chain, network){
-    if(cfg['SYNC_MODE'] === 'server'){
-        // In server mode, block_height is the broadcaster's last-polled position
-        // (how far the poller has actually broadcast), not the source DB tip.
-        // Using the source DB tip here hides poller lag: if the poller is wedged
-        // or catching up, block_height would show a climbing source tip with no
-        // lag signal. The WS updateStatus path (ServerPoller) correctly separates
-        // lastPolledBlock from the source tip; REST now matches those semantics.
-        let broadcaster = syncService.getBroadcaster();
-        // Read through getStatus, never statusData directly: it is the one accessor
-        // that expires a measurement's freshness verdict, so a status cached before the
-        // poller stopped measuring cannot certify this row (SYNC_STATUS_MAX_AGE_MS).
-        // The status object stored by ServerPoller.updateStatus has block_height
-        // (polled position) and source_block_height (DB tip) already separated.
-        let pollerStatus = (broadcaster && typeof broadcaster.getStatus === 'function')
-            ? broadcaster.getStatus(chain, network, dbType || 'indexer') : null;
+// Read through getStatus so the accessor can expire stale measurements.
+// Reject a cached freshness verdict after SYNC_STATUS_MAX_AGE_MS.
+// Avoid reading statusData directly because it cannot perform that expiry.
 
-        let polledBlock = (pollerStatus && pollerStatus.block_height != null)
-            ? pollerStatus.block_height : null;
-        let sourceBlock = (pollerStatus && pollerStatus.source_block_height != null)
-            ? pollerStatus.source_block_height : (await db.getLastBlock());
+// Preserve the two heights stored by ServerPoller.updateStatus.
+// Separate its polled block position from the source database tip.
+function getServerPollerStatus(broadcaster, chain, network, dbType){
+    return (broadcaster && typeof broadcaster.getStatus === 'function')
+        ? broadcaster.getStatus(chain, network, dbType || 'indexer') : null;
+}
 
-        let hashRow = polledBlock !== null ? await db.getBlockHashRow(polledBlock) : null;
-        let row = {
-            block_height:  polledBlock,
-            source_height: sourceBlock,
-            lag_blocks:    (sourceBlock !== null && polledBlock !== null)
-                               ? Math.max(0, sourceBlock - polledBlock) : null,
-            block_time:    hashRow ? Number(hashRow.block_time) : null,
-            poll_error_count: (pollerStatus && pollerStatus.poll_error_count != null)
-                               ? pollerStatus.poll_error_count : 0
-        };
-        applyReplicaFreshness(row, pollerStatus);
-        await applyProtocolHaltFreshness(row, db, dbType);
-        if(dbType === 'decoder'){
-            row.block_hash = hashRow ? hashRow.block_hash : null;
-        } else {
-            row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
-            row.actions_hash  = hashRow ? hashRow.actions_hash : null;
-            row.contract_hash = hashRow ? hashRow.contract_hash : null;
-            // Advisory id->address map parity (NON-consensus, default off). Computed
-            // over the deterministic subset of index_addresses on the SOURCE, bounded
-            // to the SAME polledBlock height this status publishes, so a follower at
-            // that exact height can recompute over its replica and compare. A divergent
-            // id map is invisible to the three resolved-string hashes above and to a
-            // plain row count (equal count, different content), so this is the only
-            // signal that catches it. Off by default (it scans the subset; see
-            // BlockHasher.computeIndexMapChecksum cost note); null => follower skips.
-            row.index_map_checksum = null;
-            if(cfg['INDEX_MAP_PARITY_CHECK'] && polledBlock !== null){
-                try {
-                    row.index_map_checksum = await new BlockHasher(db, statusUtil).computeIndexMapChecksum(polledBlock);
-                } catch(e){
-                    console.error('[API] index_map_checksum compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
-                }
-            }
-            // Advisory tokens fold-column parity (NON-consensus, default off), the only
-            // check that sees an ISSUE edit or its reorg reversal missing on a replica.
-            // See BlockHasher.computeTokenFoldChecksum; null => follower skips.
-            row.token_fold_parity = null;
-            if(cfg['TOKEN_FOLD_PARITY_CHECK'] && polledBlock !== null){
-                try {
-                    row.token_fold_parity = await new BlockHasher(db, statusUtil).computeTokenFoldChecksum(polledBlock);
-                } catch(e){
-                    getLogger().error('[API] token_fold_parity compute failed for ' + chain + '/' + network +
-                        ' at block ' + polledBlock + ' (advisory, returning null): ' + e.message);
-                }
-            }
-        }
-        // Advisory per-table CONTENT parity (NON-consensus, default off).
-        // Published for BOTH dbTypes, unlike the three hashes and the index-map
-        // checksum above: the decoder side has no synthetic hashes at all, so its
-        // replicated tables had no content commitment of any kind.
-        //
-        // Bounded to the SAME polledBlock this status row publishes, and carrying the
-        // window plus the per-lookup id ceilings it used, so a follower at that exact
-        // height recomputes over an identical bound instead of its own tail. null =>
-        // the follower skips the check.
-        row.table_content_parity = null;
-        if(cfg['TABLE_CONTENT_PARITY_CHECK'] && polledBlock !== null){
-            try {
-                row.table_content_parity = await new BlockHasher(db, statusUtil)
-                    .computeTableContentChecksums(polledBlock, { window: cfg['TABLE_CONTENT_PARITY_WINDOW'] });
-            } catch(e){
-                console.error('[API] table_content_parity compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message);
-            }
-        }
-        // Expose per-subscriber applied-block lag so operators can see a
-        // validator falling behind before the backpressure limit force-closes it.
-        row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
-        // Per-table row counts (same logic as client-mode path below)
-        row.table_counts = {};
-        // Ask ONCE which tables exist rather than discovering absence by failing a
-        // count against each one. The replicated-table list is static and grows with
-        // this repo, so on a replica whose source predates a family every poll used
-        // to log an ER_NO_SUCH_TABLE stack for a table neither side has.
-        // A listing failure falls back to probing, so this can only ever quieten the
-        // expected case, never hide a genuine one.
-        let presentA = null;
-        try { presentA = await db.listExistingTables(); } catch(e){ /* fall back to probing */ }
-        for(let table of getReplicatedTables(dbType)){
-            if(presentA && !presentA.has(table)) continue;
-            try {
-                row.table_counts[table] = await db.getTableCount(table);
-            } catch(e){
-                // Raced away between the listing and the count; omit rather than fail.
-            }
-        }
-        // Companion to table_counts, which can only omit a table it cannot count:
-        // an absent table looks exactly like a table nobody asked about.
-        row.missing_tables = missingReplicatedTables(presentA, dbType);
-        // Lifetime full-snapshot serve count (incremented by SnapshotBuilder
-        // on each successful streamFullSnapshot completion; 0 until first serve).
-        let builder = syncService.getSnapshotBuilder();
-        row.snapshots_served = builder ? (builder.snapshotsServed || 0) : 0;
-        // Lifetime count of snapshot requests rejected 503 by the per-Database
-        // concurrency cap; a growing value flags a bootstrap stampede.
-        row.snapshots_rejected = builder ? (builder.snapshotsRejected || 0) : 0;
-        return row;
+// Treat block_height as the broadcaster's last-polled position.
+// Keep it distinct from the source database tip in server mode.
+// Expose how far the poller has actually broadcast.
+
+// Avoid hiding a wedged or catching-up poller behind a climbing source tip.
+// Match the WebSocket updateStatus semantics used by ServerPoller.
+// Separate lastPolledBlock from the source tip on the REST surface.
+function createServerStatusRow(pollerStatus, polledBlock, sourceBlock, hashRow){
+    return {
+        block_height:  polledBlock,
+        source_height: sourceBlock,
+        lag_blocks:    (sourceBlock !== null && polledBlock !== null)
+                           ? Math.max(0, sourceBlock - polledBlock) : null,
+        block_time:    hashRow ? Number(hashRow.block_time) : null,
+        poll_error_count: (pollerStatus && pollerStatus.poll_error_count != null)
+                           ? pollerStatus.poll_error_count : 0
+    };
+}
+
+function applyServerHashFields(row, hashRow, dbType){
+    if(dbType === 'decoder'){
+        row.block_hash = hashRow ? hashRow.block_hash : null;
+    } else {
+        row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
+        row.actions_hash  = hashRow ? hashRow.actions_hash : null;
+        row.contract_hash = hashRow ? hashRow.contract_hash : null;
     }
+}
 
-    // Client mode: block_height is whatever the replica DB has applied.
-    let lastBlock = await db.getLastBlock();
-    let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
+// Compute advisory id-to-address parity over deterministic source rows.
+// Bound the calculation to the polled height published by this status row.
+// Let a follower recompute the checksum at that exact height.
+
+// Detect divergent maps that resolved-string hashes and row counts miss.
+// Catch equal-size maps whose address content differs.
+// Keep this non-consensus signal independent of the three primary hashes.
+
+// Leave the subset scan disabled by default because of its cost.
+// Return null so followers skip the comparison when the check is disabled.
+function getIndexMapChecksum(db, polledBlock){
+    return new BlockHasher(db, statusUtil).computeIndexMapChecksum(polledBlock);
+}
+
+// Advisory tokens fold-column parity (NON-consensus, default off), the only
+// check that sees an ISSUE edit or its reorg reversal missing on a replica.
+// See BlockHasher.computeTokenFoldChecksum; null => follower skips.
+function getTokenFoldChecksum(db, polledBlock){
+    return new BlockHasher(db, statusUtil).computeTokenFoldChecksum(polledBlock);
+}
+
+// Publish advisory table-content parity for both database types.
+// Cover decoder tables that have no synthetic content hashes.
+// Keep this non-consensus check disabled by default.
+
+// Bound parity to the same polled height published by this status row.
+// Carry the window and lookup-id ceilings used by the source.
+// Let followers recompute over identical bounds rather than their own tails.
+
+// Return null when disabled so followers skip the comparison.
+// Preserve a content commitment for replicated decoder tables when enabled.
+// Complement the primary hashes and the index-map checksum.
+function getTableContentParity(db, polledBlock){
+    return new BlockHasher(db, statusUtil)
+        .computeTableContentChecksums(polledBlock, { window: cfg['TABLE_CONTENT_PARITY_WINDOW'] });
+}
+
+function getExistingTables(db){
+    return db.listExistingTables();
+}
+
+function applyServerMissingTables(row, presentTables, dbType){
+    // Companion to table_counts, which can only omit a table it cannot count:
+    // an absent table looks exactly like a table nobody asked about.
+    row.missing_tables = missingReplicatedTables(presentTables, dbType);
+}
+
+function applySnapshotStatus(row, syncService){
+    // Lifetime full-snapshot serve count (incremented by SnapshotBuilder
+    // on each successful streamFullSnapshot completion; 0 until first serve).
+    let builder = syncService.getSnapshotBuilder();
+    row.snapshots_served = builder ? (builder.snapshotsServed || 0) : 0;
+    // Lifetime count of snapshot requests rejected 503 by the per-Database
+    // concurrency cap; a growing value flags a bootstrap stampede.
+    row.snapshots_rejected = builder ? (builder.snapshotsRejected || 0) : 0;
+}
+
+async function buildServerStatusRow(syncService, db, dbType, chain, network){
+    let broadcaster = syncService.getBroadcaster();
+    let pollerStatus = getServerPollerStatus(broadcaster, chain, network, dbType);
+    let polledBlock = (pollerStatus && pollerStatus.block_height != null)
+        ? pollerStatus.block_height : null;
+    let sourceBlock = (pollerStatus && pollerStatus.source_block_height != null)
+        ? pollerStatus.source_block_height : (await db.getLastBlock());
+    let hashRow = polledBlock !== null ? await db.getBlockHashRow(polledBlock) : null;
+    let row = createServerStatusRow(pollerStatus, polledBlock, sourceBlock, hashRow);
+    applyReplicaFreshness(row, pollerStatus);
+    await applyProtocolHaltFreshness(row, db, dbType);
+    applyServerHashFields(row, hashRow, dbType);
+    if(dbType !== 'decoder'){
+        row.index_map_checksum = null;
+        if(cfg['INDEX_MAP_PARITY_CHECK'] && polledBlock !== null){
+            try { row.index_map_checksum = await getIndexMapChecksum(db, polledBlock); }
+            catch(e){ console.error('[API] index_map_checksum compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message); }
+        }
+        row.token_fold_parity = null;
+        if(cfg['TOKEN_FOLD_PARITY_CHECK'] && polledBlock !== null){
+            try { row.token_fold_parity = await getTokenFoldChecksum(db, polledBlock); }
+            catch(e){ getLogger().error('[API] token_fold_parity compute failed for ' + chain + '/' + network +
+                ' at block ' + polledBlock + ' (advisory, returning null): ' + e.message); }
+        }
+    }
+    row.table_content_parity = null;
+    if(cfg['TABLE_CONTENT_PARITY_CHECK'] && polledBlock !== null){
+        try { row.table_content_parity = await getTableContentParity(db, polledBlock); }
+        catch(e){ console.error('[API] table_content_parity compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message); }
+    }
+    // Expose per-subscriber applied-block lag so operators can see a
+    // validator falling behind before the backpressure limit force-closes it.
+    row.subscribers = broadcaster ? broadcaster.getSubscribers(chain, network, dbType) : [];
+    // Per-table row counts (same logic as client-mode path below)
+    row.table_counts = {};
+    let presentA = null;
+    try { presentA = await getExistingTables(db); } catch(e){ /* fall back to probing */ }
+    for(let table of getReplicatedTables(dbType)){
+        if(presentA && !presentA.has(table)) continue;
+        try {
+            row.table_counts[table] = await db.getTableCount(table);
+        } catch(e){
+            // Raced away between the listing and the count; omit rather than fail.
+        }
+    }
+    applyServerMissingTables(row, presentA, dbType);
+    applySnapshotStatus(row, syncService);
+    return row;
+}
+
+function createClientStatusRow(hashRow, dbType){
     let row = {
         block_height: hashRow ? Number(hashRow.block_index) : null,
         block_time:   hashRow ? Number(hashRow.block_time) : null
@@ -395,103 +413,151 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
         row.actions_hash  = hashRow ? hashRow.actions_hash : null;
         row.contract_hash = hashRow ? hashRow.contract_hash : null;
     }
-    {
-        let clientState  = syncService.getClientSyncState(chain, network, dbType);
-        let sourceHeight = clientState.lastKnownServerBlock;
-        row.source_height = sourceHeight;
-        row.lag_blocks    = (sourceHeight !== null && row.block_height !== null)
-            ? Math.max(0, sourceHeight - row.block_height)
-            : null;
-        // Freshness of source_height/lag_blocks. lastKnownServerBlock only advances
-        // on live WS events, so after a silent disconnect it freezes and lag_blocks
-        // settles to 0 once the replica catches up to the stale tip. This flag tells
-        // an operator the lag figure is computed against a source height we have not
-        // heard confirmed recently (null = no live event seen yet, staleness unknown).
-        row.source_height_stale = clientState.sourceHeightStale;
-        // The upstream server's OWN replication verdict, relayed on its status events and
-        // published under distinct names: `replica_stale` on a SERVER row is a claim about
-        // that node's own database, and reusing the name here would say something else
-        // under the same key. source_height_stale above is transport liveness (is the
-        // server still speaking); this is data authority (does what it said certify the
-        // heights). Both are needed: a server whose SQL replica stopped applying keeps
-        // heart-beating, so its follower catches up to the frozen tip and reports
-        // lag_blocks 0 with source_height_stale false.
-        //
-        // upstream_replica_stale is TRI-STATE. null means no connected source reported it
-        // (nothing heard yet, or a server older than the field) and must not be read as
-        // healthy; true means at least one connected source called its own database stale.
-        // upstream_source_height is the upstream's own DB tip, which is what makes its
-        // broadcaster-versus-source-database lag visible from here.
-        // Absent on a caller that predates the field (a test double, an older
-        // SyncService): unknown, which is the null tri-state, never a fresh verdict.
-        let upstream = clientState.upstreamReplica || {};
-        row.upstream_replica_stale          = (upstream.stale === true || upstream.stale === false)
-                                                  ? upstream.stale : null;
-        row.upstream_replica_seconds_behind = (upstream.secondsBehind != null) ? upstream.secondsBehind : null;
-        row.upstream_source_height          = (upstream.sourceHeight != null) ? upstream.sourceHeight : null;
-        // Consensus-divergence halt: a halted client has STOPPED applying and
-        // requires operator clearance. Surfaced so the dashboard monitor and
-        // peers see a forked/Byzantine validator immediately.
-        row.halted = clientState.halted || false;
-        if(clientState.halted) row.halt = clientState.haltInfo;
-        // Platform-train activation verdict for the next apply (clear / pending /
-        // halt). `pending` is the announcement that this build lacks a rule set the
-        // signed manifest requires and names the height it will halt at, so a
-        // monitor can alert before the boundary rather than at it. Null until the
-        // follower has evaluated once (or on a caller that predates the field).
-        row.train_activation = clientState.trainActivation || null;
-        // Truncated-replica visibility: lets an explorer or operator know
-        // this replica cannot answer pre-base history queries.
-        row.truncated      = clientState.truncated || false;
-        row.bootstrap_base = clientState.bootstrapBase != null ? clientState.bootstrapBase : null;
-        // Multi-source Byzantine quorum surface: the M-of-N agreement
-        // threshold, the active/configured denominators, how many sources agreed on
-        // the last applied block, and any Byzantine-evicted sources. Lets a monitor
-        // flag "N sources but only one distinct operator" and see evictions.
-        row.source_quorum      = clientState.sourceQuorum != null ? clientState.sourceQuorum : null;
-        row.sources_configured = clientState.sourcesConfigured != null ? clientState.sourcesConfigured : null;
-        row.sources_active     = clientState.sourcesActive != null ? clientState.sourcesActive : null;
-        row.sources_agreeing   = clientState.sourcesAgreeing != null ? clientState.sourcesAgreeing : null;
-        row.sources_evicted    = Array.isArray(clientState.sourcesEvicted) ? clientState.sourcesEvicted : [];
-        // Persistent replica gap, made monitorable (mirrors missing_tables below).
-        //
-        // A non-empty array means this follower is short replicated ROWS the
-        // committed hashes structurally cannot see: they are computed on the source
-        // and replicated verbatim, so a follower missing rows still agrees on every
-        // hash and keeps reporting halted:false with lag_blocks 0. This carries the
-        // count sweep's VERDICT, not its per-sweep detection: only shortfalls that
-        // survived consecutive equal-height sweeps appear, so a monitor alerts on the
-        // array instead of on a TABLE_COUNT_MISMATCH log line that also fires for a
-        // read racing the source's /status and therefore repeats forever unheeded.
-        //
-        // Read off the live ClientSync (the same accessor the halt-clear endpoint
-        // uses) rather than through getClientSyncState, whose whole return object is
-        // asserted verbatim by callers. [] on a caller or build without the method:
-        // nothing to alert on, which is also what no gaps looks like.
-        let liveSync = (typeof syncService.getClientSync === 'function')
-            ? syncService.getClientSync(chain, network, dbType) : null;
-        let gaps = (liveSync && typeof liveSync.getReplicaGaps === 'function')
-            ? liveSync.getReplicaGaps() : [];
-        row.replica_gaps = Array.isArray(gaps) ? gaps : [];
-    }
-    // Per-table row counts for replica-completeness verification.
-    //
-    // The committed ledger/actions/contract hashes are computed on the source
-    // during block processing and replicated verbatim, so a follower missing
-    // entire tables still agrees on every hash. The hashes describe the
-    // source's blockchain computation, not what actually landed downstream.
-    // Publishing row counts gives followers an independent completeness
-    // signal: ClientSync.verifyAgainstSource compares these against its own
-    // counts and flags any table the source has rows in but the follower does
-    // not. Scoped to the per-block replicated set (see replicatedTables.js) so
-    // legitimately-divergent snapshot-only / operator-local tables don't raise
-    // false alarms. COUNT(*) per table is acceptable here; /status is an
-    // operator-polled endpoint, not a hot path.
+    return row;
+}
+
+function applyClientSourceStatus(row, clientState){
+    let sourceHeight = clientState.lastKnownServerBlock;
+    row.source_height = sourceHeight;
+    row.lag_blocks    = (sourceHeight !== null && row.block_height !== null)
+        ? Math.max(0, sourceHeight - row.block_height)
+        : null;
+    // Mark source_height and lag_blocks stale after live events stop.
+    // Treat lastKnownServerBlock as frozen across a silent disconnect.
+    // Avoid reporting a trustworthy zero lag after catching that stale tip.
+
+    // Use null when no live event has established freshness.
+    // Tell operators when the source height lacks recent confirmation.
+    row.source_height_stale = clientState.sourceHeightStale;
+
+    // Relay the upstream server's own replication verdict under distinct names.
+    // Reserve replica_stale on a server row for that node's database.
+    // Avoid giving a different client-side claim the same key.
+
+    // Separate transport liveness from the upstream data-authority verdict.
+    // Use source_height_stale to show whether the server is still speaking.
+    // Use upstream_replica_stale to show whether its heights remain authoritative.
+
+    // Preserve both signals when a stalled SQL replica keeps heartbeating.
+    // Expose the frozen source even if its follower catches up and reports zero lag.
+    // Keep source_height_stale false while reporting the upstream database stale.
+
+    // Treat upstream_replica_stale as a tri-state value.
+    // Return null when no connected source reports the field.
+    // Avoid treating a server without the field or an unheard source as healthy.
+
+    // Return true when any connected source marks its database stale.
+    // Publish the upstream database tip through upstream_source_height.
+    // Reveal broadcaster lag relative to the upstream source database.
+
+    // Default callers without these fields to an unknown verdict.
+    let upstream = clientState.upstreamReplica || {};
+    row.upstream_replica_stale          = (upstream.stale === true || upstream.stale === false)
+                                              ? upstream.stale : null;
+    row.upstream_replica_seconds_behind = (upstream.secondsBehind != null) ? upstream.secondsBehind : null;
+    row.upstream_source_height          = (upstream.sourceHeight != null) ? upstream.sourceHeight : null;
+}
+
+function applyClientStateStatus(row, clientState){
+    // Consensus-divergence halt: a halted client has STOPPED applying and
+    // requires operator clearance. Surfaced so the dashboard monitor and
+    // peers see a forked/Byzantine validator immediately.
+    row.halted = clientState.halted || false;
+    if(clientState.halted) row.halt = clientState.haltInfo;
+    // Publish the next-apply activation verdict as clear, pending, or halt.
+    // Use pending when this build lacks a rule set required by the manifest.
+    // Name the future halt height so monitors can alert before the boundary.
+
+    // Return null until the follower evaluates or when the caller lacks the field.
+    // Preserve unknown state rather than reporting a clear verdict.
+    row.train_activation = clientState.trainActivation || null;
+    // Truncated-replica visibility: lets an explorer or operator know
+    // this replica cannot answer pre-base history queries.
+    row.truncated      = clientState.truncated || false;
+    row.bootstrap_base = clientState.bootstrapBase != null ? clientState.bootstrapBase : null;
+}
+
+function applyClientQuorumStatus(row, clientState){
+    // Publish the multi-source Byzantine quorum and its M-of-N threshold.
+    // Include configured, active, agreeing, and evicted source counts.
+
+    // Let monitors detect weak operator diversity and source evictions.
+    // Expose agreement on the last applied block.
+    row.source_quorum      = clientState.sourceQuorum != null ? clientState.sourceQuorum : null;
+    row.sources_configured = clientState.sourcesConfigured != null ? clientState.sourcesConfigured : null;
+    row.sources_active     = clientState.sourcesActive != null ? clientState.sourcesActive : null;
+    row.sources_agreeing   = clientState.sourcesAgreeing != null ? clientState.sourcesAgreeing : null;
+    row.sources_evicted    = Array.isArray(clientState.sourcesEvicted) ? clientState.sourcesEvicted : [];
+}
+
+function applyClientGapStatus(row, syncService, chain, network, dbType){
+    // Report persistent replica gaps beside the missing-table verdict.
+    // Treat a non-empty array as replicated rows missing from this follower.
+    // Preserve the empty array as the healthy and unsupported default.
+
+    // Distinguish these gaps from source-computed hashes, which are replicated
+    // verbatim and can still agree when follower rows are missing.
+    // Surface the gap even when halted is false and lag_blocks is zero.
+
+    // Publish only the count sweep's verdict after consecutive equal-height
+    // sweeps confirm the shortfall.
+    // Avoid alerting on transient count races against the source status row.
+
+    // Read the verdict from ClientSync through the same accessor used by the
+    // halt-clear endpoint.
+    // Leave getClientSyncState unchanged because callers assert its exact shape.
+    let liveSync = (typeof syncService.getClientSync === 'function')
+        ? syncService.getClientSync(chain, network, dbType) : null;
+
+    // Default to no alert when the caller does not support gap reporting.
+    // Normalize non-array responses to the same empty verdict.
+    // Keep the public field present for every client row.
+    let gaps = (liveSync && typeof liveSync.getReplicaGaps === 'function')
+        ? liveSync.getReplicaGaps() : [];
+    row.replica_gaps = Array.isArray(gaps) ? gaps : [];
+}
+
+// Publish per-table row counts for replica-completeness verification.
+// Expose an independent signal for rows that never reached the follower.
+// Detect entire missing tables even when the committed hashes still agree.
+
+// Distinguish these counts from hashes computed on the source.
+// Describe the source's blockchain computation with those replicated hashes.
+// Avoid treating them as proof of what actually landed downstream.
+
+// Let ClientSync compare source counts against its own database.
+// Flag tables that contain source rows but no follower rows.
+// Keep the count object present before any database reads.
+
+// Restrict the caller to the per-block replicated table set.
+// Exclude snapshot-only and operator-local tables that may differ legitimately.
+// Avoid false alarms from those deliberately divergent tables.
+
+// Accept COUNT(*) here because status is an operator-polled endpoint.
+function initializeClientTableCounts(row){
     row.table_counts = {};
-    // One listing instead of one failing query per absent table, for the reason
-    // given on the client-mode path above.
+}
+
+function applyClientMissingTables(row, syncService, chain, network, dbType){
+    // ClientSync owns the source-scoped verdict; null means either schema is unknown.
+    row.missing_tables = clientMissingTables(syncService, chain, network, dbType);
+}
+
+async function buildClientStatusRow(syncService, db, dbType, chain, network){
+    // Client mode: block_height is whatever the replica DB has applied.
+    let lastBlock = await db.getLastBlock();
+    let hashRow = lastBlock !== null ? await db.getBlockHashRow(lastBlock) : null;
+    let row = createClientStatusRow(hashRow, dbType);
+    let clientState = syncService.getClientSyncState(chain, network, dbType);
+    applyClientSourceStatus(row, clientState);
+    applyClientStateStatus(row, clientState);
+    applyClientQuorumStatus(row, clientState);
+    applyClientGapStatus(row, syncService, chain, network, dbType);
+    initializeClientTableCounts(row);
+    // List tables once and avoid one failing query per absent table.
+    // Apply the same missing-table rationale as the server path above.
     let present = null;
-    try { present = await db.listExistingTables(); } catch(e){ /* fall back to probing */ }
+    try { present = await getExistingTables(db); } catch(e){ /* fall back to probing */ }
     for(let table of getReplicatedTables(dbType)){
         if(present && !present.has(table)) continue;
         try {
@@ -501,9 +567,21 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
             // indexer split); omit rather than fail the whole status.
         }
     }
-    // ClientSync owns the source-scoped verdict; null means either schema is unknown.
-    row.missing_tables = clientMissingTables(syncService, chain, network, dbType);
+    applyClientMissingTables(row, syncService, chain, network, dbType);
     return row;
+}
+
+// Build one status row for each database, type, chain, and network tuple.
+// Keep the builder at module scope and outside startApi.
+// Test the row shape against mock service and database providers.
+
+// Expose the fields that monitoring consumers use as their contract.
+// Preserve missing_tables as an alertable field on that public row.
+// Verify the contract without starting the service.
+async function buildStatusRow(syncService, db, dbType, chain, network){
+    if(cfg['SYNC_MODE'] === 'server')
+        return buildServerStatusRow(syncService, db, dbType, chain, network);
+    return buildClientStatusRow(syncService, db, dbType, chain, network);
 }
 
 // The REST surface, built over a SyncService-shaped provider and a config so the
