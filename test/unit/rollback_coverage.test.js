@@ -1264,7 +1264,11 @@ describe('Rollback coverage guard @regression', function(){
     // block columns, or the integrity hash covers a different row set than it protects.
     it('state_hash.js selection predicates mirror the replicated mutation classes', function(){
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/consensus/state_hash.js'), 'utf8')
+        // The selections live in the section collectors under state_hash/, behind the facade.
+        const hashDir = pathMod.resolve(__dirname, '../../src/consensus/state_hash');
+        const src = [pathMod.resolve(__dirname, '../../src/consensus/state_hash.js')]
+            .concat(fs.readdirSync(hashDir).filter((n) => n.endsWith('.js')).sort().map((n) => pathMod.join(hashDir, n)))
+            .map((p) => fs.readFileSync(p, 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const PREDICATES = [
             { name: 'deactivation_block stamp',  re: /WHERE deactivation_block BETWEEN \? AND \?/ },
