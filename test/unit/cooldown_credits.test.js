@@ -130,3 +130,37 @@ describe('mergeMaturedRows', function () {
         assert.deepStrictEqual(mergeMaturedRows(undefined, [fresh]), [fresh]);
     });
 });
+
+// Only a schema gap (errno 1146/1054) may be skipped. An error with no numeric errno
+// (a closed pool, a code-only timeout, a TypeError) must reach the caller's strict gate
+// so the block is retried, never broadcast short of its matured refund or escrow rows.
+describe('collectMatured errno-less errors @regression', function () {
+    const { collectMaturedCooldownEscrows: collectEscrowsRaw } = require('../../src/server/cooldown_credits.js');
+    const collectMaturedCooldownEscrows = (db, ...rest) => collectEscrowsRaw(Object.assign(db, CREDITS_MIXIN), ...rest);
+    const errnoLess = () => [
+        new Error('pool closed'),
+        new TypeError('db[finder] is not a function'),
+        Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
+        Object.assign(new Error('string errno'), { errno: '1146' }),
+    ];
+    const collectors = { credits: collectMaturedCooldownCredits, escrows: collectMaturedCooldownEscrows };
+
+    for (const [kind, collect] of Object.entries(collectors)) {
+        it(`${kind}: re-throws an errno-less error from the capability leg`, async function () {
+            for (const err of errnoLess()) {
+                await assert.rejects(() => collect(mockDb({ queries: [err] }), 1, 999), (e) => e === err);
+            }
+        });
+
+        it(`${kind}: re-throws an errno-less error from the contract leg`, async function () {
+            for (const err of errnoLess()) {
+                await assert.rejects(() => collect(mockDb({ queries: [[], err] }), 1, 999), (e) => e === err);
+            }
+        });
+
+        it(`${kind}: still skips an unknown-column gap (errno 1054) on either leg`, async function () {
+            const noColumn = () => Object.assign(new Error('unknown column'), { errno: 1054 });
+            assert.deepStrictEqual(await collect(mockDb({ queries: [noColumn(), noColumn()] }), 1, 999), []);
+        });
+    }
+});

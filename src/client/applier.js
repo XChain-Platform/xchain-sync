@@ -183,9 +183,15 @@ class ClientApplier {
         await this.applyBlockTransaction(payload);
     }
 
+    // Fail closed like the snapshot and page gates: every current server stamps the
+    // field, so a block without it comes from a server on an older wire format.
     assertBlockSchemaVersion(payload){
         let dbType = (this.db && this.db.dbType) || 'indexer';
-        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
+        if(payload.schema_version == null){
+            throw new Error('Schema version missing on live block ' + payload.block_index +
+                ': client=' + SCHEMA_VERSION[dbType] + '; the server predates versioned block payloads, upgrade it');
+        }
+        if(payload.schema_version !== SCHEMA_VERSION[dbType]){
             throw new Error('Schema version mismatch: server=' + payload.schema_version +
                 ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
         }

@@ -176,7 +176,7 @@ module.exports = {
     // weight). Row order is consensus-irrelevant (the stakes_root SMT keys on
     // pubkey+capability); only the returned SET is. CONSENSUS-CRITICAL: feeds the
     // hashed stakes_root at/after SWQ_SOURCE_CAP_ACTIVATION and MUST stay byte-identical
-    // to the xchain-indexer twin (cross-repo drift guard in rollback-coverage.test.js).
+    // to the xchain-indexer twin (cross-repo drift guard in rollback_coverage.test.js).
     //
     // `binCollation` (stake_weight_collation_activation.js) pins the ordering to a
     // binary collation. `source` and `pubkey` resolve through index_addresses.address
