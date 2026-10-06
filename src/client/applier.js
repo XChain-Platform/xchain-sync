@@ -53,197 +53,107 @@ const ESCROW_TRIGGER_TABLES = new Set([
     'dispensers', 'dispenser_statuses', 'tokens'
 ]);
 
+function initializeCoreState(applier, db, util, chain, network) {
+    applier.db = db;
+    applier.util = util;
+    // Keep chain and network nullable so callers without commitment context
+    // leave the state-commitment path disabled.
+    applier.chain = chain || null;
+    // Normalize the chain to the ticker form shared by activation lookups and
+    // state_tree_roots rows, matching the source indexer's configured coin.
+    applier.coinTicker = coinTicker(chain) || null;
+    applier.network = network || null;
+    // Reset computed roots until applyBlock produces a commitment-enabled result.
+    applier._lastComputedRoots = null;
+}
+
+function initializeIgnoreTables(applier) {
+    // Index and dedup tables use INSERT IGNORE because rows may already exist.
+    applier.ignoreTables = new Set([
+        // The lifecycle registry supplies every lookup that streams in each block.
+        ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
+        // Pubkeys can recur in incremental snapshots and per-block payloads.
+        'pubkeys',
+        // Events are a full-dumped append-only log, so repeat IDs are idempotent.
+        'events',
+        // Sync metadata streams live and through snapshots with a unique block index.
+        'sync_meta',
+        // Merkle epochs are full-dumped and carry a unique epoch.
+        'merkle_epochs',
+        // Reward windows can overlap the live and incremental snapshot channels.
+        'validator_rewards',
+        // Rollcall rows can overlap the bootstrap dump and close-block stream.
+        'rollcalls',
+        'rollcall_absences',
+        'rollcall_gates'
+    ]);
+}
+
+function initializeIdKeyedIgnoreTables(applier) {
+    // Limit strict collision checks to tables deduplicated by numeric primary ID,
+    // excluding tables with surrogate IDs and separate natural-key uniqueness where
+    // a warning on the natural key represents expected re-delivery.
+    applier.idKeyedIgnoreTables = new Set([
+        // Keep streamed lookups visible to repair when a natural value holds the wrong ID.
+        ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
+        'pubkeys',
+        'rollcalls',
+        'rollcall_absences',
+        'rollcall_gates'
+    ]);
+}
+
+function initializeRepairNaturalKeyColumns(applier) {
+    // Map lookup tables to natural columns so from-zero repair reconciles a carried
+    // ID with its value instead of letting INSERT IGNORE preserve the same natural
+    // value under a different local ID.
+    applier.repairNaturalKeyColumns = new Map([
+        ['index_statuses', ['status']]
+    ]);
+}
+
+function initializeUpsertFullDumpTables(applier) {
+    // Upsert mutable full-dump aggregates through their unique natural keys so
+    // current source values replace stale rows after re-delivery.
+    applier.upsertFullDumpTables = new Set([
+        'markets',
+        'attest_validator_stats'
+    ]);
+}
+
+function initializeLocalSurrogateIdTables(applier) {
+    // Map source rows whose numeric IDs are local-only to natural keys, dropping
+    // each carried ID and replacing the matching natural row in one transaction
+    // to avoid either a primary-key collision or a duplicate block.
+    applier.localSurrogateIdTables = new Map([
+        // Keep blocks keyed by block_index because no relation targets blocks.id,
+        // letting each replica allocate its own ID after rollback or re-application.
+        ['blocks', 'block_index']
+    ]);
+}
+
+function initializeLocalSurrogateIdOnlyTables(applier) {
+    // Mark upserted tables whose local IDs must be stripped before insertion,
+    // relying on an existing composite unique key instead of the single-column
+    // delete path above.
+    applier.localSurrogateIdOnlyTables = new Set([
+        // Keep attest validator stats keyed by validator and provider while every
+        // replica assigns its own surrogate sequence; source reorg recomputation
+        // may allocate the same numeric ID to a different surviving row.
+        'attest_validator_stats'
+    ]);
+}
+
 class ClientApplier {
 
     constructor(db, util, chain, network) {
-        this.db   = db;
-        this.util = util;
-        // chain (COIN) + network are needed to key the light-client state_tree_roots
-        // rows and the SMT balance/escrow keys (SPV spec sec.4). null on callers that
-        // predate the feature; the state-commitment path is then simply skipped.
-        this.chain   = chain || null;
-        // Canonical TICKER form of `chain` for the per-chain '<TICKER>:<network>'
-        // activation lookups and the state_tree_roots chain column, matching what the
-        // SOURCE indexer writes (config['COIN']). Passing the full name made
-        // isStateCommitmentActive resolve to "off" on every production chain, so the
-        // follower silently never computed roots or ran the commitment check.
-        this.coinTicker = coinTicker(chain) || null;
-        this.network = network || null;
-        // Roots the most recent applyBlock computed over the replica, for ClientSync's
-        // VERIFY_STATE_COMMITMENT comparison; null when the block predates the flag-day.
-        this._lastComputedRoots = null;
-
-        // Index/dedup tables use INSERT IGNORE (rows may already exist).
-        // pubkeys (decoder DB) is included: incremental snapshots and per-block
-        // payloads can re-send the same address's pubkey row across multiple
-        // blocks, and the PK on address_id would otherwise collide.
-        this.ignoreTables = new Set([
-            // The index_* lookup set is derived from the table-lifecycle registry
-            // (replication: 'stream:index') rather than hand-listed: the index bucket
-            // is re-sent every block by design and the lookups are NOT rolled back
-            // (replicaRollback: 'lookup'), so a new stream:index registry entry missing
-            // here would collide on its PK on the next referencing block and stall the
-            // apply transaction. Deriving it means a one-line registry add is picked up
-            // on both the stream side (ServerPoller/TOPOLOGY.indexer) and the apply side
-            // automatically, with no second source of truth to drift.
-            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
-            'pubkeys',
-            // events is an append-only operational log that incremental snapshots
-            // re-dump in full (it has no block_index/action_index cursor to scope by).
-            // Its AUTO_INCREMENT id PK collides on already-applied rows on every
-            // catch-up; without INSERT IGNORE the whole catch-up transaction fails
-            // with "Duplicate entry for PRIMARY". IGNORE makes the re-dump idempotent.
-            'events',
-            // sync_meta (transparency log) has a UNIQUE index on block_index. It is
-            // now streamed live per block AND carried by snapshots; INSERT IGNORE
-            // makes a row already present (bootstrap snapshot, or a catch-up/live
-            // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
-            'sync_meta',
-            // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent.
-            'merkle_epochs',
-            // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
-            // reward_type, round_reference, round_qualifier). The recovery-redriven collector
-            // (src/server/recovery_rewards.js) can re-inject a backdated survivor row via BOTH the
-            // live per-block and incremental-snapshot channels when their windows overlap;
-            // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
-            // (each row streams once in its earn-block; mirrors createValidatorReward's
-            // own INSERT IGNORE on the source).
-            'validator_rewards',
-            // rollcalls / rollcall_absences ride the bootstrap full dump AND stream by
-            // close_block, so an overlapping window re-delivers a row already applied.
-            // Each is pinned at close and never re-derived, so the re-delivery is
-            // identical and IGNORE is a no-op; a plain INSERT would abort the apply
-            // transaction on the duplicate PK. Same reasoning as validator_rewards above.
-            'rollcalls',
-            'rollcall_absences',
-            // Same close_block scoping and the same pinned-at-close reasoning; the
-            // source writes it with ON DUPLICATE KEY UPDATE, so a re-delivery is identical.
-            'rollcall_gates'
-        ]);
-
-        // Tables whose own numeric PRIMARY KEY IS the sole re-send idempotency key: a
-        // re-delivered row is only ever expected to collide on THAT id, never on any
-        // other unique key the table carries. validator_rewards, merkle_epochs and
-        // sync_meta are deliberately excluded: each has a surrogate AUTO_INCREMENT `id`
-        // that plays no part in de-duplication, so their legitimate re-send collides on
-        // a SEPARATE natural-key unique index instead (reward_unique / epoch / block_index)
-        // and any warning there is the expected case, not a fault.
-        //
-        // a from-zero lookup repair (ClientSync.syncLookupTablesPaged) exists
-        // precisely because a short index_* table needs its missing rows FORCED back in,
-        // and INSERT IGNORE gives that repair no signal when a row it must land instead
-        // collides on a DIFFERENT key (e.g. index_statuses' UNIQUE `status`) - a sign the
-        // replica already holds a WRONG row at some other id for that same natural value.
-        // IGNORE silently keeps the wrong row and the true one never lands; the repair
-        // reports the identical short count on every following pass with nothing in the
-        // journal to explain why (observed on a production RDOGE replica: a from-zero
-        // pass closed one of two missing index_statuses rows and stayed short by one,
-        // hourly, forever). See the SHOW WARNINGS check below.
-        this.idKeyedIgnoreTables = new Set([
-            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
-            'pubkeys',
-            'rollcalls',
-            'rollcall_absences',
-            'rollcall_gates'
-        ]);
-
-        // Repair-only identities for replicated lookup tables whose natural value must
-        // agree with the source at the source's carried id. These tables are normally
-        // INSERT IGNORE because every block may re-send them, but that cannot repair an
-        // id mapping changed by first-seen AUTO_INCREMENT order: PRIMARY collisions look
-        // benign even when the row at that id has a different value, while natural-key
-        // collisions silently keep the same value at the wrong id. Upsert-only replicated
-        // tables therefore need ID-stable migrations; this map is the bounded recovery
-        // path for an already-unstable replica during a from-zero lookup repair.
-        this.repairNaturalKeyColumns = new Map([
-            ['index_statuses', ['status']]
-        ]);
-
-        // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
-        // value (markets = OHLCV; attest_validator_stats = running counters). On a
-        // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
-        // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values.
-        this.upsertFullDumpTables = new Set([
-            'markets',
-            'attest_validator_stats'
-        ]);
-
-        // Tables whose PRIMARY KEY is a purely LOCAL AUTO_INCREMENT surrogate that the
-        // replica must NOT inherit from the source, mapped to the natural key that
-        // actually identifies the row. Replicating such an id verbatim forces an
-        // agreement the protocol explicitly does not require: BlockHasher hashes the
-        // resolved canonical strings "rather than raw AUTO_INCREMENT lookup ids (which
-        // diverge across nodes after a reorg); it is id-independent". Once a rollback
-        // has deleted rows and let re-application renumber them, the replica's sequence
-        // is permanently offset from the source's, and every later apply collides on
-        // the same PK forever (ER_DUP_ENTRY 1062), aborting the whole transaction and
-        // freezing the replica while it still reports halted:false. That was observed
-        // on a production litecoin/mainnet replica as ~1,400 identical failures on
-        // `Duplicate entry '27681' for key 'PRIMARY'`.
-        //
-        // Neither existing escape hatch fits `blocks`. INSERT IGNORE would SKIP the
-        // block, leaving the replica silently short a consensus-relevant row with no
-        // divergence signal; ON DUPLICATE KEY UPDATE would OVERWRITE whichever unrelated
-        // block already occupies that id. The correct treatment is to drop the source's
-        // id and let the replica assign its own, deleting any existing row for the same
-        // natural key first so the re-send stays idempotent. A scoped DELETE (not a
-        // UNIQUE constraint) is what this needs, because `blocks.block_index` carries a
-        // plain INDEX only, so ON DUPLICATE KEY has nothing to fire on and a bare INSERT
-        // of an already-present block would silently duplicate it. Same DELETE+INSERT
-        // in-one-transaction shape as applyDispensersReplace below.
-        //
-        // Nothing joins `blocks.id`: the source's own createBlock INSERTs without it,
-        // the other *_hash_id columns point into index_transactions, and the client
-        // cursor is the highest block_index (db getLastBlock), never an id.
-        this.localSurrogateIdTables = new Map([
-            ['blocks', 'block_index']
-        ]);
-
-        // Same class as localSurrogateIdTables above, minus the DELETE: tables whose
-        // `id` is a node-local AUTO_INCREMENT surrogate the replica must not inherit,
-        // but which already carry a REAL unique natural key and already ride
-        // upsertFullDumpTables, so the existing ON DUPLICATE KEY UPDATE identifies the
-        // row and nothing has to be cleared first.
-        //
-        // attest_validator_stats gained `id ... AUTO_INCREMENT PRIMARY KEY` in indexer
-        // migration 2026-08-19-attest-validator-stats-surrogate-id, which states the id
-        // is node-local ("NOT consensus-visible ... Nothing reads or signs over the id")
-        // and that the source reassigns ids wholesale on reorg
-        // (Rollback.recomputeAttestationValidatorStats). The replica mints its own
-        // instead: sync runs no migrations, so an aged replica takes the column through
-        // db.addMissingColumns + autoIncrementKeyAction, which lets the engine backfill
-        // the sequence in LOCAL row order. The two id spaces then disagree, and because
-        // the table is full-dumped with SELECT * and upserted over every carried column,
-        // the applier would emit `id` = VALUES(`id`) against the replica's PRIMARY KEY:
-        // on a source id another surviving replica row already holds that is ER_DUP_ENTRY
-        // (1062), outside ClientSync.healSchemaIfStale's {1146, 1054} heal set, so the
-        // apply transaction aborts and re-fails on every retry. Exactly the production
-        // wedge `blocks.id` was stripped for.
-        //
-        // It cannot use localSurrogateIdTables: that map's value is a SINGLE natural-key
-        // column driving DELETE ... WHERE <key> IN (...), and this table's natural key is
-        // the COMPOSITE UNIQUE (validator_pubkey, provider_id). Deleting by
-        // validator_pubkey alone would drop that validator's rows for every OTHER
-        // provider, and since insertRows runs per batch a later batch's DELETE could
-        // remove rows an earlier one just inserted: a recoverable wedge traded for silent
-        // data loss.
-        //
-        // `markets` is deliberately NOT here even though it shares the id-PK + upsert
-        // shape. Its unique natural key uq_markets_pair arrives from indexer migration
-        // 2026-07-15-markets-dedup-unique-pair, and secondary indexes are NOT propagated
-        // to replicas (db.ensureReplicaSecondaryIndexes carries a hand-listed few), so an
-        // aged replica may hold markets with NO unique key at all. Stripping the id there
-        // would leave the re-dump with nothing to collide on and append duplicate rows
-        // silently. attest_validator_stats has no such gap: validator_pubkey_provider has
-        // been in its CREATE TABLE since the table was introduced and no migration adds
-        // it, so every replica that has the table has the key. Keeping the source id means
-        // a replica whose markets ids have skewed from the source's can hit that same 1062;
-        // ClientSync.noteUpsertDuplicateKey turns a repeat of it into a durable halt.
-        this.localSurrogateIdOnlyTables = new Set([
-            'attest_validator_stats'
-        ]);
+        initializeCoreState(this, db, util, chain, network);
+        initializeIgnoreTables(this);
+        initializeIdKeyedIgnoreTables(this);
+        initializeRepairNaturalKeyColumns(this);
+        initializeUpsertFullDumpTables(this);
+        initializeLocalSurrogateIdTables(this);
+        initializeLocalSurrogateIdOnlyTables(this);
     }
 
     /**
