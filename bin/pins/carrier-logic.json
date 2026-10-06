@@ -29,7 +29,7 @@
     },
     "stake_weighted_quorum": {
       "path": "src/consensus/stake_weighted_quorum.js",
-      "hash": "afaee5777e8d909eace7a7106b294797014f74929fc4302c50a2ec31ac77a847",
+      "hash": "667f90202114618e33f1a29788fd51a21e508f207a3143b8c285aef4c079a25d",
       "twins": [
         "xchain-indexer"
       ]
@@ -358,6 +358,13 @@
       "to": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
       "reason": "restore effective archive version-set discriminator",
       "date": "2026-09-27"
+    },
+    {
+      "id": "stake_weighted_quorum",
+      "from": "afaee5777e8d909eace7a7106b294797014f74929fc4302c50a2ec31ac77a847",
+      "to": "667f90202114618e33f1a29788fd51a21e508f207a3143b8c285aef4c079a25d",
+      "reason": "re-vendor the byte-identical canonical copy that splits the snapshot indexing and the stake sums into named helpers, no behaviour change",
+      "date": "2026-10-06"
     }
   ]
 }
