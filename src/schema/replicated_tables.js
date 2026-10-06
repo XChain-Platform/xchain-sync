@@ -36,6 +36,7 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
+ *   - dispenser_extension_undo        decoder-local reorg bookkeeping, never replicated
  *   - dispensers (decoder)            mutated by five decoder writes that ride no per-block
  *                                     stream: the soft-expire UPDATE of expired_block_index,
  *                                     the format-2 edit's expiration extend with same-block
