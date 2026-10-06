@@ -90,6 +90,13 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.beginTransaction.called, false);
         });
 
+    });
+});
+
+describe('ClientRollback', function(){
+
+    describe('rollback', function(){
+        registerHooks();
         // A fault on the truncation-floor read must not read as "full history": that
         // runs the COINPay re-derive and the market sweep on a truncated replica.
         it('reads the truncation floor fail-CLOSED (opts.rethrow)', async function(){
