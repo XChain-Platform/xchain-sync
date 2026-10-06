@@ -327,3 +327,58 @@ describe("SyncService", function(){
         });
     });
 });
+
+describe("SyncService", function(){
+
+    registerHooks();
+
+    describe('discoverChains', function(){
+        // An indexer coin this bundle does not know resolves no frozen activation delay,
+        // and serving it would stream payloads with no deactivation_block updates.
+        // Server mode skips that chain alone, before any pool, and logs it once per key.
+        it('server mode skips an indexer chain whose coin the bundle does not recognize', async function(){
+            config.SYNC_MODE = 'server';
+            delete config.REPLICA_DB_HOST;
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
+                indexerCfg(),
+                indexerCfg({ coin: 'notacoin', db_name: 'nac_idx' })
+            ]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([
+                indexerCfg({ coin: 'notacoin', dbType: 'decoder', db_name: 'nac_dec' })
+            ]);
+            let vst = sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+            sinon.stub(Database.prototype, 'assertStakeWeightOrderingCollation').resolves();
+            let startPoller = sinon.stub(service, 'startPollerForChain');
+            let logError = sinon.stub(require('../../../src/observability').getLogger(), 'error');
+
+            await service.discoverChains();
+            await service.discoverChains();
+
+            assert.strictEqual(service.databases.has('bitcoin:mainnet:indexer'), true, 'known chain served');
+            assert.strictEqual(service.databases.has('notacoin:mainnet:indexer'), false, 'unknown indexer coin never registered');
+            assert.strictEqual(service.databases.has('notacoin:mainnet:decoder'), true, 'decoder chains need no activation delay');
+            assert.strictEqual(service.getDatabase('notacoin', 'mainnet', 'indexer'), null, 'snapshot routes 404 it');
+            assert.strictEqual(vst.callCount, 2, 'no pool is opened for the skipped chain');
+            assert.deepStrictEqual(startPoller.getCalls().map(c => c.args[0]).sort(),
+                ['bitcoin:mainnet:indexer', 'notacoin:mainnet:decoder']);
+            let skipLogs = logError.getCalls().filter(c => /notacoin:mainnet:indexer/.test(String(c.args[0])));
+            assert.strictEqual(skipLogs.length, 1, 'the skip is logged once across hub re-polls');
+        });
+
+        it('client mode leaves an unrecognized coin to ClientRollback, unchanged', async function(){
+            config.SYNC_MODE = 'client';
+            service = new SyncService(config);
+            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
+                indexerCfg({ coin: 'notacoin', db_name: 'nac_idx' })
+            ]);
+            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+            stubDiscoveryDb();
+            let startSync = sinon.stub(service, 'startClientSyncForChain');
+
+            await service.discoverChains();
+            assert.strictEqual(service.databases.has('notacoin:mainnet:indexer'), true);
+            assert.strictEqual(startSync.callCount, 1);
+        });
+    });
+});

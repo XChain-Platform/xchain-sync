@@ -29,7 +29,7 @@ const balanceHelpers = require('../db/balance_helpers');
 const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
-const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const util = require('node:util');
@@ -82,7 +82,9 @@ function initializeCoin(client, coin){
     // skipped (with a warning) rather than run with a wrong value. The production wiring
 
     // (SyncService.startClientSyncForChain) always passes cfg.coin.
-    client.coin = coin;
+    // Store the TICKER: cfg.coin is the full name, while the source binds source_chain
+    // and tests COIN === 'BTC' in ticker form, so the reorg mirror deletes need it too.
+    client.coin = coinTicker(coin);
     let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
     if(delay === undefined){
         throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
@@ -205,9 +207,11 @@ class ClientRollback {
         // floor"; it is skipped there rather than deleting a market the source keeps.
         // Guarded on the method existing, mirroring ClientSync.persistBootstrapBase,
         // so db instances without the durable store degrade to full-history behaviour.
+        // rethrow, as the first-action read above: a fault read as "unset" would run the
+        // COINPay re-derive and the market sweep on a truncated replica's partial history.
         let truncatedReplica = false;
         if(this.db && typeof this.db.getSyncState === 'function'){
-            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'));
+            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'), { rethrow: true });
             truncatedReplica = (base !== null && base !== undefined && parseInt(base, 10) > 0);
         }
 
@@ -1073,6 +1077,30 @@ class ClientRollback {
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
+            }
+
+            // Re-NULL delegation stamps a ROLLCALL eviction in the orphaned range wrote, mirror of
+            // repairRollcallEvictions (xchain-indexer/src/db/rollback/purge.js). Runs UNCONDITIONALLY:
+            // an eviction over all-zero stakes mints no actions row, so firstActionIndex can be null.
+            // It must precede the rollcall_absences delete below, which removes its only join key.
+            if(this.activationDelay == null){
+                logger.warn('ClientRollback: rollcall eviction delegation repair skipped (no coin supplied)');
+            } else {
+                try {
+                    await this.db.doQuery(
+                        "UPDATE delegations d " +
+                        "JOIN rollcall_absences ra ON ra.source_id = d.source_id " +
+                        "SET d.deactivation_block = NULL " +
+                        "WHERE ra.evicted = 1 " +
+                        "  AND ra.close_block >= ? " +
+                        "  AND d.deactivation_block IS NOT NULL " +
+                        "  AND d.deactivation_block = ra.close_block + ?",
+                        [block_index, this.activationDelay]
+                    );
+                } catch(e){
+                    // Skip only a schema gap (a replica predating the ROLLCALL tables holds no eviction).
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
             }
 
             // The three BTC-side ROLLCALL tables key their block scope on close_block,

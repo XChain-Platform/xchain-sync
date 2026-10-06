@@ -30,6 +30,17 @@ const { SnapshotStreamWriter, bigIntReplacer } = require('./stream_writer');
 const ROWS_PAGE_DEFAULT = 50000;
 const ROWS_PAGE_MAX = 100000;
 
+const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
+
+// The optional max_block query bound: ids in these tables are minted in block order
+// and reissued on a reorg, so a page never carries a row from above the caller's tip.
+function parseMaxBlock(res){
+    let raw = res && res.req && res.req.query ? res.req.query.max_block : undefined;
+    if(raw === undefined || raw === null || raw === '') return null;
+    let n = parseInt(raw, 10);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 const methods = {
 
     // Stream one append-only id-PK lookup table into the snapshot body by id cursor
@@ -94,8 +105,16 @@ const methods = {
         // non-monotonic w.r.t. insert order and must NOT be used as the cursor.
         let col = replicatedTables.lookupCursorColumn(table);
         let rows = await db.findLookupPageAfter(table, col, after, lim);
-        let maxId   = rows.length ? Number(rows[rows.length - 1][col]) : after;
         let hasMore = rows.length === lim;
+        let maxBlock = REISSUING_LOOKUPS.has(table) ? parseMaxBlock(res) : null;
+        if(maxBlock != null){
+            let cut = rows.findIndex(r => r.block_index != null && Number(r.block_index) > maxBlock);
+            if(cut !== -1){
+                rows = rows.slice(0, cut);
+                hasMore = false;
+            }
+        }
+        let maxId   = rows.length ? Number(rows[rows.length - 1][col]) : after;
         let schemaVersion = SCHEMA_VERSION[dbType];
 
         res.setHeader('Content-Type', 'application/json');

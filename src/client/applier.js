@@ -53,6 +53,12 @@ const ESCROW_TRIGGER_TABLES = new Set([
     'dispensers', 'dispenser_statuses', 'tokens'
 ]);
 
+// Replica-owned migration ledger: the replica's own runner records applied
+// migrations here, so a source copy is never applied and the full-snapshot clear
+// loop never deletes the replica's rows. Classified explicitly so the table is not
+// shipped by accident nor swallowed (errno 1054) by the incremental fall-through.
+const REPLICA_LEDGER_TABLES = new Set(['schema_migrations']);
+
 function initializeCoreState(applier, db, util, chain, network) {
     applier.db = db;
     applier.util = util;
@@ -183,9 +189,15 @@ class ClientApplier {
         await this.applyBlockTransaction(payload);
     }
 
+    // Fail closed like the snapshot and page gates: every current server stamps the
+    // field, so a block without it comes from a server on an older wire format.
     assertBlockSchemaVersion(payload){
         let dbType = (this.db && this.db.dbType) || 'indexer';
-        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
+        if(payload.schema_version == null){
+            throw new Error('Schema version missing on live block ' + payload.block_index +
+                ': client=' + SCHEMA_VERSION[dbType] + '; the server predates versioned block payloads, upgrade it');
+        }
+        if(payload.schema_version !== SCHEMA_VERSION[dbType]){
             throw new Error('Schema version mismatch: server=' + payload.schema_version +
                 ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
         }
@@ -330,13 +342,13 @@ class ClientApplier {
     localSnapshotTableNames(schemaRows){
         return (schemaRows || [])
             .map(r => r.table_name || r.TABLE_NAME)
-            .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+            .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t) && !REPLICA_LEDGER_TABLES.has(t));
     }
 
     // Payload tables minus node-local ones; a source still shipping one is ignored.
     payloadSnapshotTableNames(snapshotData){
         return Object.keys(snapshotData.tables).filter(t => {
-            if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
+            if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t) && !REPLICA_LEDGER_TABLES.has(t)) return true;
             logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
             return false;
         });
@@ -493,6 +505,7 @@ class ClientApplier {
         for(let table in tables){
             let rows = tables[table];
             if(!rows || rows.length === 0) continue;
+            if(REPLICA_LEDGER_TABLES.has(table)) continue;
             let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
             if(opts && opts.strictIgnoreCheck && repairKeyColumns)
                 await this.reconcileLookupRows(table, rows, repairKeyColumns);

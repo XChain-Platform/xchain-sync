@@ -30,6 +30,15 @@ const { SnapshotStreamWriter, bigIntReplacer } = require('./stream_writer');
 const { decoderIncrementalSets, indexerBlockScopedSet, indexerFullDumpSet, INDEXER_INBAND_PAGED } = require('./table_sets');
 const logger = getLogger();
 
+// Resolve the frozen activation delay for an indexer catch-up: null for an omitted coin,
+// the integer for a known one, and a throw for an unrecognized one (hard misconfiguration).
+function requireIncrementalActivationDelay(coin){
+    let delay = activationDelayBlocks(coin);
+    if(delay === undefined)
+        throw new Error('incremental snapshot: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+    return delay;
+}
+
 module.exports = {
 
     // Stream an incremental snapshot to an HTTP response.
@@ -65,6 +74,9 @@ module.exports = {
         // exceeds SNAPSHOT_MAX_CONTENT and aborts the client download. Default off:
         // existing callers (4 args) keep the full bundled behaviour unchanged.
         let skipLookups = !!(opts && opts.skipLookups);
+        // Refuse an indexer coin with no frozen activation delay before any header is sent,
+        // so the route answers a clean 500 rather than a catch-up missing its deactivation rows.
+        if(((db && db.dbType) || 'indexer') === 'indexer') requireIncrementalActivationDelay(coin);
         // Same REPEATABLE READ snapshot discipline as streamFullSnapshot: the
         // anchor, hash headers, and all per-table reads must observe one block
         // height so the catch-up payload can't mix rows from two heights while
@@ -252,8 +264,7 @@ module.exports = {
 
     async writeIncrementalUpdatedRows(writer, db, dbType, sinceBlock, lastBlock, coin, conn){
         if(dbType !== 'indexer') return;
-        let delay = activationDelayBlocks(coin);
-        if(delay === undefined) delay = null;
+        let delay = requireIncrementalActivationDelay(coin);
         let updated = await collectUpdatedRows(db, sinceBlock, lastBlock, delay, conn);
         await writer.write(',"updated_rows":' + JSON.stringify(encodeTables(updated), bigIntReplacer));
     },
