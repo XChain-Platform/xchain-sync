@@ -19,7 +19,7 @@
  * xchain-indexer/src/db/actions.js getBlockHashes(): same consensus SELECTs, same
  * special-address canonicalization, same chaining/version fold, hashed through
  * the same getDataHash/jsonStringify pair. Unlike the whole-file twins locked
- * in rollback-coverage.test.js (stateHash.js, merkle.js, ...), the two live
+ * in rollback_coverage.test.js (stateHash.js, merkle.js, ...), the two live
  * inside DIFFERENT host structures (a db/actions.js mixin method vs a class here), so
  * whole-file byte-identity cannot apply. This test extracts the
  * consensus-bearing pieces from BOTH repos' sources and asserts them equal
@@ -196,7 +196,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         if(!pair) return;
         for(const sig of [/jsonStringify\(obj\)\{/, /getDataHash\(data\)\{/]){
             assert.strictEqual(
-                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/utility.js')),
+                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/util/index.js')),
                 normalize(extractFunction(pair.indexer, sig, 'xchain-indexer/src/utility.js')),
                 sig + ' drifted between xchain-sync and xchain-indexer utility.js; it serializes every ' +
                 'consensus hash preimage and MUST stay identical (bigint coercion included)');
@@ -231,7 +231,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     //
     // The follower header calls the SMT engine byte-identical to the indexer's,
     // and until these cases nothing checked it: the whole-file loop in
-    // rollback-coverage.test.js never listed stateCommitment.js, and the case
+    // rollback_coverage.test.js never listed stateCommitment.js, and the case
     // above pins only reportOrphanStats. The engine HAD drifted - the indexer
     // grew a read-through node cache the follower has not - and the stale claim
     // is why nobody had to look. Both halves are pinned now: what is still
