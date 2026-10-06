@@ -77,6 +77,9 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // snapshot, /status count) already skips it, so shipping it would freeze the
     // source's bootstrap-instant mempool on full-bootstrap replicas.
     'mempool_transactions',
+    // dispenser_extension_undo: decoder-local reorg bookkeeping for dispenser expiration
+    // extends (no registry entry); each node rebuilds it from its own decoder writes.
+    'dispenser_extension_undo',
     // sync_halt, sync_state: replica-local durable CONTROL tables the source never
     // ships (created by db.verifySyncTables for both dbTypes; no registry entry).
     // sync_halt holds the durable divergence-halt audit record; sync_state holds the
@@ -189,7 +192,7 @@ function decoderIncrementalSets(){
         blockScoped: new Set(topology.blockScoped),
         txScoped:    new Set(topology.txScoped),
         fullDump:    new Set(topology.index),
-        skip:        new Set(['mempool_transactions', 'dispensers'])
+        skip:        new Set(['mempool_transactions', 'dispensers', 'dispenser_extension_undo'])
     };
 }
 
