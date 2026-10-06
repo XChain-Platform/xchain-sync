@@ -18,9 +18,9 @@ describe('replicatedTables', function(){
         before(function(){ tables = getReplicatedTables('indexer'); });
 
         it('covers the core block/action tables a follower must hold', function(){
-            // balances is intentionally NOT replicated per-block; it is a
-            // derived aggregate the follower recomputes locally (see replicatedTables.js
-            // and rollback-coverage.test.js RECOMPUTED). So it must NOT appear here.
+            // balances is intentionally NOT replicated per-block; it is a derived
+            // aggregate the follower recomputes locally (see src/schema/replicated_tables.js
+            // and rollback_coverage.test.js RECOMPUTED). So it must NOT appear here.
             for(let t of ['blocks', 'transactions', 'actions',
                           'contract_stakes', 'attests']){
                 assert.ok(tables.includes(t), 'expected replicated set to include ' + t);
@@ -101,7 +101,7 @@ describe('replicatedTables', function(){
         it('excludes mempool_transactions (non-deterministic across nodes)', function(){
             // mempool_transactions is excluded by design from the decoder
             // per-block stream and the /status completeness count: its contents
-            // legitimately diverge between nodes (see replicatedTables.js and
+            // legitimately diverge between nodes (see src/schema/replicated_tables.js and
             // xchain-sync-decoder-db-decisions). This assertion must live in the
             // DECODER scope: the table has no indexer registry entry, so asserting
             // its absence from the indexer set is unfalsifiable.
@@ -110,7 +110,7 @@ describe('replicatedTables', function(){
         });
 
         it('pins the decoder replicated set by value (8 of 9 decoder tables)', function(){
-            // F-5-style by-value pin (see rollback-coverage.test.js): the decoder
+            // F-5-style by-value pin (see rollback_coverage.test.js): the decoder
             // has no lifecycle registry to cross-check against, so an explicit
             // literal is the only guard that makes BOTH directions - a table added
             // to TOPOLOGY.decoder and a table dropped from it - deliberate,

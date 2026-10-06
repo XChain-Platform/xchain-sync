@@ -31,6 +31,16 @@ describe('consensus-constants (boundary)', function () {
 
     fileIt('activationDelayBlocks is case-insensitive across ticker and full name', function () {
         assert.strictEqual(C.activationDelayBlocks('btc'), C.activationDelayBlocks('BTC'));
+        // Pin the full names production passes as cfg.coin, as literals; the integer check
+        // keeps the equality from passing when both sides are undefined.
+        for(const [full, tick] of [['bitcoin', 'BTC'], ['litecoin', 'LTC'], ['dogecoin', 'DOGE']]){
+            const d = C.activationDelayBlocks(full);
+            assert.ok(Number.isSafeInteger(d) && d >= 0, full + ' must resolve to a frozen integer');
+            assert.strictEqual(d, C.activationDelayBlocks(tick));
+        }
+        // Resolve a mixed-case full name the same as its ticker.
+        assert.strictEqual(C.activationDelayBlocks('Dogecoin'), C.activationDelayBlocks('DOGE'));
+        assert.strictEqual(C.activationDelayBlocks('LITECOIN'), C.activationDelayBlocks('LTC'));
     });
 
     fileIt('GAS_TICK / gasTickSymbol are the frozen XCHAIN symbol', function () {

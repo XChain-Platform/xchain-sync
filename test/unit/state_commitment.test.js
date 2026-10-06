@@ -163,7 +163,7 @@ describe('state-commitment flag-day activation @regression', function(){
     // blocks -> guaranteed balances_root divergence HALT). Monorepo-relative: the
     // canonical doc is present in the monorepo/aggregator checkout but NOT in
     // standalone single-repo CI. The skip is GATED like the other cross-repo drift
-    // guards (see rollback-coverage.test.js requireSibling): the e2e job that checks
+    // guards (see rollback_coverage.test.js requireSibling): the e2e job that checks
     // out xchain-documentation sets XCHAIN_REQUIRE_SIBLINGS=1, where a missing
     // canonical doc HARD-FAILS instead of skipping, so this parity assertion can
     // never green-by-skip where the sibling is required. Standalone CI (flag unset,

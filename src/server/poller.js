@@ -30,6 +30,7 @@
  ********************************************************************/
 
 const replicatedTables = require('../schema/replicated_tables');
+const lifecycle = require('../table_lifecycle');
 const { collectUpdatedRows } = require('./updated_rows');
 const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
@@ -47,6 +48,10 @@ const logger = getLogger();
 // source reorg ceiling plus a margin so every reorg an honest source emits resolves (recentHashCap).
 const RECENT_HASH_CAP_FLOOR = 256;
 const RECENT_HASH_CAP_MARGIN = 16;
+
+// Derive the reorg-scoped lookups from the lifecycle registry, so forward streaming,
+// both rollbacks and the content-parity bound always name the same tables.
+const BLOCK_SCOPED_INDEX_TABLES = lifecycle.tablesWhere(t => t.rollback === 'index' && t.replication === 'stream:index');
 
 // A per-table read in buildBlockPayload may legitimately fail because the source
 // runs an older schema that lacks the table/column (errno 1146 missing table, 1054
@@ -89,12 +94,15 @@ function initializePollerIdentity(poller, chain, network, db, broadcaster,
 function initializeActivationDelay(poller, chain){
     // Freeze the per-chain activation delay for forward deactivation stamps.
     // Support the in-place updated-rows channel with its consensus delay.
-    // Normalize missing delays for unrecognized coins and test harnesses.
+    // Keep null only for an omitted coin (test harnesses) and for decoders.
 
-    // Let collectUpdatedRows skip the deactivation class without a delay.
-    // Avoid scanning updated rows with an incorrect activation delay.
-    // Keep the stored absence value consistently null.
+    // Refuse an indexer coin with no frozen delay, as ClientRollback does: a null here
+    // makes collectUpdatedRows silently drop the deactivation class from every payload.
+    // SyncService.discoverChains skips such a chain first, so this is the backstop.
     let delay = activationDelayBlocks(chain);
+    if(delay === undefined && poller.dbType === 'indexer'){
+        throw new Error('ServerPoller: unrecognized coin "' + chain + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+    }
     poller.activationDelay = (delay === undefined) ? null : delay;
 }
 
@@ -1158,7 +1166,7 @@ class ServerPoller {
 
     async addBlockScopedIndexRows(payload, block_index, conn){
         if(this.dbType !== 'decoder'){
-            for(const table of ['index_addresses', 'index_tickers']){
+            for(const table of BLOCK_SCOPED_INDEX_TABLES){
                 try {
                     const rows = await this.db.getBlockScopedRows(table, block_index, conn);
                     if(!rows || rows.length === 0) continue;

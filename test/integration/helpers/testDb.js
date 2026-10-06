@@ -312,7 +312,7 @@ async function createDatabase(dbName) {
 async function seedSchema(db) {
     // Prefer the sibling-schema path the CI e2e job exports (XCHAIN_INDEXER_SQL_PATH
     // points at the checked-out xchain-indexer/src/sql); fall back to the monorepo
-    // sibling layout for local runs. Mirrors the convention in rollback-coverage.test.js
+    // sibling layout for local runs. Mirrors the convention in rollback_coverage.test.js
     // so these DB-backed suites can run in CI without a sibling working copy.
     let sqlDir = process.env.XCHAIN_INDEXER_SQL_PATH
         || path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');
