@@ -196,7 +196,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         if(!pair) return;
         for(const sig of [/jsonStringify\(obj\)\{/, /getDataHash\(data\)\{/]){
             assert.strictEqual(
-                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/utility.js')),
+                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/util/index.js')),
                 normalize(extractFunction(pair.indexer, sig, 'xchain-indexer/src/utility.js')),
                 sig + ' drifted between xchain-sync and xchain-indexer utility.js; it serializes every ' +
                 'consensus hash preimage and MUST stay identical (bigint coercion included)');
