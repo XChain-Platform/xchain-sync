@@ -45,7 +45,7 @@ const { getReplicatedTables }  = require('../../src/schema/replicated_tables');
 const { OPERATOR_LOCAL_TABLES, decoderIncrementalSets } = require('../../src/server/snapshot_builder');
 
 // Resolved exactly as the other two decoder-schema readers resolve it
-// (generatedColumns.test.js, replicatedDatetimeColumns.test.js), so this guard
+// (generated_columns.test.js, replicated_datetime_columns.test.js), so this guard
 // runs in the same CI job and against the same directory they do.
 const DECODER_SQL_DIR = process.env.XCHAIN_DECODER_SQL_PATH
     || path.join(__dirname, '../../../xchain-decoder/src/sql');
@@ -69,7 +69,9 @@ function requireSibling(ctx){
 //
 // mempool_transactions: node-local, non-deterministic observation state; its own
 // schema comment forbids sharing raw values across nodes.
-const DECODER_EXCLUDED = new Set(['mempool_transactions']);
+// dispenser_extension_undo: local reorg bookkeeping for dispenser expiration extends,
+// not replicated state.
+const DECODER_EXCLUDED = new Set(['mempool_transactions', 'dispenser_extension_undo']);
 
 const ADD_INSTRUCTIONS =
     '\n\nEither add it to TOPOLOGY.decoder in src/schema/replicated_tables.js (and update the ' +
