@@ -10,10 +10,10 @@
 
 const assert     = require('assert');
 const sinon      = require('sinon');
-const ClientSync = require('../../../src/client/sync');
-const Utility    = require('../../../src/util');
-const HashVerifier = require('../../../src/client/hash_verifier');
-const { withDbMixins } = require('../../helpers/db_mixins.js');
+const ClientSync = require('../../../../src/client/sync');
+const Utility    = require('../../../../src/util');
+const HashVerifier = require('../../../../src/client/hash_verifier');
+const { withDbMixins } = require('../../../helpers/db_mixins.js');
 
 function createMockDb(overrides){
     return Object.assign({
