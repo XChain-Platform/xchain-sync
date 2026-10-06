@@ -1121,6 +1121,19 @@ class Database {
         }
     }
 
+    // information_schema row for transactions.data (empty when the table or column is
+    // absent). Rethrows: the fail-soft default would return [] on a driver fault, which a
+    // caller reads as "no such column" and passes.
+    async readTransactionsDataCharset(){
+        return await this.doQuery(
+            "SELECT CHARACTER_SET_NAME FROM information_schema.columns " +
+            "WHERE table_schema = ? AND table_name = 'transactions' AND column_name = 'data'",
+            [this.dbName],
+            null,
+            { rethrow: true }
+        );
+    }
+
     // Get a database connection (with exponential backoff + circuit breaker).
     // Returns the active shared transaction connection when one is open, so every
     // query on this Db instance funnels through that same transaction.
