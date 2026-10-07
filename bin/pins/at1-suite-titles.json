@@ -115,42 +115,6 @@
       "missingReplicatedTables returns null (unknown), never [], when the table listing is unavailable",
       "missingReplicatedTables scopes to the dbType (decoder set, not indexer set)"
     ],
-    "09cd28d5ace1d077": [
-      "TransparencyLog commitEpoch early returns returns early when no blocks exist for the epoch",
-      "TransparencyLog commitEpoch early returns returns early when the epoch is already committed",
-      "TransparencyLog commitEpoch reorg-marker backfill backfills a pending reorg marker new_root when the epoch re-commits",
-      "TransparencyLog findGaps returns ascending interior block indices missing from sync_meta",
-      "TransparencyLog findGaps returns empty when sync_meta is empty",
-      "TransparencyLog findGaps returns empty when the recorded range is too small to hold an interior hole",
-      "TransparencyLog getHighWaterMark returns MAX(block_index) from sync_meta",
-      "TransparencyLog getHighWaterMark returns null when sync_meta is empty",
-      "TransparencyLog getLatestRoot returns null when no epoch has been committed",
-      "TransparencyLog getLatestRoot returns the most recent committed epoch row",
-      "TransparencyLog getPage calculates correct offset",
-      "TransparencyLog getPage clamps limit above 1000 to 1000",
-      "TransparencyLog getPage clamps limit below 1 to 1 for negative values",
-      "TransparencyLog getPage clamps negative page to 0",
-      "TransparencyLog getPage falls back to default 100 for limit of 0 (parseInt(0) || 100)",
-      "TransparencyLog getPage handles non-numeric page gracefully",
-      "TransparencyLog getPage returns paginated results",
-      "TransparencyLog getProof returns a verifiable inclusion proof for a present block",
-      "TransparencyLog getProof returns an error object when the epoch is not yet committed",
-      "TransparencyLog getProof returns an error when the block is not present in the epoch range",
-      "TransparencyLog getProof returns null for a non-numeric or < 1 block index",
-      "TransparencyLog getProof returns null when the epoch is committed but sync_meta has no rows",
-      "TransparencyLog getRecordedHash returns null when the block was never recorded",
-      "TransparencyLog getRecordedHash returns null when the recorded ledger_hash is NULL",
-      "TransparencyLog getRecordedHash returns the durable recorded ledger_hash for a height",
-      "TransparencyLog pruneFrom does not duplicate the audit marker when one is already pending (retry-safe)",
-      "TransparencyLog pruneFrom propagates a DB error so the poll loop retries (no transaction state to corrupt)",
-      "TransparencyLog pruneFrom records an audit marker and prunes sync_meta + merkle_epochs for an invalidated epoch",
-      "TransparencyLog pruneFrom still prunes sync_meta when no committed epoch is invalidated",
-      "TransparencyLog recommitEpoch deletes the existing epoch row then re-commits it",
-      "TransparencyLog recordBlock calls doQuery with INSERT IGNORE and correct params",
-      "TransparencyLog recordBlock commits a Merkle epoch when an epoch boundary is crossed",
-      "TransparencyLog recordBlock does not commit an epoch for block 0",
-      "TransparencyLog recordBlock swallows a commitEpoch error so recordBlock still resolves"
-    ],
     "09f74f1da00d6cad": [
       "validation validateWsEvent accepts block event with block_index 0",
       "validation validateWsEvent accepts status event with null block_height",
@@ -328,14 +292,6 @@
       "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake an explicit zero weight is legitimate and sums normally",
       "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake sums weight over distinct sources (first weight per source wins)"
     ],
-    "1038be37b3b01cb3": [
-      "ClientSync handleReorg calls rollback with the event block_index",
-      "ClientSync handleReorg handles rollback error gracefully",
-      "ClientSync handleReorg loads new lastHashes from DB",
-      "ClientSync handleReorg null tip: ignores the reorg entirely (no rollback, no cursor advance)",
-      "ClientSync handleReorg resets lastAppliedBlock to block_index - 1",
-      "ClientSync handleReorg sets lastHashes to null when rolling back to block 0"
-    ],
     "1050d45e360d00f4": [
       "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
       "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
@@ -433,16 +389,6 @@
       "ClientSync syncLookupTablesPaged pages one table by id cursor until has_more=false, applying each non-empty page",
       "ClientSync syncLookupTablesPaged stops if has_more is true but the cursor cannot advance (no infinite spin)",
       "ClientSync syncLookupTablesPaged throws on a schema-version mismatch (fail closed)"
-    ],
-    "1a40156a4cb3fad9": [
-      "ServerPoller buildBlockPayload collects both decoder blocks hash ids under the shared *_hash_id rule @regression",
-      "ServerPoller buildBlockPayload does not run the generic index pass for the decoder",
-      "ServerPoller buildBlockPayload extracts the remaining indexer index tables from referenced _id columns",
-      "ServerPoller buildBlockPayload fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression",
-      "ServerPoller buildBlockPayload fetches index_addresses by source_id from transactions",
-      "ServerPoller buildBlockPayload fetches index_transactions by referenced IDs",
-      "ServerPoller buildBlockPayload merges the matured escrow release into escrows beside the refund credit @regression",
-      "ServerPoller buildBlockPayload streams the blocks.state_hash_id index_transactions row with the live block @regression"
     ],
     "1cc46b5d9b0c38cc": [
       "SyncService discoverChains datetime retype wiring client mode calls ensureDatetimeColumns once per chain, after verifySyncTables and before ensureReplicatedColumns, with includeFollowerDerived: true",
@@ -581,6 +527,29 @@
       "ClientApplier security insertRows: table name validation rejects table name with path traversal",
       "ClientApplier security insertRows: table name validation rejects table name with semicolon",
       "ClientApplier security insertRows: table name validation rejects table name with space"
+    ],
+    "207951e050b87331": [
+      "BlockHasher: advisory checksum reads fail closed @regression a read error rejects instead of hashing an empty index map",
+      "BlockHasher: advisory checksum reads fail closed @regression a token-fold bound read error rejects instead of bounding the digest at zero",
+      "BlockHasher: advisory checksum reads fail closed @regression hashes the read rows as the index map",
+      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, armed (regtest)",
+      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, no network/coin",
+      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, unarmed (mainnet placeholder)",
+      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, armed (regtest)",
+      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, no network/coin",
+      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, unarmed (mainnet placeholder)",
+      "BlockHasher: independent recompute conformance @regression RED: tampering a single replicated row changes the recomputed hash",
+      "BlockHasher: independent recompute conformance @regression a read error rejects instead of hashing a truncated preimage",
+      "BlockHasher: independent recompute conformance @regression an all-empty block with no previous hash recomputes without error",
+      "BlockHasher: independent recompute conformance @regression reordering rows changes the hash (ORDER BY is consensus-significant)",
+      "BlockHasher: independent recompute conformance @regression reproduces the committed golden hashes from canned replica rows",
+      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) legacy folding collation on an unarmed chain (mainnet placeholder)",
+      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) legacy folding collation when network/coin are omitted (pre-activation callers)",
+      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) pins COLLATE utf8_bin in GROUP BY and ORDER BY on regtest (armed from genesis)",
+      "BlockHasher: special-address canonicalization reaches the preimage @regression the DONATE1 role map still names both chain addresses this suite uses",
+      "BlockHasher: special-address canonicalization reaches the preimage @regression the credits slot hashes BTC DONATE1, LTC DONATE1 and the role token identically",
+      "BlockHasher: special-address canonicalization reaches the preimage @regression the debits slot hashes BTC DONATE1, LTC DONATE1 and the role token identically",
+      "BlockHasher: special-address canonicalization reaches the preimage @regression the escrows slot hashes BTC DONATE1, LTC DONATE1 and the role token identically"
     ],
     "20e54b1a43c350e3": [
       "Boundary: Config Parsing NaN inputs default gracefully BLOCK_POLL_INTERVAL=undefined defaults to 3000",
@@ -798,6 +767,14 @@
       "Boundary: Reorg Detection sizes the recorded-hash window from the chain reorg ceiling",
       "Boundary: Reorg Detection stops at the 256-height floor on a chain whose ceiling is lower"
     ],
+    "30033d82229a4fd9": [
+      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
+      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
+      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
+      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
+      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
+      "armed map v2: manifest completeness over src/ the shim scan finds all fourteen shim and carrier files and all 39 rows"
+    ],
     "3005f26e0e504c49": [
       "01 Payload Throughput dense blocks (200 actions/block)",
       "01 Payload Throughput heavy blocks (50 actions/block)",
@@ -817,14 +794,6 @@
       "E2E: Large Data Volume 6.4 Sustained throughput keeps up with 1 block per 200ms for 100 blocks",
       "E2E: Large Data Volume 6.5 Snapshot download for large dataset serves gzip-compressed snapshot for 200 blocks"
     ],
-    "316993ccc3fd07eb": [
-      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
-      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
-      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
-      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
-      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
-      "armed map v2: manifest completeness over src/ the shim scan finds all twelve gate files and all 39 rows"
-    ],
     "319ef1f0f909fe9d": [
       "Chaos: source cursor read fails closed a genuinely empty source is still a quiet no-op, not an error",
       "Chaos: source cursor read fails closed a source-DB outage surfaces out of poll instead of reading as an idle chain",
@@ -836,21 +805,6 @@
       "Database schema self-heal: one startup completes columns then key rebuilds is idle on the second and third startup",
       "Database schema self-heal: one startup completes columns then key rebuilds keeps the stale keys when the column ADD is refused, and says so",
       "Database schema self-heal: one startup completes columns then key rebuilds never defers the work to a next startup"
-    ],
-    "341aa21a3e737abe": [
-      "/status replication freshness SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s",
-      "/status replication freshness client row carries the upstream verdict is unknown (null), never false, when no source reported the fields",
-      "/status replication freshness client row carries the upstream verdict publishes the upstream verdict beside a lag_blocks of 0",
-      "/status replication freshness fails closed on a poller status that predates the fields",
-      "/status replication freshness keeps lag_blocks when replication is fresh",
-      "/status replication freshness withholds lag_blocks when the replication engine says the node is stale",
-      "/status server row carries a protocol-client halt marks a durable halt stale even when native SQL replication is fresh",
-      "per-chain rollback depth overrides and ceiling names the source reorg ceiling per chain, in ticker or full-name form",
-      "per-chain rollback depth overrides and ceiling preserves an explicit operator override",
-      "per-chain rollback depth overrides and ceiling stays silent for the defaults and for an in-range override",
-      "per-chain rollback depth overrides and ceiling warns, without clamping, when an override exceeds the source reorg ceiling",
-      "per-chain rollback depth raises the unset default to the source undo window per chain and network",
-      "source undo window mirror mirrors the utxo-tracker undo window table, inside the source ceiling"
     ],
     "347de06fd7b53919": [
       "Advisory table-content parity computeTableContentChecksums a failed table listing degrades to probing, not to an empty result",
@@ -947,6 +901,16 @@
       "db shared assertValidIdentifier rejects a non-string identifier",
       "db shared assertValidIdentifier rejects an empty identifier",
       "db shared assertValidIdentifier rejects null"
+    ],
+    "3891a3bad72fe9b5": [
+      "decoder transactions.data width assertTransactionsDataWidth passes a utf8mb4 column, an absent column, and skips indexer replicas",
+      "decoder transactions.data width assertTransactionsDataWidth propagates a driver fault instead of passing",
+      "decoder transactions.data width assertTransactionsDataWidth throws for a narrow decoder column",
+      "decoder transactions.data width discoverChains wiring refuses the narrow chain only and registers the wide one",
+      "decoder transactions.data width readTransactionsDataCharset queries information_schema with rethrow",
+      "decoder transactions.data width transactionsDataWidthReason passes utf8mb4 in either key case and binary",
+      "decoder transactions.data width transactionsDataWidthReason reads an absent column or unreadable charset as null",
+      "decoder transactions.data width transactionsDataWidthReason refuses utf8mb3 and latin1"
     ],
     "399f12faf9782346": [
       "BlockBroadcaster security per-IP limit with TRUST_PROXY=false different socket IPs are not affected by per-IP limit",
@@ -1154,6 +1118,20 @@
     "464df3f346d23048": [
       "Boundary: Reorg Detection mid-rewrite height drop: walks back to the true fork point"
     ],
+    "46f7a6a6661a718c": [
+      "ClientSync: checkpoint-quorum rotation following @regression HALTS when a rotated checkpoint is not signed by the authoritative set (forged quorum)",
+      "ClientSync: checkpoint-quorum rotation following @regression HALTS when a rotated checkpoint's committed state_root disagrees with the recompute",
+      "ClientSync: checkpoint-quorum rotation following @regression HALTS when the replica's recompute disagrees with the pinned seed (different chain)",
+      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt (waits) when the rotated set's snapshot is not yet attested",
+      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt (waits) when the seed height is not yet recomputed locally",
+      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt on a transport error while fetching the checkpoint range",
+      "ClientSync: checkpoint-quorum rotation following @regression follows the pinned seed forward to a rotated checkpoint and does NOT halt",
+      "ClientSync: checkpoint-quorum rotation range source @regression falls back to the primary source for the range when no anchor is configured",
+      "ClientSync: checkpoint-quorum rotation range source @regression fetches the rotation range from CHECKPOINT_ANCHOR_URL, not the audited source",
+      "ClientSync: checkpoint-quorum rotation range source @regression warns, and does NOT halt, when the range comes back empty (withheld rotation chain)",
+      "ClientSync: rotation following under the hub's full coin name @regression HALTS on a forged rotated checkpoint",
+      "ClientSync: rotation following under the hub's full coin name @regression walks the rotation range from the ticker-form pins"
+    ],
     "48914b893fa0ef67": [
       "ServerPoller resumeCursor (restart resume) @regression decoder resumes from the source tip (no transparency log)",
       "ServerPoller resumeCursor (restart resume) @regression does not skip blocks advanced during downtime when polling resumes",
@@ -1196,6 +1174,10 @@
       "E2E: Proxy-trust client attribution HTTP snapshot budgets with TRUST_PROXY on ignores entries beyond the one trusted hop, so a forged prefix buys no budget",
       "E2E: Proxy-trust client attribution WebSocket per-IP cap collapses every subscriber onto the socket address when TRUST_PROXY is off",
       "E2E: Proxy-trust client attribution WebSocket per-IP cap gives each forwarded client its own connection allowance when TRUST_PROXY is on"
+    ],
+    "4afbe50e37085854": [
+      "startup incremental catch-up 404 log level logs a 404 at warn on one line and never at error",
+      "startup incremental catch-up 404 log level still logs a non-404 failure at error"
     ],
     "4b01b6170cf07d89": [
       "ServerPoller restart reorg-window seed @regression keeps only the newest contiguous suffix when a durable hash is missing",
@@ -1402,9 +1384,45 @@
     "4fbe28f32fa63c5b": [
       "anchor fold state hash twin is byte-identical to the xchain-indexer canonical copy"
     ],
+    "5011c253198113a2": [
+      "pinnedValidators @regression fails closed (null) on a malformed env override",
+      "pinnedValidators @regression is INERT: every real (chain, network) pins null",
+      "pinnedValidators @regression parses a well-formed env override (case-insensitive lookup)",
+      "pinnedValidators @regression returns null for an unknown chain/network and for null args",
+      "pinnedValidators: assertPinnedEnvOverrides @regression accepts well-formed validator and seed overrides",
+      "pinnedValidators: assertPinnedEnvOverrides @regression defaults to process.env when called with no argument",
+      "pinnedValidators: assertPinnedEnvOverrides @regression does not reject a chain/network pair that is absent from the baked-in map",
+      "pinnedValidators: assertPinnedEnvOverrides @regression does not throw when no override is present at all",
+      "pinnedValidators: assertPinnedEnvOverrides @regression ignores a prefixed name with no CHAIN_NETWORK shape (the getters never read it)",
+      "pinnedValidators: assertPinnedEnvOverrides @regression names every offender, not just the first",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a seed override that is not JSON, not an object, or missing a required field",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a validator override that is not JSON, not an array, empty, or wrongly shaped",
+      "pinnedValidators: assertPinnedEnvOverrides @regression treats an unset or empty-string override as absent, not invalid",
+      "pinnedValidators: rotation seed checkpoint @regression fails closed (null) on a malformed env seed override",
+      "pinnedValidators: rotation seed checkpoint @regression is INERT: every real (chain, network) seed pins null",
+      "pinnedValidators: rotation seed checkpoint @regression parses a well-formed env seed override (case-insensitive lookup)",
+      "pinnedValidators: rotation seed checkpoint @regression returns null for an unknown chain/network and for null args",
+      "pinnedValidators: the hub's full coin name @regression is INERT under the full coin names too",
+      "pinnedValidators: the hub's full coin name @regression resolves the ticker-form env override under the hub's full coin name",
+      "pinnedValidators: the hub's full coin name @regression still resolves a full-name env override, and the ticker form wins when both are set",
+      "pinnedValidators: the hub's full coin name, seed checkpoint @regression resolves the ticker-form env seed under the hub's full coin name",
+      "pinnedValidators: the hub's full coin name, seed checkpoint @regression still resolves a full-name env seed, and the ticker form wins when both are set"
+    ],
     "50379832b5c241b2": [
       "Database pool session time zone pins the decoder pool to UTC while preserving date strings",
       "Database pool session time zone pins the indexer pool to UTC while preserving date strings"
+    ],
+    "5039fe55a9d97010": [
+      "train gate verdict characterization gives clear when nothing requires a rule set",
+      "train gate verdict characterization gives clear with the classification carried when the build implements the rule set",
+      "train gate verdict characterization halts on a malformed block with a null classification",
+      "train gate verdict characterization, pending three blocks below the boundary gives pending from an already read block",
+      "train gate verdict characterization, pending three blocks below the boundary gives the same verdict from a raw manifest passed as required",
+      "train gate verdict characterization, pending three blocks below the boundary gives the same verdict from the manifest option",
+      "train gate verdict characterization, reached boundary halts above the boundary",
+      "train gate verdict characterization, reached boundary halts at the boundary",
+      "train gate verdict characterization, unproven boundary halts on a null height, naming no BTC height to compare against",
+      "train gate verdict characterization, unproven boundary halts when the manifest names no activation height for the network"
     ],
     "50469ad456b170f3": [
       "E2E: API Correctness 9.1 Status endpoint reflects live state returns current block height after new blocks",
@@ -1456,6 +1474,11 @@
       "HubClient parseEndpoints prefixes bare HUB_VALIDATORS hosts with https when configured",
       "HubClient parseEndpoints uses https in the fallback path when HUB_PROTOCOL is https"
     ],
+    "54140585946817e9": [
+      "ClientApplier schema_migrations classification full snapshot leaves the ledger alone when only the local enumeration lists it",
+      "ClientApplier schema_migrations classification full snapshot leaves the replica schema_migrations rows untouched",
+      "ClientApplier schema_migrations classification incremental snapshot skips schema_migrations without a swallowed missing-column error"
+    ],
     "547bbbb3e69a37dd": [
       "updatedRows accumulator creates a table entry on the first add",
       "updatedRows accumulator does not mutate an input row",
@@ -1481,6 +1504,12 @@
       "armed map v2: fingerprint module and publication never lists a directory, so the value cannot depend on the file layout",
       "armed map v2: fingerprint module and publication publishes a 64-hex fingerprint over every manifest row",
       "armed map v2: fingerprint module and publication uses v2 for the legacy field and records version 2 plus the logic digest, with no _v2 alias (W5)"
+    ],
+    "55d52d6d7d7aecd5": [
+      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
+      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
+      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
+      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)"
     ],
     "564769c03a6a6f31": [
       "follower: escrow arming block full-builds balances @regression commits the live escrow leaf that has no arming-height journal row",
@@ -1762,11 +1791,6 @@
       "ClientRollback rollback skips the in-place resets and the escrow re-derive when firstActionIndex is null",
       "ClientRollback rollback still replays the anchor reconcile-log restore when firstActionIndex is null (RB-ANCHOR-NULL)"
     ],
-    "685672ba7325e614": [
-      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
-      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
-      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)"
-    ],
     "68687be53be6c143": [
       "HubClient constructor builds the correct URL",
       "HubClient getallconfigs returns null on error",
@@ -1841,6 +1865,48 @@
       "ClientSync persistent replica gaps records the persistent gap durably and clears it when the gap closes",
       "ClientSync persistent replica gaps reports that the client self-repair pass failed to close a short lookup"
     ],
+    "6feb913da3be5be4": [
+      "ClientSync: a live recompute error is recorded durably @regression a clean recompute records nothing",
+      "ClientSync: a live recompute error is recorded durably @regression a recompute error still advances when the durable record cannot be written",
+      "ClientSync: a live recompute error is recorded durably @regression a state_hash read error still holds the tip and records nothing",
+      "ClientSync: a live recompute error is recorded durably @regression records a live recompute error durably and does not halt"
+    ],
+    "6ff6cbc7afd5ddfd": [
+      "TransparencyLog commitEpoch early returns returns early when no blocks exist for the epoch",
+      "TransparencyLog commitEpoch early returns returns early when the epoch is already committed",
+      "TransparencyLog commitEpoch reorg-marker backfill backfills a pending reorg marker new_root when the epoch re-commits",
+      "TransparencyLog findGaps returns ascending interior block indices missing from sync_meta",
+      "TransparencyLog findGaps returns empty when sync_meta is empty",
+      "TransparencyLog findGaps returns empty when the recorded range is too small to hold an interior hole",
+      "TransparencyLog getHighWaterMark returns MAX(block_index) from sync_meta",
+      "TransparencyLog getHighWaterMark returns null when sync_meta is empty",
+      "TransparencyLog getLatestRoot returns null when no epoch has been committed",
+      "TransparencyLog getLatestRoot returns the most recent committed epoch row",
+      "TransparencyLog getPage calculates correct offset",
+      "TransparencyLog getPage clamps limit above 1000 to 1000",
+      "TransparencyLog getPage clamps limit below 1 to 1 for negative values",
+      "TransparencyLog getPage clamps negative page to 0",
+      "TransparencyLog getPage falls back to default 100 for limit of 0 (parseInt(0) || 100)",
+      "TransparencyLog getPage handles non-numeric page gracefully",
+      "TransparencyLog getPage returns paginated results",
+      "TransparencyLog getProof returns a verifiable inclusion proof for a present block",
+      "TransparencyLog getProof returns an error object when the epoch is not yet committed",
+      "TransparencyLog getProof returns an error when the block is not present in the epoch range",
+      "TransparencyLog getProof returns null for a non-numeric or < 1 block index",
+      "TransparencyLog getProof returns null when the epoch is committed but sync_meta has no rows",
+      "TransparencyLog getRecordedHash returns null when the block was never recorded",
+      "TransparencyLog getRecordedHash returns null when the recorded ledger_hash is NULL",
+      "TransparencyLog getRecordedHash returns the durable recorded block identity (ledger|actions|contract) for a height",
+      "TransparencyLog pruneFrom does not duplicate the audit marker when one is already pending (retry-safe)",
+      "TransparencyLog pruneFrom propagates a DB error so the poll loop retries (no transaction state to corrupt)",
+      "TransparencyLog pruneFrom records an audit marker and prunes sync_meta + merkle_epochs for an invalidated epoch",
+      "TransparencyLog pruneFrom still prunes sync_meta when no committed epoch is invalidated",
+      "TransparencyLog recommitEpoch deletes the existing epoch row then re-commits it",
+      "TransparencyLog recordBlock calls doQuery with INSERT IGNORE and correct params",
+      "TransparencyLog recordBlock commits a Merkle epoch when an epoch boundary is crossed",
+      "TransparencyLog recordBlock does not commit an epoch for block 0",
+      "TransparencyLog recordBlock swallows a commitEpoch error so recordBlock still resolves"
+    ],
     "71dbe5f3ab51e1b0": [
       "ServerPoller updateStatus calls broadcaster.updateStatus with correct shape",
       "ServerPoller updateStatus handles null lastPolledBlock",
@@ -1902,26 +1968,6 @@
       "Database.addMissingColumns: AUTO_INCREMENT key clause reports a refused ALTER as a failure and never logs \"Added column\"",
       "Database.addMissingColumns: AUTO_INCREMENT key clause reproduces a source PRIMARY KEY when the replica has no primary key",
       "Database.addMissingColumns: AUTO_INCREMENT key clause synthesises a UNIQUE key when the source declares no single-column key on the auto column"
-    ],
-    "761a0293ba4d835b": [
-      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, armed (regtest)",
-      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, no network/coin",
-      "BlockHasher: contract_state gather parity with getBlockLeafRows @regression getBlockLeafRows emits the same contract_state SQL as BlockHasher, unarmed (mainnet placeholder)",
-      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, armed (regtest)",
-      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, no network/coin",
-      "BlockHasher: every gather resolves a non-empty SQL @regression issues 11 resolved queries, unarmed (mainnet placeholder)",
-      "BlockHasher: independent recompute conformance @regression RED: tampering a single replicated row changes the recomputed hash",
-      "BlockHasher: independent recompute conformance @regression a read error rejects instead of hashing a truncated preimage",
-      "BlockHasher: independent recompute conformance @regression an all-empty block with no previous hash recomputes without error",
-      "BlockHasher: independent recompute conformance @regression reordering rows changes the hash (ORDER BY is consensus-significant)",
-      "BlockHasher: independent recompute conformance @regression reproduces the committed golden hashes from canned replica rows",
-      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) legacy folding collation on an unarmed chain (mainnet placeholder)",
-      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) legacy folding collation when network/coin are omitted (pre-activation callers)",
-      "BlockHasher: independent recompute conformance @regression state_key collation gate (contract-state gather SQL) pins COLLATE utf8_bin in GROUP BY and ORDER BY on regtest (armed from genesis)",
-      "BlockHasher: special-address canonicalization reaches the preimage @regression the DONATE1 role map still names both chain addresses this suite uses",
-      "BlockHasher: special-address canonicalization reaches the preimage @regression the credits slot hashes BTC DONATE1, LTC DONATE1 and the role token identically",
-      "BlockHasher: special-address canonicalization reaches the preimage @regression the debits slot hashes BTC DONATE1, LTC DONATE1 and the role token identically",
-      "BlockHasher: special-address canonicalization reaches the preimage @regression the escrows slot hashes BTC DONATE1, LTC DONATE1 and the role token identically"
     ],
     "76d8fd79030c9638": [
       "ClientApplier strictIgnoreCheck is a no-op by default: no SHOW WARNINGS round trip on the ordinary apply path",
@@ -2063,6 +2109,19 @@
     "8018794f66fac00f": [
       "ClientSync: stop() clears _hbTimer, closes all ws connections, empties wsConns",
       "ClientSync: stop() tolerates missing _hbTimer"
+    ],
+    "805d506efd2e2166": [
+      "replicatedTables getReplicatedTables (decoder) covers the decoder per-block set",
+      "replicatedTables getReplicatedTables (decoder) excludes mempool_transactions (non-deterministic across nodes)",
+      "replicatedTables getReplicatedTables (decoder) has no action-scoped tables",
+      "replicatedTables getReplicatedTables (decoder) includes dispensers in the completeness count set but NOT per-block-streamed",
+      "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 10 decoder tables)",
+      "replicatedTables getReplicatedTables (indexer) covers the core block/action tables a follower must hold",
+      "replicatedTables getReplicatedTables (indexer) excludes snapshot-only / operator-local / non-deterministic tables",
+      "replicatedTables getReplicatedTables (indexer) includes the transparency log (sync_meta) in the completeness check",
+      "replicatedTables getReplicatedTables (indexer) is the union of every per-scope list in the topology",
+      "replicatedTables getReplicatedTables (indexer) returns a de-duplicated union of the per-scope lists",
+      "replicatedTables getTopology defaults unknown dbTypes to the indexer topology"
     ],
     "805df1c0d5571b8d": [
       "ClientSync maybeVerifyCompleteness does not sweep once halted on a divergence",
@@ -2291,25 +2350,6 @@
       "coverage ratchet floors runs --all in coverage and coverage:check, so a file no test ever requires cannot hide from the denominator",
       "coverage ratchet floors ships the coverage:check script the CI coverage job invokes"
     ],
-    "8908175de26042da": [
-      "pinnedValidators @regression fails closed (null) on a malformed env override",
-      "pinnedValidators @regression is INERT: every real (chain, network) pins null",
-      "pinnedValidators @regression parses a well-formed env override (case-insensitive lookup)",
-      "pinnedValidators @regression returns null for an unknown chain/network and for null args",
-      "pinnedValidators: assertPinnedEnvOverrides @regression accepts well-formed validator and seed overrides",
-      "pinnedValidators: assertPinnedEnvOverrides @regression defaults to process.env when called with no argument",
-      "pinnedValidators: assertPinnedEnvOverrides @regression does not reject a chain/network pair that is absent from the baked-in map",
-      "pinnedValidators: assertPinnedEnvOverrides @regression does not throw when no override is present at all",
-      "pinnedValidators: assertPinnedEnvOverrides @regression ignores a prefixed name with no CHAIN_NETWORK shape (the getters never read it)",
-      "pinnedValidators: assertPinnedEnvOverrides @regression names every offender, not just the first",
-      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a seed override that is not JSON, not an object, or missing a required field",
-      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a validator override that is not JSON, not an array, empty, or wrongly shaped",
-      "pinnedValidators: assertPinnedEnvOverrides @regression treats an unset or empty-string override as absent, not invalid",
-      "pinnedValidators: rotation seed checkpoint @regression fails closed (null) on a malformed env seed override",
-      "pinnedValidators: rotation seed checkpoint @regression is INERT: every real (chain, network) seed pins null",
-      "pinnedValidators: rotation seed checkpoint @regression parses a well-formed env seed override (case-insensitive lookup)",
-      "pinnedValidators: rotation seed checkpoint @regression returns null for an unknown chain/network and for null args"
-    ],
     "890c1afd26223048": [
       "ClientSync: divergence halt @regression a halted client REFUSES to apply blocks",
       "ClientSync: divergence halt @regression a prior uncleared halt in sync_halt keeps the client halted on start (no silent resume)",
@@ -2503,6 +2543,24 @@
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 live getStakeWeightsByCapability drops the overflow source above maxSources (follower selects the same set the source commits)",
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 live getStakeWeightsByCapability stays on the legacy path when no coin/network is threaded (backward compatible)"
     ],
+    "91e7a6f068b71e76": [
+      "/status replication freshness SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s",
+      "/status replication freshness client row carries the upstream verdict is unknown (null), never false, when no source reported the fields",
+      "/status replication freshness client row carries the upstream verdict publishes the upstream verdict beside a lag_blocks of 0",
+      "/status replication freshness fails closed before the poller has written any status",
+      "/status replication freshness fails closed on a poller status that predates the fields",
+      "/status replication freshness keeps lag_blocks when replication is fresh",
+      "/status replication freshness still certifies a primary whose poller reports an explicit false",
+      "/status replication freshness withholds lag_blocks when the replication engine says the node is stale",
+      "/status server row carries a protocol-client halt marks a durable halt stale even when native SQL replication is fresh",
+      "/status server row carries a protocol-client halt reads stale, never fresh, before the poller has measured anything",
+      "per-chain rollback depth overrides and ceiling names the source reorg ceiling per chain, in ticker or full-name form",
+      "per-chain rollback depth overrides and ceiling preserves an explicit operator override",
+      "per-chain rollback depth overrides and ceiling stays silent for the defaults and for an in-range override",
+      "per-chain rollback depth overrides and ceiling warns, without clamping, when an override exceeds the source reorg ceiling",
+      "per-chain rollback depth raises the unset default to the source undo window per chain and network",
+      "source undo window mirror mirrors the utxo-tracker undo window table, inside the source ceiling"
+    ],
     "932531f1175e9a43": [
       "ClientApplier applyDispensersReplace clears the table even when the new set is empty (decoder)",
       "ClientApplier applyDispensersReplace is a no-op on a non-decoder DB",
@@ -2571,6 +2629,15 @@
       "Boundary: Config Parsing zero values (falsy-zero) preserves SNAPSHOT_RATE_INCR=0",
       "Boundary: Config Parsing zero values (falsy-zero) preserves SYNC_API_PORT=0"
     ],
+    "964a9e8a96d5896d": [
+      "ClientSync handleReorg at genesis reloads the genesis tip hashes when rolling back to block 1",
+      "ClientSync handleReorg calls rollback with the event block_index",
+      "ClientSync handleReorg handles rollback error gracefully",
+      "ClientSync handleReorg loads new lastHashes from DB",
+      "ClientSync handleReorg null tip: ignores the reorg entirely (no rollback, no cursor advance)",
+      "ClientSync handleReorg resets lastAppliedBlock to block_index - 1",
+      "ClientSync handleReorg sets lastHashes to null when rolling back to block 0"
+    ],
     "971aa02f9a73a797": [
       "Integration: TransparencyLog getPage includes logged_at timestamp",
       "Integration: TransparencyLog getPage paginates correctly with offset",
@@ -2581,6 +2648,14 @@
       "Integration: TransparencyLog recordBlock inserts a row into sync_meta",
       "Integration: TransparencyLog recordBlock records multiple blocks",
       "Integration: TransparencyLog rollback cleanup preserves entries before rollback point after manual delete"
+    ],
+    "9720670ea76e54f9": [
+      "ServerPoller ledger-neutral reorg identity: net-forward @regression fires a net-forward reorg when only the actions hash changed",
+      "ServerPoller ledger-neutral reorg identity: net-forward @regression fires a net-forward reorg when only the contract hash changed",
+      "ServerPoller ledger-neutral reorg identity: net-forward @regression walks the fork point down through a height whose ledger hash did not change",
+      "ServerPoller ledger-neutral reorg identity: restart and catch-up @regression does not fire when a NULL contract hash was recorded and the source still has none",
+      "ServerPoller ledger-neutral reorg identity: restart and catch-up @regression does not fire when a catch-up payload carried a null state_hash the source row has",
+      "ServerPoller ledger-neutral reorg identity: restart and catch-up @regression fires on the first poll after a restart when the recorded actions hash is pre-reorg"
     ],
     "9743546a34b05c9f": [
       "ClientRollback pair-scoped markets rollback (IDX-2 mirror) aborts (fail-closed) on a transient error in the pair-scoped sweep",
@@ -2594,6 +2669,28 @@
     "97d2186dcdde6b05": [
       "Boundary: Circuit Breaker half-open recovery re-opens on failure during half-open",
       "Boundary: Circuit Breaker half-open recovery transitions to half-open after cooldown expires"
+    ],
+    "981ac25a08843afc": [
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer ignores a global BigInt.prototype.toJSON patch",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer is the only BigInt replacer: every server serializer imports it from wire_codec",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a BigInt above the safe-integer range as its exact decimal string",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a top-level BigInt and one inside encodeTables output as strings"
     ],
     "982b7874b134e4c3": [
       "HubClient getallconfigs watermark regression discards the cache and re-fetches full when the same endpoint serves a lower watermark",
@@ -2650,17 +2747,10 @@
       "07 Rollback Performance rollback 50 blocks",
       "07 Rollback Performance rollback time scales sub-quadratically with depth"
     ],
-    "9bb1134813e2f22a": [
-      "ClientSync: checkpoint-quorum rotation following @regression HALTS when a rotated checkpoint is not signed by the authoritative set (forged quorum)",
-      "ClientSync: checkpoint-quorum rotation following @regression HALTS when a rotated checkpoint's committed state_root disagrees with the recompute",
-      "ClientSync: checkpoint-quorum rotation following @regression HALTS when the replica's recompute disagrees with the pinned seed (different chain)",
-      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt (waits) when the rotated set's snapshot is not yet attested",
-      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt (waits) when the seed height is not yet recomputed locally",
-      "ClientSync: checkpoint-quorum rotation following @regression does NOT halt on a transport error while fetching the checkpoint range",
-      "ClientSync: checkpoint-quorum rotation following @regression follows the pinned seed forward to a rotated checkpoint and does NOT halt",
-      "ClientSync: checkpoint-quorum rotation range source @regression falls back to the primary source for the range when no anchor is configured",
-      "ClientSync: checkpoint-quorum rotation range source @regression fetches the rotation range from CHECKPOINT_ANCHOR_URL, not the audited source",
-      "ClientSync: checkpoint-quorum rotation range source @regression warns, and does NOT halt, when the range comes back empty (withheld rotation chain)"
+    "9d92b7054e6d2dc8": [
+      "updatedRows.collectUpdatedRows carries COINPay-settled order_matches rows keyed by the window of the fulfilled status",
+      "updatedRows.collectUpdatedRows rethrows a non-schema error from the COINPay match class (never a silent drop)",
+      "updatedRows.collectUpdatedRows skips the COINPay match class on a pre-COINPay schema instead of throwing"
     ],
     "9e08b97fcd02776a": [
       "ClientSync constructor: SYNC_MODE_<CHAIN>=infra-only vs the halting verification gates constructs in infra-only when all three gates are explicitly false, and carries the mode to the subscribe URL",
@@ -2715,15 +2805,6 @@
       "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an undated filename carrying replicated DDL rather than skipping it",
       "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION decoder: no replicated-DDL migration has landed past the frontier",
       "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION indexer: no replicated-DDL migration has landed past the frontier"
-    ],
-    "a10aa497412e5a05": [
-      "collectDerivedAnchorRewards keeps two archive rewards that differ only in round_qualifier (the five-column identity)",
-      "collectDerivedAnchorRewards maps rows through and dedups by the validator_rewards UNIQUE identity",
-      "collectDerivedAnchorRewards passes the snapshot connection through for the REPEATABLE READ view",
-      "collectDerivedAnchorRewards projects vr.* so derived rows stay column-compatible with block-scoped rows (carry the id PK)",
-      "collectDerivedAnchorRewards returns [] (no throw) when the source has no derived rows",
-      "collectDerivedAnchorRewards selects by the derive_block_index window with the backdated-only guard",
-      "collectDerivedAnchorRewards swallows ONLY a schema gap (1054/1146); a transient fault propagates so the block is retried"
     ],
     "a1c61939d5e79b8d": [
       "Integration: Client Bootstrap full bootstrap from snapshot preserves exact data values (no type coercion)",
@@ -2797,6 +2878,16 @@
       "SnapshotBuilder paging-stream client-abort streamDispensers: swallows the abort and destroys gzip on client disconnect",
       "SnapshotBuilder paging-stream client-abort streamTableRowsById: swallows the abort and destroys gzip on client disconnect"
     ],
+    "a665881376c1eaaf": [
+      "collectDerivedAnchorRewards carries a rollcall_publish row and never filters the selector on reward_type",
+      "collectDerivedAnchorRewards keeps two archive rewards that differ only in round_qualifier (the five-column identity)",
+      "collectDerivedAnchorRewards maps rows through and dedups by the validator_rewards UNIQUE identity",
+      "collectDerivedAnchorRewards passes the snapshot connection through for the REPEATABLE READ view",
+      "collectDerivedAnchorRewards projects vr.* so derived rows stay column-compatible with block-scoped rows (carry the id PK)",
+      "collectDerivedAnchorRewards returns [] (no throw) when the source has no derived rows",
+      "collectDerivedAnchorRewards selects by the derive_block_index window with the backdated-only guard",
+      "collectDerivedAnchorRewards swallows ONLY a schema gap (1054/1146); a transient fault propagates so the block is retried"
+    ],
     "a702de1223cc909f": [
       "E2E: Decoder DB Lifecycle Live WebSocket sync decoder block payload carries block_hash and omits indexer hashes",
       "E2E: Decoder DB Lifecycle Live WebSocket sync replica receives decoder block events for blocks added post-bootstrap"
@@ -2860,16 +2951,19 @@
       "foldIssueRows reads a allow_list of 0 (number, string or BigInt) as a detach to NULL",
       "foldIssueRows reads a block_list of 0 (number, string or BigInt) as a detach to NULL"
     ],
-    "acb7cd2431de09a3": [
-      "ServerPoller buildBlockPayload collects both decoder blocks hash ids under the shared *_hash_id rule @regression",
-      "ServerPoller buildBlockPayload fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression",
-      "ServerPoller buildBlockPayload merges the matured escrow release into escrows beside the refund credit @regression",
-      "ServerPoller buildBlockPayload streams the blocks.state_hash_id index_transactions row with the live block @regression"
+    "ab66d18ef5798490": [
+      "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships each row once when both channels return the same synthetic-action row @regression",
+      "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships the synthetic-action credit and release once when the matured join is empty @regression"
     ],
     "ae094bbd1678fdf4": [
       "SnapshotBuilder streamIncrementalSnapshot snapshot-replication tables full-dumps indexer pubkeys instead of action-scoping it into errno 1054",
       "SnapshotBuilder streamIncrementalSnapshot snapshot-replication tables pages indexer pubkeys by address_id rather than one unbounded SELECT *",
       "SnapshotBuilder streamIncrementalSnapshot snapshot-replication tables still streams indexer pubkeys under skip_lookups, which has no out-of-band route for it"
+    ],
+    "ae5babf68b91a59d": [
+      "ClientApplier in-place updated-rows apply: binary columns round-trip the wire sentinel applyBlock decodes the sentinel in payload.updated_rows",
+      "ClientApplier in-place updated-rows apply: binary columns round-trip the wire sentinel applyIncrementalSnapshot decodes the sentinel in its updated_rows",
+      "ClientApplier in-place updated-rows apply: binary columns round-trip the wire sentinel upsertRows decodes the sentinel to the source bytes"
     ],
     "ae699f6978a9fbbd": [
       "Database pool sizing per dbType applies per-dbType timeouts to the pool config",
@@ -2903,24 +2997,19 @@
       "E2E: ServerProcess proxy trust honours forwarded client and protocol when TRUST_PROXY is true",
       "E2E: ServerProcess proxy trust ignores forwarded client and protocol when TRUST_PROXY is unset"
     ],
-    "af5a41ac8b61580f": [
-      "replicatedTables getReplicatedTables (decoder) covers the decoder per-block set",
-      "replicatedTables getReplicatedTables (decoder) excludes mempool_transactions (non-deterministic across nodes)",
-      "replicatedTables getReplicatedTables (decoder) has no action-scoped tables",
-      "replicatedTables getReplicatedTables (decoder) includes dispensers in the completeness count set but NOT per-block-streamed",
-      "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 10 decoder tables)",
-      "replicatedTables getReplicatedTables (indexer) covers the core block/action tables a follower must hold",
-      "replicatedTables getReplicatedTables (indexer) excludes snapshot-only / operator-local / non-deterministic tables",
-      "replicatedTables getReplicatedTables (indexer) includes the transparency log (sync_meta) in the completeness check",
-      "replicatedTables getReplicatedTables (indexer) is the union of every per-scope list in the topology",
-      "replicatedTables getReplicatedTables (indexer) returns a de-duplicated union of the per-scope lists",
-      "replicatedTables getTopology defaults unknown dbTypes to the indexer topology"
-    ],
     "afa95c8c1b2d6f8f": [
       "HubClient applyConfigResult merges changed params into an existing cached module"
     ],
     "b03d7c4fb1f16f36": [
       "E2E: Disconnect/Resume Parity 10.5 Schema drift while disconnected (self-heal) a replica missing a replicated table re-applies the source schema and converges"
+    ],
+    "b112b3ef67dadca7": [
+      "ServerPoller buildBlockPayload collects both decoder blocks hash ids under the shared *_hash_id rule @regression",
+      "ServerPoller buildBlockPayload dedups a post-activation maturity that both channels return @regression",
+      "ServerPoller buildBlockPayload delivers a post-activation maturity once, through the action-scoped read @regression",
+      "ServerPoller buildBlockPayload fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression",
+      "ServerPoller buildBlockPayload merges the matured escrow release into escrows beside the refund credit @regression",
+      "ServerPoller buildBlockPayload streams the blocks.state_hash_id index_transactions row with the live block @regression"
     ],
     "b146f330faa567f9": [
       "balance-helpers @money @regression rebuildBalances() aggregates credits minus debits per (address_id, tick_id)",
@@ -3148,6 +3237,18 @@
       "ClientSync bootstrap-failure gating (empty-replica defect) handleBlock refuses to apply a non-genesis block onto an empty replica",
       "ClientSync bootstrap-failure gating (empty-replica defect) start() propagates a permanent bootstrap failure without live-following",
       "ClientSync bootstrap-failure gating (empty-replica defect) start() refuses live-follow when bootstrap leaves the replica empty"
+    ],
+    "c291362707d79208": [
+      "ServerPoller buildBlockPayload collects both decoder blocks hash ids under the shared *_hash_id rule @regression",
+      "ServerPoller buildBlockPayload dedups a post-activation maturity that both channels return @regression",
+      "ServerPoller buildBlockPayload delivers a post-activation maturity once, through the action-scoped read @regression",
+      "ServerPoller buildBlockPayload does not run the generic index pass for the decoder",
+      "ServerPoller buildBlockPayload extracts the remaining indexer index tables from referenced _id columns",
+      "ServerPoller buildBlockPayload fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression",
+      "ServerPoller buildBlockPayload fetches index_addresses by source_id from transactions",
+      "ServerPoller buildBlockPayload fetches index_transactions by referenced IDs",
+      "ServerPoller buildBlockPayload merges the matured escrow release into escrows beside the refund credit @regression",
+      "ServerPoller buildBlockPayload streams the blocks.state_hash_id index_transactions row with the live block @regression"
     ],
     "c3ea0728ff672f13": [
       "Database.sqlDir(): the sync-owned DDL directory exists on disk contains every sync-owned .sql file the boot path expects",
@@ -3481,6 +3582,12 @@
     "d276bbc2f251795a": [
       "Integration: ServerPoller updateStatus updates broadcaster status with real block data"
     ],
+    "d2d56e78b428dd10": [
+      "ClientSync: multi-source state_hash vote @regression a state_hash-only dissenter is struck and the matching majority applies",
+      "ClientSync: multi-source state_hash vote @regression sources agreeing on every field including state_hash still apply",
+      "ClientSync: multi-source state_hash vote @regression tuple key differs when only state_hash differs",
+      "ClientSync: multi-source state_hash vote @regression two sources with equal hashes but different state_hash halt with no-source-quorum"
+    ],
     "d2fffeabd095588e": [
       "SyncService getClientSyncState omits halt info for a healthy sync",
       "SyncService getClientSyncState reports a live sync, including halt info when halted",
@@ -3640,6 +3747,13 @@
       "Integration: ServerPoller poll processes multiple sequential blocks",
       "Integration: ServerPoller poll records each block in transparency log"
     ],
+    "dda265fbcf4e76b6": [
+      "state-root assembly twins: buildFullBalancesRoot @regression differs only by the inlined ledger read (declared)",
+      "state-root assembly twins: computeBlockMerkleRoot @regression differs only by the collation arguments (declared)",
+      "state-root assembly twins: identical functions @regression assembleStateRoot and extraSubRootColumn are identical to indexer state_root.js",
+      "state-root assembly twins: identical functions @regression reservedSubRootCandidates is identical to indexer state_commitment/index.js",
+      "state-root assembly twins: leaf encoders @regression differ only by name (declared)"
+    ],
     "de5556f788692dd9": [
       "vendored checkpoint verifier (twin conformance) @regression a garbage-then-valid duplicate for one signer still PASSES (seen marked after verify)",
       "vendored checkpoint verifier (twin conformance) @regression an empty validator set can never verify",
@@ -3696,24 +3810,6 @@
       "ClientSync: bootstrap size wall falls back to RateLimit-Reset when Retry-After is absent",
       "ClientSync: bootstrap size wall persists the halt so the restart lands idle rather than back at the wall",
       "ClientSync: bootstrap size wall the size wall has one definition, shared with the incremental fallback"
-    ],
-    "e283c1eed8fe0836": [
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF"
     ],
     "e2dd3b784dd1d118": [
       "applyProtocolHaltFreshness calls getActiveHalt once with the dbType",
@@ -4098,6 +4194,11 @@
       "Boundary: Config Parsing negative values clamped clamps SNAPSHOT_RATE_FULL=-5 to 0",
       "Boundary: Config Parsing negative values clamped clamps WS_MAX_PER_IP=-1 to 1"
     ],
+    "fd4c252b3fe21f8d": [
+      "decoder dispensers off-stream write list @regression counts exactly the pinned UPDATE/DELETE statements on dispensers in xchain-decoder/src",
+      "decoder dispensers off-stream write list @regression finds every pinned writer in xchain-decoder/src",
+      "decoder dispensers off-stream write list @regression names every pinned writer in the replicated_tables.js header"
+    ],
     "fd7aab0726a62958": [
       "Rollback coverage guard @regression ATTEST v5 batch-head status restore is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)",
       "Rollback coverage guard @regression COINPay match-status re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)",
@@ -4182,8 +4283,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 338,
-      "titleCount": 2668,
+      "fileCount": 350,
+      "titleCount": 2743,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4201,10 +4302,11 @@
         "test/unit/block_broadcaster.test/08_get_validator_heartbeats.test.js": "6362e6d5b508b99d",
         "test/unit/block_broadcaster.test/09_get_validator_heartbeats_with_an_expected_validator_roster.test.js": "27948aa1cde1b70e",
         "test/unit/block_broadcaster.test/10_evict_stale_validators.test.js": "3db5faf2fec0a01f",
-        "test/unit/block_hasher.test.js": "761a0293ba4d835b",
+        "test/unit/block_hasher.test.js": "207951e050b87331",
         "test/unit/blockhash_conformance_twin.test.js": "c0bcb57647f83af0",
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
+        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "dda265fbcf4e76b6",
         "test/unit/boundaries/batch_insert.test.js": "ec173aca8005e2db",
         "test/unit/boundaries/block_index.test.js": "3c56690bfa37c105",
         "test/unit/boundaries/circuit_breaker.test.js": "f5bb2b28cc7a8e95",
@@ -4257,6 +4359,7 @@
         "test/unit/client_applier.test/04_apply_dispensers_replace.test.js": "932531f1175e9a43",
         "test/unit/client_applier.test/05_anchor_actions_bundle_sections.test.js": "07d974594667f5bb",
         "test/unit/client_applier.test/06_insert_rows_upsert_error_tag.test.js": "a8143fefd1a46c99",
+        "test/unit/client_applier_schema_migrations_snapshot.test.js": "54140585946817e9",
         "test/unit/client_applier_strict_ignore_check.test.js": "76d8fd79030c9638",
         "test/unit/client_rollback.test.js": "a86e3201d3a619c6",
         "test/unit/client_rollback.test/01_rollback.test.js": "c023695e884eff80",
@@ -4268,28 +4371,29 @@
         "test/unit/client_rollback.test/07_token_refold.test.js": "ab4eeba553a52936",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
-        "test/unit/client_sync.test/01_warn_trust_posture.test.js": "9f32bf1a82b5f6ab",
-        "test/unit/client_sync.test/02_is_source_height_stale.test.js": "5d10b0ffea8843e3",
-        "test/unit/client_sync.test/03_log_gap_throttling.test.js": "c01052b400b95da9",
-        "test/unit/client_sync.test/04_start.test.js": "8a4c1c7c0c132a7c",
-        "test/unit/client_sync.test/05_bootstrap_failure_gating_empty_replica_defect.test.js": "c19f60997c7483e1",
-        "test/unit/client_sync.test/06_handle_event.test.js": "447987fa6855b9be",
-        "test/unit/client_sync.test/07_maybe_verify_completeness.test.js": "805df1c0d5571b8d",
-        "test/unit/client_sync.test/08_persistent_replica_gaps.test.js": "6fe6527e42a197a6",
-        "test/unit/client_sync.test/09_handle_block.test.js": "ce122cc4912e82c8",
-        "test/unit/client_sync.test/10_apply_block_event.test.js": "99d874997e2b72e1",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
-        "test/unit/client_sync.test/12_run_incremental_catch_up_schema_self_heal.test.js": "da75e2ebbb09f1cf",
-        "test/unit/client_sync.test/13_handle_reorg.test.js": "1038be37b3b01cb3",
-        "test/unit/client_sync.test/14_constructor_sync_mode_chain_infra_only_vs_the_halting_verification_gates.test.js": "9e08b97fcd02776a",
-        "test/unit/client_sync.test/15_stop.test.js": "edeb00b6254cb702",
-        "test/unit/client_sync.test/16_verify_table_counts_replica_completeness.test.js": "169ecc74d07da9cf",
-        "test/unit/client_sync.test/17_decoder_bootstrap_completeness.test.js": "4ee867ce8010316d",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",
-        "test/unit/client_sync.test/19_run_incremental_catch_up_upsert_duplicate_key_halt.test.js": "610ddbb5ed3ccd77",
         "test/unit/client_sync.test/20_reconcile_dispensers_schema_version_gate.test.js": "4cffa6e7132ef017",
+        "test/unit/client_sync.test/catch_up/12_run_incremental_catch_up_schema_self_heal.test.js": "da75e2ebbb09f1cf",
+        "test/unit/client_sync.test/catch_up/19_run_incremental_catch_up_upsert_duplicate_key_halt.test.js": "610ddbb5ed3ccd77",
+        "test/unit/client_sync.test/completeness/05_bootstrap_failure_gating_empty_replica_defect.test.js": "c19f60997c7483e1",
+        "test/unit/client_sync.test/completeness/07_maybe_verify_completeness.test.js": "805df1c0d5571b8d",
+        "test/unit/client_sync.test/completeness/08_persistent_replica_gaps.test.js": "6fe6527e42a197a6",
+        "test/unit/client_sync.test/completeness/16_verify_table_counts_replica_completeness.test.js": "169ecc74d07da9cf",
+        "test/unit/client_sync.test/completeness/17_decoder_bootstrap_completeness.test.js": "4ee867ce8010316d",
+        "test/unit/client_sync.test/events/06_handle_event.test.js": "447987fa6855b9be",
+        "test/unit/client_sync.test/events/09_handle_block.test.js": "ce122cc4912e82c8",
+        "test/unit/client_sync.test/events/10_apply_block_event.test.js": "99d874997e2b72e1",
+        "test/unit/client_sync.test/events/13_handle_reorg.test.js": "964a9e8a96d5896d",
+        "test/unit/client_sync.test/lifecycle/01_warn_trust_posture.test.js": "9f32bf1a82b5f6ab",
+        "test/unit/client_sync.test/lifecycle/02_is_source_height_stale.test.js": "5d10b0ffea8843e3",
+        "test/unit/client_sync.test/lifecycle/03_log_gap_throttling.test.js": "c01052b400b95da9",
+        "test/unit/client_sync.test/lifecycle/04_start.test.js": "8a4c1c7c0c132a7c",
+        "test/unit/client_sync.test/lifecycle/14_constructor_sync_mode_chain_infra_only_vs_the_halting_verification_gates.test.js": "9e08b97fcd02776a",
+        "test/unit/client_sync.test/lifecycle/15_stop.test.js": "edeb00b6254cb702",
+        "test/unit/client_sync.test/startup_catch_up_404_level.test.js": "4afbe50e37085854",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
-        "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "9bb1134813e2f22a",
+        "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "46f7a6a6661a718c",
         "test/unit/client_sync_dispenser_reconcile_tick.test.js": "422bb0e33ab3603c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
         "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "86523982ea831a05",
@@ -4298,20 +4402,10 @@
         "test/unit/client_sync_halt.test/04_verify_recompute_false_is_declared_unsafe.test.js": "eee91ecc715fb032",
         "test/unit/client_sync_halt.test/05_state_hash_halt_class_digests.test.js": "be6b2b4e899038ac",
         "test/unit/client_sync_halt.test/06_verify_recompute_passes_coin_ticker.test.js": "b315a3a62a3a38ed",
+        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "6feb913da3be5be4",
         "test/unit/client_sync_io.test.js": "d04e4264d025b2c1",
-        "test/unit/client_sync_io.test/01_bootstrap_size_wall.test.js": "e187211525c8a3de",
-        "test/unit/client_sync_io.test/02_bootstrap_from_height.test.js": "549430c7ecacfc94",
-        "test/unit/client_sync_io.test/03_sync_lookup_tables_paged.test.js": "19b6bdb857cf7156",
-        "test/unit/client_sync_io.test/04_truncated_catch_up.test.js": "db43ccc2db666f97",
-        "test/unit/client_sync_io.test/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
-        "test/unit/client_sync_io.test/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/07_indexer_head_fork_re_delivery.test.js": "0c06733c3bf59e5e",
-        "test/unit/client_sync_io.test/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
-        "test/unit/client_sync_io.test/09_run_incremental_catch_up.test.js": "0351fed12642c8a1",
-        "test/unit/client_sync_io.test/10_incremental_catch_up_coalescing.test.js": "5ff54077cc3ba86f",
         "test/unit/client_sync_io.test/11_strict_cross_source_gate_survives_catch_up_m_22.test.js": "be748fea997da5e8",
-        "test/unit/client_sync_io.test/12_verify_against_source.test.js": "6e98846a4e3b9709",
-        "test/unit/client_sync_io.test/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
         "test/unit/client_sync_io.test/14_stop.test.js": "8018794f66fac00f",
         "test/unit/client_sync_io.test/15_heartbeat.test.js": "2de415b648901dff",
         "test/unit/client_sync_io.test/16_connect_web_socket.test.js": "81b2c5034f4c92dd",
@@ -4319,9 +4413,21 @@
         "test/unit/client_sync_io.test/18_misc_branch_coverage.test.js": "5ccec02617fb694b",
         "test/unit/client_sync_io.test/19_small_branches.test.js": "81b2dec027b5a63e",
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
+        "test/unit/client_sync_io.test/bootstrap/01_bootstrap_size_wall.test.js": "e187211525c8a3de",
+        "test/unit/client_sync_io.test/bootstrap/02_bootstrap_from_height.test.js": "549430c7ecacfc94",
+        "test/unit/client_sync_io.test/bootstrap/03_sync_lookup_tables_paged.test.js": "19b6bdb857cf7156",
+        "test/unit/client_sync_io.test/catch_up/04_truncated_catch_up.test.js": "db43ccc2db666f97",
+        "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
+        "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
+        "test/unit/client_sync_io.test/catch_up/09_run_incremental_catch_up.test.js": "0351fed12642c8a1",
+        "test/unit/client_sync_io.test/catch_up/10_incremental_catch_up_coalescing.test.js": "5ff54077cc3ba86f",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
+        "test/unit/client_sync_io.test/verify/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
+        "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "6e98846a4e3b9709",
+        "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
         "test/unit/client_sync_schema_apply.test.js": "b6ab840e3149d748",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
+        "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
         "test/unit/coin_ticker_activation.test.js": "de57542d908be190",
@@ -4332,7 +4438,7 @@
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
-        "test/unit/consensus/armed_map/completeness.test.js": "316993ccc3fd07eb",
+        "test/unit/consensus/armed_map/completeness.test.js": "30033d82229a4fd9",
         "test/unit/consensus/armed_map/falsification.test.js": "4acfae0d52008855",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
@@ -4384,8 +4490,10 @@
         "test/unit/db_swq_source_cap.test.js": "910a4f5c866b3b8b",
         "test/unit/db_weightless_stake_row.test.js": "8597f4afbe495528",
         "test/unit/deactivation_block_mirror.test.js": "158cc6c75f54ea23",
+        "test/unit/decoder_link_transactions_data_width.test.js": "3891a3bad72fe9b5",
         "test/unit/decoder_table_classification.test.js": "59a6088c6ff7fee2",
-        "test/unit/derived_rewards.test.js": "a10aa497412e5a05",
+        "test/unit/derived_rewards.test.js": "a665881376c1eaaf",
+        "test/unit/dispensers_offstream_writes.test.js": "fd4c252b3fe21f8d",
         "test/unit/escrow_leaf_subtree.test.js": "07fa9a8166b63715",
         "test/unit/escrow_leaf_subtree.test/xchain_esc_locked_leaf_shadow_thread.test.js": "6aff270db2df60a7",
         "test/unit/escrow_leaf_subtree.test/xchain_esc_locked_leaf_the.test.js": "6f3bf3f9c5f1d95a",
@@ -4416,15 +4524,15 @@
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
         "test/unit/missing_tables.test.js": "092adf2c2aa96019",
         "test/unit/observability.test.js": "ca8fa416b5e8a763",
-        "test/unit/pinned_validators.test.js": "8908175de26042da",
+        "test/unit/pinned_validators.test.js": "5011c253198113a2",
         "test/unit/pool_sizing.test.js": "ae699f6978a9fbbd",
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/recovery_rewards.test.js": "c7ffd8486a3a6f7e",
-        "test/unit/replica_freshness.test.js": "341aa21a3e737abe",
+        "test/unit/replica_freshness.test.js": "91e7a6f068b71e76",
         "test/unit/replica_gap_status.test.js": "bcf51d25df891659",
-        "test/unit/replica_secondary_indexes.test.js": "685672ba7325e614",
+        "test/unit/replica_secondary_indexes.test.js": "55d52d6d7d7aecd5",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
-        "test/unit/replicated_tables.test.js": "af5a41ac8b61580f",
+        "test/unit/replicated_tables.test.js": "805d506efd2e2166",
         "test/unit/repo_guards/carrier_logic_pin.test.js": "0c13b5d1d073adc0",
         "test/unit/repo_guards/config_key_coverage.test.js": "dbf1db338a37ed48",
         "test/unit/repo_guards/markets_id_parity_tool.test.js": "07811aa22e123504",
@@ -4442,7 +4550,7 @@
         "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js": "9e1eab683f917093",
         "test/unit/server_poller.test/03_backfill_gaps_regression.test.js": "3107b91431c55ba5",
         "test/unit/server_poller.test/04_build_block_payload.test.js": "62101a3cfb162f48",
-        "test/unit/server_poller.test/05_build_block_payload_2.test.js": "1a40156a4cb3fad9",
+        "test/unit/server_poller.test/05_build_block_payload_2.test.js": "c291362707d79208",
         "test/unit/server_poller.test/06_update_status.test.js": "71dbe5f3ab51e1b0",
         "test/unit/server_poller.test/07_stop.test.js": "14cea56fa69537cd",
         "test/unit/server_poller.test/08_poll_snapshot_pinning_h_p2.test.js": "f9851634c56991cb",
@@ -4453,6 +4561,7 @@
         "test/unit/server_poller.test/12_reorg_window_seed_snapshot.test.js": "13c2f94637234733",
         "test/unit/server_poller.test/13_burst_state_hash_follower_halt.test.js": "2a4f7a67a8cf446a",
         "test/unit/server_poller.test/14_unrecognized_coin_activation_delay.test.js": "6d0c8ebeb93fdc48",
+        "test/unit/server_poller.test/15_ledger_neutral_reorg_identity.test.js": "9720670ea76e54f9",
         "test/unit/server_poller_action_scoped_probe.test.js": "d7ac1268f904a175",
         "test/unit/shutdown.test.js": "e4081567250aec28",
         "test/unit/sibling_coverage.test.js": "d8d1e52267ea606f",
@@ -4470,6 +4579,7 @@
         "test/unit/snapshot_builder.test/11_stream_incremental_snapshot_snapshot_replication_tables.test.js": "ae094bbd1678fdf4",
         "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js": "81aeefdb52ea39d2",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
+        "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
         "test/unit/sql_datetime_ddl_state_tree_roots.test.js": "d1f0d0aeec5914a9",
         "test/unit/sql_datetime_ddl_transparency_log.test.js": "df77321eda7793e8",
         "test/unit/sql_util.test.js": "40158d38b88066f8",
@@ -4515,14 +4625,17 @@
         "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "5cb811bd3e21b84c",
         "test/unit/train_activation.test.js": "4bbfbfece133da72",
         "test/unit/train_activation_twin.test.js": "be30d095ec85b25c",
-        "test/unit/transparency_log.test.js": "09cd28d5ace1d077",
+        "test/unit/train_gate_verdict_characterization.test.js": "5039fe55a9d97010",
+        "test/unit/transparency_log.test.js": "6ff6cbc7afd5ddfd",
         "test/unit/transparency_log_readonly.test.js": "438f210bee5c5290",
         "test/unit/transparency_log_retention.test.js": "77025ae7ee6bc534",
         "test/unit/updated_rows.test.js": "1f93748ddf32c5f3",
+        "test/unit/updated_rows.test/01_coinpay_match_class.test.js": "9d92b7054e6d2dc8",
+        "test/unit/updated_rows.test/02_binary_wire_sentinel.test.js": "ae5babf68b91a59d",
         "test/unit/utf8mb4_replica_widen.test.js": "9e46fbfae5839c05",
         "test/unit/utility.test.js": "436350992c034c95",
         "test/unit/validation.test.js": "8abfcb4541ad0c52",
-        "test/unit/wire_codec.test.js": "e283c1eed8fe0836"
+        "test/unit/wire_codec.test.js": "981ac25a08843afc"
       }
     },
     "test:boundary": {
@@ -4807,21 +4920,22 @@
       }
     },
     "test:regression": {
-      "fileCount": 87,
-      "titleCount": 678,
+      "fileCount": 93,
+      "titleCount": 714,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
-        "test/unit/block_hasher.test.js": "761a0293ba4d835b",
+        "test/unit/block_hasher.test.js": "207951e050b87331",
         "test/unit/blockhash_conformance_twin.test.js": "c0bcb57647f83af0",
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
+        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "dda265fbcf4e76b6",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "de5556f788692dd9",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
-        "test/unit/client_sync.test/06_handle_event.test.js": "e962afbc1dd6ade5",
+        "test/unit/client_sync.test/events/06_handle_event.test.js": "e962afbc1dd6ade5",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
-        "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "9bb1134813e2f22a",
+        "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "46f7a6a6661a718c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
         "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "86523982ea831a05",
         "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js": "2de09f9ac8510fc7",
@@ -4829,12 +4943,14 @@
         "test/unit/client_sync_halt.test/04_verify_recompute_false_is_declared_unsafe.test.js": "eee91ecc715fb032",
         "test/unit/client_sync_halt.test/05_state_hash_halt_class_digests.test.js": "be6b2b4e899038ac",
         "test/unit/client_sync_halt.test/06_verify_recompute_passes_coin_ticker.test.js": "b315a3a62a3a38ed",
-        "test/unit/client_sync_io.test/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
-        "test/unit/client_sync_io.test/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
+        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "6feb913da3be5be4",
         "test/unit/client_sync_io.test/07_indexer_head_fork_re_delivery.test.js": "0c06733c3bf59e5e",
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
+        "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
+        "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
+        "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
         "test/unit/coins_conformance.test.js": "2442df610ebb6911",
@@ -4852,6 +4968,7 @@
         "test/unit/db_stake_weights_as_of.test.js": "13f9b36dc6dc41be",
         "test/unit/db_swq_source_cap.test.js": "910a4f5c866b3b8b",
         "test/unit/decoder_table_classification.test.js": "59a6088c6ff7fee2",
+        "test/unit/dispensers_offstream_writes.test.js": "fd4c252b3fe21f8d",
         "test/unit/escrow_leaf_subtree.test.js": "07fa9a8166b63715",
         "test/unit/escrow_leaf_subtree.test/xchain_esc_locked_leaf_shadow_thread.test.js": "6aff270db2df60a7",
         "test/unit/escrow_leaf_subtree.test/xchain_esc_locked_leaf_the.test.js": "6f3bf3f9c5f1d95a",
@@ -4860,7 +4977,7 @@
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
-        "test/unit/pinned_validators.test.js": "8908175de26042da",
+        "test/unit/pinned_validators.test.js": "5011c253198113a2",
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/rollback_coverage.test.js": "fd7aab0726a62958",
@@ -4872,14 +4989,16 @@
         "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js": "9e1eab683f917093",
         "test/unit/server_poller.test/03_backfill_gaps_regression.test.js": "3107b91431c55ba5",
         "test/unit/server_poller.test/04_build_block_payload.test.js": "d6e6a07ac37b541c",
-        "test/unit/server_poller.test/05_build_block_payload_2.test.js": "acb7cd2431de09a3",
+        "test/unit/server_poller.test/05_build_block_payload_2.test.js": "b112b3ef67dadca7",
         "test/unit/server_poller.test/10_decoder_dispenser_address_ids_regression.test.js": "1dc91ecf36f00157",
         "test/unit/server_poller.test/11_reorg_window_seed_restart_regression.test.js": "4b01b6170cf07d89",
         "test/unit/server_poller.test/12_reorg_window_seed_snapshot.test.js": "13c2f94637234733",
         "test/unit/server_poller.test/13_burst_state_hash_follower_halt.test.js": "2a4f7a67a8cf446a",
+        "test/unit/server_poller.test/15_ledger_neutral_reorg_identity.test.js": "9720670ea76e54f9",
         "test/unit/snapshot_builder.test/04_stream_dispensers.test.js": "654c349590fc25ab",
         "test/unit/snapshot_builder.test/06_branch_coverage.test.js": "b4f0d893b0d9c977",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
+        "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
         "test/unit/stakes_validator_set_parity.test.js": "e89c73ba3a32ab98",
         "test/unit/state_commitment.test.js": "e34cac5673dfa0d1",
         "test/unit/state_commitment_batched_node_writes.test.js": "cf99cbc50f631839",
