@@ -200,6 +200,7 @@ class SyncService {
         for(let cfg of allConfigs){
             let key = cfg.coin + ':' + cfg.network + ':' + cfg.dbType;
             if(this.databases.has(key)) continue;
+            if(this.unrecognizedCoinKeys.has(key)) continue;
 
             // SYNC_EXCLUDE drops a chain before any DB pool or ClientSync exists,
             // so an excluded chain cannot crash-loop the process.
@@ -208,15 +209,14 @@ class SyncService {
                 continue;
             }
 
-            // Refuse an indexer coin this bundle has no frozen activation delay for. A server would
-            // silently omit the deactivation_block updated rows and a client replica cannot
-            // build its ClientRollback, so skip the chain alone before any pool opens, in either mode; a bundle
-            // upgrade picks it up on the next start.
-            if(cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
+            // Refuse to serve an indexer coin this bundle has no frozen activation delay for.
+            // Its payloads would silently omit the deactivation_block updated rows, so skip the
+            // chain alone before any pool opens; a bundle upgrade picks it up on the next start.
+            if(this.config['SYNC_MODE'] === 'server' && cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
                 if(!this.unrecognizedCoinKeys.has(key)){
                     this.unrecognizedCoinKeys.add(key);
                     getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
-                        '" is not in this node\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
+                        '" is not in this server\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to serve it');
                 }
                 continue;
             }
@@ -246,7 +246,7 @@ class SyncService {
         }
 
         this.validateFirstDiscoveryPass();
-        this.startDiscoveredChains(newChains);
+        newChains = await this.startDiscoveredChains(newChains);
 
         return newChains;
     }
@@ -346,14 +346,29 @@ class SyncService {
         }
     }
 
-    startDiscoveredChains(newChains){
-        for(let { key, db, config: cfg } of newChains){
+    async startDiscoveredChains(newChains){
+        const startedChains = [];
+        for(const { key, db, config: cfg } of newChains){
             if(this.config['SYNC_MODE'] === 'server'){
                 this.startPollerForChain(key, db, cfg);
             } else {
-                this.startClientSyncForChain(key, db, cfg);
+                try {
+                    this.startClientSyncForChain(key, db, cfg);
+                } catch(e){
+                    if(cfg.dbType !== 'indexer' || activationDelayBlocks(cfg.coin) !== undefined ||
+                        !e || !String(e.message).startsWith('ClientRollback: unrecognized coin "')) throw e;
+                    this.databases.delete(key);
+                    this.clientSyncs.delete(key);
+                    this.unrecognizedCoinKeys.add(key);
+                    getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
+                        '" is not in this client\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
+                    try { await db.close(); } catch(closeErr){ /* pool already gone */ }
+                    continue;
+                }
             }
+            startedChains.push({ key, db, config: cfg });
         }
+        return startedChains;
     }
 
     async startServerMode(){

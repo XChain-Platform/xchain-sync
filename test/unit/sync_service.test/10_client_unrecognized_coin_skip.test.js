@@ -50,32 +50,36 @@ describe('SyncService client mode unrecognized coin skip', function(){
         sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
         sinon.stub(Database.prototype, 'close').resolves();
         sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
-            indexerCfg(),
             indexerCfg({ coin: 'notacoin', db_name: 'nac_idx' })
         ]);
-        sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([
-            indexerCfg({ coin: 'notacoin', dbType: 'decoder', db_name: 'nac_dec' })
-        ]);
+        sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
     });
 
     afterEach(function(){
         sinon.restore();
     });
 
-    it('never registers an indexer chain whose coin has no frozen activation delay', async function(){
-        let startSync = sinon.stub(service, 'startClientSyncForChain');
-        let logError = sinon.stub(require('../../../src/observability').getLogger(), 'error');
+    it('removes an indexer chain when ClientRollback rejects its unrecognized coin', async function(){
+        const logError = sinon.stub(require('../../../src/observability').getLogger(), 'error');
 
-        await service.discoverChains();
-        await service.discoverChains();
+        const firstDiscovery = await service.discoverChains();
+        const secondDiscovery = await service.discoverChains();
 
-        assert.strictEqual(service.databases.has('bitcoin:mainnet:indexer'), true);
         assert.strictEqual(service.databases.has('notacoin:mainnet:indexer'), false);
-        assert.strictEqual(service.databases.has('notacoin:mainnet:decoder'), true);
-        assert.deepStrictEqual(startSync.getCalls().map(c => c.args[0]).sort(),
-            ['bitcoin:mainnet:indexer', 'notacoin:mainnet:decoder']);
-        assert.strictEqual(Database.prototype.createDatabase.callCount, 2, 'no replica opens for the skipped chain');
-        let skipLogs = logError.getCalls().filter(c => /notacoin:mainnet:indexer/.test(String(c.args[0])));
+        assert.strictEqual(service.clientSyncs.has('notacoin:mainnet:indexer'), false);
+        assert.deepStrictEqual(firstDiscovery, []);
+        assert.deepStrictEqual(secondDiscovery, []);
+        assert.strictEqual(Database.prototype.createDatabase.callCount, 1, 'the re-poll skips the rejected chain');
+        assert.strictEqual(Database.prototype.close.callCount, 2, 'the source and rejected replica pools are closed');
+        const skipLogs = logError.getCalls().filter(c => /notacoin:mainnet:indexer/.test(String(c.args[0])));
         assert.strictEqual(skipLogs.length, 1, 'the skip is logged once across hub re-polls');
+    });
+
+    it('does not convert another client startup failure into an unrecognized-coin skip', async function(){
+        sinon.stub(service, 'startClientSyncForChain').throws(new Error('unrelated startup failure'));
+
+        await assert.rejects(() => service.discoverChains(), /unrelated startup failure/);
+
+        assert.strictEqual(service.unrecognizedCoinKeys.has('notacoin:mainnet:indexer'), false);
     });
 });
