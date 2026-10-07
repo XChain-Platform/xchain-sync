@@ -11,12 +11,11 @@
  * contact legal@dankest.llc.
  *
  **********************************************************************
- * ClientSync: a live recompute ERROR that advances the tip leaves a trace.
+ * ClientSync: a live recompute ERROR that holds the tip leaves a trace.
  *
- * The live consensus-hash recompute fails open on a local infrastructure fault
- * (the block advances, nothing halts), so the height is counted durably in
- * sync_state as unverified. The state_hash check is unchanged: its error still
- * holds the tip for redelivery, and a real mismatch on either still halts.
+ * The live consensus-hash recompute does not halt on a local infrastructure
+ * fault, and like the state_hash check it holds the tip for redelivery; the
+ * height is counted durably in sync_state. A real mismatch on either still halts.
  ********************************************************************/
 
 const assert = require('assert');
@@ -81,14 +80,14 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
         assert.strictEqual(db.syncState.size, 0);
     });
 
-    it('a recompute error still advances when the durable record cannot be written', async function(){
+    it('a recompute error still holds the tip when the durable record cannot be written', async function(){
         build({ VERIFY_RECOMPUTE: true });
         db.setSyncState = sinon.stub().rejects(new Error('sync_state down'));
         sync.blockHasher.computeBlockHashes = sinon.stub().rejects(new Error('transient DB error'));
         await sync.applyBlockEvent({ block_index: 200, block_time: 1, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
 
         assert.strictEqual(sync.isHalted(), false);
-        assert.strictEqual(sync.lastAppliedBlock, 200);
+        assert.strictEqual(sync.lastAppliedBlock, null);
     });
 
     it('records a live recompute error durably and does not halt', async function(){
@@ -98,7 +97,7 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
         await sync.applyBlockEvent({ block_index: 200, block_time: 1, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
 
         assert.strictEqual(sync.isHalted(), false);
-        assert.strictEqual(sync.lastAppliedBlock, 200);
+        assert.strictEqual(sync.lastAppliedBlock, null);
         assert.strictEqual(db.syncState.get('unverified_recompute_count:indexer'), '1');
         assert.strictEqual(db.syncState.get('unverified_recompute_last_block:indexer'), '200');
     });
