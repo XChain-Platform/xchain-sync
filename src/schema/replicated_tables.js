@@ -28,7 +28,9 @@
  * streamed: a table added to live sync automatically joins the check, and a
  * table removed from it automatically leaves.
  *
- * Scope note: this is deliberately the *per-block streamed* set. Tables that
+ * Decoder coverage is 8 of 10 schema tables, not every table:
+ * mempool_transactions and dispenser_extension_undo stay local. Scope note:
+ * this is deliberately the *per-block streamed* set. Tables that
  * converge through other channels (a full/incremental snapshot ride-along, or
  * no xchain-sync channel at all) are intentionally excluded, because their
  * counts legitimately diverge between nodes and comparing them would raise
