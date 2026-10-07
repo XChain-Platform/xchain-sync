@@ -34,6 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
+const RollbackGuard = require('./rollback_guard');
 const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
@@ -287,6 +288,7 @@ class ClientSync {
         this.maxRollbackDepth = envConfig.resolveMaxRollbackDepth(
             this.chain, this.network, this.config['MAX_ROLLBACK_DEPTH'],
             this.config['MAX_ROLLBACK_DEPTH_EXPLICIT']);
+        this.rollbackGuard = new RollbackGuard(this.maxRollbackDepth);
         // Independent block-hash recomputation (true byzantine / replication-
         // integrity detection). Verifies the replicated raw rows actually hash to
         // the committed hash, rather than trusting verbatim-replicated hashes.
@@ -4020,10 +4022,6 @@ class ClientSync {
         return false;
     }
 
-    rollbackDepth(event){
-        return this.lastAppliedBlock - event.block_index + 1;
-    }
-
     async haltForExcessiveRollback(event, depth){
         await this.haltOnDivergence(event.block_index,
             [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
@@ -4054,13 +4052,14 @@ class ClientSync {
         if(this.ignoreReorgWithoutTip(event)) return;
         if(this.ignoreReorgAboveTip(event)) return;
 
-        let depth = this.rollbackDepth(event);
+        let depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
         if(depth > this.maxRollbackDepth){
             await this.haltForExcessiveRollback(event, depth);
             return;
         }
 
         try {
+            this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
             await this.applyReorgRollback(event);
         } catch(e){
             await this.haltForReorgRollbackFailure(event, e);
