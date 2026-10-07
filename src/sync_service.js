@@ -209,9 +209,7 @@ class SyncService {
                 continue;
             }
 
-            // Refuse to serve an indexer coin this bundle has no frozen activation delay for.
-            // Its payloads would silently omit the deactivation_block updated rows, so skip the
-            // chain alone before any pool opens; a bundle upgrade picks it up on the next start.
+            // A server cannot safely serve an indexer coin without a frozen activation delay.
             if(this.config['SYNC_MODE'] === 'server' && cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
                 if(!this.unrecognizedCoinKeys.has(key)){
                     this.unrecognizedCoinKeys.add(key);

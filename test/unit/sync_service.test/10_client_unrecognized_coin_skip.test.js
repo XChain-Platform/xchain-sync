@@ -30,6 +30,23 @@ function indexerCfg(over){
     }, over || {});
 }
 
+function stubReplicaLifecycle(service){
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+    sinon.stub(process, 'exit');
+    sinon.stub(Database.prototype, 'createDatabase').resolves(true);
+    sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
+    sinon.stub(Database.prototype, 'replicateSchema').resolves();
+    sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
+    sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
+    sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
+    sinon.stub(Database.prototype, 'close').resolves();
+    sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
+        indexerCfg({ coin: 'notacoin', db_name: 'nac_idx' })
+    ]);
+    sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+}
+
 describe('SyncService client mode unrecognized coin skip', function(){
     let service;
 
@@ -39,20 +56,7 @@ describe('SyncService client mode unrecognized coin skip', function(){
             HUB_REPOLL_INTERVAL: 300000, REPLICA_DB_HOST: 'localhost', REPLICA_DB_PORT: 3306,
             REPLICA_DB_USER: 'user', REPLICA_DB_PASS: 'pass'
         });
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-        sinon.stub(process, 'exit');
-        sinon.stub(Database.prototype, 'createDatabase').resolves(true);
-        sinon.stub(Database.prototype, 'verifyDatabaseOnce').resolves(true);
-        sinon.stub(Database.prototype, 'replicateSchema').resolves();
-        sinon.stub(Database.prototype, 'verifySyncTables').resolves(true);
-        sinon.stub(Database.prototype, 'ensureReplicatedColumns').resolves();
-        sinon.stub(Database.prototype, 'ensureReplicaSecondaryIndexes').resolves();
-        sinon.stub(Database.prototype, 'close').resolves();
-        sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([
-            indexerCfg({ coin: 'notacoin', db_name: 'nac_idx' })
-        ]);
-        sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
+        stubReplicaLifecycle(service);
     });
 
     afterEach(function(){
