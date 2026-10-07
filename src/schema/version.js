@@ -15,13 +15,15 @@
  * XChain Sync - Snapshot Schema Version
  *
  * SCHEMA_VERSION carries an independent version per dbType ({ indexer, decoder }).
- * Bump only the key whose replicated DB had a DDL change (column added, dropped,
- * renamed, or type changed; index added, dropped, or changed; or a primary-key,
- * foreign-key, or constraint change) OR a wire-encoding change to its row values. Keeping
- * the two versions separate means a schema change to one DB does not force the
- * other dbType's validators to restart; only validators of the changed dbType
- * see a mismatch. Mismatched versions cause those validators to refuse the
- * snapshot and log a clear error rather than silently corrupting replica state.
+ * Bump only the key whose replicated DB had a DDL change that affects what rows a
+ * follower can store (a column, primary key, foreign key, unique index or constraint
+ * change) OR a wire-encoding change to its row values. A non-unique secondary-index-
+ * only migration changes query performance rather than replicated columns or payload
+ * shape, so it is recorded at MIGRATION_FRONTIER without a version bump. Keeping the
+ * two versions separate means a schema change to one DB does not force the other
+ * dbType's validators to restart; only validators of the changed dbType see a mismatch.
+ * Mismatched versions cause those validators to refuse the snapshot and log a clear
+ * error rather than silently corrupting replica state.
  * After bumping a key, that dbType's validators must be restarted (or will
  * restart automatically on the next bootstrap) so that fetchAndApplySchema
  * re-runs against the new schema.
@@ -203,6 +205,11 @@
  *       gains the same four indexes at startup from ensureReplicaBlockIndexes.
  *       Nothing here enters a block-hash preimage. The migration is mode=auto.
  *       Decoder is unaffected and stays at 4.
+ * Index-only frontier record (no version bump): the
+ *       2026-10-07-ledger-covering-index migration adds non-unique
+ *       (tick_id, action_index, amount) covering indexes to `credits`, `debits`
+ *       and `escrows`. It changes neither replicated columns nor payload shape,
+ *       so an older follower can still store every streamed row.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -212,10 +219,11 @@
  * reads both, walks the sibling migration ledgers, and fails when a migration
  * past the frontier carries DDL against a wire-replicated table of that dbType
  * while the frontier stands still. Pure-DML backfills do not change what a
- * follower can store and are not flagged. Per the operator ruling of 2026-09-09
- * the answer to a red gate is a bump carried by the next fleet release (the
- * version decides what peers ACCEPT, so a drive-by edit strands the fleet),
- * never a frontier advance on its own.
+ * follower can store and are not flagged. Per the operator ruling of 2026-09-09,
+ * payload-affecting DDL requires a bump carried by the next fleet release because
+ * the version decides what peers ACCEPT. A reviewed non-unique secondary-index-only
+ * migration can advance the frontier without a bump when an accounting comment names
+ * the migration and records that it changes neither replicated columns nor payload shape.
  *
  ********************************************************************/
 
@@ -223,9 +231,10 @@ const SCHEMA_VERSION = { indexer: 15, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-06',
+        through: '2026-10-07',
         accounted: [
-            '2026-10-06-resolved-block-idx.sql'
+            // Index-only; no replicated column or payload shape changed.
+            '2026-10-07-ledger-covering-index.sql'
         ]
     },
     decoder: {

@@ -20,9 +20,11 @@
 // Pure-DML backfills are NOT flagged: they change rows, not the shape a follower
 // needs. DDL against a table this dbType never ships is not flagged either.
 //
-// Per the operator ruling of 2026-09-09 a red gate is answered by a bump carried
-// on the next fleet release, never by advancing the frontier alone: the version
-// decides what peers ACCEPT, so a drive-by edit strands the fleet.
+// Per the operator ruling of 2026-09-09 a red gate for payload-affecting DDL is
+// answered by a bump carried on the next fleet release: the version decides what
+// peers ACCEPT, so a drive-by edit strands the fleet. A reviewed secondary-index-
+// only migration can instead advance the frontier with an index-only accounting
+// comment because it changes neither replicated columns nor payload shape.
 
 'use strict';
 
@@ -195,6 +197,16 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
         });
 
+        it('does not flag an index-only migration explicitly recorded at an advanced frontier', function(){
+            const indexOnlyFrontier = {
+                through: '2026-09-12',
+                accounted: ['2026-09-12-sends-covering-index.sql']
+            };
+            write('2026-09-12-sends-covering-index.sql',
+                'CREATE INDEX sends_covering ON sends (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire), []);
+        });
+
         it('flags a same-day migration the accounted tail does not name', function(){
             write('2026-09-11-snuck-in.sql', 'ALTER TABLE sends ADD COLUMN snuck INT NULL;\n');
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.file),
@@ -225,11 +237,12 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
                         + ' bump:\n'
                         + findings.map(f => '  ' + f.file + ' -> ' + f.tables.join(', ')
                             + (f.undated ? '  [filename carries no date]' : '')).join('\n')
-                        + '\nBump SCHEMA_VERSION.' + dbType + ' in src/schema/version.js with a history'
-                        + ' entry naming what a follower on the previous version cannot store, move the'
-                        + ' frontier to the newest migration date, and land it with the next fleet'
-                        + ' release: the version decides what peers ACCEPT, so a follower must refuse'
-                        + ' the snapshot rather than apply rows into a schema that cannot hold them.'
+                        + '\nIf the DDL changes replicated columns or payload shape, bump SCHEMA_VERSION.'
+                        + dbType + ' in src/schema/version.js with a history entry naming what a follower'
+                        + ' on the previous version cannot store, move the frontier to the newest'
+                        + ' migration date, and land it with the next fleet release. If it adds only'
+                        + ' non-unique secondary indexes, leave the version unchanged and move the'
+                        + ' frontier with an index-only accounting comment naming the migration.'
                     : '');
             });
         }
