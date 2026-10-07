@@ -101,7 +101,8 @@ const stateQueryOf = (calls) => {
 };
 
 describe('BlockHasher: independent recompute conformance @regression', function(){
-    // state_key collation flag-day (state_key_collation_activation.js twin):
+    // state_key collation flag-day (the state_key_collation_activation
+    // gate-registry row, a twin of the indexer's):
     // the contract-state gather must pin COLLATE utf8_bin exactly when the gate
     // is active, byte-for-byte with the indexer's getBlockHashes, or the
     // recompute halts diverge from the source at/after an armed height.

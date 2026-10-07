@@ -288,5 +288,45 @@ describe('ServerPoller', function(){
             assert.deepStrictEqual(payload.data.escrows, [other, release],
                 'the release joins the action-scoped escrows, it does not replace them');
         });
+
+        // Once UNSTAKE_COOLDOWN_COMPLETION_ACTION is active the indexer writes the refund
+        // and the release under a synthetic UNSTAKE action minted AT the maturity block, so
+        // the action-scoped read carries them and the unstake-keyed joins match nothing.
+        it('delivers a post-activation maturity once, through the action-scoped read @regression', async function(){
+            db.getBlockHashRow.resolves({ block_index: 50, block_time: 100, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getStatusId.resolves(3);
+            let refund  = { action_index: 120, address_id: 7, tick_id: 1, amount: '100' };
+            let release = { action_index: 120, address_id: 7, tick_id: 1, amount: '-100' };
+            db.getActionScopedRows.callsFake(async (table) =>
+                (table === 'credits' ? [refund] : table === 'escrows' ? [release] : []));
+
+            let payload = await poller.buildBlockPayload(50);
+
+            assert.ok(db.doQuery.getCalls().some(c => /FROM credits c JOIN unstakes u/.test(c.args[0])),
+                'the matured-cooldown join must still run (pre-activation history needs it)');
+            assert.deepStrictEqual(payload.data.credits, [refund]);
+            assert.deepStrictEqual(payload.data.escrows, [release]);
+        });
+
+        // If both channels ever reach the same synthetic-action row, the merge's
+        // logical-identity dedup must keep the follower from crediting it twice.
+        it('dedups a post-activation maturity that both channels return @regression', async function(){
+            db.getBlockHashRow.resolves({ block_index: 50, block_time: 100, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+            db.getStatusId.resolves(3);
+            let refund  = { action_index: 120, address_id: 7, tick_id: 1, amount: '100' };
+            let release = { action_index: 120, address_id: 7, tick_id: 1, amount: '-100' };
+            db.getActionScopedRows.callsFake(async (table) =>
+                (table === 'credits' ? [refund] : table === 'escrows' ? [release] : []));
+            db.doQuery.callsFake(async (sql) => {
+                if(/FROM escrows e JOIN unstakes u/.test(sql)) return [Object.assign({}, release)];
+                if(/FROM credits c JOIN unstakes u/.test(sql)) return [Object.assign({}, refund)];
+                return [];
+            });
+
+            let payload = await poller.buildBlockPayload(50);
+
+            assert.deepStrictEqual(payload.data.credits, [refund]);
+            assert.deepStrictEqual(payload.data.escrows, [release]);
+        });
     });
 });

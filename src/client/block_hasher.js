@@ -120,7 +120,8 @@ class BlockHasher {
     // Recompute { ledger_hash, actions_hash, contract_hash } for a block from the
     // replicated raw rows. Mirrors xchain-indexer/src/db/actions.js getBlockHashes().
     // `network`/`coin` drive the state_key collation flag-day
-    // (state_key_collation_activation.js, byte-identical twin of the indexer's);
+    // (the state_key_collation_activation row in consensus/gate_registry/shared_rows_4.js,
+    // byte-identical twin of the indexer's src/protocol_changes/shared_rows_4.js);
     // omitted -> legacy folding collation, matching pre-activation blocks. Live
     // recompute callers MUST pass them or the replica gates differently than the
     // source at/after an armed height and false-halts on divergence.
