@@ -33,6 +33,7 @@
 const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
+const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js');
 
 const swq   = require('../../src/consensus/stake_weighted_quorum.js');
 const equiv = require('../../src/consensus/equivocation_header.js');
@@ -46,15 +47,17 @@ const LOCAL_DIR = path.join(__dirname, '../../src');
 const DOCS_DIR  = process.env.XCHAIN_DOCS_DIR || path.join(__dirname, '../../../xchain-documentation');
 const CANON_DIR = path.join(DOCS_DIR, 'protocol', 'reference-impl');
 const VEC_DIR   = path.join(DOCS_DIR, 'protocol', 'test-vectors');
+const CANON_VERDICT = siblingCheckout(__dirname, CANON_DIR);
+const VEC_VERDICT = siblingCheckout(__dirname, VEC_DIR);
 
 let quorumVec = null, equivVec = null, activationVec = null;
-try {
-    quorumVec     = require(path.join(VEC_DIR, 'stake_weighted_quorum.json'));
-    equivVec      = require(path.join(VEC_DIR, 'equivocation_header.json'));
-    activationVec = require(path.join(VEC_DIR, 'activation_predicates.json'));
-} catch(e){ /* sibling xchain-documentation absent */ }
-
-const CANON_PRESENT = fs.existsSync(CANON_DIR);
+if(VEC_VERDICT.usable){
+    try {
+        quorumVec     = require(path.join(VEC_DIR, 'stake_weighted_quorum.json'));
+        equivVec      = require(path.join(VEC_DIR, 'equivocation_header.json'));
+        activationVec = require(path.join(VEC_DIR, 'activation_predicates.json'));
+    } catch(e){ /* sibling xchain-documentation absent */ }
+}
 
 // Every copy now shares ONE signature: meetsStakeThreshold(validators, signers),
 // and every copy exports totalStake(). No per-repo adapter remains.
@@ -69,7 +72,14 @@ function vecValidators(c){
 function meets(c){ return swq.meetsStakeThreshold(vecValidators(c), c.signers); }
 
 describe('consensus-primitive conformance: canonical vectors @regression', function(){
-    before(function(){ if(!quorumVec || !equivVec){ if(process.env.XCHAIN_REQUIRE_SIBLINGS==='1') throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but consensus test-vectors not found (sibling xchain-documentation missing)'); this.skip(); } });
+    before(function(){
+        if(!skipOrFail(this, VEC_VERDICT, 'the consensus test-vector guard')) return;
+        if(!quorumVec || !equivVec){
+            if(process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
+                throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but consensus test-vectors not found (sibling xchain-documentation missing)');
+            this.skip();
+        }
+    });
 
     describe('stake_weighted_quorum.meetsStakeThreshold', function(){
         (quorumVec ? quorumVec.meetsStakeThreshold : []).forEach(function(c){
@@ -119,7 +129,14 @@ function decodeSnapshotBlock(v){
 // The activation boundaries run through THIS repo's carriers and so its own gate registry,
 // which byte identity never reaches; no snapshot_reorg_buffer.js here, so no burial group.
 describe('consensus-primitive conformance: activation predicate vectors @regression', function(){
-    before(function(){ if(!activationVec){ if(process.env.XCHAIN_REQUIRE_SIBLINGS==='1') throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but activation_predicates.json not found (sibling xchain-documentation missing)'); this.skip(); } });
+    before(function(){
+        if(!skipOrFail(this, VEC_VERDICT, 'the activation predicate test-vector guard')) return;
+        if(!activationVec){
+            if(process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
+                throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but activation_predicates.json not found (sibling xchain-documentation missing)');
+            this.skip();
+        }
+    });
     const groups = activationVec || {};
 
     it('every group this repo runs is a non-empty list', function(){
@@ -139,7 +156,9 @@ describe('consensus-primitive conformance: activation predicate vectors @regress
 });
 
 describe('consensus-primitive conformance: byte-identity to canonical source @regression', function(){
-    before(function(){ if(!CANON_PRESENT){ if(process.env.XCHAIN_REQUIRE_SIBLINGS==='1') throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but canonical reference-impl dir not found at ' + CANON_DIR); this.skip(); } });
+    before(function(){
+        skipOrFail(this, CANON_VERDICT, 'the canonical consensus reference-impl byte-identity guard');
+    });
 
     // The two carriers sit under consensus/ on both sides since W5 (the same tail in
     // every repo), so the compare is a raw byte compare of src/consensus/<f> against
