@@ -61,6 +61,7 @@ describe('SyncService client mode unrecognized coin skip', function(){
 
     it('removes an indexer chain when ClientRollback rejects its unrecognized coin', async function(){
         const logError = sinon.stub(require('../../../src/observability').getLogger(), 'error');
+        const startDiscovered = sinon.spy(service, 'startDiscoveredChains');
 
         const firstDiscovery = await service.discoverChains();
         const secondDiscovery = await service.discoverChains();
@@ -71,6 +72,8 @@ describe('SyncService client mode unrecognized coin skip', function(){
         assert.deepStrictEqual(secondDiscovery, []);
         assert.strictEqual(Database.prototype.createDatabase.callCount, 1, 'the re-poll skips the rejected chain');
         assert.strictEqual(Database.prototype.close.callCount, 2, 'the source and rejected replica pools are closed');
+        assert.strictEqual(startDiscovered.firstCall.returnValue, undefined,
+            'startDiscoveredChains preserves its synchronous return contract');
         const skipLogs = logError.getCalls().filter(c => /notacoin:mainnet:indexer/.test(String(c.args[0])));
         assert.strictEqual(skipLogs.length, 1, 'the skip is logged once across hub re-polls');
     });

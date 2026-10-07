@@ -246,9 +246,9 @@ class SyncService {
         }
 
         this.validateFirstDiscoveryPass();
-        newChains = await this.startDiscoveredChains(newChains);
+        this.startDiscoveredChains(newChains);
 
-        return newChains;
+        return newChains.filter(({ key }) => this.databases.has(key));
     }
 
     // Client mode: the replica keeps the source's db_name but uses the client's own creds.
@@ -346,8 +346,7 @@ class SyncService {
         }
     }
 
-    async startDiscoveredChains(newChains){
-        const startedChains = [];
+    startDiscoveredChains(newChains){
         for(const { key, db, config: cfg } of newChains){
             if(this.config['SYNC_MODE'] === 'server'){
                 this.startPollerForChain(key, db, cfg);
@@ -362,13 +361,14 @@ class SyncService {
                     this.unrecognizedCoinKeys.add(key);
                     getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
                         '" is not in this client\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
-                    try { await db.close(); } catch(closeErr){ /* pool already gone */ }
+                    try {
+                        const closing = db.close();
+                        if(closing && typeof closing.catch === 'function') closing.catch(() => {});
+                    } catch(closeErr){ /* pool already gone */ }
                     continue;
                 }
             }
-            startedChains.push({ key, db, config: cfg });
         }
-        return startedChains;
     }
 
     async startServerMode(){
