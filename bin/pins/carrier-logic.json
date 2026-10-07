@@ -36,7 +36,7 @@
     },
     "stateHash": {
       "path": "src/consensus/state_hash.js",
-      "hash": "3b5cb6a37f58cb40b0020e2c0440d34e21810b9b316c3e71a5b0c2861a18eb21",
+      "hash": "5ac03b6746c93bc0615d0a4d857f5eb4861c44aa5890ee60e922794ed29bc785",
       "twins": [
         "xchain-indexer"
       ]
@@ -379,6 +379,13 @@
       "to": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
       "reason": "copy the rule set resolution fix from its indexer canonical",
       "date": "2026-10-06"
+    },
+    {
+      "id": "stateHash",
+      "from": "3b5cb6a37f58cb40b0020e2c0440d34e21810b9b316c3e71a5b0c2861a18eb21",
+      "to": "5ac03b6746c93bc0615d0a4d857f5eb4861c44aa5890ee60e922794ed29bc785",
+      "reason": "add the attest batch-head state hash class behind its flag day",
+      "date": "2026-10-07"
     }
   ]
 }

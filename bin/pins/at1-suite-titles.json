@@ -34,6 +34,13 @@
       "Integration: ClientRollback rollback then re-sync allows new data to be applied after rollback",
       "Integration: ClientRollback rollback with no actions handles block with no actions cleanly"
     ],
+    "0290d32138719430": [
+      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
+      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
+      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet and testnet inert, unknown network off",
+      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
+      "state_hash attest_batch_head class, follower twin @regression selection: stamped v5 head keyed by the completing chunk block, resolved status, total order"
+    ],
     "0351fed12642c8a1": [
       "ClientSync: runIncrementalCatchUp aborts the pass (no request, no apply) when the tip read faults",
       "ClientSync: runIncrementalCatchUp happy path: dbTip null \u2192 sinceBlock=1, calls applyIncrementalSnapshot",
@@ -3899,9 +3906,6 @@
       "graceful shutdown resolveTimeoutMs prefers an explicit budget, then the env var, then the default",
       "graceful shutdown resolveTimeoutMs stays under Docker's 10s default stop grace"
     ],
-    "e569d1d59419919f": [
-      "state_hash attest batch-head stamp gap @regression covers only the legacy v0 attest request-status class"
-    ],
     "e596ac816b0afb6a": [
       "Boundary: Hash Continuity Check hash comparison boundaries empty string vs empty string is match",
       "Boundary: Hash Continuity Check hash comparison boundaries empty string vs null is mismatch",
@@ -4292,7 +4296,7 @@
   "scripts": {
     "test": {
       "fileCount": 351,
-      "titleCount": 2749,
+      "titleCount": 2753,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4599,7 +4603,7 @@
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "e569d1d59419919f",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
@@ -4930,7 +4934,7 @@
     },
     "test:regression": {
       "fileCount": 93,
-      "titleCount": 717,
+      "titleCount": 721,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5015,7 +5019,7 @@
         "test/unit/state_commitment_batched_node_writes.test/02_db_node_store_put_many_sql_shape.test.js": "e8b11f7dc180370c",
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "e569d1d59419919f",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
