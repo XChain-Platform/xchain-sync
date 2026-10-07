@@ -194,6 +194,15 @@
  *       src/table_lifecycle/action_tables.js and rolled back by
  *       `action_index >= ?`. No row is written below LIST_META_ACTIVATION, and
  *       the migration is mode=auto. Decoder is unaffected and stays at 4.
+ *  15 - (indexer only) secondary indexes added by the 2026-10-06-resolved-block-idx
+ *       migration: (version, resolved_block) on `attests` and `xcalls`, and
+ *       resolved_block and callback_due_block on `polls`, so the per-block state-hash
+ *       collectors, the resolved-row sync reads and the reorg resets stop scanning
+ *       whole tables. A v14 follower can still store every streamed row; the bump
+ *       records the index change as this file's rule requires, and an aged follower
+ *       gains the same four indexes at startup from ensureReplicaBlockIndexes.
+ *       Nothing here enters a block-hash preimage. The migration is mode=auto.
+ *       Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -210,15 +219,13 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 14, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 15, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-01',
+        through: '2026-10-06',
         accounted: [
-            '2026-10-01-list-metas.sql',
-            '2026-10-01-list-transfers.sql',
-            '2026-10-01-response-mirror-batch-action-index.sql'
+            '2026-10-06-resolved-block-idx.sql'
         ]
     },
     decoder: {

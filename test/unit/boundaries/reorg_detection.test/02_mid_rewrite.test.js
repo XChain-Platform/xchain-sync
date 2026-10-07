@@ -23,8 +23,9 @@ describe('Boundary: Reorg Detection', function(){
         // later poll caught the deeper rewrite, so the walk-back must resolve fork=5 in this poll.
         poller.lastPolledBlock = 10;
         db.getLastBlock.resolves(8);
-        // Recorded broadcast hashes: 4 matches the live source ('l'), 5..10 were broadcast pre-reorg with a different content hash.
-        poller.recentBroadcastHashes.set(4, 'l');
+        // Recorded broadcast identities: 4 matches the live source (its ledger|actions|contract
+        // hashes 'l|a|c'), 5..10 were broadcast pre-reorg with a different content identity.
+        poller.recentBroadcastHashes.set(4, 'l|a|c');
         for(let bi = 5; bi <= 10; bi++) poller.recentBroadcastHashes.set(bi, 'pre-reorg');
         await poller.poll();
         let event = broadcaster.broadcast.firstCall.args[2];
@@ -32,7 +33,7 @@ describe('Boundary: Reorg Detection', function(){
         assert.strictEqual(event.block_index, 5);
         assert.strictEqual(poller.lastPolledBlock, 4);
         // Guard re-seeded from the recorded (still matching) hash at the fork parent.
-        assert.strictEqual(poller.lastPolledBlockHash, 'l');
+        assert.strictEqual(poller.lastPolledBlockHash, 'l|a|c');
         assert.strictEqual(poller.transparencyLog.pruneFrom.calledOnceWithExactly(5), true);
     });
 });

@@ -276,17 +276,27 @@ class TransparencyLog {
         return null;
     }
 
-    // Return the DURABLE recorded ledger_hash for a height (the value this node
-    // broadcast when it recorded the block), or null if the block was never
-    // recorded. Used by ServerPoller to seed its net-forward reorg guard from the
-    // pre-reorg recorded hash rather than a fresh (post-reorg) source read, so a
-    // reorg that completed entirely during downtime is still detected on the first
-    // poll after restart. Indexer-only (the decoder has no transparency log).
+    // Indexer block identity for reorg detection: the three chained hashes joined.
+    // Each hash chains only its own predecessor and the ledger preimage carries no
+    // actions, so a ledger-only identity misses a replacement block that changes
+    // actions or contracts alone. state_hash stays out: catch-up payloads send it
+    // null and sync_meta never records it. Null when ledger_hash is absent, which
+    // disables the comparison for that height.
+    static blockIdentity(row) {
+        if (!row || row.ledger_hash === null || row.ledger_hash === undefined) return null;
+        const part = v => (v === null || v === undefined) ? '' : String(v);
+        return part(row.ledger_hash) + '|' + part(row.actions_hash) + '|' + part(row.contract_hash);
+    }
+
+    // Return the DURABLE recorded block identity for a height (blockIdentity over
+    // the hashes this node broadcast when it recorded the block), or null if the
+    // block was never recorded. Used by ServerPoller to seed its net-forward reorg
+    // guard from the pre-reorg record rather than a fresh (post-reorg) source read,
+    // so a reorg that completed entirely during downtime is still detected on the
+    // first poll after restart. Indexer-only (the decoder has no transparency log).
     async getRecordedHash(height) {
-        let rows = await this.db.getRecordedLedgerHash(height);
-        if (rows.length > 0 && rows[0].ledger_hash !== null && rows[0].ledger_hash !== undefined)
-            return rows[0].ledger_hash;
-        return null;
+        let rows = await this.db.getRecordedBlockHashes(height);
+        return rows.length > 0 ? TransparencyLog.blockIdentity(rows[0]) : null;
     }
 
     // Find interior gaps in the transparency log: source blocks that fall strictly

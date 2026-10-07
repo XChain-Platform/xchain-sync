@@ -123,8 +123,8 @@ describe('ServerPoller', function(){
         it('falls back to the live read for a fresh node (no recorded hash) and null cursor', async function(){
             assert.strictEqual(await poller.seedReorgGuardHash(null), null, 'null cursor -> no seed');
             log.getRecordedHash.withArgs(42).resolves(null);       // never recorded
-            db.getBlockHashRow.withArgs(42).resolves({ ledger_hash: 'live-42' });
-            assert.strictEqual(await poller.seedReorgGuardHash(42), 'live-42', 'live fallback on a recorded miss');
+            db.getBlockHashRow.withArgs(42).resolves({ ledger_hash: 'live-42', actions_hash: 'a', contract_hash: 'c' });
+            assert.strictEqual(await poller.seedReorgGuardHash(42), 'live-42|a|c', 'live fallback on a recorded miss');
         });
 
         it('decoder (no transparency log) seeds from the live source read', async function(){

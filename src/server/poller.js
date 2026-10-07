@@ -36,6 +36,7 @@ const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMatur
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const seedReorgWindow = require('./poller/reorg_window_seed');
+const TransparencyLog = require('./transparency_log');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -446,7 +447,7 @@ class ServerPoller {
         // visible event order. The selected hash is the same content identity that the
         // next poll reads from each source database type.
         this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
-        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : TransparencyLog.blockIdentity(payload);
         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
         // The bounded map retains enough pre-reorg identities for the configured source
         // ceiling plus its safety margin. Eviction removes only the single height that
@@ -494,12 +495,13 @@ class ServerPoller {
         return forkBlock;
     }
 
-    // Source content hash at a block, for net-forward reorg detection. Indexer uses
-    // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
+    // Source content identity at a block, for net-forward reorg detection. Indexer uses
+    // TransparencyLog.blockIdentity (all three chained hashes); decoder uses the
+    // blockchain block_hash.
     async sourceBlockHash(blockIndex, conn, opts){
         let row = await this.db.getBlockHashRow(blockIndex, conn, opts);
         if(!row) return null;
-        return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
+        return (this.dbType === 'decoder') ? row.block_hash : TransparencyLog.blockIdentity(row);
     }
 
     async readReorgWindow(floor, cursor){
@@ -513,7 +515,7 @@ class ServerPoller {
                 const rows = await rangeDb.findSyncMetaLeaves(floor, cursor, conn);
                 return rows.map(row => ({
                     block_index: row.block_index,
-                    hash: row.ledger_hash
+                    hash: TransparencyLog.blockIdentity(row)
                 }));
             };
         } else {
@@ -567,7 +569,7 @@ class ServerPoller {
     }
 
     // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This
-    // MUST come from the DURABLE recorded hash (sync_meta.ledger_hash via the
+    // MUST come from the DURABLE recorded identity (sync_meta's three hashes via the
     // transparency log), NOT a fresh source read. A reorg that completed entirely
     // during downtime leaves the LIVE source content at lastPolledBlock in its
     // post-reorg form; seeding from that would match the first poll's re-read and

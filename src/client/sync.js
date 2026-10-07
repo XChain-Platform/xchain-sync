@@ -3919,7 +3919,7 @@ class ClientSync {
     async followCheckpointForward(cp, seed, source){
         let rangeSource = source || this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
         // Signer sets live only in BTC's stakes, so other chains cannot follow rotation
-        if(this.chain !== 'BTC') return { verdict: 'wait', reason: 'rotation following is BTC-only' };
+        if(this.coinTicker !== 'BTC') return { verdict: 'wait', reason: 'rotation following is BTC-only' };
         if(!seed || seed.state_root == null || typeof seed.block_index !== 'number')
             return { verdict: 'wait', reason: 'pinned seed checkpoint is malformed' };
         if(cp.block_index <= seed.block_index) return { verdict: 'wait', reason: 'checkpoint is not past the pinned seed' };

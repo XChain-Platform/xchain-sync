@@ -97,7 +97,7 @@ class TestDatabase {
     }
 
     // Mirror of src/db.js getStatusId(): resolves a status string to its
-    // index_statuses id (or null). ClientRollback.js calls this during the
+    // index_statuses id (or null). src/client/rollback.js calls this during the
     // cooldown-maturity re-derive; the integration TestDatabase needs it so the
     // S-5 client-rollback suite runs against a real DB instead of erroring on a
     // missing method. SQL is byte-identical to production.

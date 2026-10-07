@@ -247,6 +247,8 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(hq.sql.indexOf('ah.version = 5') !== -1);
         assert.ok(hq.sql.indexOf('ac.version = 6') !== -1);
         assert.ok(hq.sql.indexOf('ah.batch_chunk_index = 0') !== -1);
+        // Only a real chunk row completes a batch; the rollback reset requires the same predicate.
+        assert.ok(hq.sql.indexOf('ac.batch_chunk_index IS NOT NULL') !== -1);
         // Only a VALID continuation completes a batch, and both rows must share an author:
         // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
         assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
