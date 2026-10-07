@@ -208,14 +208,15 @@ class SyncService {
                 continue;
             }
 
-            // Refuse to serve an indexer coin this bundle has no frozen activation delay for.
-            // Its payloads would silently omit the deactivation_block updated rows, so skip the
-            // chain alone before any pool opens; a bundle upgrade picks it up on the next start.
-            if(this.config['SYNC_MODE'] === 'server' && cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
+            // Refuse an indexer coin this bundle has no frozen activation delay for. A server would
+            // silently omit the deactivation_block updated rows and a client replica cannot
+            // build its ClientRollback, so skip the chain alone before any pool opens, in either mode; a bundle
+            // upgrade picks it up on the next start.
+            if(cfg.dbType === 'indexer' && activationDelayBlocks(cfg.coin) === undefined){
                 if(!this.unrecognizedCoinKeys.has(key)){
                     this.unrecognizedCoinKeys.add(key);
                     getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
-                        '" is not in this server\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to serve it');
+                        '" is not in this node\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
                 }
                 continue;
             }
