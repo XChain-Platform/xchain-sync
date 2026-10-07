@@ -227,46 +227,54 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
         });
 
+        it('flags a same-day migration the accounted tail does not name', function(){
+            write('2026-09-11-snuck-in.sql', 'ALTER TABLE sends ADD COLUMN snuck INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.file),
+                ['2026-09-11-snuck-in.sql']);
+        });
+    });
+});
+
+describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
+
+    describe('the gate detects what it claims to detect', function(){
+
+        let dir;
+        const frontier = {
+            through: '2026-09-12',
+            accounted: ['2026-09-12-sends-covering-index.sql'],
+            indexOnly: ['2026-09-12-sends-covering-index.sql']
+        };
+        const wire = new Set(['sends', 'attests']);
+
+        function write(sql){
+            fs.writeFileSync(path.join(dir, '2026-09-12-sends-covering-index.sql'), sql);
+        }
+
+        beforeEach(function(){
+            dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xchain-sync-migration-gate-'));
+        });
+
+        afterEach(function(){
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
         it('does not flag an index-only migration explicitly recorded at an advanced frontier', function(){
-            const indexOnlyFrontier = {
-                through: '2026-09-12',
-                accounted: ['2026-09-12-sends-covering-index.sql'],
-                indexOnly: ['2026-09-12-sends-covering-index.sql']
-            };
-            write('2026-09-12-sends-covering-index.sql',
-                'ALTER TABLE sends ADD INDEX IF NOT EXISTS sends_covering (action_index, block_index);\n');
-            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire), []);
+            write('ALTER TABLE sends ADD INDEX IF NOT EXISTS sends_covering (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
         });
 
         it('flags payload-affecting DDL substituted into an index-only migration', function(){
-            const indexOnlyFrontier = {
-                through: '2026-09-12',
-                accounted: ['2026-09-12-sends-covering-index.sql'],
-                indexOnly: ['2026-09-12-sends-covering-index.sql']
-            };
-            write('2026-09-12-sends-covering-index.sql',
-                'ALTER TABLE sends ADD COLUMN payload_shape_changed INT NULL;\n');
-            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire), [{
+            write('ALTER TABLE sends ADD COLUMN payload_shape_changed INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
                 file: '2026-09-12-sends-covering-index.sql', tables: ['sends'], undated: false
             }]);
         });
 
         it('flags a unique index substituted into an index-only migration', function(){
-            const indexOnlyFrontier = {
-                through: '2026-09-12',
-                accounted: ['2026-09-12-sends-covering-index.sql'],
-                indexOnly: ['2026-09-12-sends-covering-index.sql']
-            };
-            write('2026-09-12-sends-covering-index.sql',
-                'CREATE UNIQUE INDEX sends_covering ON sends (action_index, block_index);\n');
-            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire).map(f => f.tables),
+            write('CREATE UNIQUE INDEX sends_covering ON sends (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.tables),
                 [['sends']]);
-        });
-
-        it('flags a same-day migration the accounted tail does not name', function(){
-            write('2026-09-11-snuck-in.sql', 'ALTER TABLE sends ADD COLUMN snuck INT NULL;\n');
-            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.file),
-                ['2026-09-11-snuck-in.sql']);
         });
     });
 });
