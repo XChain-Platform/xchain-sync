@@ -4033,7 +4033,8 @@ class ClientSync {
     async applyReorgRollback(event){
         await this.withApplyLock(() => this.rollback.rollback(event.block_index));
         this.lastAppliedBlock = event.block_index - 1;
-        if(this.lastAppliedBlock > 0)
+        // Reload the new tip's hashes, genesis block 0 included (a null tip turns off the gap check).
+        if(this.lastAppliedBlock >= 0)
             this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
         else
             this.lastHashes = null;

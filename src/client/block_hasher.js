@@ -243,10 +243,13 @@ class BlockHasher {
     // Cost note: this scans the deterministic subset up to uptoBlock; on a large
     // index_addresses table an index on block_index is advisable before enabling this
     // on a high-volume chain. Gated off by default (INDEX_MAP_PARITY_CHECK).
+    //
+    // Fail the read closed: a query error reaches the caller (source publishes null,
+    // follower skips) instead of hashing an empty map that reads as a false mismatch.
     async computeIndexMapChecksum(uptoBlock){
         let rows = await this.db.doQuery(
             "SELECT id, address FROM index_addresses WHERE block_index IS NOT NULL AND block_index <= ? ORDER BY id ASC",
-            [uptoBlock]
+            [uptoBlock], null, { rethrow: true }
         );
         let mapped = rows.map(r => ({ id: String(r.id), address: String(r.address) }));
         return this.util.getDataHash({ index_map: mapped });

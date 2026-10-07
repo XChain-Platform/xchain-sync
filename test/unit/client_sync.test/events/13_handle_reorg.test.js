@@ -72,7 +72,26 @@ function registerHandleReorgTests(){
     });
 }
 
+// Block 0 is a real height on a chain indexed from genesis (regtest, e2e): a rollback
+// to block 1 keeps block 0, so its hashes must reload, or the next block's
+// continuity gap check is skipped against a null tip.
+function registerGenesisReorgTests(){
+    describe('handleReorg at genesis', function(){
+        beforeEach(function(){ sync.lastAppliedBlock = 100; });
+
+        it('reloads the genesis tip hashes when rolling back to block 1', async function(){
+            let hashes = { ledger_hash: 'l0', actions_hash: 'a0', contract_hash: 'c0' };
+            db.getBlockHashRow.resolves(hashes);
+            await sync.handleReorg({ block_index: 1 });
+            assert.strictEqual(sync.lastAppliedBlock, 0);
+            assert.strictEqual(db.getBlockHashRow.calledWith(0), true);
+            assert.strictEqual(sync.lastHashes, hashes);
+        });
+    });
+}
+
 describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerHandleReorgTests();
+    registerGenesisReorgTests();
 });

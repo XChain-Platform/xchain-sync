@@ -32,6 +32,13 @@
  * peer on the old format fails closed at bootstrap rather than re-introducing
  * the corruption.
  *
+ * BIGINT columns (which the driver returns as BigInt) go on the wire as base-10
+ * strings through bigIntReplacer below, the one replacer every server route
+ * serializes with: the live broadcast and every snapshot, page and table stream.
+ * The client applies values without coercion, so two routes emitting different
+ * forms would replicate the same column differently. Changing the form is a
+ * wire-format change under the same SCHEMA_VERSION rule.
+ *
  ********************************************************************/
 
 // Reserved single-key sentinel wrapping a base64-encoded binary column value.
@@ -76,4 +83,12 @@ function decodeValue(v){
     return v;
 }
 
-module.exports = { BINARY_TAG, encodeRow, encodeTables, decodeValue };
+// JSON.stringify replacer: BigInt -> base-10 string. Reads the RAW value via
+// this[key] (so it must stay a regular function), so a global
+// BigInt.prototype.toJSON patch cannot change the wire form, as in util jsonStringify.
+function bigIntReplacer(key, value){
+    const raw = this[key];
+    return typeof raw === 'bigint' ? raw.toString() : value;
+}
+
+module.exports = { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer };
