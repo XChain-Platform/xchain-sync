@@ -3377,6 +3377,8 @@ class ClientSync {
                 if(opts.failClosed) throw e;
                 getLogger().error(util.format('Recompute verification errored at block %s (NOT halting on a recompute error):',
                     (event && event.block_index), e));
+                // Leave a durable mark that this height advanced without its recompute.
+                if(opts.recordUnverified) await this.recordSyncStateCounter('unverified_recompute', event && event.block_index);
                 return null;
             }
         }
@@ -3686,7 +3688,7 @@ class ClientSync {
             await this.withApplyLock(() => this.applier.applyBlock(event));
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
-                let mismatches = await this.verifyRecompute(event);
+                let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true });
                 if(mismatches){
                     await this.haltOnDivergence(event.block_index, mismatches, this.sources.slice(0, 1), 'local-recompute-divergence');
                     return;
