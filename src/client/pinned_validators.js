@@ -34,6 +34,11 @@
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
  *
+ * The service names a chain by the hub's full name ('bitcoin'), so the getters fold
+ * it onto the ticker every map key uses. An env name may spell the chain either way
+ * (CHECKPOINT_VALIDATORS_BTC_MAINNET or CHECKPOINT_VALIDATORS_BITCOIN_MAINNET); the
+ * ticker form is canonical and wins when both are set.
+ *
  * ABSENT is not INVALID. An unset override is inert: no trust root exists, so
  * ClientSync.verifyCheckpointQuorum skips the step, which is what the config.js
  * VERIFY_CHECKPOINT_QUORUM contract means by "skipped, never bypassed". An override
@@ -66,7 +71,22 @@
 'use strict';
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
+const { coinTicker } = require('../consensus-constants');
 const logger = getLogger();
+
+// Fold a ticker or full coin name onto the uppercase ticker the pin maps are keyed by.
+function tickerOf(chain) {
+    return String(coinTicker(String(chain))).toUpperCase();
+}
+
+// Env names to try for (chain, network): the ticker form first, then the caller's own
+// spelling when it differs, so the full-name form operators already set keeps resolving.
+function envNames(keyFn, chain, network) {
+    const names = [keyFn(tickerOf(chain), network)];
+    const raw = keyFn(chain, network);
+    if (raw !== names[0]) names.push(raw);
+    return names;
+}
 
 /**
  * Baked-in pinned validator sets, keyed "chain:network". All real keys ship null
@@ -120,19 +140,23 @@ function parseValidatorSetEnv(raw) {
 // unusable. Never throws: this is on the per-verify read path, and startup already
 // refused an invalid explicit value.
 function fromEnv(chain, network) {
-    const raw = envConfig.envValueByName(envKey(chain, network));
-    if (!raw) return null;
-    const { set, error } = parseValidatorSetEnv(raw);
-    if (error) {
-        logger.warn('[pinnedValidators] ' + envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
-        return null;
+    for (const name of envNames(envKey, chain, network)) {
+        const raw = envConfig.envValueByName(name);
+        if (!raw) continue;
+        const { set, error } = parseValidatorSetEnv(raw);
+        if (error) {
+            logger.warn('[pinnedValidators] ' + name + ' override ' + error + '; no env trust root for this key');
+            return null;
+        }
+        return set;
     }
-    return set;
+    return null;
 }
 
 /**
  * The pinned validator set for (chain, network): an env override if present and
- * well-formed, else the baked-in entry, else null. Lookup is case-insensitive.
+ * well-formed, else the baked-in entry, else null. Lookup is case-insensitive and
+ * accepts the ticker or the full coin name.
  * @param {string} chain
  * @param {string} network
  * @returns {Array<{pubkey:string, weight:string, source:string}> | null}
@@ -141,7 +165,7 @@ function getPinnedValidators(chain, network) {
     if (chain == null || network == null) return null;
     const env = fromEnv(chain, network);
     if (env) return env;
-    const entry = PINNED[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
+    const entry = PINNED[tickerOf(chain) + ':' + String(network).toLowerCase()];
     return entry || null;
 }
 
@@ -194,19 +218,23 @@ function parseSeedEnv(raw) {
 // Resolve the env-supplied seed for (chain, network), or null when it is absent or
 // unusable. Never throws, for the same reason fromEnv does not.
 function seedFromEnv(chain, network) {
-    const raw = envConfig.envValueByName(seedEnvKey(chain, network));
-    if (!raw) return null;
-    const { seed, error } = parseSeedEnv(raw);
-    if (error) {
-        logger.warn('[pinnedValidators] ' + seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
-        return null;
+    for (const name of envNames(seedEnvKey, chain, network)) {
+        const raw = envConfig.envValueByName(name);
+        if (!raw) continue;
+        const { seed, error } = parseSeedEnv(raw);
+        if (error) {
+            logger.warn('[pinnedValidators] ' + name + ' override ' + error + '; no env seed for this key');
+            return null;
+        }
+        return seed;
     }
-    return seed;
+    return null;
 }
 
 /**
  * The pinned SEED checkpoint for (chain, network): an env override if present and
- * well-formed, else the baked-in entry, else null. Lookup is case-insensitive.
+ * well-formed, else the baked-in entry, else null. Lookup is case-insensitive and
+ * accepts the ticker or the full coin name.
  * @param {string} chain
  * @param {string} network
  * @returns {object | null}
@@ -215,7 +243,7 @@ function getPinnedCheckpoint(chain, network) {
     if (chain == null || network == null) return null;
     const env = seedFromEnv(chain, network);
     if (env) return env;
-    const entry = PINNED_CHECKPOINTS[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
+    const entry = PINNED_CHECKPOINTS[tickerOf(chain) + ':' + String(network).toLowerCase()];
     return entry || null;
 }
 

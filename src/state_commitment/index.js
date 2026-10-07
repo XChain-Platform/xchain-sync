@@ -37,15 +37,29 @@
  *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
  *     drift guard in test/unit/rollback_coverage.test.js.
  *
- * DbNodeStore, MemoryNodeStore, PersistentSMT.update / buildFull / prove, the leaf
- * encoders, buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to
- * the indexer; merkle.js itself is a verbatim copy. The golden vectors + the
- * persistent-vs-reference fuzz test lock the equality, and the twin cases in
- * test/unit/blockhash_conformance_twin.test.js pin the bytes.
+ * DbNodeStore, MemoryNodeStore and PersistentSMT.update / buildFull / prove are
+ * byte-identical to the indexer, and assembleStateRoot, extraSubRootColumn and
+ * reservedSubRootCandidates are identical to it in code (comments aside); merkle.js
+ * itself is a verbatim copy. The golden vectors + the persistent-vs-reference fuzz
+ * test lock the equality, and the twin cases in
+ * test/unit/blockhash_conformance_twin.test.js and its part
+ * 03_state_root_assembly_twin.test.js pin the code.
  *
- * TWO DECLARED DIVERGENCES, and they are the only ones. Each is root-neutral, each
- * is pinned by its own case in test/unit/blockhash_conformance_twin.test.js, and
- * each case fails on a move in either direction and points back here.
+ * ROOT-NEUTRAL SHAPE DIFFERENCES. Each is pinned by a case in that part which
+ * applies the difference to the indexer's code and then requires the rest to match:
+ *   - computeBlockMerkleRoot takes network/coin and hands them to getBlockLeafRows,
+ *     which applies the state_key collation flag-day there; the indexer applies it
+ *     earlier, in its getBlockHashes stash, so both hash the same rows.
+ *   - buildFullBalancesRoot builds its own PersistentSMT and runs the nonzero-net
+ *     balances SQL inline; the indexer passes the tree in (buildFullBalancesRootWith)
+ *     and runs the same SQL text through getNonzeroNetBalances.
+ *   - The leaf encoders _nz / _leafOrNull are the indexer's canonicalAmountOf /
+ *     leafOrNull (leaf_values.js) under other names.
+ *
+ * TWO DECLARED DIVERGENCES in the twinned SMT code, and they are the only ones
+ * there. Each is root-neutral, each is pinned by its own case in
+ * test/unit/blockhash_conformance_twin.test.js, and each case fails on a move in
+ * either direction and points back here.
  *
  * DECLARED DIVERGENCE 1, the node cache: the indexer's PersistentSMT
  * carries a bounded read-through node cache (SMT_NODE_CACHE_MAX, _nodeCache,

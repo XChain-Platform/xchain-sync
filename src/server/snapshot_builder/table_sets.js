@@ -29,10 +29,10 @@ const tableLifecycle = require('../../table_lifecycle');
 // rollback lists (replicaRollbackTables) already have. A new registry entry
 // with one of those modes is excluded automatically; before this derivation a
 // new local table passed every guard and silently rode consensus snapshots
-// unless someone also hand-edited this Set. The three names appended
-// after the spread have no registry entry (mempool_transactions is a
-// decoder-DB table; sync_halt / sync_state are replica-created control
-// tables) and are the ONLY permitted non-registry members; F-5 in
+// unless someone also hand-edited this Set. The four names appended
+// after the spread have no registry entry (mempool_transactions and
+// dispenser_extension_undo are decoder-DB tables; sync_halt / sync_state are
+// replica-created control tables) and are the ONLY permitted non-registry members; F-5 in
 // test/unit/rollback_coverage.test.js pins both directions against the registry.
 //
 // Why the registry-derived members are excluded:
@@ -174,7 +174,7 @@ function orderSnapshotTables(allTables){
 //
 // dispensers is skipped here for the same reason it is not per-block
 // streamed: the decoder mutates and deletes dispensers rows off the stream
-// (the five writes are listed in src/schema/replicated_tables.js). An insert-only
+// (the writes are listed in the header of src/schema/replicated_tables.js). An insert-only
 // incremental delta (the tx_index->block_index join) would re-introduce the
 // count divergence on any follower that catches up incrementally, and a plain
 // re-dump would collide on the (tx_index, address_id) PK (dispensers is not in

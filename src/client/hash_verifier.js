@@ -126,16 +126,18 @@ class HashVerifier {
             };
         }
 
-        // Hash chain verification: the indexer includes previous_hash in each block's hash
-        // computation, so if we verify the hash chain across our stored blocks, we can detect
-        // any tampering. However, we can't directly verify the previous_hash embedding without
-        // recomputing the hash from raw data (which we don't have on the client side).
+        // Check sequential block ordering only; this never verifies the previous_hash link.
+        // The indexer folds previous_hash into each block's hash, so a modified block
+        // changes every hash after it, but this continuity check recomputes nothing and
+        // cannot see that cascade on its own.
         //
-        // Instead, we rely on:
-        // 1. Cross-source comparison (two honest sources produce identical hashes)
-        // 2. The hash chain property (any modification cascades to all subsequent hashes)
+        // On indexer replicas the link is verified elsewhere: ClientSync.verifyRecompute
+        // rebuilds the three chained hashes from the replicated rows through BlockHasher
+        // while VERIFY_RECOMPUTE is on (the default), and skips only a truncated
+        // replica's bootstrap base block, whose predecessor the replica never received.
         //
-        // The continuity check here just verifies sequential block ordering.
+        // Cross-source comparison (two honest sources produce identical hashes) remains
+        // a complementary check against a single dishonest source, not the link check.
         return { valid: true, reason: null };
     }
 }

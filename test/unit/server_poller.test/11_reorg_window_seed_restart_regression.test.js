@@ -59,19 +59,21 @@ async function testRestartReorg(){
     const cursor = 20;
     poller.recentHashCap = 6;
     log.getHighWaterMark.resolves(cursor);
-    log.getRecordedHash.callsFake(async blockIndex => 'old-' + blockIndex);
+    // Recorded identities are ledger|actions|contract, the form getRecordedHash returns.
+    log.getRecordedHash.callsFake(async blockIndex => 'old-' + blockIndex + '|a|c');
 
     await startOnce(poller);
 
     assert.deepStrictEqual([...poller.recentBroadcastHashes.entries()], [
-        [15, 'old-15'], [16, 'old-16'], [17, 'old-17'],
-        [18, 'old-18'], [19, 'old-19'], [20, 'old-20']
+        [15, 'old-15|a|c'], [16, 'old-16|a|c'], [17, 'old-17|a|c'],
+        [18, 'old-18|a|c'], [19, 'old-19|a|c'], [20, 'old-20|a|c']
     ]);
 
     db.getLastBlock.resolves(cursor);
     db.getBlockHashRow.callsFake(async blockIndex => ({
         block_index: blockIndex,
-        ledger_hash: blockIndex >= 18 ? 'new-' + blockIndex : 'old-' + blockIndex
+        ledger_hash: blockIndex >= 18 ? 'new-' + blockIndex : 'old-' + blockIndex,
+        actions_hash: 'a', contract_hash: 'c'
     }));
 
     await poller.poll();

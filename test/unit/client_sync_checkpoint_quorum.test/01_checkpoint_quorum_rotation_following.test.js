@@ -304,3 +304,49 @@ describe('ClientSync: checkpoint-quorum rotation range source @regression', func
             'a stalled rotation walk must log a warn naming the reason, got: ' + msgs.join(' | '));
     });
 });
+
+// The service builds ClientSync with the hub's full lowercase name ('bitcoin'), not the
+// ticker every case above uses, so the rotation gate and the pin lookups must both
+// accept it. Before they did, a forged rotated checkpoint here passed without a halt.
+describe('ClientSync: rotation following under the hub\'s full coin name @regression', function(){
+    registerHooks();
+    beforeEach(function(){
+        const config = { SYNC_SOURCES: 'http://a:3006', VERIFY_RECOMPUTE: true,
+            VERIFY_CHECKPOINT_QUORUM: true, CHECKPOINT_VERIFY_INTERVAL: 1 };
+        sync = new ClientSync('bitcoin', 'regtest', withDbMixins(db), { applyBlock: sinon.stub().resolves() },
+            { rollback: sinon.stub().resolves() }, new HashVerifier(), config, new Utility());
+        sync.lastAppliedBlock = 1000;
+    });
+
+    it('walks the rotation range from the ticker-form pins', async function(){
+        const launch = makeSigner(), s1 = makeSigner(); pin(launch);
+        const SR0 = 'b0'.repeat(32), SR1 = 'b1'.repeat(32);
+        setSeed({ block_index: 90, snapshot_block: 84, state_root: SR0 });
+        const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
+        rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
+        rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
+        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        route(cp, [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), false);
+        assert.ok(getStub.getCalls().some(c => c.args[0].includes('/range')), 'walked the checkpoint range');
+    });
+
+    it('HALTS on a forged rotated checkpoint', async function(){
+        const launch = makeSigner(), s1 = makeSigner(), rogue = makeSigner(); pin(launch);
+        const SR0 = 'b0'.repeat(32), SR1 = 'b1'.repeat(32);
+        setSeed({ block_index: 90, snapshot_block: 84, state_root: SR0 });
+        const cp = signedCpAt(rogue, { block_index: 100, snapshot_block: 90, state_root: SR1 });
+        rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
+        rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
+        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        route(cp, [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), true);
+        assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-quorum-divergence');
+    });
+});
