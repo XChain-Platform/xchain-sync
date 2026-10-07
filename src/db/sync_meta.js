@@ -36,28 +36,33 @@ module.exports = {
     // to persist the truncated-replica join floor (_bootstrapBase): an in-memory-only
     // field is lost on restart, dropping the join-block recompute skip and the
     // truncation floor that protects against an in-window reorg below `base`.
-    async ensureSyncStateTable(){
+    // opts.rethrow makes a failed CREATE throw, and the table is then not marked ready.
+    async ensureSyncStateTable(opts){
         if(this._syncStateReady) return;
         await this.doQuery(
             "CREATE TABLE IF NOT EXISTS sync_state (" +
             "  state_key   VARCHAR(128) NOT NULL PRIMARY KEY," +
             "  state_value TEXT," +
             "  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP" +
-            ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci",
+            undefined, null, (opts && opts.rethrow) ? { rethrow: true } : undefined
         );
         this._syncStateReady = true;
     },
 
-    // Read a durable client marker. Returns the stored string, or null if absent
-    // (or if the table cannot be reached: fail-soft, the caller treats null as
-    // "no persisted value" and falls back to its in-memory default).
-    async getSyncState(key){
+    // Read a durable client marker: the stored string, or null if absent. Fail-soft by
+    // default (an unreachable table also reads null, and the caller falls back to its
+    // in-memory default); opts.rethrow logs and THROWS a CREATE or SELECT fault instead.
+    async getSyncState(key, opts){
+        let strict = !!(opts && opts.rethrow);
         try {
-            await this.ensureSyncStateTable();
-            let rows = await this.doQuery("SELECT state_value FROM sync_state WHERE state_key=? LIMIT 1", [key]);
+            await this.ensureSyncStateTable(strict ? { rethrow: true } : undefined);
+            let rows = await this.doQuery("SELECT state_value FROM sync_state WHERE state_key=? LIMIT 1", [key],
+                                          null, strict ? { rethrow: true } : undefined);
             return (rows && rows.length) ? rows[0].state_value : null;
         } catch(e){
-            logger.error(util.format('getSyncState(' + key + ') failed (treating as unset):', e));
+            logger.error(util.format('getSyncState(' + key + ') failed (' + (strict ? 'rethrowing' : 'treating as unset') + '):', e));
+            if(strict) throw e;
             return null;
         }
     },
@@ -148,10 +153,10 @@ module.exports = {
         return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
     },
 
-    // The ledger hash recorded for one height, at most one row.
-    async getRecordedLedgerHash(height){
+    // The three hashes recorded for one height, at most one row.
+    async getRecordedBlockHashes(height){
         return await this.doQuery(
-            "SELECT ledger_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
+            "SELECT ledger_hash, actions_hash, contract_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
         );
     },
 

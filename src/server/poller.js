@@ -30,11 +30,13 @@
  ********************************************************************/
 
 const replicatedTables = require('../schema/replicated_tables');
+const lifecycle = require('../table_lifecycle');
 const { collectUpdatedRows } = require('./updated_rows');
 const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const seedReorgWindow = require('./poller/reorg_window_seed');
+const TransparencyLog = require('./transparency_log');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -47,6 +49,10 @@ const logger = getLogger();
 // source reorg ceiling plus a margin so every reorg an honest source emits resolves (recentHashCap).
 const RECENT_HASH_CAP_FLOOR = 256;
 const RECENT_HASH_CAP_MARGIN = 16;
+
+// Derive the reorg-scoped lookups from the lifecycle registry, so forward streaming,
+// both rollbacks and the content-parity bound always name the same tables.
+const BLOCK_SCOPED_INDEX_TABLES = lifecycle.tablesWhere(t => t.rollback === 'index' && t.replication === 'stream:index');
 
 // A per-table read in buildBlockPayload may legitimately fail because the source
 // runs an older schema that lacks the table/column (errno 1146 missing table, 1054
@@ -89,12 +95,15 @@ function initializePollerIdentity(poller, chain, network, db, broadcaster,
 function initializeActivationDelay(poller, chain){
     // Freeze the per-chain activation delay for forward deactivation stamps.
     // Support the in-place updated-rows channel with its consensus delay.
-    // Normalize missing delays for unrecognized coins and test harnesses.
+    // Keep null only for an omitted coin (test harnesses) and for decoders.
 
-    // Let collectUpdatedRows skip the deactivation class without a delay.
-    // Avoid scanning updated rows with an incorrect activation delay.
-    // Keep the stored absence value consistently null.
+    // Refuse an indexer coin with no frozen delay, as ClientRollback does: a null here
+    // makes collectUpdatedRows silently drop the deactivation class from every payload.
+    // SyncService.discoverChains skips such a chain first, so this is the backstop.
     let delay = activationDelayBlocks(chain);
+    if(delay === undefined && poller.dbType === 'indexer'){
+        throw new Error('ServerPoller: unrecognized coin "' + chain + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+    }
     poller.activationDelay = (delay === undefined) ? null : delay;
 }
 
@@ -438,7 +447,7 @@ class ServerPoller {
         // visible event order. The selected hash is the same content identity that the
         // next poll reads from each source database type.
         this.broadcaster.broadcast(this.chain, this.network, payload, this.infraTables);
-        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : payload.ledger_hash;
+        this.lastPolledBlockHash = (this.dbType === 'decoder') ? payload.block_hash : TransparencyLog.blockIdentity(payload);
         this.recentBroadcastHashes.set(nextBlock, this.lastPolledBlockHash);
         // The bounded map retains enough pre-reorg identities for the configured source
         // ceiling plus its safety margin. Eviction removes only the single height that
@@ -486,12 +495,13 @@ class ServerPoller {
         return forkBlock;
     }
 
-    // Source content hash at a block, for net-forward reorg detection. Indexer uses
-    // the ledger_hash (primary content hash); decoder uses the blockchain block_hash.
+    // Source content identity at a block, for net-forward reorg detection. Indexer uses
+    // TransparencyLog.blockIdentity (all three chained hashes); decoder uses the
+    // blockchain block_hash.
     async sourceBlockHash(blockIndex, conn, opts){
         let row = await this.db.getBlockHashRow(blockIndex, conn, opts);
         if(!row) return null;
-        return (this.dbType === 'decoder') ? row.block_hash : row.ledger_hash;
+        return (this.dbType === 'decoder') ? row.block_hash : TransparencyLog.blockIdentity(row);
     }
 
     async readReorgWindow(floor, cursor){
@@ -505,7 +515,7 @@ class ServerPoller {
                 const rows = await rangeDb.findSyncMetaLeaves(floor, cursor, conn);
                 return rows.map(row => ({
                     block_index: row.block_index,
-                    hash: row.ledger_hash
+                    hash: TransparencyLog.blockIdentity(row)
                 }));
             };
         } else {
@@ -559,7 +569,7 @@ class ServerPoller {
     }
 
     // Seed the net-forward reorg guard (lastPolledBlockHash) for a (re)start. This
-    // MUST come from the DURABLE recorded hash (sync_meta.ledger_hash via the
+    // MUST come from the DURABLE recorded identity (sync_meta's three hashes via the
     // transparency log), NOT a fresh source read. A reorg that completed entirely
     // during downtime leaves the LIVE source content at lastPolledBlock in its
     // post-reorg form; seeding from that would match the first poll's re-read and
@@ -1158,7 +1168,7 @@ class ServerPoller {
 
     async addBlockScopedIndexRows(payload, block_index, conn){
         if(this.dbType !== 'decoder'){
-            for(const table of ['index_addresses', 'index_tickers']){
+            for(const table of BLOCK_SCOPED_INDEX_TABLES){
                 try {
                     const rows = await this.db.getBlockScopedRows(table, block_index, conn);
                     if(!rows || rows.length === 0) continue;

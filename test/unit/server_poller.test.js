@@ -269,10 +269,11 @@ describe('ServerPoller', function(){
             // are recorded. A net-forward reorg rewrote BOTH 99 and 100 within one
             // interval; 98 is the unchanged true fork point.
             poller.lastPolledBlock = 100;
-            poller.lastPolledBlockHash = 'h100-old';
-            poller.recentBroadcastHashes.set(98, 'h98-old');
-            poller.recentBroadcastHashes.set(99, 'h99-old');
-            poller.recentBroadcastHashes.set(100, 'h100-old');
+            // Recorded identities are ledger|actions|contract (TransparencyLog.blockIdentity).
+            poller.lastPolledBlockHash = 'h100-old|a|c';
+            poller.recentBroadcastHashes.set(98, 'h98-old|a|c');
+            poller.recentBroadcastHashes.set(99, 'h99-old|a|c');
+            poller.recentBroadcastHashes.set(100, 'h100-old|a|c');
             db.getLastBlock.resolves(101); // net-forward: height stays >= lastPolledBlock
 
             // Source serves the POST-reorg hashes at the rewritten heights; 98 unchanged.
@@ -299,12 +300,12 @@ describe('ServerPoller', function(){
             assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].type, 'reorg');
             assert.strictEqual(broadcaster.broadcast.getCall(0).args[2].block_index, 99);
             assert.strictEqual(poller.lastPolledBlock, 98);
-            assert.strictEqual(poller.lastPolledBlockHash, 'h98-old');
+            assert.strictEqual(poller.lastPolledBlockHash, 'h98-old|a|c');
         });
 
         it('does not flag a net-forward reorg when the same-height hash is unchanged', async function(){
             poller.lastPolledBlock = 100;
-            poller.lastPolledBlockHash = 'lh';
+            poller.lastPolledBlockHash = 'lh|a|c';
             db.getLastBlock.resolves(100);
             db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 100,

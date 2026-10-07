@@ -16,6 +16,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const { collectUpdatedRows } = require('../../src/server/updated_rows');
 const ClientApplier = require('../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 const ClientRollback = require('../../src/client/rollback');
 const Utility = require('../../src/util');
 const { withDbMixins } = require('../helpers/db_mixins.js');
@@ -246,6 +247,8 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(hq.sql.indexOf('ah.version = 5') !== -1);
         assert.ok(hq.sql.indexOf('ac.version = 6') !== -1);
         assert.ok(hq.sql.indexOf('ah.batch_chunk_index = 0') !== -1);
+        // Only a real chunk row completes a batch; the rollback reset requires the same predicate.
+        assert.ok(hq.sql.indexOf('ac.batch_chunk_index IS NOT NULL') !== -1);
         // Only a VALID continuation completes a batch, and both rows must share an author:
         // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
         assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
@@ -338,6 +341,7 @@ describe('ClientApplier in-place updated-rows apply', function(){
 
     it('applyBlock UPSERTs payload.updated_rows for surviving rows', async function(){
         let payload = {
+            schema_version: SCHEMA_VERSION.indexer,
             block_index: 9,
             data: { blocks: [{ block_index: 9 }] },
             updated_rows: { stakes: [{ action_index: 4, deactivation_block: 80 }] }

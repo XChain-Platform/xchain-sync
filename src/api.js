@@ -173,10 +173,13 @@ function createRateLimiters(cfg){
 // stops applying and lag_blocks computes 0 on an hours-behind node. Withhold the
 // number rather than publish a zero the replication engine contradicts: every
 // consumer keying off `lag_blocks === 0` would otherwise certify the node.
+// Fail closed: only an explicit boolean verdict is a measurement, so a missing
+// poller status (before the first poll) or one without the field reads stale.
 function applyReplicaFreshness(row, pollerStatus){
     row.replica_seconds_behind = (pollerStatus && pollerStatus.replica_seconds_behind !== undefined)
                                      ? pollerStatus.replica_seconds_behind : null;
-    row.replica_stale = !!(pollerStatus && pollerStatus.replica_stale);
+    let measured = !!pollerStatus && typeof pollerStatus.replica_stale === 'boolean';
+    row.replica_stale = measured ? pollerStatus.replica_stale : true;
     if(row.replica_stale) row.lag_blocks = null;
     return row;
 }

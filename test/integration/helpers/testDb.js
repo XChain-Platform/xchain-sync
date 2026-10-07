@@ -97,7 +97,7 @@ class TestDatabase {
     }
 
     // Mirror of src/db.js getStatusId(): resolves a status string to its
-    // index_statuses id (or null). ClientRollback.js calls this during the
+    // index_statuses id (or null). src/client/rollback.js calls this during the
     // cooldown-maturity re-derive; the integration TestDatabase needs it so the
     // S-5 client-rollback suite runs against a real DB instead of erroring on a
     // missing method. SQL is byte-identical to production.
@@ -312,7 +312,7 @@ async function createDatabase(dbName) {
 async function seedSchema(db) {
     // Prefer the sibling-schema path the CI e2e job exports (XCHAIN_INDEXER_SQL_PATH
     // points at the checked-out xchain-indexer/src/sql); fall back to the monorepo
-    // sibling layout for local runs. Mirrors the convention in rollback-coverage.test.js
+    // sibling layout for local runs. Mirrors the convention in rollback_coverage.test.js
     // so these DB-backed suites can run in CI without a sibling working copy.
     let sqlDir = process.env.XCHAIN_INDEXER_SQL_PATH
         || path.join(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'sql');

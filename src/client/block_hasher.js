@@ -30,7 +30,8 @@
  * xchain-sync/src/utility.js). The two MUST stay identical: same SELECT
  * column sets, same ORDER BY, same object key-insertion order, the same
  * array-with-props quirk for `actions`, and the same previous-block chaining.
- * ANY change to the indexer's hash inputs MUST be mirrored here and the
+ * ANY change to the indexer's hash inputs MUST be mirrored here, in BOTH the call-site
+ * template and its BLOCK_HASH_QUERIES entry (consensusSql throws on a mismatch), and the
  * test/fixtures/block-hash-vectors.json regenerated, but only once
  * test/unit/blockhash_conformance_twin.test.js passes: that golden is a sync
  * self-lock, so never regenerate it to clear a failure. The xchain-e2e-test
@@ -89,11 +90,18 @@ const BLOCK_HASH_QUERIES = [
 ];
 const BLOCK_HASH_QUERY_BY_SHAPE = new Map(BLOCK_HASH_QUERIES.map(query => [query.replace(/\s+/g, ' ').trim(), query]));
 
+// Fail CLOSED on a shape with no BLOCK_HASH_QUERIES entry: an undefined query reaches
+// doQuery's null guard and comes back as [], which would hash a truncated preimage.
 function consensusSql(strings, ...values){
-    if(typeof strings === 'string') return BLOCK_HASH_QUERY_BY_SHAPE.get(strings.replace(/\s+/g, ' ').trim());
-    let query = strings[0];
-    for(let i = 0; i < values.length; i++) query += values[i] + strings[i + 1];
-    return BLOCK_HASH_QUERY_BY_SHAPE.get(query.replace(/\s+/g, ' ').trim());
+    let query = strings;
+    if(typeof strings !== 'string'){
+        query = strings[0];
+        for(let i = 0; i < values.length; i++) query += values[i] + strings[i + 1];
+    }
+    let shape = query.replace(/\s+/g, ' ').trim();
+    let resolved = BLOCK_HASH_QUERY_BY_SHAPE.get(shape);
+    if(resolved === undefined) throw new Error('consensusSql: no BLOCK_HASH_QUERIES entry for query shape: ' + shape);
+    return resolved;
 }
 
 class BlockHasher {

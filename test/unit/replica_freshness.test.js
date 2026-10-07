@@ -79,7 +79,22 @@ describe('/status replication freshness', function(){
         // read as "not stale" AND still surface an explicit unknown seconds-behind.
         let row = applyReplicaFreshness(baseRow(), { block_height: 100 });
         assert.strictEqual(row.replica_seconds_behind, null);
-        assert.strictEqual(row.replica_stale, false, 'no signal is the pre-replica topology default');
+        assert.strictEqual(row.replica_stale, true, 'no verdict is unmeasured, never fresh');
+        assert.strictEqual(row.lag_blocks, null,
+            'a computed 0 beside an unmeasured verdict reads as caught up');
+    });
+
+    it('fails closed before the poller has written any status', function(){
+        let row = applyReplicaFreshness({ block_height: null, source_height: 100, lag_blocks: null }, null);
+        assert.strictEqual(row.replica_stale, true);
+        assert.strictEqual(row.replica_seconds_behind, null);
+        assert.strictEqual(row.lag_blocks, null);
+    });
+
+    it('still certifies a primary whose poller reports an explicit false', function(){
+        let row = applyReplicaFreshness(baseRow(), { replica_stale: false, replica_seconds_behind: null });
+        assert.strictEqual(row.replica_stale, false);
+        assert.strictEqual(row.lag_blocks, 0);
     });
 
     it('SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s', function(){
@@ -233,6 +248,24 @@ describe('/status server row carries a protocol-client halt', function(){
             let row = await buildStatusRow(service, db, 'decoder', 'litecoin', 'testnet');
             assert.strictEqual(row.replica_halted, true);
             assert.strictEqual(row.replica_stale, true);
+            assert.strictEqual(row.lag_blocks, null);
+    });
+
+    it('reads stale, never fresh, before the poller has measured anything', async function(){
+            let prior = process.env.SYNC_MODE;
+            process.env.SYNC_MODE = 'server';
+            let { buildStatusRow } = proxyquire('../../src/api', {});
+            if(prior === undefined) delete process.env.SYNC_MODE; else process.env.SYNC_MODE = prior;
+            let db = mockDb();
+            db.getActiveHalt = sinon.stub().resolves(null);
+            let service = {
+                getBroadcaster: () => ({ getStatus: () => null, getSubscribers: () => [] }),
+                getSnapshotBuilder: () => null
+            };
+
+            let row = await buildStatusRow(service, db, 'indexer', 'bitcoin', 'mainnet');
+            assert.strictEqual(row.replica_stale, true);
+            assert.strictEqual(row.replica_seconds_behind, null);
             assert.strictEqual(row.lag_blocks, null);
     });
 });

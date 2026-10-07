@@ -56,10 +56,13 @@ const manifestKeys = ENTRIES.map(([key]) => key);
 
 describe('armed map v2: manifest completeness over src/', function () {
 
-    it('the shim scan finds all twelve gate files and all 39 rows', function () {
+    it('the shim scan finds all fourteen shim and carrier files and all 39 rows', function () {
         // 10 shims (6 gates, 3 carriers, consensus-constants) plus the three W5
         // callers that read a retired predicate-only shim's row by literal key.
-        assert.strictEqual(shims.size, 13, 'the shim scan found ' + shims.size + ' files');
+        // The state hash carrier is a facade over src/consensus/state_hash/, whose
+        // activation and mutation collectors each read their rows from the registry,
+        // so the scan counts those two files rather than the facade alone.
+        assert.strictEqual(shims.size, 14, 'the shim scan found ' + shims.size + ' files');
         assert.strictEqual(shimKeys.size, 39, 'the shim scan found ' + shimKeys.size + ' keys');
     });
 
