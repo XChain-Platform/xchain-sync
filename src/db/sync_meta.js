@@ -153,10 +153,10 @@ module.exports = {
         return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
     },
 
-    // The ledger hash recorded for one height, at most one row.
-    async getRecordedLedgerHash(height){
+    // The three hashes recorded for one height, at most one row.
+    async getRecordedBlockHashes(height){
         return await this.doQuery(
-            "SELECT ledger_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
+            "SELECT ledger_hash, actions_hash, contract_hash FROM sync_meta WHERE block_index=? LIMIT 1", [height]
         );
     },
 

@@ -871,11 +871,19 @@ class Database {
     }
 
     // These block indexes keep rollback and parity queries from scanning whole tables.
+    // Names and columns match the indexer's declarations, so an index a bootstrap already
+    // shipped is found by name and skipped.
     async ensureReplicaBlockIndexes(){
         let ensureIndexes = [
             { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)' },
             { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)' },
-            { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)' }
+            { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)' },
+            // Per-block state-hash request_status and poll_finalize reads, the resolved-row
+            // and finalized-poll sync reads, and the reorg resets all select on these columns.
+            { table: 'attests',          indexName: 'version_resolved',   columns: '(version, resolved_block)' },
+            { table: 'xcalls',           indexName: 'version_resolved',   columns: '(version, resolved_block)' },
+            { table: 'polls',            indexName: 'resolved_block',     columns: '(resolved_block)' },
+            { table: 'polls',            indexName: 'callback_due_block', columns: '(callback_due_block)' }
         ];
         for(let { table, indexName, columns } of ensureIndexes){
             let tableRows = await this.doQuery(

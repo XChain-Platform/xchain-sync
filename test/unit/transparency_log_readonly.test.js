@@ -94,8 +94,8 @@ describe('TransparencyLog (read-only replica)', function(){
         });
 
         it('getRecordedHash still queries', async function(){
-            db.doQuery.resolves([{ ledger_hash: 'abc' }]);
-            assert.strictEqual(await log.getRecordedHash(961197), 'abc');
+            db.doQuery.resolves([{ ledger_hash: 'abc', actions_hash: 'def', contract_hash: 'ghi' }]);
+            assert.strictEqual(await log.getRecordedHash(961197), 'abc|def|ghi');
             assert.strictEqual(db.doQuery.calledOnce, true);
         });
 

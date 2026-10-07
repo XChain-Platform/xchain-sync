@@ -23,7 +23,7 @@
  *   xchain-indexer/src/rollback/commit.js:60   updateTokens(tickers, true)
  *   xchain-indexer/src/db/database/ledger_checks.js:132  updateTokenInfo
  *   xchain-indexer/src/db/issues/token_info.js:29        getTokenInfo, whose replay is
- *       rowsQuery (:84), rowValues (:131) and foldRow (:169)
+ *       issueReplay.rowsQuery, issueReplay.rowValues and issueReplay.foldRow
  *   xchain-indexer/src/db/tokens/token_writer.js:26      createToken, via
  *       normalizeDataValues (src/db/database/normalize.js:136), fields (:57) and
  *       updateSql (:113)

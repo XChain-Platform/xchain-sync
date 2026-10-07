@@ -200,7 +200,9 @@ describe('ServerPoller indexer durable range @regression', function(){
         assert.strictEqual(logDb.beginReadSnapshot.callCount, 1);
         assert.strictEqual(logDb.commitReadSnapshot.callCount, 1);
         assert.strictEqual(logDb.rollbackReadSnapshot.callCount, 0);
-        assert.strictEqual(poller.lastPolledBlockHash, 'old-100');
+        // The indexer identity is ledger|actions|contract; NULL sync_meta columns and absent
+        // source fields both render empty, so the recorded and live forms compare equal.
+        assert.strictEqual(poller.lastPolledBlockHash, 'old-100||');
 
         await poller.poll();
 
