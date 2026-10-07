@@ -43,7 +43,7 @@
     "train_activation.TRAIN_ACTIVATION": "1f7b8f196149e0bf068bfc430c6355a65788333e1eb2952c52462f0aa3526a6e"
   },
   "armed_map_rows": 39,
-  "carrier_logic_digest": "0713bf5e35c68e214fee0db8a1b9237d5951d087ddc3b23ce0655eaf100a61bd",
+  "carrier_logic_digest": "3f7e2bc01488d6089242f944f8e20275e0e891ab55822d0a20b3c6538e09cdbf",
   "vendoredCoins": {
     "src/coins/BTC.js": "92f1e7d143f844886700f40deb53cb02bb7c6c270ab4bb837488f5d8535629b6",
     "src/coins/DOGE.js": "3b1aac3d95ca96fd6a7f53c4af169e4e845effb77d00058473bda4d4786e397b",

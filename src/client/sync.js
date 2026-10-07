@@ -56,6 +56,7 @@ const envConfig = require('../config');
 // mechanism. Declared once in replicated_tables.js, which the content-parity plan
 // also reads, so the count and content checks cannot disagree about a table.
 const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
+const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
 // Lock-wait timeouts on schema apply retry with exponential backoff before the
 // table counts as a persistent failure.
 const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
@@ -669,7 +670,8 @@ class ClientSync {
     // Stable comparison key for a source's committed hash tuple.
     hashTupleKey(h){
         if(!h) return 'null';
-        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash);
+        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash) +
+            '|' + String(h.state_hash == null ? null : h.state_hash);
     }
 
     // Sources still eligible to vote (configured minus evicted).
@@ -1460,8 +1462,11 @@ class ClientSync {
     }
 
     async reconcileBootstrapDecoder(source){
-        await this.reconcileDispensers(source);
-        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock);
+        // A truncated bootstrap never seeds dispensers, so after a FAILED reconcile the
+        // table is still empty: leave it out of the count check rather than blame the snapshot.
+        let reconciled = await this.reconcileDispensers(source) === true;
+        await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
+            reconciled ? undefined : new Set(['dispensers']));
     }
 
     logBootstrapFromHeightComplete(){
@@ -1507,9 +1512,10 @@ class ClientSync {
         return Math.min(100000, n);
     }
 
-    fetchLookupPage(source, table, afterId, pageSize){
+    fetchLookupPage(source, table, afterId, pageSize, maxBlock){
         let url = source + '/snapshot-rows/' + this.dbType + '/' + this.chain + '/' +
             this.network + '/' + table + '?after_id=' + afterId + '&limit=' + pageSize;
+        if(maxBlock != null) url += '&max_block=' + maxBlock;
         return axios.get(url, {
             headers: this.upstreamHeaders(),
             responseType: 'arraybuffer',
@@ -1557,7 +1563,9 @@ class ClientSync {
     }
 
     // Pages append-only lookup tables from their current high-water cursors.
-    // A from-zero pass fills holes below a table's high-water mark.
+    // A from-zero pass fills holes below a table's high-water mark. Tables that
+    // reissue ids on a reorg are paged only up to the replica's applied tip, so the
+    // replica never holds a row its own reorg rollback would not delete and reissue.
     async syncLookupTablesPaged(source, opts){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this.lookupPageSize();
@@ -1567,6 +1575,8 @@ class ClientSync {
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
             let repairing = !!(fromZero && fromZero.has(table));
+            let tip = this.lastAppliedBlock;
+            let maxBlock = (REISSUING_LOOKUPS.has(table) && Number.isInteger(tip) && tip >= 0) ? tip : null;
             if(repairing){
                 getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
                     'below the high-water mark (a cursor-seeded page cannot reach it).');
@@ -1580,7 +1590,7 @@ class ClientSync {
             }
             let pages = 0;
             while(true){
-                let response = await this.fetchLookupPage(source, table, afterId, pageSize);
+                let response = await this.fetchLookupPage(source, table, afterId, pageSize, maxBlock);
                 let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
@@ -1849,14 +1859,15 @@ class ClientSync {
         // Reconcile dispensers on the configured cadence because this table cannot
         // converge through the block stream or append-only lookup paging. Its bounded
         // purge depth keeps the periodic atomic replacement affordable.
-        let didReconcile = this.shouldReconcileDispensers(Date.now());
-        if(didReconcile) await this.reconcileDispensers(source);
+        let reconciled = this.shouldReconcileDispensers(Date.now()) &&
+            await this.reconcileDispensers(source) === true;
 
-        // Check dispensers only after reconciliation to avoid interim drift reports.
+        // Check dispensers only after a SUCCESSFUL reconciliation to avoid interim drift
+        // reports: a failed one leaves the drifted table in place and is logged on its own.
         // Other decoder tables converge through streamed blocks or full dumps and
         // remain part of every completeness check.
         await this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
-            didReconcile ? null : new Set(['dispensers']));
+            reconciled ? null : new Set(['dispensers']));
     }
 
     async handleIncrementalCatchUpFailure(source, sinceBlock, error){
@@ -1886,6 +1897,15 @@ class ClientSync {
             getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                 '; falling back to full bootstrap.');
             await this.bootstrapFromSnapshot();
+            return;
+        }
+
+        // A 404 means the source holds no rows at or past this height yet (the resume
+        // tip is already current). That is expected and self-clearing, so it logs one
+        // warn line instead of an error and skips duplicate-key and schema recovery.
+        if(error && error.response && error.response.status === 404){
+            getLogger().warn('Incremental catch-up from block ' + sinceBlock +
+                ' found nothing newer on ' + source + ' (404); replica is current or source is behind.');
             return;
         }
 
@@ -2663,9 +2683,10 @@ class ClientSync {
     // checked against SCHEMA_VERSION like the lookup-page and snapshot channels, so a
     // code-version mismatch aborts before the replace (the status-tick caller has no
     // earlier version-checked apply in front of it).
+    // Returns true only once the replace has committed, false on every skip or failure.
     async reconcileDispensers(source){
-        if(this.dbType !== 'decoder') return;
-        if(!source) return;
+        if(this.dbType !== 'decoder') return false;
+        if(!source) return false;
         // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
         this._lastDispenserReconcileAttemptAt = Date.now();
         let expected = SCHEMA_VERSION[this.dbType];
@@ -2703,10 +2724,12 @@ class ClientSync {
             this._lastDispenserReconcileAt = Date.now();
             getLogger().info('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
+            return true;
         } catch(e){
             // Best-effort: leave the existing local dispensers intact on any failure.
             getLogger().error(util.format('Dispensers reconcile failed against ' + source +
                 ' (local table left intact):', (e && e.message) ? e.message : e));
+            return false;
         }
     }
 
@@ -3023,7 +3046,8 @@ class ClientSync {
         this.pendingHashes.get(blockIndex)[sourceIndex] = {
             ledger_hash: event.ledger_hash,
             actions_hash: event.actions_hash,
-            contract_hash: event.contract_hash
+            contract_hash: event.contract_hash,
+            state_hash: event.state_hash
         };
         return this.pendingHashes.get(blockIndex);
     }

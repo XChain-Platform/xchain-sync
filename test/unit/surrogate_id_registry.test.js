@@ -16,7 +16,7 @@ const ClientApplier = require('../../src/client/applier');
 const Utility       = require('../../src/util');
 
 // The indexer schema, resolved the way the other cross-repo guards here do
-// (see generatedColumns.test.js). Absent by default in a standalone checkout;
+// (see generated_columns.test.js). Absent by default in a standalone checkout;
 // XCHAIN_REQUIRE_SIBLINGS=1 turns green-by-skip into a failure, and
 // xchain-indexer is declared in .ci-siblings so the push gate ships it.
 const INDEXER_SQL = process.env.XCHAIN_INDEXER_SQL_PATH
