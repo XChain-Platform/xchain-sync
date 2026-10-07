@@ -88,6 +88,32 @@ function ddlTables(sqlText){
     return tables;
 }
 
+function isNonUniqueSecondaryIndex(statement, tables){
+    if(tables.length !== 1) return false;
+    const table = tables[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const createIndex = new RegExp('^\\s*CREATE\\s+INDEX(?:\\s+IF\\s+NOT\\s+EXISTS)?'
+        + '\\s+`?\\w+`?\\s+ON\\s+`?' + table + '`?\\s+\\([^;]+\\)\\s*$', 'i');
+    const alterTable = new RegExp('^\\s*ALTER\\s+TABLE\\s+`?' + table + '`?\\s+'
+        + 'ADD\\s+(?:INDEX|KEY)(?:\\s+IF\\s+NOT\\s+EXISTS)?'
+        + '\\s+`?\\w+`?\\s*\\([^;]+\\)\\s*$', 'i');
+    return createIndex.test(statement) || alterTable.test(statement);
+}
+
+function unsafeIndexOnlyTables(sqlText, wire){
+    const body = sqlText
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/^\s*--.*$/gm, ' ')
+        .replace(/--[^\n]*/g, ' ');
+    const unsafe = new Set();
+    for(const statement of body.split(';').map(s => s.trim()).filter(Boolean)){
+        const tables = [...ddlTables(statement)].filter(t => wire.has(t)).sort();
+        if(tables.length && !isNonUniqueSecondaryIndex(statement, tables)){
+            for(const table of tables) unsafe.add(table);
+        }
+    }
+    return [...unsafe].sort();
+}
+
 // Every migration past the frontier that changes the shape of a wire-replicated
 // table. `accounted` covers the same-day tail, because the frontier cursor is a date
 // and dates are not unique. A filename with no parseable date is reported too: the
@@ -97,9 +123,13 @@ function unaccountedReplicatedDdl(dir, frontier, wire){
     for(const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()){
         const date = (file.match(/^(\d{4}-\d{2}-\d{2})-/) || [])[1];
         if(date && date < frontier.through) continue;
-        if(date && date === frontier.through && frontier.accounted.includes(file)) continue;
-        const hits = [...ddlTables(fs.readFileSync(path.join(dir, file), 'utf8'))]
-            .filter(t => wire.has(t)).sort();
+        const sqlText = fs.readFileSync(path.join(dir, file), 'utf8');
+        const isAccounted = date && date === frontier.through && frontier.accounted.includes(file);
+        const isIndexOnly = isAccounted && (frontier.indexOnly || []).includes(file);
+        if(isAccounted && !isIndexOnly) continue;
+        const hits = isIndexOnly
+            ? unsafeIndexOnlyTables(sqlText, wire)
+            : [...ddlTables(sqlText)].filter(t => wire.has(t)).sort();
         if(hits.length) findings.push({ file, tables: hits, undated: !date });
     }
     return findings;
@@ -200,11 +230,37 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
         it('does not flag an index-only migration explicitly recorded at an advanced frontier', function(){
             const indexOnlyFrontier = {
                 through: '2026-09-12',
-                accounted: ['2026-09-12-sends-covering-index.sql']
+                accounted: ['2026-09-12-sends-covering-index.sql'],
+                indexOnly: ['2026-09-12-sends-covering-index.sql']
             };
             write('2026-09-12-sends-covering-index.sql',
-                'CREATE INDEX sends_covering ON sends (action_index, block_index);\n');
+                'ALTER TABLE sends ADD INDEX IF NOT EXISTS sends_covering (action_index, block_index);\n');
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire), []);
+        });
+
+        it('flags payload-affecting DDL substituted into an index-only migration', function(){
+            const indexOnlyFrontier = {
+                through: '2026-09-12',
+                accounted: ['2026-09-12-sends-covering-index.sql'],
+                indexOnly: ['2026-09-12-sends-covering-index.sql']
+            };
+            write('2026-09-12-sends-covering-index.sql',
+                'ALTER TABLE sends ADD COLUMN payload_shape_changed INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire), [{
+                file: '2026-09-12-sends-covering-index.sql', tables: ['sends'], undated: false
+            }]);
+        });
+
+        it('flags a unique index substituted into an index-only migration', function(){
+            const indexOnlyFrontier = {
+                through: '2026-09-12',
+                accounted: ['2026-09-12-sends-covering-index.sql'],
+                indexOnly: ['2026-09-12-sends-covering-index.sql']
+            };
+            write('2026-09-12-sends-covering-index.sql',
+                'CREATE UNIQUE INDEX sends_covering ON sends (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, indexOnlyFrontier, wire).map(f => f.tables),
+                [['sends']]);
         });
 
         it('flags a same-day migration the accounted tail does not name', function(){

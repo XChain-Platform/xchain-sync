@@ -215,11 +215,14 @@
  * is the newest migration DATE whose replicated DDL is folded into the version
  * above, and `accounted` names the migration files bearing exactly that date
  * (dates are not unique, so the tail has to be enumerated or a same-day
- * migration would hide behind the cursor). test/unit/schema_version_gate.test.js
- * reads both, walks the sibling migration ledgers, and fails when a migration
- * past the frontier carries DDL against a wire-replicated table of that dbType
- * while the frontier stands still. Pure-DML backfills do not change what a
- * follower can store and are not flagged. Per the operator ruling of 2026-09-09,
+ * migration would hide behind the cursor). `indexOnly` identifies the accounted
+ * files that did not receive a version bump, so the gate also verifies their
+ * replicated DDL remains non-unique secondary-index-only.
+ * test/unit/schema_version_gate.test.js reads both, walks the sibling migration
+ * ledgers, and fails when a migration past the frontier carries DDL against a
+ * wire-replicated table of that dbType while the frontier stands still. Pure-DML
+ * backfills do not change what a follower can store and are not flagged. Per the
+ * operator ruling of 2026-09-09,
  * payload-affecting DDL requires a bump carried by the next fleet release because
  * the version decides what peers ACCEPT. A reviewed non-unique secondary-index-only
  * migration can advance the frontier without a bump when an accounting comment names
@@ -234,6 +237,9 @@ const MIGRATION_FRONTIER = {
         through: '2026-10-07',
         accounted: [
             // Index-only; no replicated column or payload shape changed.
+            '2026-10-07-ledger-covering-index.sql'
+        ],
+        indexOnly: [
             '2026-10-07-ledger-covering-index.sql'
         ]
     },
