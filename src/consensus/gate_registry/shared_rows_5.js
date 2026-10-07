@@ -38,7 +38,7 @@ const { addGate, UNARMED, UNPINNED } = require('./shared_rows.js');
 
 // SHARED-GATES BEGIN
 // token_policy_activation
-// TOKEN_POLICY_INHERITANCE_ACTIVATION: the height (per network) on the chain being
+// TOKEN_POLICY_INHERITANCE_ACTIVATION: the height (keyed <COIN>:<network>, bare network as fallback) on the chain being
 // parsed at/above which policy inheritance is in effect. Keyed on the chain's OWN
 // block_index, never on a snapshot's snapshot_block or origin_block, because what it
 // gates is the verdict of an action mined here.
@@ -61,7 +61,7 @@ const { addGate, UNARMED, UNPINNED } = require('./shared_rows.js');
 //
 // TWO ORDERING INVARIANTS, asserted by test/unit/activationConstantsParity.test.js
 // over the canonical constants.js rather than over this copy:
-//   - >= TOKEN_BRIDGE_ACTIVATION per network. Inheritance has nothing to inherit onto
+//   - >= TOKEN_BRIDGE_ACTIVATION per coin and network. Inheritance has nothing to inherit onto
 //     before bridged copies can exist.
 //   - >= LIST_EDIT_RESOLUTION_ACTIVATION per chain and network. The snapshot read
 //     resolves a list AS OF origin_block through getListAtBlock, which walks the edit
