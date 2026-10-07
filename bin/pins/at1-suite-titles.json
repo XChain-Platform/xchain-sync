@@ -2908,7 +2908,7 @@
       "replicatedTables getReplicatedTables (decoder) excludes mempool_transactions (non-deterministic across nodes)",
       "replicatedTables getReplicatedTables (decoder) has no action-scoped tables",
       "replicatedTables getReplicatedTables (decoder) includes dispensers in the completeness count set but NOT per-block-streamed",
-      "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 9 decoder tables)",
+      "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 10 decoder tables)",
       "replicatedTables getReplicatedTables (indexer) covers the core block/action tables a follower must hold",
       "replicatedTables getReplicatedTables (indexer) excludes snapshot-only / operator-local / non-deterministic tables",
       "replicatedTables getReplicatedTables (indexer) includes the transparency log (sync_meta) in the completeness check",

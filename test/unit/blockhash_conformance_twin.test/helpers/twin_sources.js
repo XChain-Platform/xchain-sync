@@ -22,20 +22,24 @@
 const assert  = require('assert');
 const fs      = require('fs');
 const path    = require('path');
+const { siblingCheckout } = require('../../../helpers/sibling_checkout.js');
 
 // Sibling resolution + hard-fail policy: same conventions as
 // rollback_coverage.test.js (see the comments there). Skip when the sibling
 // checkout is absent, throw where XCHAIN_REQUIRE_SIBLINGS=1 makes
 // green-by-skip impossible (bin/ci-all.sh and the sibling-checkout CI job).
+// Presence is the shared sibling verdict (test/helpers/sibling_checkout.js), so a lane
+// worktree's symlink into a live main checkout is refused exactly like an absent sibling.
 const SYNC_ROOT    = path.join(__dirname, '../../../..');
 const INDEXER_ROOT = process.env.XCHAIN_INDEXER_SQL_PATH
     ? path.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
     : path.join(__dirname, '../../../../../xchain-indexer');
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 function requireSibling(ctx, absPath){
-    if(fs.existsSync(absPath)) return true;
+    const verdict = siblingCheckout(__dirname, absPath);
+    if(verdict.usable) return true;
     if(SIBLING_REQUIRED)
-        throw new Error('consensus drift guard cannot run: sibling missing at ' + absPath +
+        throw new Error('consensus drift guard cannot run: ' + verdict.reason +
             ' (check out xchain-indexer or set XCHAIN_INDEXER_SQL_PATH)');
     ctx.skip();
     return false;

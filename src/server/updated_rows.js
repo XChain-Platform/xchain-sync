@@ -79,6 +79,11 @@
  *     on action_index, so it misses the edit. Found via the
  *     ticks carrying a valid `issues` row in this window, since `issues` is
  *     action-scoped and pins the edit to a block.
+ *   - status_id promotion on a surviving COINPay order_matches row ('pending_coinpay'
+ *     -> 'valid') by the later COINPAY that settles it. Found via the 'fulfilled'
+ *     coinpay_statuses row that COINPAY writes, which is action-scoped. Carried, not
+ *     re-derived on the replica: matches settled before the source's forward-only
+ *     promotion fix stay 'pending_coinpay' there, and a local promote would differ.
  *
  * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
  * source's own authoritative gate value lands on the replica. The follower ALSO
@@ -299,6 +304,21 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     }
 }
 
+async function collectCoinpayMatchRows(db, from, to, conn, acc){
+    // 8. COINPay match promotion. A native-coin match is written 'pending_coinpay' and
+    //    the COINPAY that pays it, usually in a later block, promotes the match row to
+    //    'valid' in place, so the action-scoped stream never re-sends it. Keyed on the
+    //    'fulfilled' coinpay_statuses row that COINPAY writes under its own action, and
+    //    carries the source's current row rather than re-deriving it on the replica.
+    try {
+        let matchRows = await db.findCoinpaySettledMatches(from, to, conn);
+        add(acc, 'order_matches', matchRows);
+    } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        // Tables may not exist on older source schemas (pre-COINPay builds); skip.
+    }
+}
+
 // Collect the in-place-mutated surviving rows for the block window [fromBlock, toBlock].
 // Returns a { tableName: [rows] } map (only non-empty tables). Rows are raw DB rows;
 // the caller is responsible for wire-encoding binary columns (encodeRow / encodeTables).
@@ -323,6 +343,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     await collectAttestBatchHeadRows(db, from, to, conn, acc);
     await collectTokenSupplyRows(db, from, to, conn, acc);
     await collectTokenEditRows(db, from, to, conn, acc);
+    await collectCoinpayMatchRows(db, from, to, conn, acc);
     let out = {};
     for(let table in acc){
         let arr = Array.from(acc[table].values());

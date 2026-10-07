@@ -120,7 +120,8 @@ class BlockHasher {
     // Recompute { ledger_hash, actions_hash, contract_hash } for a block from the
     // replicated raw rows. Mirrors xchain-indexer/src/db/actions.js getBlockHashes().
     // `network`/`coin` drive the state_key collation flag-day
-    // (state_key_collation_activation.js, byte-identical twin of the indexer's);
+    // (the state_key_collation_activation row in consensus/gate_registry/shared_rows_4.js,
+    // byte-identical twin of the indexer's src/protocol_changes/shared_rows_4.js);
     // omitted -> legacy folding collation, matching pre-activation blocks. Live
     // recompute callers MUST pass them or the replica gates differently than the
     // source at/after an armed height and false-halts on divergence.
@@ -242,10 +243,13 @@ class BlockHasher {
     // Cost note: this scans the deterministic subset up to uptoBlock; on a large
     // index_addresses table an index on block_index is advisable before enabling this
     // on a high-volume chain. Gated off by default (INDEX_MAP_PARITY_CHECK).
+    //
+    // Fail the read closed: a query error reaches the caller (source publishes null,
+    // follower skips) instead of hashing an empty map that reads as a false mismatch.
     async computeIndexMapChecksum(uptoBlock){
         let rows = await this.db.doQuery(
             "SELECT id, address FROM index_addresses WHERE block_index IS NOT NULL AND block_index <= ? ORDER BY id ASC",
-            [uptoBlock]
+            [uptoBlock], null, { rethrow: true }
         );
         let mapped = rows.map(r => ({ id: String(r.id), address: String(r.address) }));
         return this.util.getDataHash({ index_map: mapped });

@@ -13,15 +13,12 @@
  **********************************************************************
  *
  * XChain Sync - Snapshot Stream Writer
- * Backpressure and client-abort handling for gzip snapshot streams, plus the
- * BigInt-safe JSON replacer every snapshot row write shares.
+ * Backpressure and client-abort handling for gzip snapshot streams. The
+ * BigInt-safe JSON replacer every row write shares lives in src/util/wire_codec.js.
  *
  ********************************************************************/
 
 const { once } = require('events');
-
-// JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
-const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
 // Guards a gzip snapshot stream against a slow or vanished reader. The snapshot
 // routes are unauthenticated behind only a per-IP/hr limiter, so a half-open
@@ -98,4 +95,4 @@ class SnapshotStreamWriter {
     }
 }
 
-module.exports = { SnapshotStreamWriter, bigIntReplacer };
+module.exports = { SnapshotStreamWriter };

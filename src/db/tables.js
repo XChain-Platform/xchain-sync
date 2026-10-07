@@ -265,6 +265,25 @@ const windowReads = {
     },
 
     /**
+     * COINPay matches whose settling COINPAY landed in this window: the match row
+     * named by a 'fulfilled' coinpay_statuses row whose own action is in the window.
+     *
+     * @param {number} from   first block of the window, inclusive
+     * @param {number} to     last block of the window, inclusive
+     * @param {object} [conn] a connection to read on, when the caller holds one
+     * @returns {Promise<object[]>} the driver's row array
+     */
+    async findCoinpaySettledMatches(from, to, conn){
+        return await this.doQuery(
+            "SELECT m.* FROM `order_matches` m WHERE m.settlement_type = 'coinpay' AND m.action_index IN (" +
+                "SELECT cs.coinpay_action_index FROM coinpay_statuses cs " +
+                "JOIN actions a ON a.action_index = cs.action_index " +
+                "JOIN index_statuses si ON si.id = cs.status_id " +
+                "WHERE si.status = 'fulfilled' AND a.block_index BETWEEN ? AND ?)",
+            [from, to], conn);
+    },
+
+    /**
      * Archive-head anchor parents stamped invalid_archive by a completing chunk
      * that landed in this window. The height key is the shared chunk-height column
      * from stateHash.js, which a v2 continuation row actually populates.

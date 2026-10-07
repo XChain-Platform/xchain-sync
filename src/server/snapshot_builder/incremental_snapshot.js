@@ -21,12 +21,12 @@
 const zlib = require('zlib');
 const util = require('node:util');
 const { SCHEMA_VERSION } = require('../../schema/version');
-const { encodeRow, encodeTables } = require('../../util/wire_codec');
+const { encodeRow, encodeTables, bigIntReplacer } = require('../../util/wire_codec');
 const replicatedTables = require('../../schema/replicated_tables');
 const { collectUpdatedRows } = require('../updated_rows');
 const { activationDelayBlocks } = require('../../consensus-constants');
 const { getLogger } = require('../../observability');
-const { SnapshotStreamWriter, bigIntReplacer } = require('./stream_writer');
+const { SnapshotStreamWriter } = require('./stream_writer');
 const { decoderIncrementalSets, indexerBlockScopedSet, indexerFullDumpSet, INDEXER_INBAND_PAGED } = require('./table_sets');
 const logger = getLogger();
 

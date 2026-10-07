@@ -20,9 +20,9 @@
 
 const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('../../schema/version');
-const { encodeRow } = require('../../util/wire_codec');
+const { encodeRow, bigIntReplacer } = require('../../util/wire_codec');
 const { getLogger } = require('../../observability');
-const { SnapshotStreamWriter, bigIntReplacer } = require('./stream_writer');
+const { SnapshotStreamWriter } = require('./stream_writer');
 const logger = getLogger();
 
 module.exports = {

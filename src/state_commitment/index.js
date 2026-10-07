@@ -518,8 +518,9 @@ async function getNetBalance(db, address, tick){
 // someone remembered, with merkle.js's own twin-identity check still green.
 
 // `network`/`coin` drive the state_key collation flag-day
-// (state_key_collation_activation.js) inside getBlockLeafRows, mirroring
-// BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
+// (the state_key_collation_activation gate-registry row) inside
+// getBlockLeafRows, mirroring BlockHasher; omitted -> legacy folding collation
+// (pre-activation behavior).
 async function computeBlockMerkleRoot(db, blockIndex, network, coin){
     const rows = await db.getBlockLeafRows(blockIndex, undefined, network, coin);
     return M.toHex(M.blockMerkleRoot(M.blockMerkleLeaves(rows)));

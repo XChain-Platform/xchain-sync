@@ -866,21 +866,21 @@ class ServerPoller {
         return this.actionScopedProbe(payload, block_index, conn, metric);
     }
 
-    // Cooldown-maturity refund credits mint AT this block but carry the
-    // unstake's earlier-block action_index (and no block_index), so the
-    // action-scoped join above misses them, leaving followers permanently
-
+    // Cooldown-maturity refund credits of the LEGACY attribution era (before
+    // the indexer's UNSTAKE_COOLDOWN_COMPLETION_ACTION) mint AT this block but
+    // carry the unstake's earlier-block action_index (and no block_index), so
+    // the action-scoped join above misses them, leaving followers permanently
     // short by every matured refund. Select them by maturity block
     // (cooldown_end_block = this block), the forward mirror of
     // ClientRollback's reverse delete, and merge into the credits payload;
-
     // ClientApplier then upserts them and rebuilds balances like any other
     // credit. Disjoint from the action-scoped credits (those carry an action
     // in THIS block; a refund's action is in an earlier block), but dedup the
-
     // union defensively on the credit's logical identity. The escrow release
     // written beside each refund shares its backdated action_index, so it
-    // rides the same way into the escrows payload.
+    // rides the same way into the escrows payload. After activation both rows
+    // sit under a synthetic UNSTAKE action in THIS block, so the action-scoped
+    // read carries them and these collectors correctly return nothing.
     async addCooldownPayloadRows(payload, block_index, conn){
         try {
             let refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
@@ -932,18 +932,18 @@ class ServerPoller {
         return this.addDerivedRewardPayloadRows(payload, block_index, conn);
     }
 
-    // Derived anchor/archive validator rewards: the BTC-side derivation writes the
-    // row while processing THIS block but stamps block_index = the checkpoint's
-    // SNAPSHOT_BLOCK E (< this block), so getBlockScopedRows never carries it.
-
-    // Select by derive_block_index (= this block, the materialization point), the
-    // forward twin of ClientRollback's derive_block_index >= B delete, and merge
-    // deduped on the UNIQUE identity exactly like the redriven rows above. The
-
-    // reconcile that collapses the round to its winner runs in the same block on the
-    // source, so only survivors are read here; the losers' pre-images ride the
+    // Derived validator rewards: a writer that stamps derive_block_index (the
+    // anchor/archive derivation, the ROLLCALL close's rollcall_publish, a
+    // recovery restore; see derived_rewards.js) writes the row while processing
+    // THIS block but stamps an earlier earn-block E as block_index, so
+    // getBlockScopedRows never carries it.
+    // Select by derive_block_index (= this block, the materialization point) with
+    // no reward_type filter, the forward twin of ClientRollback's
+    // derive_block_index >= B delete, and merge deduped on the UNIQUE identity
+    // exactly like the redriven rows above. The anchor reconcile that collapses a
+    // round to its winner runs in the same block on the source, so only survivors
+    // are read here; the losers' pre-images ride the
     // anchor_reward_reconcile_log rows this payload already carries.
-
     // Five-column identity, same reason as the redriven merge above: the
     // archive leg is exactly the channel that can present two distinct rewards
     // differing only in round_qualifier.

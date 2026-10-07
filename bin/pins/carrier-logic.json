@@ -64,7 +64,7 @@
     },
     "train_activation": {
       "path": "src/consensus/gates/train_gate.js",
-      "hash": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
+      "hash": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
       "twins": [
         "xchain-indexer"
       ]
@@ -371,6 +371,13 @@
       "from": "afaee5777e8d909eace7a7106b294797014f74929fc4302c50a2ec31ac77a847",
       "to": "667f90202114618e33f1a29788fd51a21e508f207a3143b8c285aef4c079a25d",
       "reason": "copy the split quorum helpers from their indexer canonical",
+      "date": "2026-10-06"
+    },
+    {
+      "id": "train_activation",
+      "from": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
+      "to": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
+      "reason": "copy the rule set resolution fix from its indexer canonical",
       "date": "2026-10-06"
     }
   ]

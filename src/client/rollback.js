@@ -931,11 +931,11 @@ class ClientRollback {
 
             // validator_rewards MATERIALIZATION-block delete, mirror of
             // xchain-indexer/src/rollback/purge.js. The loop above scopes on block_index,
-            // which for a reward is its EARN block. The BTC-side anchor/archive
-            // derivation earns at the checkpoint's SNAPSHOT_BLOCK but writes the row while
-            // processing a later BTC block, stamped derive_block_index, so a reorg into that
-            // gap orphans the block that minted the reward while leaving its earn-block below
-            // the delete's scope. The replica must drop exactly the rows the source drops or
+            // which for a reward is its EARN block. A derived writer (the BTC-side
+            // anchor/archive derivation, the ROLLCALL close's rollcall_publish, a recovery
+            // restore) earns at an earlier block but writes the row while processing a later
+            // one, stamped derive_block_index, so a reorg into that gap orphans the block that
+            // minted the reward while leaving its earn-block below the delete's scope. The replica must drop exactly the rows the source drops or
             // its COLLECT rail reads a different SUM(validator_rewards). NULL (every same-block
             // writer) is never matched. Runs BEFORE the index-lookup deletes below, which
             // require no surviving row to reference an id they remove.

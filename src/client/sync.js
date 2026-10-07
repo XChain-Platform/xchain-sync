@@ -3377,6 +3377,8 @@ class ClientSync {
                 if(opts.failClosed) throw e;
                 getLogger().error(util.format('Recompute verification errored at block %s (NOT halting on a recompute error):',
                     (event && event.block_index), e));
+                // Leave a durable mark that this height advanced without its recompute.
+                if(opts.recordUnverified) await this.recordSyncStateCounter('unverified_recompute', event && event.block_index);
                 return null;
             }
         }
@@ -3686,7 +3688,7 @@ class ClientSync {
             await this.withApplyLock(() => this.applier.applyBlock(event));
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
-                let mismatches = await this.verifyRecompute(event);
+                let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true });
                 if(mismatches){
                     await this.haltOnDivergence(event.block_index, mismatches, this.sources.slice(0, 1), 'local-recompute-divergence');
                     return;
@@ -4031,7 +4033,8 @@ class ClientSync {
     async applyReorgRollback(event){
         await this.withApplyLock(() => this.rollback.rollback(event.block_index));
         this.lastAppliedBlock = event.block_index - 1;
-        if(this.lastAppliedBlock > 0)
+        // Reload the new tip's hashes, genesis block 0 included (a null tip turns off the gap check).
+        if(this.lastAppliedBlock >= 0)
             this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
         else
             this.lastHashes = null;
