@@ -546,6 +546,22 @@ function applyClientMissingTables(row, syncService, chain, network, dbType){
     row.missing_tables = clientMissingTables(syncService, chain, network, dbType);
 }
 
+// Live recompute errors hold the tip and are counted durably; publish the count
+// so a replica stuck on a persistent recompute fault is visible.
+async function applyUnverifiedRecompute(row, db, dbType){
+    row.unverified_recompute_count = null;
+    row.unverified_recompute_last_block = null;
+    if(typeof db.getSyncState !== 'function') return;
+    try {
+        let count = await db.getSyncState('unverified_recompute_count:' + dbType);
+        let last  = await db.getSyncState('unverified_recompute_last_block:' + dbType);
+        row.unverified_recompute_count = count != null ? Number(count) : 0;
+        row.unverified_recompute_last_block = last != null ? Number(last) : null;
+    } catch(e){
+        row.unverified_recompute_count = null;
+    }
+}
+
 async function buildClientStatusRow(syncService, db, dbType, chain, network){
     // Client mode: block_height is whatever the replica DB has applied.
     let lastBlock = await db.getLastBlock();
@@ -571,6 +587,7 @@ async function buildClientStatusRow(syncService, db, dbType, chain, network){
         }
     }
     applyClientMissingTables(row, syncService, chain, network, dbType);
+    await applyUnverifiedRecompute(row, db, dbType);
     return row;
 }
 
