@@ -82,4 +82,15 @@ describe('SyncService client mode unrecognized coin skip', function(){
 
         assert.strictEqual(service.unrecognizedCoinKeys.has('notacoin:mainnet:indexer'), false);
     });
+
+    it('retains the registration when client startup accepts the chain', async function(){
+        const startSync = sinon.stub(service, 'startClientSyncForChain');
+
+        const discovered = await service.discoverChains();
+
+        assert.strictEqual(service.databases.has('notacoin:mainnet:indexer'), true);
+        assert.strictEqual(service.unrecognizedCoinKeys.has('notacoin:mainnet:indexer'), false);
+        assert.deepStrictEqual(discovered.map(chain => chain.key), ['notacoin:mainnet:indexer']);
+        assert.strictEqual(startSync.callCount, 1);
+    });
 });
