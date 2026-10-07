@@ -51,6 +51,17 @@
  * cooldown-maturity rollback removes only the credit, so ClientRollback mirrors it
  * and leaves the release in place too: the replica keeps the rows the source keeps.
  *
+ * Everything above describes the LEGACY attribution era only. Once the indexer's
+ * UNSTAKE_COOLDOWN_COMPLETION_ACTION protocol change is active (genesis on testnet
+ * and regtest, a timestamp on mainnet), processCooldownCompletions writes the credit
+ * and the escrow release under a fresh synthetic UNSTAKE (FORMAT 2) action minted AT
+ * the maturity block (xchain-indexer/src/utility.js completionAttribution). Those
+ * rows ride the ordinary action-scoped channels (the per-block stream and the
+ * incremental snapshot's action_index cursor), and the unstake-keyed joins here match
+ * nothing, so an empty result for a post-activation maturity is correct, not a miss.
+ * The collectors stay for mainnet's pre-activation history; mergeMaturedRows' dedup
+ * on the logical identity keeps a row both channels reach from landing twice.
+ *
  ********************************************************************/
 
 const { gasTickSymbol } = require('../consensus-constants');

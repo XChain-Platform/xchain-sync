@@ -114,7 +114,7 @@ async function sourceFold(root, issues){
     req('src/config/wire_fields.js').applyWireFields(config);
     req('src/config/token_limits.js').applyTokenSupplyLimits(config);
     let util = Object.assign({ safeToString: (v) => (v === null || v === undefined) ? null : String(v) },
-        req('src/utility/value_checks.js'), req('src/utility/bcmath.js'));
+        req('src/utility/validation/value_checks.js'), req('src/utility/bcmath.js'));
     let byName = (map, v) => { let k = Object.keys(map).find(id => map[id] === v); return k === undefined ? null : Number(k); };
     let captured = null;
     let db = Object.assign({ util, config }, req('src/db/issues/token_info.js'),

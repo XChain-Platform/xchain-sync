@@ -12,19 +12,31 @@
  *
  **********************************************************************
  *
- * XChain Sync - Derived anchor/archive validator-reward delivery (source side, forward)
+ * XChain Sync - Derived validator-reward delivery (source side, forward)
  *
- * The BTC-side anchor/archive derivation (xchain-indexer/src/consensus/anchor_reward_derive.js)
- * writes a validator_rewards row while processing BTC block B but stamps block_index =
- * the checkpoint's SNAPSHOT_BLOCK E (the earn-block COLLECT reads), with E <= B minus
- * the mirror-maturity watermark, and derive_block_index = B (the MATERIALIZATION block).
+ * A derived validator_rewards row is written while the source processes block B but
+ * carries block_index = an earlier earn-block E (the block COLLECT reads) and
+ * derive_block_index = B (the MATERIALIZATION block). Every xchain-indexer writer that
+ * stamps derive_block_index rides this channel, whatever its reward_type. Today's writers:
+ *   - the BTC-side anchor/archive derivation (src/consensus/anchor_reward_derive/
+ *     mint_row.js): E = the checkpoint's SNAPSHOT_BLOCK, at most B minus the
+ *     mirror-maturity watermark;
+ *   - the ROLLCALL close (src/consensus/rollcall_close.js, reward_type
+ *     'rollcall_publish'): E = the epoch height, B = the close block;
+ *   - recovery-restored rows (src/db/rewards/index.js applyPendingRewardsForAddress,
+ *     stamped with restoredRewardDeriveBlock); recovery_rewards.js also forwards these
+ *     by applied_block, since a restore can land after its derive block.
  * None of the block-keyed forward channels reach that row on their own:
  *   - the per-block stream selects validator_rewards by block_index = the streamed block
  *     (forward from B), and E < B is never streamed again;
  *   - the incremental snapshot scopes validator_rewards by block_index >= sinceBlock, so
  *     the row rides it only when a follower's gap already spans back to E.
- * A continuously-live follower therefore never received a derived anchor/archive reward
- * (a silent record-table divergence: validator_rewards is in no consensus hash).
+ * A continuously-live follower therefore never received a derived reward (a silent
+ * record-table divergence: validator_rewards is in no consensus hash).
+ *
+ * The selector must never filter on reward_type: an anchor-only filter would drop every
+ * rollcall_publish row from followers with no hash to show it. The function name
+ * collectDerivedAnchorRewards predates the other writers and is kept for its callers.
  *
  * This selects those rows by their materialization block (derive_block_index) so they can
  * be merged into the normal validator_rewards payload, keeping their block_index = E. It is
@@ -36,7 +48,7 @@
  * re-injection across the live + snapshot channels is idempotent). Indexer dbType only.
  *
  * Coverage boundary: only writers that stamp derive_block_index ride this channel. The
- * pre-flag-day writers (actions/anchor/index.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
+ * pre-flag-day writers (actions/anchor/settle.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
  * push) backdate block_index and leave derive_block_index NULL; their rows remain
  * reachable by a snapshot whose window spans the earn-block only, and their shortfall
  * surfaces through ClientSync.verifyTableCounts.

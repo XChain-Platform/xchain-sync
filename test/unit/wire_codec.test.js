@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { BINARY_TAG, encodeRow, encodeTables, decodeValue } = require('../../src/util/wire_codec');
+const { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer } = require('../../src/util/wire_codec');
 
 // Simulate the wire trip: a row is encoded, JSON-serialized, parsed back, and
 // each column value decoded, exactly what SnapshotBuilder/BlockBroadcaster do
@@ -137,6 +137,60 @@ describe('Unit: wireCodec (binary-safe row serialization)', function(){
 
         it('passes non-object input through', function(){
             assert.strictEqual(encodeTables(null), null);
+        });
+    });
+});
+
+// Assert every server serializer imports the one replacer and none defines its own.
+function assertOneBigIntReplacer(){
+    const fs = require('fs');
+    const path = require('path');
+    const SRC = path.join(__dirname, '../../src/server');
+    const users = ['block_broadcaster/broadcast_and_heartbeats.js', 'snapshot_builder/full_snapshot.js',
+        'snapshot_builder/incremental_snapshot.js', 'snapshot_builder/table_streaming.js'];
+    for(const rel of users){
+        const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+        assert.match(src, /\{[^}]*\bbigIntReplacer\b[^}]*\}\s*=\s*require\('\.\.\/\.\.\/util\/wire_codec'\)/,
+            rel + ' must take bigIntReplacer from src/util/wire_codec.js');
+    }
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+        e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.js') ? [path.join(dir, e.name)] : []);
+    for(const file of walk(SRC)){
+        const src = fs.readFileSync(file, 'utf8');
+        assert.doesNotMatch(src, /bigIntReplacer\s*=|function\s+bigIntReplacer|typeof\s+\w+\s*===\s*'bigint'\s*\?/,
+            path.relative(SRC, file) + ' defines its own BigInt replacer');
+    }
+}
+
+// One BigInt wire form for every server route: the client applies values uncoerced.
+describe('Unit: wireCodec bigIntReplacer', function(){
+    describe('bigIntReplacer', function(){
+        it('writes a BigInt above the safe-integer range as its exact decimal string', function(){
+            assert.strictEqual(JSON.stringify({ id: 12345678901234567890n, n: 1, s: 'x' }, bigIntReplacer),
+                '{"id":"12345678901234567890","n":1,"s":"x"}');
+        });
+
+        it('writes a top-level BigInt and one inside encodeTables output as strings', function(){
+            assert.strictEqual(JSON.stringify(5n, bigIntReplacer), '"5"');
+            let wire = JSON.parse(JSON.stringify(encodeTables({ t: [{ q: 9007199254740993n }] }), bigIntReplacer));
+            assert.strictEqual(wire.t[0].q, '9007199254740993');
+        });
+
+        it('ignores a global BigInt.prototype.toJSON patch', function(){
+            const prior = Object.getOwnPropertyDescriptor(BigInt.prototype, 'toJSON');
+            Object.defineProperty(BigInt.prototype, 'toJSON',
+                { value: function(){ return Number(this); }, configurable: true, writable: true });
+            try {
+                assert.strictEqual(JSON.stringify({ id: 12345678901234567890n }, bigIntReplacer),
+                    '{"id":"12345678901234567890"}');
+            } finally {
+                if(prior) Object.defineProperty(BigInt.prototype, 'toJSON', prior);
+                else delete BigInt.prototype.toJSON;
+            }
+        });
+
+        it('is the only BigInt replacer: every server serializer imports it from wire_codec', function(){
+            assertOneBigIntReplacer();
         });
     });
 });

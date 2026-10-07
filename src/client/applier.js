@@ -976,16 +976,12 @@ class ClientApplier {
             }
         }
         // A plain INSERT with the ON DUPLICATE KEY UPDATE suffix: every carried column
-        // is written on both insert and update.
+        // is written on both insert and update. Batches decode binary sentinels through
+        // the same prepareInsertBatch insertRows uses, so the two paths cannot drift.
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
-            let batch = rows.slice(i, i + batchSize);
-            let args = [];
-            for(let row of batch){
-                for(let col of columns)
-                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
-            }
-            await this.db.insertRowValues(table, columns, batch.length, args, false, true);
+            let { batch, args } = this.prepareInsertBatch(rows, columns, i, batchSize);
+            await this.insertRowBatch(table, columns, batch, args, false, true);
         }
     }
 

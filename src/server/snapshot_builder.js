@@ -247,7 +247,10 @@ class SnapshotBuilder {
     // unstake created AND matured inside this window can be reached both
     // here and by the action_index scope, hence the dedup. The escrow
     // release paired with each refund shares its action_index and merges
-    // into escrows the same way.
+    // into escrows the same way. This covers the LEGACY attribution era
+    // only: once UNSTAKE_COOLDOWN_COMPLETION_ACTION is active the credit and
+    // release sit under a synthetic UNSTAKE action at the maturity block, so
+    // the action_index cursor carries them and this merge adds nothing.
     async mergeMaturedCooldownRows(db, table, rows, sinceBlock, lastBlock, conn){
         try {
             let matured = (table === 'credits')
@@ -270,12 +273,12 @@ class SnapshotBuilder {
     // [sinceBlock, lastBlock] window, deduped on the row's UNIQUE identity
     // (the forward analogue of ClientRollback's reverse block_index delete).
     //
-    // Derived anchor/archive rewards: materialized (derive_block_index)
-    // inside [sinceBlock, lastBlock] but stamped block_index = the
-    // checkpoint's SNAPSHOT_BLOCK E below the cursor, so the block_index
-    // >= sinceBlock scope misses them unless the gap already spans
-    // back to E. Same merge + dedup; the forward twin of ClientRollback's
-    // derive_block_index >= B reverse delete.
+    // Derived rewards (every reward_type whose writer stamps
+    // derive_block_index; see derived_rewards.js): materialized inside
+    // [sinceBlock, lastBlock] but stamped an earn-block E below the cursor,
+    // so the block_index >= sinceBlock scope misses them unless the gap
+    // already spans back to E. Same merge + dedup; the forward twin of
+    // ClientRollback's derive_block_index >= B reverse delete.
     //
     // Swallow ONLY a genuine schema gap (1146 missing table / 1054 missing
     // column on an older source); a transient/operational error must abort

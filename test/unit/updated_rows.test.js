@@ -19,28 +19,9 @@ const ClientApplier = require('../../src/client/applier');
 const { SCHEMA_VERSION } = require('../../src/schema/version');
 const ClientRollback = require('../../src/client/rollback');
 const Utility = require('../../src/util');
-const { withDbMixins } = require('../helpers/db_mixins.js');
-
 // A doQuery stub that branches on a substring of the SQL so each in-place class
 // can be given canned rows independently. Records every (sql, args) pair.
-function fakeDb(routes){
-    let calls = [];
-    return withDbMixins({
-        calls,
-        dbType: 'indexer',
-        doQuery: sinon.stub().callsFake(async (sql, args) => {
-            calls.push({ sql, args });
-            for(let r of routes || []){
-                if(sql.indexOf(r.match) !== -1) return r.rows;
-            }
-            return [];
-        }),
-        beginTransaction: sinon.stub().resolves(),
-        commitTransaction: sinon.stub().resolves(),
-        rollbackTransaction: sinon.stub().resolves(),
-        getBlockHashRow: sinon.stub().resolves(null)
-    });
-}
+const { fakeDb } = require('./updated_rows.test/helpers/fake_db.js');
 
 describe('updatedRows.collectUpdatedRows', function(){
 
@@ -54,10 +35,10 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.strictEqual(hitDeactivation, false);
         // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
         // + bet-status + anchor_invalid + attest-batch-head + tokens-supply + tokens-edit
-        // classes still run, none of which depend on the activation delay (4 slash
-        // + 2 rotation + 2 request + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor
-        // + 1 attest batch head + 1 tokens supply + 1 tokens edit = 17).
-        assert.strictEqual(db.calls.length, 17);
+        // + COINPay-match classes still run, none of which depend on the activation delay
+        // (4 slash + 2 rotation + 2 request + 1 poll + 2 cooldown-status + 2 bet-status
+        // + 1 anchor + 1 attest batch head + 1 tokens supply + 1 tokens edit + 1 COINPay = 18).
+        assert.strictEqual(db.calls.length, 18);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);

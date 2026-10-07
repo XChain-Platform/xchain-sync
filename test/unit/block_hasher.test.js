@@ -101,7 +101,8 @@ const stateQueryOf = (calls) => {
 };
 
 describe('BlockHasher: independent recompute conformance @regression', function(){
-    // state_key collation flag-day (state_key_collation_activation.js twin):
+    // state_key collation flag-day (the state_key_collation_activation
+    // gate-registry row, a twin of the indexer's):
     // the contract-state gather must pin COLLATE utf8_bin exactly when the gate
     // is active, byte-for-byte with the indexer's getBlockHashes, or the
     // recompute halts diverge from the source at/after an armed height.
@@ -214,4 +215,50 @@ describe('BlockHasher: every gather resolves a non-empty SQL @regression', funct
                 assert.ok(typeof q === 'string' && q.trim().length > 0, 'unresolved gather SQL: ' + q);
         });
     }
+});
+
+// The advisory index-map checksum is published by the source and recomputed by every
+// follower, so a swallowed read error would hash an empty map on either side.
+describe('BlockHasher: advisory checksum reads fail closed @regression', function(){
+    // Model the production reader: an error becomes [] unless the caller asks it to rethrow.
+    function indexMapDb(rows, error){
+        return {
+            doQuery: async (sql, args, conn, opts) => {
+                if(!error) return rows;
+                if(opts && opts.rethrow) throw error;
+                return [];
+            }
+        };
+    }
+
+    it('a read error rejects instead of hashing an empty index map', async function(){
+        const db = indexMapDb([], new Error('lock wait timeout on index_addresses'));
+        await assert.rejects(new BlockHasher(db, new Utility()).computeIndexMapChecksum(10),
+            /lock wait timeout on index_addresses/,
+            'a failed read must surface so the source publishes null and a follower skips');
+    });
+
+    it('hashes the read rows as the index map', async function(){
+        const db = indexMapDb([{ id: 1, address: 'a' }, { id: 2, address: 'b' }], null);
+        const got = await new BlockHasher(db, new Utility()).computeIndexMapChecksum(10);
+        assert.strictEqual(got, new Utility().getDataHash({
+            index_map: [{ id: '1', address: 'a' }, { id: '2', address: 'b' }]
+        }));
+    });
+
+    // The source's token-fold bound read shares the posture: a swallowed error would
+    // bound the digest at '0' and publish every token as 'ahead'.
+    it('a token-fold bound read error rejects instead of bounding the digest at zero', async function(){
+        const error = new Error('lock wait timeout on actions');
+        const db = {
+            doQuery: async (sql, args, conn, opts) => {
+                if(!/MAX\(action_index\)/.test(sql)) return [];
+                if(opts && opts.rethrow) throw error;
+                return [];
+            }
+        };
+        await assert.rejects(new BlockHasher(db, new Utility()).computeTokenFoldChecksum(10),
+            /lock wait timeout on actions/,
+            'a failed bound read must surface so the source publishes null');
+    });
 });

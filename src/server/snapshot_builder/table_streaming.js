@@ -20,9 +20,9 @@
 
 const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('../../schema/version');
-const { encodeRow } = require('../../util/wire_codec');
+const { encodeRow, bigIntReplacer } = require('../../util/wire_codec');
 const replicatedTables = require('../../schema/replicated_tables');
-const { SnapshotStreamWriter, bigIntReplacer } = require('./stream_writer');
+const { SnapshotStreamWriter } = require('./stream_writer');
 
 // Default + ceiling page sizes for streamTableRowsById. The ceiling bounds the
 // server's single-query result set and the client's per-page buffer so no one
