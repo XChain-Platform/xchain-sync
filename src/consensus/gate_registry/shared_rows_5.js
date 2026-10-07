@@ -54,7 +54,7 @@ const { addGate, UNARMED, UNPINNED } = require('./shared_rows.js');
 // Below it every milestone-1 verdict stands unchanged, so the replay corpus is
 // hash-identical on every chain with this code present.
 //
-// Mainnet and testnet are the house sentinel 9999999999: this rides the same MAJOR
+// Mainnet is the house sentinel 9999999999 and each testnet chain is armed below: this rides the same MAJOR
 // train as the two bridges and the operator sizes the dated instant at the cut. A
 // height in the map ahead of the fleet's deploy tip is the operator's act, not a
 // build's. Regtest is 0 so the e2e rail exercises the armed rule from genesis.
