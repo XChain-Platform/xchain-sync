@@ -210,6 +210,14 @@
  *       (tick_id, action_index, amount) covering indexes to `credits`, `debits`
  *       and `escrows`. It changes neither replicated columns nor payload shape,
  *       so an older follower can still store every streamed row.
+ * Migration-rename frontier record (no version bump):
+ *       2026-10-08-token-bridge-fields is the byte-identical re-key of
+ *       2026-09-12-token-bridge-fields, whose `issues` and `tokens` columns were
+ *       already folded into indexer version 11. The indexer migration ledger
+ *       re-keys the old applied name to the new one, so this changes neither the
+ *       live schema nor what a follower can store. The same frontier date also
+ *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique
+ *       secondary index on the follower-derived `state_tree_roots` table.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -234,13 +242,15 @@ const SCHEMA_VERSION = { indexer: 15, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-07',
+        through: '2026-10-08',
         accounted: [
-            // Index-only; no replicated column or payload shape changed.
-            '2026-10-07-ledger-covering-index.sql'
+            // Index-only on a follower-derived table; no replicated payload changed.
+            '2026-10-08-state-tree-roots-block-index-idx.sql',
+            // Renamed byte-identically; its replicated columns were accounted at v11.
+            '2026-10-08-token-bridge-fields.sql'
         ],
         indexOnly: [
-            '2026-10-07-ledger-covering-index.sql'
+            '2026-10-08-state-tree-roots-block-index-idx.sql'
         ]
     },
     decoder: {
