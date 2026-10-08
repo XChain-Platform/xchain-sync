@@ -210,14 +210,18 @@
  *       (tick_id, action_index, amount) covering indexes to `credits`, `debits`
  *       and `escrows`. It changes neither replicated columns nor payload shape,
  *       so an older follower can still store every streamed row.
- * Migration-rename frontier record (no version bump):
- *       2026-10-08-token-bridge-fields is the byte-identical re-key of
- *       2026-09-12-token-bridge-fields, whose `issues` and `tokens` columns were
- *       already folded into indexer version 11. The indexer migration ledger
- *       re-keys the old applied name to the new one, so this changes neither the
- *       live schema nor what a follower can store. The same frontier date also
- *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique
- *       secondary index on the follower-derived `state_tree_roots` table.
+ *  16 - (indexer only) the forward-dated 2026-10-08-token-bridge-fields
+ *       migration is the byte-identical re-key of the retired
+ *       2026-09-12-token-bridge-fields migration. It adds the ISSUE format 7 bridge
+ *       opt-in columns to the wire-replicated `issues` and `tokens` tables:
+ *       bridge_chains, min_depth and lock_bridge on both, plus bridged on tokens.
+ *       These shapes were first versioned at 11, so an installation that applied
+ *       the retired migration has no live schema change. An installation that
+ *       missed it can still identify as v15 without the columns, however; this bump
+ *       forces a schema refresh before it accepts those rows. The same frontier date
+ *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique secondary
+ *       index on the follower-derived `state_tree_roots` table, so it is recorded
+ *       index-only. Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -238,7 +242,7 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 15, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 16, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
