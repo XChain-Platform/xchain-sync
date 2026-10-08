@@ -211,15 +211,17 @@
  *       and `escrows`. It changes neither replicated columns nor payload shape,
  *       so an older follower can still store every streamed row.
  *  16 - (indexer only) the forward-dated 2026-10-08-token-bridge-fields
- *       migration replaces its retired 2026-09-12 ledger entry. It adds the ISSUE
- *       format 7 bridge opt-in columns to the wire-replicated `issues` and `tokens`
- *       tables: bridge_chains, min_depth and lock_bridge on both, plus bridged on
- *       tokens. These shapes were first versioned at 11, but an installation that
- *       missed the retired migration can still identify as v15 without the columns;
- *       this bump forces a schema refresh before it accepts those rows. The same-day
- *       state-tree-roots-block-index-idx migration adds only a non-unique secondary
- *       index to follower-derived `state_tree_roots`, so it is recorded index-only.
- *       Decoder is unaffected and stays at 4.
+ *       migration is the byte-identical re-key of the retired
+ *       2026-09-12-token-bridge-fields migration. It adds the ISSUE format 7 bridge
+ *       opt-in columns to the wire-replicated `issues` and `tokens` tables:
+ *       bridge_chains, min_depth and lock_bridge on both, plus bridged on tokens.
+ *       These shapes were first versioned at 11, so an installation that applied
+ *       the retired migration has no live schema change. An installation that
+ *       missed it can still identify as v15 without the columns, however; this bump
+ *       forces a schema refresh before it accepts those rows. The same frontier date
+ *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique secondary
+ *       index on the follower-derived `state_tree_roots` table, so it is recorded
+ *       index-only. Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -246,7 +248,9 @@ const MIGRATION_FRONTIER = {
     indexer: {
         through: '2026-10-08',
         accounted: [
+            // Index-only on a follower-derived table; no replicated payload changed.
             '2026-10-08-state-tree-roots-block-index-idx.sql',
+            // Renamed byte-identically; its replicated columns were accounted at v11.
             '2026-10-08-token-bridge-fields.sql'
         ],
         indexOnly: [
