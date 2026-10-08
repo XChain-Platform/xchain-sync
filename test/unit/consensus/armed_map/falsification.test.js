@@ -132,26 +132,6 @@ describe('armed map v2: falsification on temp trees', function () {
         assert.strictEqual(baseline.hex, computeArmedMapFingerprint().hex);
     });
 
-    it('pins all six shared row files to the indexer canonical byte digests', function () {
-        for (const file of SHARED_ROW_FILES) {
-            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
-            assert.strictEqual(sha256(copy), INDEXER_CANONICAL_SHA256[file], file);
-            const falsified = Buffer.from(copy);
-            falsified[falsified.length - 1] ^= 1;
-            assert.notStrictEqual(sha256(falsified), INDEXER_CANONICAL_SHA256[file], file);
-        }
-    });
-
-    it('keeps all six shared row files byte-identical to the indexer canonical blobs', function () {
-        assert.ok(fs.existsSync(indexerRoot()), 'xchain-indexer checkout is required');
-        for (const file of SHARED_ROW_FILES) {
-            const canonical = readIndexerCanonical(file);
-            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
-            assert.strictEqual(sha256(canonical), INDEXER_CANONICAL_SHA256[file], file);
-            assert.ok(copy.equals(canonical), file + ' drifted from the indexer canonical');
-        }
-    });
-
     it('does not move under the regtest venue arming environment (no sync carrier reads it)', function () {
         assert.strictEqual(readV2(tree(), VENUE_ENV).hex, baseline.hex);
     });
@@ -217,5 +197,27 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('reads the same value without node_modules because every registry row is local data', function () {
         assert.strictEqual(readV2(tree({ nodeModules: false })).hex, baseline.hex);
+    });
+});
+
+describe('armed map v2: falsification on temp trees', function () {
+    it('pins all six shared row files to the indexer canonical byte digests', function () {
+        for (const file of SHARED_ROW_FILES) {
+            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
+            assert.strictEqual(sha256(copy), INDEXER_CANONICAL_SHA256[file], file);
+            const falsified = Buffer.from(copy);
+            falsified[falsified.length - 1] ^= 1;
+            assert.notStrictEqual(sha256(falsified), INDEXER_CANONICAL_SHA256[file], file);
+        }
+    });
+
+    it('keeps all six shared row files byte-identical to the indexer canonical blobs', function () {
+        assert.ok(fs.existsSync(indexerRoot()), 'xchain-indexer checkout is required');
+        for (const file of SHARED_ROW_FILES) {
+            const canonical = readIndexerCanonical(file);
+            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
+            assert.strictEqual(sha256(canonical), INDEXER_CANONICAL_SHA256[file], file);
+            assert.ok(copy.equals(canonical), file + ' drifted from the indexer canonical');
+        }
     });
 });
