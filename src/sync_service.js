@@ -395,7 +395,8 @@ class SyncService {
 
         let log    = (cfg.dbType === 'indexer')
             ? new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], this.config['REPLICA_DB_READONLY'],
-                                  this.config['SYNC_META_RETENTION_BLOCKS'])
+                                  this.config['SYNC_META_RETENTION_BLOCKS'],
+                                  this.syncMetaRetentionFloor(cfg.coin, cfg.network))
             : null;
         let poller = new ServerPoller(cfg.coin, cfg.network, db, this.broadcaster, log, this.config, this.util);
         this.pollers.set(key, poller);
@@ -536,10 +537,11 @@ class SyncService {
             if(this._syncMetaRetentionRunning) return;
             this._syncMetaRetentionRunning = true;
             try {
-                for(const [key, { db, dbType }] of this.databases){
+                for(const [key, { db, dbType, config: cfg }] of this.databases){
                     if(dbType !== 'indexer') continue;   // sync_meta lives only in indexer DBs
                     try {
-                        const log = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], readOnly, keep);
+                        const floor = this.syncMetaRetentionFloor(cfg && cfg.coin, cfg && cfg.network);
+                        const log = new TransparencyLog(db, this.config['MERKLE_EPOCH_SIZE'], readOnly, keep, floor);
                         await log.pruneSyncMeta();
                     } catch(err){
                         getLogger().warn('SyncService: sync_meta retention failed for ' + key + ': ' +
@@ -643,7 +645,23 @@ class SyncService {
         // handed every caller a log that believed it was writable and unwindowed.
         return new TransparencyLog(entry.db, this.config['MERKLE_EPOCH_SIZE'],
                                    this.config['REPLICA_DB_READONLY'],
-                                   this.config['SYNC_META_RETENTION_BLOCKS']);
+                                   this.config['SYNC_META_RETENTION_BLOCKS'],
+                                   this.syncMetaRetentionFloor(chain, network));
+    }
+
+    // Floor sync_meta retention at the poller's reorg reach for a chain, warning once per
+    // chain when the configured window is smaller: a reorg could otherwise land in pruned leaves.
+    syncMetaRetentionFloor(coin, network){
+        const floor = envConfig.reorgWalkBackDepth(coin, network);
+        const keep  = parseInt(this.config['SYNC_META_RETENTION_BLOCKS'], 10);
+        const label = coin + '/' + network;
+        this._retentionFloorWarned = this._retentionFloorWarned || new Set();
+        if(keep > 0 && keep < floor && !this._retentionFloorWarned.has(label)){
+            this._retentionFloorWarned.add(label);
+            getLogger().warn('SyncService: SYNC_META_RETENTION_BLOCKS=' + keep + ' is below the reorg floor ' +
+                floor + ' for ' + label + '; keeping ' + floor + ' blocks of sync_meta instead');
+        }
+        return floor;
     }
 }
 

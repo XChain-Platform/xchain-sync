@@ -64,7 +64,7 @@
     },
     "train_activation": {
       "path": "src/consensus/gates/train_gate.js",
-      "hash": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
+      "hash": "ce3a9989904471c34cc525539c736cdec90687009cde9abdfbb475994c9a970f",
       "twins": [
         "xchain-indexer"
       ]
@@ -379,6 +379,13 @@
       "to": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
       "reason": "copy the rule set resolution fix from its indexer canonical",
       "date": "2026-10-06"
+    },
+    {
+      "id": "train_activation",
+      "from": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
+      "to": "ce3a9989904471c34cc525539c736cdec90687009cde9abdfbb475994c9a970f",
+      "reason": "split evaluateTrainActivation, logic unchanged",
+      "date": "2026-10-07"
     }
   ]
 }

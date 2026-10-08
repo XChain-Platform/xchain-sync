@@ -43,11 +43,11 @@
     "train_activation.TRAIN_ACTIVATION": "1f7b8f196149e0bf068bfc430c6355a65788333e1eb2952c52462f0aa3526a6e"
   },
   "armed_map_rows": 39,
-  "carrier_logic_digest": "0194667bf257c690de463d1d7f805a2452cdc869bf4c438865f6c1f9a3aca0a0",
+  "carrier_logic_digest": "f167a6315c74a4e26d34398656b5b3f89d88b9073170797336833982b397760c",
   "vendoredCoins": {
-    "src/coins/BTC.js": "92f1e7d143f844886700f40deb53cb02bb7c6c270ab4bb837488f5d8535629b6",
-    "src/coins/DOGE.js": "3b1aac3d95ca96fd6a7f53c4af169e4e845effb77d00058473bda4d4786e397b",
-    "src/coins/LTC.js": "d7cf410caea44a18c3c5cac07ab7f47507af8680ec3cbbec4f54ab8cd09fc0b9",
+    "src/coins/BTC.js": "182baf5173e3846b94a5edc1ae15913a54fb266addfc45a3cf9a013bd9ec16c6",
+    "src/coins/DOGE.js": "4659b45fb7a5c959ce2777ab9d5e7c193f3515f03cdd8cd23bb6b9c4d012fc11",
+    "src/coins/LTC.js": "6155195bfa5fdfeab77dec3802ce67b5cc47a77695e81a4a5545d980e4c421dd",
     "src/coins/consensus_pin.js": "342bf7af224a19ea0a98ff9cfb2c9a70b3fd5be75de7ecef2db05936f82baa63",
     "src/coins/index.js": "08b678d934fa647d3c7d14dc5ccdaeb86722ee32a3662de69e4a31cd7b09234c"
   }

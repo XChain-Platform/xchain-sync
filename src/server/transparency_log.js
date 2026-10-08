@@ -38,12 +38,21 @@ class TransparencyLog {
     // retentionBlocks: OPT-IN sync_meta retention window, default OFF (0). See
     // pruneSyncMeta for what a positive value gives up. A non-numeric or negative
     // value is treated as off, never as "prune everything".
-    constructor(db, epochSize, readOnly, retentionBlocks) {
+    // retentionFloor: the shallowest window an armed retention may run with (the
+    // poller's reorg walk-back depth). It raises a smaller window and never arms one.
+    constructor(db, epochSize, readOnly, retentionBlocks, retentionFloor) {
         this.db        = db;
         this.epochSize = epochSize || 100;
         this.readOnly  = readOnly === true;
         let keep = parseInt(retentionBlocks, 10);
         this.retentionBlocks = (Number.isFinite(keep) && keep > 0) ? keep : 0;
+        let floor = parseInt(retentionFloor, 10);
+        this.retentionFloor = (Number.isFinite(floor) && floor > 0) ? floor : 0;
+    }
+
+    // Raise an armed window to the reorg floor, so leaves a reorg can still reach are kept.
+    flooredWindow(keep) {
+        return Math.max(keep, this.retentionFloor);
     }
 
     // Crossing an epoch boundary commits that epoch's Merkle root as a side effect.
@@ -100,6 +109,8 @@ class TransparencyLog {
             : parseInt(retentionBlocks, 10);
         // No-op at zero (and at anything unparseable or negative): retention is off.
         if (!Number.isFinite(keep) || keep <= 0) return { enabled: false, deleted: 0 };
+        // Never prune inside the reorg walk-back reach, explicit argument included.
+        keep = this.flooredWindow(keep);
         // A replicated log prunes at the source; the DELETEs arrive over replication.
         if (this.readOnly) return { enabled: true, skipped: true, reason: 'read_only', deleted: 0 };
 
@@ -148,6 +159,8 @@ class TransparencyLog {
         let rows = await this.db.findSyncMetaLeaves(startBlock, endBlock);
 
         if (rows.length === 0) return;
+        // Leave a reorged epoch uncommitted rather than publish a root over a truncated leaf set.
+        if (await this.reorgedLeavesTruncated(epoch, Number(rows[0].block_index))) return;
 
         let leaves = rows.map(r =>
             MerkleTree.computeLeaf(r.ledger_hash, r.actions_hash, r.contract_hash)
@@ -166,6 +179,22 @@ class TransparencyLog {
 
         logger.info('Merkle: Epoch ' + epoch + ' committed (blocks ' + startBlock + '-' + endBlock +
             ', root: ' + tree.root.substring(0, 16) + '...)');
+    }
+
+    // True when a reorg invalidated this epoch and its surviving leaves no longer reach the
+    // first leaf it was committed over (retention pruned them). An older schema with no
+    // merkle_reorgs table has no markers, so it reads as not truncated.
+    async reorgedLeavesTruncated(epoch, firstLeaf) {
+        let marker = await this.db.findPendingReorgMarkerStart(epoch).catch(e => {
+            if (e && e.errno === 1146) return [];
+            throw e;
+        });
+        let row = Array.isArray(marker) ? marker[0] : null;
+        let start = (row && row.start_block != null) ? Number(row.start_block) : null;
+        if (start === null || firstLeaf <= start) return false;
+        logger.error('Merkle: epoch ' + epoch + ' not re-committed after a reorg: its leaves now start at block ' +
+            firstLeaf + ' but it was committed from block ' + start + ' (pruned by sync_meta retention); refusing a partial root');
+        return true;
     }
 
     // Prunes the log on a server-side reorg to `block_index` (the new canonical tip + 1,

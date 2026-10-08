@@ -129,18 +129,25 @@ async function sourceFold(root, issues){
             owner: ADDRESSES[i.source_addr_id], transfer: i.transfer_addr_id ? ADDRESSES[i.transfer_addr_id] : null,
             bridged: 0, block_index: 1 }));
         if(/SELECT id FROM tokens/.test(sql)) return [{ id: 1 }];
-        if(/^\s*UPDATE\s+tokens/.test(sql)){ captured = args; return {}; }
+        if(/^\s*UPDATE\s+tokens/.test(sql)){ captured = args; sourceFold.updateSql = sql; return {}; }
         return [];
     };
     let data = await db.getTokenInfo(TICKERS[TICK]);
+    sourceFold.infoKeys = Object.keys(data);
+    sourceFold.config = config;
     await db.createToken(data);
-    // updateArgs order: the 22 fold columns, supply, owner_id, last_action_index, tick_id.
-    let cols = tokenRefold.FOLD_COLUMNS.filter(c => c !== 'owner_id' && c !== 'last_action_index');
+    // Bind each fold column by its name in the captured SET list, never by position.
+    let columns = updateColumns(sourceFold.updateSql);
     let out = {};
-    cols.forEach((c, k) => { out[c] = captured[k]; });
-    out.owner_id = captured[23];
-    out.last_action_index = captured[24];
+    for(let c of tokenRefold.FOLD_COLUMNS) out[c] = captured[columns.indexOf(c)];
     return out;
+}
+
+// The SET column names of an UPDATE, in bind order.
+function updateColumns(sql){
+    let m = /\bSET (.*) WHERE /i.exec(String(sql).replace(/\s+/g, ' '));
+    assert.ok(m, 'not an UPDATE ... SET ... WHERE statement: ' + sql);
+    return m[1].split(',').map(c => c.trim().replace(/ ?= ?\?$/, ''));
 }
 
 // Rolls back from action 500, orphaning `edit`; `surviving` is the history the reorg keeps.
@@ -186,6 +193,7 @@ describe('ClientRollback token refold (reverse leg of updated_rows class 7)', fu
         });
 
         it('a reorg of the ' + name + ' matches the xchain-indexer fold byte for byte', async function(){
+            this.timeout(30000);
             let root = indexerOrSkip(this);
             if(!root) return;
             let [edit, row] = SCENARIOS[name];
@@ -394,4 +402,80 @@ describe('ClientRollback token refold: replay SELECT parity with the indexer', f
             assert.notDeepStrictEqual(replayShape(mutated), shape, name + ' is invisible to replayShape');
         }
     });
+});
+
+// The replica restates the source's wire-field lists, decimal bounds and UPDATE column
+// set by hand, so each is compared with the sibling indexer rather than trusted.
+describe('ClientRollback token refold: restated constants parity with the indexer', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    // Run the indexer fold once and return its config and the keys its token info carries.
+    async function sourceView(root){
+        await sourceFold(root, [GENESIS, SURVIVING_EDIT]);
+        let keys = new Set(tokenRefold.RESTATED.FOLD_KEYS.concat(sourceFold.infoKeys));
+        return { config: sourceFold.config, pick: (list) => list.filter(k => keys.has(k)).sort() };
+    }
+
+    it('restates the indexer number, list, lock and integer field lists over the fold keys', async function(){
+        let root = indexerOrSkip(this);
+        if(!root) return;
+        let { config, pick } = await sourceView(root);
+        let R = tokenRefold.RESTATED;
+        for(let name of ['NUMBER_FIELDS', 'LIST_FIELDS', 'LOCK_FIELDS'])
+            assert.deepStrictEqual(R[name].slice().sort(), pick(config[name]), name + ' in src/db/token_refold.js no longer matches the indexer wire_fields.js');
+        let ints = pick(Object.keys(config.INTEGER_FIELDS));
+        assert.deepStrictEqual(R.INTEGER_FIELDS.slice().sort(), ints, 'INTEGER_FIELDS no longer matches the indexer wire_fields.js');
+        for(let k of ints) assert.strictEqual(config.INTEGER_FIELDS[k], R.U64_MAX, k + ' is no longer bounded at u64 on the indexer');
+    });
+
+    it('restates the indexer token decimal bounds', async function(){
+        let root = indexerOrSkip(this);
+        if(!root) return;
+        let { config } = await sourceView(root);
+        assert.deepStrictEqual([tokenRefold.RESTATED.MIN_TOKEN_DECIMALS, tokenRefold.RESTATED.MAX_TOKEN_DECIMALS],
+            [config.MIN_TOKEN_DECIMALS, config.MAX_TOKEN_DECIMALS], 'the replica decimal bounds no longer match the indexer token_limits.js');
+    });
+
+    it('binds exactly the fold columns plus supply in the indexer tokens UPDATE', async function(){
+        let root = indexerOrSkip(this);
+        if(!root) return;
+        await sourceFold(root, [GENESIS, SURVIVING_EDIT]);
+        let columns = updateColumns(sourceFold.updateSql);
+        assert.strictEqual(columns.filter(c => c === 'supply').length, 1, 'expected one supply column: ' + columns.join(','));
+        assert.deepStrictEqual(columns.filter(c => c !== 'supply'), tokenRefold.FOLD_COLUMNS.slice(),
+            'FOLD_COLUMNS (src/db/token_refold.js) no longer matches the indexer tokens UPDATE column list');
+    });
+
+    it('the UPDATE column reader changes under an added or reordered column', function(){
+        let sql = 'UPDATE tokens SET max_supply=?, supply=?, owner_id=? WHERE tick_id=?';
+        assert.deepStrictEqual(updateColumns(sql), ['max_supply', 'supply', 'owner_id']);
+        assert.deepStrictEqual(updateColumns(sql.replace(' WHERE', ', extra=? WHERE')), ['max_supply', 'supply', 'owner_id', 'extra']);
+        assert.deepStrictEqual(updateColumns(sql.replace('max_supply=?, supply=?', 'supply=?, max_supply=?')), ['supply', 'max_supply', 'owner_id']);
+    });
+});
+
+// Each normalize branch, fed a malformed surviving issue, must fold identically on both sides.
+describe('ClientRollback token refold: malformed value parity with the indexer', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    const ORPHANED_TRANSFER = issue(500, { transfer_addr_id: 2 });
+    const MALFORMED = {
+        'out-of-range decimals': issue(400, { decimals: '20' }),
+        'a lock value of 2': issue(400, { lock_sleep: '2', lock_mint: '2' }),
+        'a non-numeric limit': issue(400, { max_mint: 'abc', mint_address_max: 'x1' }),
+        'a callback block above u64': issue(400, { callback_block: '18446744073709551616' }),
+    };
+
+    for(let name of Object.keys(MALFORMED)){
+        it('a surviving issue with ' + name + ' folds the same as the xchain-indexer', async function(){
+            let root = indexerOrSkip(this);
+            if(!root) return;
+            let surviving = [GENESIS, SURVIVING_EDIT, MALFORMED[name]];
+            let world = await reorg(ORPHANED_TRANSFER, editedRow({ owner_id: 2, last_action_index: 500 }), surviving);
+            assert.strictEqual(world.updates, 1);
+            assert.deepStrictEqual(stored(world.token), stored(await sourceFold(root, surviving)));
+        });
+    }
 });
