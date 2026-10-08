@@ -61,6 +61,18 @@
       "sync boot consensus-pin verification skips on the (currently null) mainnet pin",
       "sync boot consensus-pin verification the pin check runs before the express app is built"
     ],
+    "06bf2b9ac933792b": [
+      "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
+      "armed map v2: falsification on temp trees a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red",
+      "armed map v2: falsification on temp trees a shared row outside sync membership does not move the sync fingerprint",
+      "armed map v2: falsification on temp trees does not move under the regtest venue arming environment (no sync carrier reads it)",
+      "armed map v2: falsification on temp trees holds under a comment, a registry reformat, a carrier rename and a move",
+      "armed map v2: falsification on temp trees keeps all six shared row files byte-identical to the indexer canonical blobs",
+      "armed map v2: falsification on temp trees moves when a pinned testnet height reverts to NOT-YET-PINNED (null)",
+      "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
+      "armed map v2: falsification on temp trees pins all six shared row files to the indexer canonical byte digests",
+      "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
+    ],
     "07811aa22e123504": [
       "bin/markets-id-parity fetch reads markets at the tip and pages every ticker",
       "bin/markets-id-parity fetch refuses a source with no polled height instead of pulling since/0",
@@ -1287,16 +1299,6 @@
       "createApp against the real route table rejects a wrong bearer key with 401",
       "createApp against the real route table returns the real 400 for an invalid dbType once authenticated",
       "createApp against the real route table serves /health to the correct bearer key"
-    ],
-    "4acfae0d52008855": [
-      "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
-      "armed map v2: falsification on temp trees a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red",
-      "armed map v2: falsification on temp trees a shared row outside sync membership does not move the sync fingerprint",
-      "armed map v2: falsification on temp trees does not move under the regtest venue arming environment (no sync carrier reads it)",
-      "armed map v2: falsification on temp trees holds under a comment, a registry reformat, a carrier rename and a move",
-      "armed map v2: falsification on temp trees moves when a pinned testnet height reverts to NOT-YET-PINNED (null)",
-      "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
-      "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
     ],
     "4ad4873eb9337e0e": [
       "E2E: Proxy-trust client attribution HTTP snapshot budgets with TRUST_PROXY off keys every forwarded caller on the socket address",
@@ -4356,7 +4358,7 @@
   "scripts": {
     "test": {
       "fileCount": 355,
-      "titleCount": 2803,
+      "titleCount": 2805,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4515,7 +4517,7 @@
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
         "test/unit/consensus/armed_map/completeness.test.js": "30916c5c70bdcf16",
-        "test/unit/consensus/armed_map/falsification.test.js": "4acfae0d52008855",
+        "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
         "test/unit/consensus/gate_registry.test.js": "0a0b1c0489a3d846",

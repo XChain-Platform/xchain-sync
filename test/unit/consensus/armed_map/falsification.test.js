@@ -20,7 +20,6 @@
 // instead of silently testing an unmodified tree.
 
 const assert = require('assert');
-const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs     = require('fs');
 const os     = require('os');
@@ -33,7 +32,6 @@ const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
 const runnerRequire = createRequire(require.main.filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
-const INDEXER_CANONICAL_COMMIT = '7a36b27a868e74eca20f551b9f1ec0e013db6ea4';
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_SHA256 = {
@@ -97,10 +95,10 @@ function indexerRoot() {
         : path.resolve(ROOT, '..', 'xchain-indexer');
 }
 
+// A shallow sibling clone (GitHub CI) holds only its tip commit, so the canonical is read from
+// the sibling's working tree; the pinned digests hold it to the reviewed bytes.
 function readIndexerCanonical(file) {
-    return childProcess.execFileSync('git', [
-        '-C', indexerRoot(), 'show', INDEXER_CANONICAL_COMMIT + ':src/protocol_changes/' + file,
-    ]);
+    return fs.readFileSync(path.join(indexerRoot(), 'src/protocol_changes', file));
 }
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
