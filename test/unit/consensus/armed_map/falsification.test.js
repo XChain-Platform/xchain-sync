@@ -20,6 +20,8 @@
 // instead of silently testing an unmodified tree.
 
 const assert = require('assert');
+const childProcess = require('child_process');
+const crypto = require('crypto');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
@@ -31,6 +33,17 @@ const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
 const runnerRequire = createRequire(require.main.filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
+const INDEXER_CANONICAL_COMMIT = '7aa40771189dbf57d051df20a5bb687bf65ca00d';
+const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
+    'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
+const INDEXER_CANONICAL_SHA256 = {
+    'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
+    'shared_rows_1.js': 'dafd67482b0d4f2e60958f7184f1596620798dabe3f4d5b5637b7b83da489dc1',
+    'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
+    'shared_rows_3.js': '89127614a54b9a4007b8e63f18c4f8abb0873d8f8cb0d3f31a1115d67485c2b4',
+    'shared_rows_4.js': 'dec84cd5f6e10b5bc631eb3a68ddcdfa5e37c5fb10cdf01ddd43cbb35980dc9b',
+    'shared_rows_5.js': 'c6749ca7043a9a0c3057ed3a7b4dfd92362dee351a9a3d7611efff69bfd1b7ae',
+};
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
     'process.stdout.write(JSON.stringify({ hex: r.hex, count: r.count, rows: r.rows, reason: r.reason }));';
@@ -78,6 +91,20 @@ function runCompleteness(root) {
         { cwd: root, encoding: 'utf8', env: cleanEnv() });
 }
 
+function indexerRoot() {
+    return process.env.XCHAIN_INDEXER_SQL_PATH
+        ? path.resolve(process.env.XCHAIN_INDEXER_SQL_PATH, '..', '..')
+        : path.resolve(ROOT, '..', 'xchain-indexer');
+}
+
+function readIndexerCanonical(file) {
+    return childProcess.execFileSync('git', [
+        '-C', indexerRoot(), 'show', INDEXER_CANONICAL_COMMIT + ':src/protocol_changes/' + file,
+    ]);
+}
+
+const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
 const movedRows = (a, b) => Object.keys({ ...a.rows, ...b.rows }).filter((k) => a.rows[k] !== b.rows[k]).sort();
 
 let baseline;
@@ -103,6 +130,29 @@ describe('armed map v2: falsification on temp trees', function () {
     it('a copied tree reads the same v2 as this checkout, so the harness measures the real thing', function () {
         const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
         assert.strictEqual(baseline.hex, computeArmedMapFingerprint().hex);
+    });
+
+    it('pins all six shared row files to the indexer canonical byte digests', function () {
+        for (const file of SHARED_ROW_FILES) {
+            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
+            assert.strictEqual(sha256(copy), INDEXER_CANONICAL_SHA256[file], file);
+            const falsified = Buffer.from(copy);
+            falsified[falsified.length - 1] ^= 1;
+            assert.notStrictEqual(sha256(falsified), INDEXER_CANONICAL_SHA256[file], file);
+        }
+    });
+
+    it('keeps all six shared row files byte-identical to the indexer canonical blobs', function () {
+        if (!fs.existsSync(indexerRoot())) {
+            if (process.env.XCHAIN_REQUIRE_SIBLINGS === '1') assert.fail('xchain-indexer checkout is required');
+            this.skip();
+        }
+        for (const file of SHARED_ROW_FILES) {
+            const canonical = readIndexerCanonical(file);
+            const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
+            assert.strictEqual(sha256(canonical), INDEXER_CANONICAL_SHA256[file], file);
+            assert.ok(copy.equals(canonical), file + ' drifted from the indexer canonical');
+        }
     });
 
     it('does not move under the regtest venue arming environment (no sync carrier reads it)', function () {
