@@ -65,6 +65,7 @@
  ********************************************************************/
 
 const { gasTickSymbol } = require('../consensus-constants');
+const { isSchemaGapError } = require('../db/schema_gap');
 
 // The two Database finders behind each half of a maturity: the refund credit
 // and the escrow release written beside it under the same action_index.
@@ -121,7 +122,7 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
         } catch(e){
             // Skip ONLY a schema gap (errno 1146/1054): an error with no numeric errno would
             // otherwise broadcast the block short of its refund rows (poller's isSchemaGapError rule).
-            if(!(e && typeof e.errno === 'number' && (e.errno === 1146 || e.errno === 1054))) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -132,7 +133,7 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
         add(await db[finders.contract](completedStatusId, from, to, conn));
     } catch(e){
         // Same schema-gap-only skip as the capability leg above.
-        if(!(e && typeof e.errno === 'number' && (e.errno === 1146 || e.errno === 1054))) throw e;
+        if(!isSchemaGapError(e)) throw e;
         // Table may not exist on older source schemas; skip.
     }
 

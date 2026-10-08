@@ -15,7 +15,7 @@
  *
  * Static drift-lock for the consensus block-hash CONFORMANCE PAIR.
  *
- * xchain-sync/src/BlockHasher.js computeBlockHashes() is a hand-ported twin of
+ * xchain-sync/src/client/block_hasher.js computeBlockHashes() is a hand-ported twin of
  * xchain-indexer/src/db/actions.js getBlockHashes(): same consensus SELECTs, same
  * special-address canonicalization, same chaining/version fold, hashed through
  * the same getDataHash/jsonStringify pair. Unlike the whole-file twins locked
@@ -94,7 +94,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         const vIndexer = pair.indexer.match(/const BLOCK_HASH_VERSION = (\d+)/);
         assert.ok(vSync && vIndexer, 'BLOCK_HASH_VERSION constant missing on one side');
         assert.strictEqual(vSync[1], vIndexer[1],
-            'BLOCK_HASH_VERSION drifted between xchain-sync/src/BlockHasher.js and ' +
+            'BLOCK_HASH_VERSION drifted between xchain-sync/src/client/block_hasher.js and ' +
             'xchain-indexer/src/db/shared.js; a version bump is a consensus break and MUST land on both sides');
     });
 

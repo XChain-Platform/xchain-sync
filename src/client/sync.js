@@ -490,7 +490,7 @@ class ClientSync {
         this._halted = null; // { blockIndex, reason, mismatches, sources, at }
 
         // Platform-train activation verdict for the block (or snapshot tip) this
-        // follower is about to apply (src/train_activation.js), or null before the
+        // follower is about to apply (src/consensus/gates/train_gate.js), or null before the
         // first evaluation. `pending` means the signed release manifest names a rule
         // set this build does not implement and the boundary is still ahead, which
         // /status carries so the halt is announced before it fires; `halt` means the
@@ -3277,7 +3277,7 @@ class ClientSync {
     // The clock is the BTC height, which on a BTC follower is the block index itself.
     // Off BTC there is no BTC height in this path, so null is passed and the gate
     // treats an unimplemented requirement as fail-closed (see the header of
-    // src/train_activation.js). The halt rides haltOnDivergence so it is durable in
+    // src/consensus/gates/train_gate.js). The halt rides haltOnDivergence so it is durable in
     // sync_halt, re-read by start(), and cleared only by an operator, exactly like a
     // divergence halt: a follower that forgot the halt across a restart would apply
     // the forked block. Never throws into the apply path: a fault in the gate itself

@@ -324,6 +324,7 @@ const windowReads = {
             "JOIN actions aha ON aha.action_index = ah.action_index " +
             "JOIN attests ac ON ac.request_id = ah.request_id " +
                 "AND ac.version = " + continuationVersion + " AND ac.batch_chunk_index IS NOT NULL " +
+                "AND ac.batch_total_chunks = ah.batch_total_chunks AND ac.batch_crc32 = ah.batch_crc32 " +
             "JOIN index_statuses acs ON acs.id = ac.status_id AND acs.status = 'valid' " +
             "JOIN actions aca ON aca.action_index = ac.action_index AND aca.source_id = aha.source_id " +
             "WHERE ah.version = " + headVersion + " AND ah.batch_chunk_index = 0 " +

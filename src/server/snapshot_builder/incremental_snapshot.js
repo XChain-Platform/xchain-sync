@@ -22,6 +22,7 @@ const zlib = require('zlib');
 const util = require('node:util');
 const { SCHEMA_VERSION } = require('../../schema/version');
 const { encodeRow, encodeTables, bigIntReplacer } = require('../../util/wire_codec');
+const { isSchemaGapError } = require('../../db/schema_gap');
 const replicatedTables = require('../../schema/replicated_tables');
 const { collectUpdatedRows } = require('../updated_rows');
 const { activationDelayBlocks } = require('../../consensus-constants');
@@ -219,18 +220,6 @@ module.exports = {
         return first;
     },
 
-    // After the "tables" object closes, emit the in-place updated-rows channel
-    // as a sibling key. The action_index window above can't reach a surviving
-    // row (created below the window) that was mutated in place during the
-    // catch-up range, so carry its current full state here for the follower to
-    // UPSERT (ClientApplier.applyUpdatedRows). Indexer only; decoder has none
-    // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
-    // the snapshot's block height. Window starts at sinceBlock to match the
-    // `block_index >= sinceBlock` data scoping above (over-inclusion is a
-    // harmless UPSERT). tokens.escrow_action_index rides along (full-row
-    // carry); the follower also re-derives it locally when escrow tables
-    // move (ClientApplier.maybeRederiveEscrow), so the carried value is
-    // convergent, not the gate's only writer.
     async writeIncrementalTableRows(writer, table, rows, first){
         if(!first) await writer.write(',');
         await writer.write('"' + table + '":[');
@@ -258,10 +247,22 @@ module.exports = {
         // table's window vanishes while the payload still parses). Re-throw so
         // the stream aborts and the follower fails closed on truncated JSON,
         // matching ClientRollback's errno discrimination.
-        if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+        if(!isSchemaGapError(e)) throw e;
         logger.error(util.format('Error reading table ' + table + ' for incremental:', e));
     },
 
+    // After the "tables" object closes, emit the in-place updated-rows channel
+    // as a sibling key. The action_index window above can't reach a surviving
+    // row (created below the window) that was mutated in place during the
+    // catch-up range, so carry its current full state here for the follower to
+    // UPSERT (ClientApplier.applyUpdatedRows). Indexer only; decoder has none
+    // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
+    // the snapshot's block height. Window starts at sinceBlock to match the
+    // `block_index >= sinceBlock` data scoping above (over-inclusion is a
+    // harmless UPSERT). tokens.escrow_action_index rides along (full-row
+    // carry); the follower also re-derives it locally when escrow tables
+    // move (ClientApplier.maybeRederiveEscrow), so the carried value is
+    // convergent, not the gate's only writer.
     async writeIncrementalUpdatedRows(writer, db, dbType, sinceBlock, lastBlock, coin, conn){
         if(dbType !== 'indexer') return;
         let delay = requireIncrementalActivationDelay(coin);

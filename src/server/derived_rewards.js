@@ -55,6 +55,8 @@
  *
  ********************************************************************/
 
+const { isSchemaGapError } = require('../db/schema_gap');
+
 // Selects validator_rewards rows MATERIALIZED (derive_block_index) inside the inclusive
 // window [fromBlock, toBlock] whose own block_index (earn-block E) is BELOW their
 // materialization block, so the block-keyed channels missed them. Returns raw rows for
@@ -98,7 +100,7 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
         // such a source has derived nothing either, so skip silently ONLY on a genuine
         // schema gap. A transient fault must surface so the caller retries the block
         // rather than broadcasting it short (mirrors ServerPoller's isSchemaGapError gate).
-        if(!(e && typeof e.errno === 'number' && (e.errno === 1146 || e.errno === 1054))) throw e;
+        if(!isSchemaGapError(e)) throw e;
     }
 
     return Array.from(acc.values());

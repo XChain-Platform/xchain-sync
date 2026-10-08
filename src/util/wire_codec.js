@@ -32,12 +32,18 @@
  * peer on the old format fails closed at bootstrap rather than re-introducing
  * the corruption.
  *
- * BIGINT columns (which the driver returns as BigInt) go on the wire as base-10
- * strings through bigIntReplacer below, the one replacer every server route
- * serializes with: the live broadcast and every snapshot, page and table stream.
- * The client applies values without coercion, so two routes emitting different
- * forms would replicate the same column differently. Changing the form is a
- * wire-format change under the same SCHEMA_VERSION rule.
+ * BIGINT columns travel as JSON Numbers: the shared pool sets bigIntAsNumber
+ * (src/db/index.js poolOptions), so the driver hands every route a JS Number.
+ * That form is exact only up to Number.MAX_SAFE_INTEGER; a larger value is
+ * rounded on the source read and replicated rounded, and content parity cannot
+ * see it because both sides then hold the same Number. A column that can pass
+ * 2^53 needs another type (amounts are VARCHAR) before it is replicated.
+ * bigIntReplacer below is still the one replacer every server route serializes
+ * with (the live broadcast and every snapshot, page and table stream), writing
+ * any BigInt that does reach it as its exact base-10 string. The client applies
+ * values without coercion, so two routes emitting different forms would
+ * replicate the same column differently. Flipping bigIntAsNumber or changing
+ * either form is a wire-format change under the same SCHEMA_VERSION rule.
  *
  ********************************************************************/
 

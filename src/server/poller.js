@@ -59,10 +59,8 @@ const BLOCK_SCOPED_INDEX_TABLES = lifecycle.tablesWhere(t => t.rollback === 'ind
 // unhashed slash-debit/reconcile tables ClientRollback restores from on reorg). Only
 // schema gaps may be skipped; anything else must re-throw so poll's loop freezes the
 // cursor and retries the block. Mirrors SnapshotBuilder.streamIncrementalSnapshot's
-// errno discrimination.
-function isSchemaGapError(e){
-    return !!(e && (e.errno === 1146 || e.errno === 1054));
-}
+// errno discrimination. The predicate is the one every forward collector shares.
+const { isSchemaGapError } = require('../db/schema_gap');
 
 function initializePollerIdentity(poller, chain, network, db, broadcaster,
     transparencyLog, config, util){

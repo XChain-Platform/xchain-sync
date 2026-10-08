@@ -234,6 +234,9 @@ describe('updatedRows.collectUpdatedRows', function(){
         // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
         assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
         assert.ok(hq.sql.indexOf('aca.source_id = aha.source_id') !== -1);
+        // The reverse reset's encoding scope: the chunk shares the head's chunk count and CRC.
+        assert.ok(hq.sql.indexOf('ac.batch_total_chunks = ah.batch_total_chunks') !== -1);
+        assert.ok(hq.sql.indexOf('ac.batch_crc32 = ah.batch_crc32') !== -1);
         // Full row, so the follower's upsert refreshes status_id in place.
         assert.ok(hq.sql.indexOf('SELECT ah.*') === 0);
     });

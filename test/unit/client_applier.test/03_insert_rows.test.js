@@ -271,6 +271,37 @@ function registerInsertCases5(){
         assert.strictEqual(db.doQuery.called, false);
     });
 }
+
+function registerInsertCases6(){
+    // Catch-up reads sync_meta with SELECT *, so its rows carry the source's local id
+    // while live rows carry none; an IGNOREd PRIMARY collision would drop a block leaf.
+    describe('sync_meta surrogate id (strip-only class)', function(){
+        const leaf = { id: 27681, block_index: 3147670, block_time: 5, ledger_hash: 'aa', actions_hash: 'bb', contract_hash: 'cc' };
+
+        it('strips the source id and still dedupes on block_index with INSERT IGNORE', async function(){
+            await applier.insertRows('sync_meta', [leaf]);
+            let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+            assert.ok(insert.startsWith('INSERT IGNORE'), 'sync_meta must keep first-write-wins dedupe');
+            assert.ok(!insert.includes('`id`'), 'the source surrogate id must not reach the column list');
+            for(const col of ['block_index', 'ledger_hash', 'actions_hash', 'contract_hash'])
+                assert.ok(insert.includes('`' + col + '`'), col + ' must still be written');
+        });
+
+        it('issues no DELETE for a sync_meta row', async function(){
+            await applier.insertRows('sync_meta', [leaf]);
+            let calls = db.doQuery.getCalls().map(c => c.args[0]);
+            assert.ok(!calls.some(q => /^DELETE/.test(q)), 'a delete-and-reinsert would make leaves last-write-wins');
+        });
+
+        it('writes a live-shaped sync_meta row that carries no id unchanged', async function(){
+            let live = Object.assign({}, leaf);
+            delete live.id;
+            await applier.insertRows('sync_meta', [live]);
+            let insert = db.doQuery.getCalls().map(c => c.args[0]).find(q => /^INSERT/.test(q));
+            assert.ok(insert.startsWith('INSERT IGNORE') && insert.includes('`block_index`'));
+        });
+    });
+}
 describe('ClientApplier', function(){
     registerHooks();
 
@@ -280,5 +311,6 @@ describe('ClientApplier', function(){
         registerInsertCases3();
         registerInsertCases4();
         registerInsertCases5();
+        registerInsertCases6();
     });
 });

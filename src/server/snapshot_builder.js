@@ -25,6 +25,7 @@
  ********************************************************************/
 
 const poolSizing = require('../db/pool_sizing');
+const { isSchemaGapError } = require('../db/schema_gap');
 const envConfig = require('../config');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
@@ -218,7 +219,7 @@ class SnapshotBuilder {
         } catch(e){
             // Swallow ONLY a genuine schema gap on an older source (1146
             // missing table / 1054 missing column), propagate anything transient.
-            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             return null;
         }
     }
@@ -233,7 +234,7 @@ class SnapshotBuilder {
             // error (deadlock 1213, lock-wait 1205, connection drop)
             // must propagate so the stream aborts rather than silently
             // omitting the table's window (matches ClientRollback).
-            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             return null;
         }
     }
@@ -262,7 +263,7 @@ class SnapshotBuilder {
             // missing column on an older source). A transient/operational
             // error must abort the stream, not silently drop the matured
             // credits from the catch-up payload (mirrors ClientRollback).
-            if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             return rows;
         }
     }
@@ -296,7 +297,7 @@ class SnapshotBuilder {
                     appendNewRewardRows(rows, extra);
                 }
             } catch(e){
-                if(e && e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
         }
         return rows;

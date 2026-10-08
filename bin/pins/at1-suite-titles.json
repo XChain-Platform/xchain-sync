@@ -317,6 +317,12 @@
       "SyncService getHubConfigAgeSeconds returns null when the hub has never answered",
       "SyncService getHubConfigAgeSeconds returns whole seconds since the last successful fetch"
     ],
+    "166fa60da55ff1a9": [
+      "ClientApplier surrogate-id registry matches the indexer DDL @regression every allow-listed table carries a reason, so the list cannot grow silently",
+      "ClientApplier surrogate-id registry matches the indexer DDL @regression keeps attest_validator_stats in the strip-only class, not the DELETE class",
+      "ClientApplier surrogate-id registry matches the indexer DDL @regression keeps sync_meta in the strip-only class and on the IGNORE path, not the DELETE class",
+      "ClientApplier surrogate-id registry matches the indexer DDL @regression strips or explicitly allows the id of every upsert full-dump table that declares one"
+    ],
     "169ecc74d07da9cf": [
       "ClientSync verifyTableCounts (replica-completeness) at the same height, reports a replica-AHEAD delta on exact-parity tables as reason replica-ahead",
       "ClientSync verifyTableCounts (replica-completeness) does not fault the completeness check when the schema heal itself throws",
@@ -930,18 +936,6 @@
       "HubClient hub-vs-bundle consensus-hash cross-check says nothing when every served hash matches the bundle",
       "HubClient hub-vs-bundle consensus-hash cross-check says nothing when the hub predates the field"
     ],
-    "3787112c2730702b": [
-      "Advisory table-content parity content digest a single altered amount diverges (the smallest possible tamper)",
-      "Advisory table-content parity content digest case 2: a faithful replica reproduces the source digest",
-      "Advisory table-content parity content digest case 3: equal row count + substituted content diverges (row counts miss this)",
-      "Advisory table-content parity content digest case 4: row order is not content (unlike the consensus hashes)",
-      "Advisory table-content parity content digest case 5: the stripped blocks.id surrogate is excluded, so it cannot false-alarm",
-      "Advisory table-content parity content digest column ORDER and driver value typing do not change the digest",
-      "Advisory table-content parity content digest the digest is table-scoped: identical rows under different table names differ",
-      "Advisory table-content parity content digest the generated contract_state.state_key_bin column is excluded",
-      "Advisory table-content parity content digest the node-local contract_emissions.id column is excluded, so it cannot false-alarm",
-      "Advisory table-content parity content digest the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm"
-    ],
     "37bc72a0a6979a91": [
       "Integration: contract_emissions reorg-safe streaming (emissions fix) @regression getEmissionRowsForBlock includes NULL-action_index (SLASH) emissions the action-scoped path drops"
     ],
@@ -1430,6 +1424,38 @@
       "ClientSync decoder bootstrap completeness verifyDecoderCompleteness is a no-op for non-decoder dbType",
       "ClientSync decoder bootstrap completeness verifyDecoderCompleteness passes quietly when the follower is complete"
     ],
+    "4ee97831bb1bf547": [
+      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) issues no DELETE: the natural key is composite and a scoped delete would drop siblings",
+      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) leaves a row that carries no id alone",
+      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) refuses a row that carries only the stripped id rather than inserting nothing",
+      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) still upserts on the natural key, so a re-dump refreshes the counters",
+      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) strips the source id so the replica keeps its own",
+      "ClientApplier insertRows backtick-wraps column names",
+      "ClientApplier insertRows batches inserts in groups of 100",
+      "ClientApplier insertRows blocks surrogate id (item 808) deletes the existing row for that block_index first, so a re-send is idempotent",
+      "ClientApplier insertRows blocks surrogate id (item 808) does not use IGNORE or UPSERT, which would drop or overwrite a block",
+      "ClientApplier insertRows blocks surrogate id (item 808) fails closed on a row with no block_index rather than appending a duplicate",
+      "ClientApplier insertRows blocks surrogate id (item 808) leaves a legacy row that carries no id untouched",
+      "ClientApplier insertRows blocks surrogate id (item 808) scopes the delete to the applied blocks only, never the whole table",
+      "ClientApplier insertRows blocks surrogate id (item 808) strips the source id so the replica assigns its own",
+      "ClientApplier insertRows does nothing for empty rows",
+      "ClientApplier insertRows does nothing for null rows",
+      "ClientApplier insertRows handles null column values",
+      "ClientApplier insertRows handles undefined column values as null",
+      "ClientApplier insertRows keeps refreshing markets.id, whose id space is source-assigned end to end",
+      "ClientApplier insertRows sync_meta surrogate id (strip-only class) issues no DELETE for a sync_meta row",
+      "ClientApplier insertRows sync_meta surrogate id (strip-only class) strips the source id and still dedupes on block_index with INSERT IGNORE",
+      "ClientApplier insertRows sync_meta surrogate id (strip-only class) writes a live-shaped sync_meta row that carries no id unchanged",
+      "ClientApplier insertRows throws on an invalid column name without querying (fail closed)",
+      "ClientApplier insertRows throws on an invalid table name without querying (fail closed)",
+      "ClientApplier insertRows upserts attest_validator_stats with ON DUPLICATE KEY UPDATE covering every carried column",
+      "ClientApplier insertRows upserts markets with ON DUPLICATE KEY UPDATE covering every carried column",
+      "ClientApplier insertRows uses INSERT IGNORE for append-only merkle_epochs",
+      "ClientApplier insertRows uses INSERT IGNORE for index tables",
+      "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcall_absences",
+      "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcalls",
+      "ClientApplier insertRows uses INSERT for non-index tables"
+    ],
     "4f4e462e9354e761": [
       "ClientSync security fetchAndApplySchema: DDL validation accepts valid CREATE TABLE DDL",
       "ClientSync security fetchAndApplySchema: DDL validation continues processing when one table is invalid",
@@ -1721,12 +1747,6 @@
       "ClientSync: decoder completeness check on a truncated replica full-history decoder: no windowed exclusion, caller excludes pass through unchanged @regression",
       "ClientSync: decoder completeness check on a truncated replica truncated decoder: block-windowed tables are excluded from the count check, lookups stay strict @regression"
     ],
-    "5cb811bd3e21b84c": [
-      "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
-      "Advisory table-content parity excluded-column registry @regression excludes every applier node-local id and every generated column of a hashed table",
-      "Advisory table-content parity excluded-column registry @regression reports a generated column the registry does not exclude",
-      "Advisory table-content parity excluded-column registry @regression reports a hashed node-local-id table with no id exclusion, and ignores one that is not hashed"
-    ],
     "5cc2b8143bdd5808": [
       "Security: remediated dependency advisories @regression @tier4 ADV-10: the installed mariadb reports a patched runtime version",
       "Security: remediated dependency advisories @regression @tier4 ADV-1: package.json pins axios at or above 1.18.0",
@@ -1999,11 +2019,6 @@
       "SnapshotBuilder streamFullSnapshot sets correct response headers",
       "SnapshotBuilder streamFullSnapshot skips tables with 0 rows",
       "SnapshotBuilder streamFullSnapshot streams valid gzip JSON for tables with data"
-    ],
-    "73126c25800a9bdc": [
-      "ClientApplier surrogate-id registry matches the indexer DDL @regression every allow-listed table carries a reason, so the list cannot grow silently",
-      "ClientApplier surrogate-id registry matches the indexer DDL @regression keeps attest_validator_stats in the strip-only class, not the DELETE class",
-      "ClientApplier surrogate-id registry matches the indexer DDL @regression strips or explicitly allows the id of every upsert full-dump table that declares one"
     ],
     "73d07ebbe093fcfd": [
       "replication schema version and migration frontier @regression carries a frontier for exactly the same dbTypes",
@@ -2652,35 +2667,6 @@
       "Database.ensureReplicaSecondaryIndexes(): votes append-only migration creates the widened key on a replica missing both (defensive)",
       "Database.ensureReplicaSecondaryIndexes(): votes append-only migration is a no-op for a decoder replica (indexer-only)"
     ],
-    "93d6210945bb30dd": [
-      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) issues no DELETE: the natural key is composite and a scoped delete would drop siblings",
-      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) leaves a row that carries no id alone",
-      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) refuses a row that carries only the stripped id rather than inserting nothing",
-      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) still upserts on the natural key, so a re-dump refreshes the counters",
-      "ClientApplier insertRows attest_validator_stats surrogate id (strip-only class) strips the source id so the replica keeps its own",
-      "ClientApplier insertRows backtick-wraps column names",
-      "ClientApplier insertRows batches inserts in groups of 100",
-      "ClientApplier insertRows blocks surrogate id (item 808) deletes the existing row for that block_index first, so a re-send is idempotent",
-      "ClientApplier insertRows blocks surrogate id (item 808) does not use IGNORE or UPSERT, which would drop or overwrite a block",
-      "ClientApplier insertRows blocks surrogate id (item 808) fails closed on a row with no block_index rather than appending a duplicate",
-      "ClientApplier insertRows blocks surrogate id (item 808) leaves a legacy row that carries no id untouched",
-      "ClientApplier insertRows blocks surrogate id (item 808) scopes the delete to the applied blocks only, never the whole table",
-      "ClientApplier insertRows blocks surrogate id (item 808) strips the source id so the replica assigns its own",
-      "ClientApplier insertRows does nothing for empty rows",
-      "ClientApplier insertRows does nothing for null rows",
-      "ClientApplier insertRows handles null column values",
-      "ClientApplier insertRows handles undefined column values as null",
-      "ClientApplier insertRows keeps refreshing markets.id, whose id space is source-assigned end to end",
-      "ClientApplier insertRows throws on an invalid column name without querying (fail closed)",
-      "ClientApplier insertRows throws on an invalid table name without querying (fail closed)",
-      "ClientApplier insertRows upserts attest_validator_stats with ON DUPLICATE KEY UPDATE covering every carried column",
-      "ClientApplier insertRows upserts markets with ON DUPLICATE KEY UPDATE covering every carried column",
-      "ClientApplier insertRows uses INSERT IGNORE for append-only merkle_epochs",
-      "ClientApplier insertRows uses INSERT IGNORE for index tables",
-      "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcall_absences",
-      "ClientApplier insertRows uses INSERT IGNORE for the re-deliverable rollcalls",
-      "ClientApplier insertRows uses INSERT for non-index tables"
-    ],
     "946032dcbe5e268e": [
       "DATETIME retype failure isolation continues with the next table when one ALTER rejects",
       "DATETIME retype failure isolation does not alter columns in the unsafe -06:00 session zone",
@@ -2744,28 +2730,6 @@
       "Boundary: Circuit Breaker half-open recovery re-opens on failure during half-open",
       "Boundary: Circuit Breaker half-open recovery transitions to half-open after cooldown expires"
     ],
-    "981ac25a08843afc": [
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer ignores a global BigInt.prototype.toJSON patch",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer is the only BigInt replacer: every server serializer imports it from wire_codec",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a BigInt above the safe-integer range as its exact decimal string",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a top-level BigInt and one inside encodeTables output as strings"
-    ],
     "982b7874b134e4c3": [
       "HubClient getallconfigs watermark regression discards the cache and re-fetches full when the same endpoint serves a lower watermark",
       "HubClient getallconfigs watermark regression does not treat a regressed-but-unwrapped (no seq/configs) payload as a regression"
@@ -2821,10 +2785,47 @@
       "07 Rollback Performance rollback 50 blocks",
       "07 Rollback Performance rollback time scales sub-quadratically with depth"
     ],
+    "9c17a3e25b776f72": [
+      "Advisory table-content parity content digest a later COINPAY promotion of order_matches.status_id does not diverge, other columns do",
+      "Advisory table-content parity content digest a single altered amount diverges (the smallest possible tamper)",
+      "Advisory table-content parity content digest case 2: a faithful replica reproduces the source digest",
+      "Advisory table-content parity content digest case 3: equal row count + substituted content diverges (row counts miss this)",
+      "Advisory table-content parity content digest case 4: row order is not content (unlike the consensus hashes)",
+      "Advisory table-content parity content digest case 5: the stripped blocks.id surrogate is excluded, so it cannot false-alarm",
+      "Advisory table-content parity content digest column ORDER and driver value typing do not change the digest",
+      "Advisory table-content parity content digest the digest is table-scoped: identical rows under different table names differ",
+      "Advisory table-content parity content digest the generated contract_state.state_key_bin column is excluded",
+      "Advisory table-content parity content digest the node-local contract_emissions.id column is excluded, so it cannot false-alarm",
+      "Advisory table-content parity content digest the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm"
+    ],
     "9d92b7054e6d2dc8": [
       "updatedRows.collectUpdatedRows carries COINPay-settled order_matches rows keyed by the window of the fulfilled status",
       "updatedRows.collectUpdatedRows rethrows a non-schema error from the COINPay match class (never a silent drop)",
       "updatedRows.collectUpdatedRows skips the COINPay match class on a pre-COINPay schema instead of throwing"
+    ],
+    "9d933da3a4fc8f8a": [
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer ignores a global BigInt.prototype.toJSON patch",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer is the only BigInt replacer: every server serializer imports it from wire_codec",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer passes a Number BIGINT, the bigIntAsNumber driver form, through as a JSON Number",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer the shared pool sets bigIntAsNumber: true, so BIGINT travels as a Number",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a BigInt above the safe-integer range as its exact decimal string",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a top-level BigInt and one inside encodeTables output as strings"
     ],
     "9e08b97fcd02776a": [
       "ClientSync constructor: SYNC_MODE_<CHAIN>=infra-only vs the halting verification gates constructs in infra-only when all three gates are explicitly false, and carries the mode to the subscribe URL",
@@ -2986,6 +2987,14 @@
     "ab66d18ef5798490": [
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships each row once when both channels return the same synthetic-action row @regression",
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships the synthetic-action credit and release once when the matured join is empty @regression"
+    ],
+    "ad581ffaee874b66": [
+      "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
+      "Advisory table-content parity excluded-column registry @regression declares the edited columns of every in-place carried table still in the parity window",
+      "Advisory table-content parity excluded-column registry @regression excludes every applier node-local id and every generated column of a hashed table",
+      "Advisory table-content parity excluded-column registry @regression reports a generated column the registry does not exclude",
+      "Advisory table-content parity excluded-column registry @regression reports a hashed node-local-id table with no id exclusion, and ignores one that is not hashed",
+      "Advisory table-content parity excluded-column registry @regression reports an in-place carried table with no declared column, and ignores one outside the window"
     ],
     "ae094bbd1678fdf4": [
       "SnapshotBuilder streamIncrementalSnapshot snapshot-replication tables full-dumps indexer pubkeys instead of action-scoping it into errno 1054",
@@ -4358,7 +4367,7 @@
   "scripts": {
     "test": {
       "fileCount": 355,
-      "titleCount": 2805,
+      "titleCount": 2814,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4431,7 +4440,7 @@
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
-        "test/unit/client_applier.test/03_insert_rows.test.js": "93d6210945bb30dd",
+        "test/unit/client_applier.test/03_insert_rows.test.js": "4ee97831bb1bf547",
         "test/unit/client_applier.test/04_apply_dispensers_replace.test.js": "932531f1175e9a43",
         "test/unit/client_applier.test/05_anchor_actions_bundle_sections.test.js": "07d974594667f5bb",
         "test/unit/client_applier.test/06_insert_rows_upsert_error_tag.test.js": "a8143fefd1a46c99",
@@ -4676,7 +4685,7 @@
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_armed_set.test.js": "8e78b69ca3426aa3",
         "test/unit/stream_scope_columns.test.js": "0c3480e683309fb5",
-        "test/unit/surrogate_id_registry.test.js": "73126c25800a9bdc",
+        "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_meta_client_retention.test.js": "64d6e397618c5805",
         "test/unit/sync_service.test.js": "d43f78d5b62fbee6",
         "test/unit/sync_service.test/01_discover_chains.test.js": "80a5a1a0eeed9d5e",
@@ -4696,12 +4705,12 @@
         "test/unit/sync_service.test/14_state_tree_metric_coin_ticker.test.js": "bce5f38ce4fa01fe",
         "test/unit/sync_table_classification.test.js": "f4ec21668243211b",
         "test/unit/table_content_parity.test.js": "3f4b732becaa031e",
-        "test/unit/table_content_parity.test/01_content_digest.test.js": "3787112c2730702b",
+        "test/unit/table_content_parity.test/01_content_digest.test.js": "9c17a3e25b776f72",
         "test/unit/table_content_parity.test/02_compute_table_content_checksums.test.js": "347de06fd7b53919",
         "test/unit/table_content_parity.test/03_compare_table_content.test.js": "39c89678ecd7b9af",
         "test/unit/table_content_parity.test/04_wiring.test.js": "0193b2edcc8a3f28",
         "test/unit/table_content_parity.test/05_operational_log_exclusion.test.js": "14ec247717c62037",
-        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "5cb811bd3e21b84c",
+        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",
         "test/unit/train_activation.test.js": "4bbfbfece133da72",
         "test/unit/train_activation_twin.test.js": "be30d095ec85b25c",
         "test/unit/train_gate_verdict_characterization.test.js": "5039fe55a9d97010",
@@ -4714,7 +4723,7 @@
         "test/unit/utf8mb4_replica_widen.test.js": "9e46fbfae5839c05",
         "test/unit/utility.test.js": "436350992c034c95",
         "test/unit/validation.test.js": "8abfcb4541ad0c52",
-        "test/unit/wire_codec.test.js": "981ac25a08843afc"
+        "test/unit/wire_codec.test.js": "9d933da3a4fc8f8a"
       }
     },
     "test:boundary": {
@@ -5000,7 +5009,7 @@
     },
     "test:regression": {
       "fileCount": 94,
-      "titleCount": 733,
+      "titleCount": 736,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5093,9 +5102,9 @@
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_armed_set.test.js": "8e78b69ca3426aa3",
         "test/unit/stream_scope_columns.test.js": "0c3480e683309fb5",
-        "test/unit/surrogate_id_registry.test.js": "73126c25800a9bdc",
+        "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_service.test/14_state_tree_metric_coin_ticker.test.js": "bce5f38ce4fa01fe",
-        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "5cb811bd3e21b84c"
+        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66"
       }
     },
     "test:security": {

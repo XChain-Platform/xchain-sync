@@ -279,6 +279,8 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     and (key, author) has been the batch's identity since the rail shipped. An
     //     unresolvable author on either side is a NULL that no equality matches, so it
     //     authenticates nothing rather than everything (fail closed), matching authoredBy.
+    //     Encoding scope too: the continuation must declare the head's own chunk count and
+    //     body CRC, since only a chunk that matches the head's geometry can stamp it.
     //
     //     Aliases are ah/ac (head, chunk) rather than class 5's p/c: the anchor class's
     //     regression guard is a file-wide regex over this source that forbids the literal

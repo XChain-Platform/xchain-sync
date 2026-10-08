@@ -192,5 +192,17 @@ describe('Unit: wireCodec bigIntReplacer', function(){
         it('is the only BigInt replacer: every server serializer imports it from wire_codec', function(){
             assertOneBigIntReplacer();
         });
+
+        it('passes a Number BIGINT, the bigIntAsNumber driver form, through as a JSON Number', function(){
+            assert.strictEqual(JSON.stringify({ id: 42, h: 9007199254740991, s: 'x' }, bigIntReplacer),
+                '{"id":42,"h":9007199254740991,"s":"x"}');
+        });
+
+        it('the shared pool sets bigIntAsNumber: true, so BIGINT travels as a Number', function(){
+            const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/db/index.js'), 'utf8');
+            assert.match(src, /bigIntAsNumber:\s*true/,
+                'flipping bigIntAsNumber changes the BIGINT wire form, a SCHEMA_VERSION change');
+            assert.doesNotMatch(src, /bigIntAsNumber:\s*(?:false|this\.|\()/);
+        });
     });
 });

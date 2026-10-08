@@ -14,8 +14,10 @@
 // as a permanent false content-parity alarm while every other test stays green.
 
 const assert = require('assert');
+const fs     = require('fs');
+const path   = require('path');
 
-const ClientApplier        = require('../../../src/client/applier');
+const ClientApplier       = require('../../../src/client/applier');
 const Utility              = require('../../../src/util');
 const lifecycle            = require('../../../src/table_lifecycle');
 const replicatedTables     = require('../../../src/schema/replicated_tables');
@@ -40,6 +42,25 @@ function missingExclusions({ planned, surrogateIdTables, generated, excludedFor 
 function plannedTables(){
     return new Set(replicatedTables.contentParityPlan('indexer')
         .concat(replicatedTables.contentParityPlan('decoder')).map(p => p.table));
+}
+
+// Every table the updated-rows carry re-sends after an in-place edit: the literal add() calls
+// plus every table named by the exported spec lists (strings or { table } entries).
+function updatedRowsCarriedTables(){
+    let dir = path.join(__dirname, '../../../src/server');
+    let files = [path.join(dir, 'updated_rows.js')].concat(fs.readdirSync(path.join(dir, 'updated_rows'))
+        .filter(f => f.endsWith('.js')).map(f => path.join(dir, 'updated_rows', f)));
+    let tables = new Set();
+    for(let file of files)
+        for(let m of fs.readFileSync(file, 'utf8').matchAll(/add\(acc,\s*'(\w+)'/g)) tables.add(m[1]);
+    for(let list of Object.values(require('../../../src/server/updated_rows/table_specs')))
+        if(Array.isArray(list)) for(let s of list) tables.add(typeof s === 'string' ? s : s.table);
+    return tables;
+}
+
+// Carried tables that stay in the parity window with no declared in-place column.
+function undeclaredInPlaceTables(carried, planned, inPlace){
+    return [...carried].filter(t => planned.has(t) && !(inPlace[t] && inPlace[t].length)).sort();
 }
 
 // The applier's two node-local id sets, read off a real instance (both are set in the constructor).
@@ -81,6 +102,21 @@ describe('Advisory table-content parity', function(){
             let { gaps } = missingExclusions({ planned, surrogateIdTables: [bare, 'not_a_hashed_table'],
                 generated: {}, excludedFor });
             assert.deepStrictEqual(gaps, [{ table: bare, column: 'id', source: 'applier node-local id' }]);
+        });
+
+        it('declares the edited columns of every in-place carried table still in the parity window', function(){
+            let carried = updatedRowsCarriedTables();
+            assert.ok(carried.has('order_matches') && carried.has('tokens'), 'the carried-table scan found ' +
+                JSON.stringify([...carried]) + '; it no longer reads the updated-rows sources');
+            assert.deepStrictEqual(undeclaredInPlaceTables(carried, plannedTables(), lifecycle.CONTENT_PARITY_IN_PLACE_COLUMNS), [],
+                'a later block edits these rows in place, so a source one block ahead false-alarms; declare the ' +
+                'state_hash class or a CONTENT_PARITY_IN_PLACE_COLUMNS entry in both registry twins');
+            assert.ok(lifecycle.contentParityExcludedColumns('order_matches').includes('status_id'));
+        });
+
+        it('reports an in-place carried table with no declared column, and ignores one outside the window', function(){
+            let planned = plannedTables();
+            assert.deepStrictEqual(undeclaredInPlaceTables(new Set(['order_matches', 'tokens']), planned, {}), ['order_matches']);
         });
     });
 });

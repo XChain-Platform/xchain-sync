@@ -139,14 +139,18 @@ function initializeLocalSurrogateIdTables(applier) {
 }
 
 function initializeLocalSurrogateIdOnlyTables(applier) {
-    // Mark upserted tables whose local IDs must be stripped before insertion,
-    // relying on an existing composite unique key instead of the single-column
-    // delete path above.
+    // Mark tables whose local IDs must be stripped before insertion, relying on
+    // an existing unique natural key (through the upsert or IGNORE path) instead
+    // of the single-column delete path above.
     applier.localSurrogateIdOnlyTables = new Set([
         // Keep attest validator stats keyed by validator and provider while every
         // replica assigns its own surrogate sequence; source reorg recomputation
         // may allocate the same numeric ID to a different surviving row.
-        'attest_validator_stats'
+        'attest_validator_stats',
+        // Keep sync_meta keyed by its unique block_index (first write wins, as on
+        // the source). The live stream omits id, so a catch-up row carrying the
+        // source id can hit another block's local id and be silently IGNOREd.
+        'sync_meta'
     ]);
 }
 
@@ -568,10 +572,10 @@ class ClientApplier {
         }
 
         // Drop the source's local surrogate id and let the replica keep its own. No
-        // DELETE: this class already upserts on a real unique natural key, so the
-        // existing ON DUPLICATE KEY UPDATE identifies the row. Writing the id here is
-        // what would rewrite the replica's PRIMARY KEY onto a number another surviving
-        // row holds (ER_DUP_ENTRY 1062). See localSurrogateIdOnlyTables.
+        // DELETE: the class has a real unique natural key, so ON DUPLICATE KEY UPDATE
+        // or INSERT IGNORE identifies the row. A carried id can land on a PRIMARY KEY
+        // another row holds (ER_DUP_ENTRY 1062 on upsert, a silent drop under IGNORE).
+        // See localSurrogateIdOnlyTables.
         if(this.localSurrogateIdOnlyTables.has(table) && columns.includes('id')){
             columns = columns.filter(c => c !== 'id');
             if(columns.length === 0)

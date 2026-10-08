@@ -37,6 +37,8 @@
  *
  ********************************************************************/
 
+const { isSchemaGapError } = require('../db/schema_gap');
+
 // Selects validator_rewards rows re-materialized (recovery_pending_rewards.applied_block)
 // inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)
 // is BELOW that window, so the normal block-scoped channels missed them. Returns raw
@@ -87,7 +89,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // freezes the block cursor / aborts the snapshot stream, and swallowing here
         // makes those gates dead code and ships the block short its backdated rows.
         // Mirrors derivedRewards.js on the same rail.
-        if(!(e && typeof e.errno === 'number' && (e.errno === 1146 || e.errno === 1054))) throw e;
+        if(!isSchemaGapError(e)) throw e;
     }
 
     return Array.from(acc.values());

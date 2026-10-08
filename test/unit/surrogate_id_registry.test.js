@@ -105,6 +105,14 @@ describe('ClientApplier surrogate-id registry matches the indexer DDL @regressio
             'a single-column DELETE would drop that validator rows for every other provider');
     });
 
+    it('keeps sync_meta in the strip-only class and on the IGNORE path, not the DELETE class', function(){
+        // Its id is node-local (live rows omit it); the UNIQUE block_index is the real key.
+        assert.ok(applier.localSurrogateIdOnlyTables.has('sync_meta'));
+        assert.ok(applier.ignoreTables.has('sync_meta'), 'sync_meta must stay first-write-wins');
+        assert.ok(!applier.localSurrogateIdTables.has('sync_meta'),
+            'the DELETE class would make transparency-log leaves last-write-wins');
+    });
+
     it('every allow-listed table carries a reason, so the list cannot grow silently', function(){
         for(const table of Object.keys(UPSERT_ID_ALLOWED))
             assert.ok(typeof UPSERT_ID_ALLOWED[table] === 'string' && UPSERT_ID_ALLOWED[table].length > 40,
