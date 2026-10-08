@@ -360,13 +360,6 @@
       "date": "2026-09-27"
     },
     {
-      "id": "train_activation",
-      "from": "0e52179db25e4ef767aa8f695604b37a4a8d7c2dcc70afafadbd40b5760ca9eb",
-      "to": "304a6c9b8b255c674afd19cc50cccbc89185572c943e9af99a6ba54174e97de5",
-      "reason": "copy the split train gate from its indexer canonical",
-      "date": "2026-10-06"
-    },
-    {
       "id": "stateHash",
       "from": "ab592efeee1c1791a7c684db0fc0e53c640cda600433adcfcc8386d189759776",
       "to": "3b5cb6a37f58cb40b0020e2c0440d34e21810b9b316c3e71a5b0c2861a18eb21",
@@ -389,9 +382,9 @@
     },
     {
       "id": "train_activation",
-      "from": "304a6c9b8b255c674afd19cc50cccbc89185572c943e9af99a6ba54174e97de5",
+      "from": "4f82ea30b5120eb7fc0c9cf56f3c115781238255d5760dafb7d79ff5816577ee",
       "to": "ce3a9989904471c34cc525539c736cdec90687009cde9abdfbb475994c9a970f",
-      "reason": "merge the split train gate with the rule set resolution fix",
+      "reason": "split evaluateTrainActivation, logic unchanged",
       "date": "2026-10-07"
     }
   ]
