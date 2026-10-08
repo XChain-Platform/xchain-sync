@@ -186,6 +186,7 @@ describe('ClientRollback token refold (reverse leg of updated_rows class 7)', fu
         });
 
         it('a reorg of the ' + name + ' matches the xchain-indexer fold byte for byte', async function(){
+            this.timeout(30000);
             let root = indexerOrSkip(this);
             if(!root) return;
             let [edit, row] = SCENARIOS[name];

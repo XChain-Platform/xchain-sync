@@ -1,5 +1,11 @@
 {
   "titleSets": {
+    "0040f816c21c3133": [
+      "ClientSync: a live recompute error is recorded durably @regression a clean recompute records nothing",
+      "ClientSync: a live recompute error is recorded durably @regression a recompute error still holds the tip when the durable record cannot be written",
+      "ClientSync: a live recompute error is recorded durably @regression a state_hash read error still holds the tip and records nothing",
+      "ClientSync: a live recompute error is recorded durably @regression records a live recompute error durably and does not halt"
+    ],
     "007aec547cbd73a8": [
       "replicated DATETIME columns depend on db.js dateStrings:true @regression db.js sets dateStrings: true on the shared pool (never scoped per dbType)",
       "replicated DATETIME columns depend on db.js dateStrings:true @regression decoder: the wire-replicated DATETIME/TIMESTAMP inventory matches the frozen list",
@@ -47,14 +53,6 @@
       "sync boot consensus-pin verification passes on the vendored bundle for every network",
       "sync boot consensus-pin verification skips on the (currently null) mainnet pin",
       "sync boot consensus-pin verification the pin check runs before the express app is built"
-    ],
-    "068103cacb04749f": [
-      "ClientSync security handleReorg: max rollback depth HALTS (fails closed) when reorg exceeds MAX_ROLLBACK_DEPTH",
-      "ClientSync security handleReorg: max rollback depth HALTS on deep rollback to block 1",
-      "ClientSync security handleReorg: max rollback depth HALTS the decoder track too (no recompute safety net)",
-      "ClientSync security handleReorg: max rollback depth allows rollback of depth 1",
-      "ClientSync security handleReorg: max rollback depth allows rollback within MAX_ROLLBACK_DEPTH",
-      "ClientSync security handleReorg: max rollback depth ignores a reorg when lastAppliedBlock is null (no cursor inflation from server data)"
     ],
     "07811aa22e123504": [
       "bin/markets-id-parity fetch reads markets at the tip and pages every ticker",
@@ -1003,6 +1001,15 @@
       "sqlUtil stripSqlLineComments removes a trailing -- line comment, leaving a newline",
       "sqlUtil stripSqlLineComments returns empty string for empty input"
     ],
+    "4042bf4162052e5b": [
+      "ClientSync security handleReorg: cumulative rollback depth HALTS when several shallow reorgs sum past MAX_ROLLBACK_DEPTH",
+      "ClientSync security handleReorg: max rollback depth HALTS (fails closed) when reorg exceeds MAX_ROLLBACK_DEPTH",
+      "ClientSync security handleReorg: max rollback depth HALTS on deep rollback to block 1",
+      "ClientSync security handleReorg: max rollback depth HALTS the decoder track too (no recompute safety net)",
+      "ClientSync security handleReorg: max rollback depth allows rollback of depth 1",
+      "ClientSync security handleReorg: max rollback depth allows rollback within MAX_ROLLBACK_DEPTH",
+      "ClientSync security handleReorg: max rollback depth ignores a reorg when lastAppliedBlock is null (no cursor inflation from server data)"
+    ],
     "4149fd390fa625eb": [
       "Database.ensureReplicaSecondaryIndexes(): validator_rewards reward_unique qualifier key adds round_qualifier itself and then rebuilds the key in the same pass",
       "Database.ensureReplicaSecondaryIndexes(): validator_rewards reward_unique qualifier key does nothing when reward_unique is absent",
@@ -1479,6 +1486,11 @@
       "HubClient parseEndpoints prefixes bare HUB_VALIDATORS hosts with https when configured",
       "HubClient parseEndpoints uses https in the fallback path when HUB_PROTOCOL is https"
     ],
+    "5384bbe767fab909": [
+      "/status unverified recompute count is null when the sync state cannot be read",
+      "/status unverified recompute count is zero with no last block when nothing was recorded",
+      "/status unverified recompute count publishes the durable count and last block"
+    ],
     "54140585946817e9": [
       "ClientApplier schema_migrations classification full snapshot leaves the ledger alone when only the local enumeration lists it",
       "ClientApplier schema_migrations classification full snapshot leaves the replica schema_migrations rows untouched",
@@ -1525,6 +1537,12 @@
       "BlockBroadcaster removeSubscription clears metadata on ws",
       "BlockBroadcaster removeSubscription handles ws with no metadata gracefully",
       "BlockBroadcaster removeSubscription removes from subscribers and ipConnections"
+    ],
+    "5744432e388b90b9": [
+      "RollbackGuard accumulates a rewind split across events",
+      "RollbackGuard ends the streak once the tip climbs a full limit above the low target",
+      "RollbackGuard ends the streak once the tip recovers to the peak",
+      "RollbackGuard measures a single event from the tip"
     ],
     "5751017b882d5474": [
       "BlockBroadcaster getSubscriberCount returns 0 for unknown chain/network",
@@ -1870,12 +1888,6 @@
       "ClientSync persistent replica gaps records the persistent gap durably and clears it when the gap closes",
       "ClientSync persistent replica gaps reports that the client self-repair pass failed to close a short lookup"
     ],
-    "6feb913da3be5be4": [
-      "ClientSync: a live recompute error is recorded durably @regression a clean recompute records nothing",
-      "ClientSync: a live recompute error is recorded durably @regression a recompute error still advances when the durable record cannot be written",
-      "ClientSync: a live recompute error is recorded durably @regression a state_hash read error still holds the tip and records nothing",
-      "ClientSync: a live recompute error is recorded durably @regression records a live recompute error durably and does not halt"
-    ],
     "6ff6cbc7afd5ddfd": [
       "TransparencyLog commitEpoch early returns returns early when no blocks exist for the epoch",
       "TransparencyLog commitEpoch early returns returns early when the epoch is already committed",
@@ -2136,6 +2148,11 @@
       "ClientSync maybeVerifyCompleteness reports a shortfall against the primary source at equal heights",
       "ClientSync maybeVerifyCompleteness throttles to COMPLETENESS_CHECK_INTERVAL"
     ],
+    "80769f679993810f": [
+      "ClientSync: a recompute error holds the tip @regression does not advance or halt on a recompute error, then advances once the recompute succeeds",
+      "ClientSync: a recompute error holds the tip @regression verifyRecompute rethrows with holdTip",
+      "ClientSync: a recompute error holds the tip @regression verifyRecompute still returns null without holdTip"
+    ],
     "80a5a1a0eeed9d5e": [
       "SyncService discoverChains SYNC_EXCLUDE drops a listed chain before any DB pool / ClientSync is created",
       "SyncService discoverChains client mode (source reachable): replicates schema, verifies tables, starts a ClientSync",
@@ -2206,6 +2223,12 @@
     ],
     "82de2fae4693c94d": [
       "Integration: the applier can write every table it replicates accepts a schema-shaped row for every replicated table, with no applier-class error"
+    ],
+    "83270a69eb7e38bb": [
+      "ClientSync: independent recompute halt @regression HALTS when replicated rows do not hash to the committed block hash",
+      "ClientSync: independent recompute halt @regression a recompute DB error is logged, does NOT halt, and holds the tip for redelivery",
+      "ClientSync: independent recompute halt @regression does NOT halt when rows hash to the committed block hash (clean block advances)",
+      "ClientSync: independent recompute halt @regression skips recompute when VERIFY_RECOMPUTE is disabled (opt-out for plain replicas)"
     ],
     "8340f62c3bf4e723": [
       "contract_state_root: frozen row-to-leaf mapping @regression MAX(id) runs over tombstones too: a deleted key stays deleted (the ordering trap)",
@@ -2320,12 +2343,6 @@
       "Chaos: Source Database Resilience CE-SRC-04: Intermittent Connection Drops server remains alive throughout intermittent drops",
       "Chaos: Source Database Resilience CE-SRC-04: Intermittent Connection Drops success rate returns to 100% after toxic is removed",
       "Chaos: Source Database Resilience CE-SRC-05: Source Down \u2192 Blocks Accumulate \u2192 Recovery full data integrity after source DB outage with accumulated blocks"
-    ],
-    "86523982ea831a05": [
-      "ClientSync: independent recompute halt @regression HALTS when replicated rows do not hash to the committed block hash",
-      "ClientSync: independent recompute halt @regression a recompute DB error is logged but does NOT halt (no self-inflicted fork on infra faults)",
-      "ClientSync: independent recompute halt @regression does NOT halt when rows hash to the committed block hash (clean block advances)",
-      "ClientSync: independent recompute halt @regression skips recompute when VERIFY_RECOMPUTE is disabled (opt-out for plain replicas)"
     ],
     "87ba7838842f7cf2": [
       "04 Subscriber Scaling 1 subscriber",
@@ -4291,13 +4308,14 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 351,
-      "titleCount": 2749,
+      "fileCount": 354,
+      "titleCount": 2759,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
         "test/unit/api_app_factory.test.js": "4a99c6858a3aef3e",
         "test/unit/api_protocol_halt_freshness.test/01_apply_protocol_halt_freshness.test.js": "e2dd3b784dd1d118",
+        "test/unit/api_unverified_recompute_status.test.js": "5384bbe767fab909",
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_broadcaster.test.js": "8dd046e550af23cc",
         "test/unit/block_broadcaster.test/01_remove_subscription.test.js": "56ea43b3d3b87ccd",
@@ -4360,6 +4378,7 @@
         "test/unit/client/archive_reset_predicate.test.js": "a54f9a2821a10c99",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
+        "test/unit/client/rollback_guard.test.js": "5744432e388b90b9",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
@@ -4404,13 +4423,14 @@
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "46f7a6a6661a718c",
         "test/unit/client_sync_dispenser_reconcile_tick.test.js": "422bb0e33ab3603c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
-        "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "86523982ea831a05",
+        "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "83270a69eb7e38bb",
         "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js": "2de09f9ac8510fc7",
         "test/unit/client_sync_halt.test/03_state_hash_apply_time_integrity_halt.test.js": "c887799f86d69a43",
         "test/unit/client_sync_halt.test/04_verify_recompute_false_is_declared_unsafe.test.js": "eee91ecc715fb032",
         "test/unit/client_sync_halt.test/05_state_hash_halt_class_digests.test.js": "be6b2b4e899038ac",
         "test/unit/client_sync_halt.test/06_verify_recompute_passes_coin_ticker.test.js": "b315a3a62a3a38ed",
-        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "6feb913da3be5be4",
+        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "0040f816c21c3133",
+        "test/unit/client_sync_halt.test/08_recompute_error_holds_tip.test.js": "80769f679993810f",
         "test/unit/client_sync_io.test.js": "d04e4264d025b2c1",
         "test/unit/client_sync_io.test/07_indexer_head_fork_re_delivery.test.js": "0c06733c3bf59e5e",
         "test/unit/client_sync_io.test/11_strict_cross_source_gate_survives_catch_up_m_22.test.js": "be748fea997da5e8",
@@ -4929,8 +4949,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 93,
-      "titleCount": 717,
+      "fileCount": 94,
+      "titleCount": 720,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -4946,13 +4966,14 @@
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "46f7a6a6661a718c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
-        "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "86523982ea831a05",
+        "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "83270a69eb7e38bb",
         "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js": "2de09f9ac8510fc7",
         "test/unit/client_sync_halt.test/03_state_hash_apply_time_integrity_halt.test.js": "c887799f86d69a43",
         "test/unit/client_sync_halt.test/04_verify_recompute_false_is_declared_unsafe.test.js": "eee91ecc715fb032",
         "test/unit/client_sync_halt.test/05_state_hash_halt_class_digests.test.js": "be6b2b4e899038ac",
         "test/unit/client_sync_halt.test/06_verify_recompute_passes_coin_ticker.test.js": "b315a3a62a3a38ed",
-        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "6feb913da3be5be4",
+        "test/unit/client_sync_halt.test/07_live_verify_error_is_recorded.test.js": "0040f816c21c3133",
+        "test/unit/client_sync_halt.test/08_recompute_error_holds_tip.test.js": "80769f679993810f",
         "test/unit/client_sync_io.test/07_indexer_head_fork_re_delivery.test.js": "0c06733c3bf59e5e",
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
@@ -5029,7 +5050,7 @@
     },
     "test:security": {
       "fileCount": 17,
-      "titleCount": 157,
+      "titleCount": 158,
       "files": {
         "test/security/api_rate_limit_proxy_security.test.js": "f77234f6a5f65a2b",
         "test/security/api_rate_limit_proxy_security.test/proxy_modes.test.js": "883cfefe655e6d60",
@@ -5039,7 +5060,7 @@
         "test/security/block_broadcaster_security.test/per_ip_limits.test.js": "399f12faf9782346",
         "test/security/client_applier_security.test.js": "207558fd52fb2bf8",
         "test/security/client_sync_security.test.js": "4f4e462e9354e761",
-        "test/security/client_sync_security.test/01_handle_reorg_max_rollback_depth.test.js": "068103cacb04749f",
+        "test/security/client_sync_security.test/01_handle_reorg_max_rollback_depth.test.js": "4042bf4162052e5b",
         "test/security/client_sync_security.test/02_handle_block_strict_cross_source_timeout.test.js": "50994261d736f8b5",
         "test/security/client_sync_security.test/03_connect_web_socket_max_payload.test.js": "22f878636d1e21f6",
         "test/security/client_sync_security.test/04_web_socket_message_handler_event_validation.test.js": "598cee8913d7c5bc",
