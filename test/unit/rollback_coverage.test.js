@@ -831,6 +831,8 @@ describe('Rollback coverage guard @regression', function(){
               re: /JOIN index_statuses vs ON vs\.status = valid SET p\.status_id = vs\.id/ },
             { name: 'head predicate (v5, chunk 0, below the orphaned range)',
               re: /WHERE p\.version = ATTEST_BATCH_HEAD_VERSION AND p\.batch_chunk_index = 0 AND p\.action_index < \?/ },
+            { name: 'encoding scope (the orphaned continuation declares the head\'s chunk count and body CRC)',
+              re: /AND c\.action_index >= \? AND c\.batch_total_chunks = p\.batch_total_chunks AND c\.batch_crc32 = p\.batch_crc32 / },
         ];
         for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
@@ -1307,6 +1309,14 @@ describe('Rollback coverage guard @regression', function(){
             .replace(/\s+/g, ' ');
         assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.coinTicker\)/.test(cs),
             'ClientSync must pass this.coinTicker (the normalized TICKER, not this.chain) as the coin gate parameter to computeStateHash');
+    });
+
+    // The e2e source-side state_hash must key per-chain activations like the follower does.
+    it('the e2e state_hash fixture passes the coin ticker, matching the follower', function(){
+        const fx = fs.readFileSync(pathMod.resolve(__dirname, '../e2e/helpers/fixtures.js'), 'utf8')
+            .replace(/\s+/g, ' ');
+        assert.ok(/computeStateHash\( ?blockIndex,.*?network, coinTicker\(chain\)\)/.test(fx),
+            'computeAndStoreStateHash must pass coinTicker(chain), not the full chain name, as the coin gate parameter');
     });
 
     // Value-level fixture assertions (F-1, F-2, F-5).

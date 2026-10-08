@@ -97,6 +97,17 @@ function rollbackDepthSafeCeiling(chain, network){
         : SOURCE_SAFE_REORG_DEPTH
 }
 
+// The server poller's reorg walk-back reach: at least 256 heights, raised to the source
+// reorg ceiling plus a margin. It sizes the poller's recent-hash window and floors the
+// sync_meta retention window, so a reorg the poller acts on never lands in pruned leaves.
+const REORG_WALK_BACK_FLOOR = 256
+const REORG_WALK_BACK_MARGIN = 16
+
+// Return the deepest reorg the server poller resolves for a chain.
+function reorgWalkBackDepth(chain, network){
+    return Math.max(REORG_WALK_BACK_FLOOR, rollbackDepthSafeCeiling(chain, network) + REORG_WALK_BACK_MARGIN)
+}
+
 function resolveMaxRollbackDepth(chain, network, configuredDepth, explicitOverride){
     const configured = parseIntMin1(configuredDepth, 100)
     let resolved = configured
@@ -222,6 +233,7 @@ module.exports = {
     assertBootstrapDepthChains,
     resolveMaxRollbackDepth,
     rollbackDepthSafeCeiling,
+    reorgWalkBackDepth,
     SOURCE_UNDO_WINDOW,
 
     getConfig

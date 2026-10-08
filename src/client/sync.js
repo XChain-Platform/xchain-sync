@@ -262,10 +262,12 @@ function statusGapStart(client, blockHeight){
     return client.lastAppliedBlock + 1;
 }
 
-// Decoder-only wall-clock reconcile gate; needs an applied block and no reconcile in flight.
+// Decoder-only status-tick reconcile gate; needs an applied block and no reconcile in flight.
+// A rollback that left dispensers stale makes it due at once, even with the interval at 0.
 function shouldReconcileDispensersOnStatus(client){
     return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
-        !client._dispenserReconcileInFlight && client.dispenserReconcileIntervalDue(Date.now());
+        !client._dispenserReconcileInFlight &&
+        (client._dispenserReconcileAfterReorg === true || client.dispenserReconcileIntervalDue(Date.now()));
 }
 
 class ClientSync {
@@ -2650,6 +2652,9 @@ class ClientSync {
     //       dispenserReconcileIntervalDue and its caller in handleEvent), because a
     //       healthy live-following replica never enters a catch-up at all, which is
     //       precisely the cadence this clause claims to bound.
+    //   (d) afterReorg   - a reorg rollback ran since the last attempt: the source rewrote
+    //       dispensers off-stream for the orphaned blocks, and the follower's rollback
+    //       leaves them alone, so the table is known stale (see applyReorgRollback).
     // `_lastDispenserReconcileAt` is stamped by reconcileDispensers on success (covering
     // the from-height bootstrap reconcile too), so firstResume is false once any has run.
     shouldReconcileDispensers(nowMs){
@@ -2658,10 +2663,11 @@ class ClientSync {
         if(isNaN(every) || every < 1) every = 20;
         let firstResume = (this._lastDispenserReconcileAt == null);
         let periodic    = (this._catchUpCount % every === 0);
+        let afterReorg  = (this._dispenserReconcileAfterReorg === true);
         // Free function, not this.dispenserReconcileIntervalDue: this method is exercised
         // through prototype.call with hand-built contexts, which carry config and the stamp
         // and nothing else.
-        return firstResume || periodic ||
+        return firstResume || periodic || afterReorg ||
                dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
     }
 
@@ -2691,6 +2697,9 @@ class ClientSync {
         if(!source) return false;
         // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
         this._lastDispenserReconcileAttemptAt = Date.now();
+        // Clear the post-reorg trigger on attempt, not success: a later reorg re-arms it,
+        // and a failing source then falls back to the interval instead of every tick.
+        this._dispenserReconcileAfterReorg = false;
         let expected = SCHEMA_VERSION[this.dbType];
         try {
             let all = [];
@@ -4030,6 +4039,9 @@ class ClientSync {
 
     async applyReorgRollback(event){
         await this.withApplyLock(() => this.rollback.rollback(event.block_index));
+        // The source rewrote dispensers off-stream for the orphaned blocks, so arm a reconcile
+        // for the next status tick or catch-up rather than waiting out the interval.
+        if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
         this.lastAppliedBlock = event.block_index - 1;
         // Reload the new tip's hashes, genesis block 0 included (a null tip turns off the gap check).
         if(this.lastAppliedBlock >= 0)

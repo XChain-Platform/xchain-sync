@@ -299,4 +299,12 @@ async function tokenFoldRows(db, maxActionIndex, excludeTickIds){
     return { rows: kept, ahead: ahead };
 }
 
-module.exports = { FOLD_COLUMNS, foldIssueRows, collectIssueTickIds, refoldTokenRows, tokenFoldRows };
+// Read-only copies of the restated source constants and the fold's keys, so the parity
+// test can compare them with the indexer config. Nothing at runtime reads this object.
+const RESTATED = Object.freeze({
+    NUMBER_FIELDS: Object.freeze(NUMBER_FIELDS.slice()), LIST_FIELDS: Object.freeze(LIST_FIELDS.slice()),
+    INTEGER_FIELDS: Object.freeze(INTEGER_FIELDS.slice()), LOCK_FIELDS: Object.freeze(LOCK_FIELDS.slice()),
+    U64_MAX, MIN_TOKEN_DECIMALS, MAX_TOKEN_DECIMALS, FOLD_KEYS: Object.freeze(Object.keys(rowValues({}))),
+});
+
+module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectIssueTickIds, refoldTokenRows, tokenFoldRows };

@@ -62,8 +62,9 @@
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
- *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
- *   - dispenser_extension_undo        decoder-local reorg journal: the pre-image of each row a
+ *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS, plus one armed by
+ *                                     every reorg rollback for the next status tick or catch-up.
+ *   - dispenser_extension_undo       decoder-local reorg journal: the pre-image of each row a
  *                                     format-2 expiration extend touched, written and consumed
  *                                     on the decoder's own block transaction (restored by
  *                                     restoreDispenserExtensions then deleted by block on

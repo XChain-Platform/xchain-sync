@@ -157,7 +157,7 @@ function initializeDecoderTxScopedTables(){
 
     // Deleting its rows on a reorg would corrupt that replicated state with no
     // per-block stream to restore them before the next reconcile, so a reorg leaves
-    // dispensers untouched.
+    // dispensers untouched and ClientSync arms that reconcile instead.
     this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
 }
 
@@ -815,6 +815,10 @@ class ClientRollback {
             // is a case-folding collation); an unresolvable author on either side is a NULL that
             // no equality matches, so it authenticates nothing rather than everything.
             //
+            // Encoding scope: the chunk must declare the head's own chunk count and body CRC, the
+            // identity the forward reassembly reads, so a republish of the same window in another
+            // encoding can never revive a head whose own completing chunk survives.
+            //
             // Runs BEFORE the dataTables delete, while both rows are still present. The three
             // version/stamp constants are imported from updated_rows.js so the forward carry and
             // this reverse reset cannot drift apart; the twin to change in lockstep is
@@ -828,6 +832,7 @@ class ClientRollback {
                         "JOIN attests c ON c.request_id = p.request_id " +
                         "  AND c.version = " + ATTEST_BATCH_CONTINUATION_VERSION + " " +
                         "  AND c.batch_chunk_index IS NOT NULL AND c.action_index >= ? " +
+                        "  AND c.batch_total_chunks = p.batch_total_chunks AND c.batch_crc32 = p.batch_crc32 " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         "JOIN actions ca ON ca.action_index = c.action_index AND ca.source_id = pa.source_id " +
                         "JOIN index_statuses vs ON vs.status = 'valid' " +
