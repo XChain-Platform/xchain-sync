@@ -1116,6 +1116,11 @@
       "Utility throwError logs to console.error",
       "Utility throwError throws an Error with the given message"
     ],
+    "43893e9d550945c2": [
+      "schemaGap.isSchemaGapError rejects an error with no numeric errno, and a thrown falsy value",
+      "schemaGap.isSchemaGapError rejects transient driver faults such as a deadlock or a lock-wait timeout",
+      "schemaGap.isSchemaGapError treats a missing table (1146) and a missing column (1054) as a schema gap"
+    ],
     "438f210bee5c5290": [
       "ServerPoller.backfillGaps (read-only replica) returns 0 when there is no transparency log at all (decoder)",
       "ServerPoller.backfillGaps (read-only replica) returns 0 without scanning when the log is read-only",
@@ -4366,8 +4371,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 355,
-      "titleCount": 2814,
+      "fileCount": 356,
+      "titleCount": 2817,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4625,6 +4630,7 @@
         "test/unit/repo_guards/markets_id_parity_tool.test.js": "07811aa22e123504",
         "test/unit/rollback_coverage.test.js": "43bd2e998a80cce2",
         "test/unit/schema_datetime_columns.test.js": "28e4ceac4ff3fdac",
+        "test/unit/schema_gap.test.js": "43893e9d550945c2",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
         "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
         "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
