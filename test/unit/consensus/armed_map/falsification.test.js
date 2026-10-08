@@ -33,12 +33,12 @@ const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
 const runnerRequire = createRequire(require.main.filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
-const INDEXER_CANONICAL_COMMIT = '7aa40771189dbf57d051df20a5bb687bf65ca00d';
+const INDEXER_CANONICAL_COMMIT = '94f482f97cfcf6eb4f690d091cb37fa44b213b9a';
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
-    'shared_rows_1.js': 'dafd67482b0d4f2e60958f7184f1596620798dabe3f4d5b5637b7b83da489dc1',
+    'shared_rows_1.js': '6769da650408acc79b5db6fa0d93f835b077a37d8f7885e8aa81d61bcd8618de',
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': '89127614a54b9a4007b8e63f18c4f8abb0873d8f8cb0d3f31a1115d67485c2b4',
     'shared_rows_4.js': 'dec84cd5f6e10b5bc631eb3a68ddcdfa5e37c5fb10cdf01ddd43cbb35980dc9b',
