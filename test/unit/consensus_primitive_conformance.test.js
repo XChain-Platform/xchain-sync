@@ -172,4 +172,25 @@ describe('consensus-primitive conformance: byte-identity to canonical source @re
                 'edit xchain-indexer/src/consensus/' + f + ' and re-run reconcile-twins.sh to re-vendor every copy.');
         });
     });
+
+    // Compare the activation-registry parts too: a one-sided row edit here forks the
+    // follower at its flag day. The per-repo entry gate_registry.js is not a twin.
+    ['core.js', 'shared_rows.js', 'regtest_env.js', 'shared_rows_1.js', 'shared_rows_2.js',
+        'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'].forEach(function(f){
+        it('gate_registry/' + f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
+            const rel   = path.join('consensus', 'gate_registry', f);
+            const local = fs.readFileSync(path.join(LOCAL_DIR, rel), 'utf8');
+            const canon = fs.readFileSync(path.join(CANON_DIR, rel), 'utf8');
+            assert.strictEqual(local, canon, gateRegistryDriftMessage(f));
+        });
+    });
 });
+
+/** Name the true canonical of a registry part (core is hub-owned, the rest indexer-owned). */
+function gateRegistryDriftMessage(f){
+    const source = f === 'core.js'
+        ? 'xchain-hub/src/consensus/gate_registry/core.js'
+        : 'xchain-indexer/src/protocol_changes/' + f;
+    return 'this repo\'s consensus/gate_registry/' + f + ' has drifted from the canonical source; ' +
+        'edit ' + source + ' and re-run reconcile-twins.sh to re-vendor every copy, never this copy alone.';
+}

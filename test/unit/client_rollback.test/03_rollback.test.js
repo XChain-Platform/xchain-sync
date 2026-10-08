@@ -259,3 +259,18 @@ describe('ClientRollback', function(){
         });
     });
 });
+
+describe('ClientRollback', function(){
+
+    describe('rollback', function(){
+        registerHooks();
+        it('scopes the ATTEST batch-head restore to a continuation of the head\'s own encoding', async function(){
+            await rollback.rollback(100);
+            let reset = db.doQuery.getCalls().find(c => ATTEST_HEAD_RE.test(c.args[0]));
+            assert.ok(reset, 'expected the ATTEST batch-head status restore');
+            // A republish of the window in another encoding must never revive a stamped head.
+            assert.ok(reset.args[0].includes('c.batch_total_chunks = p.batch_total_chunks'));
+            assert.ok(reset.args[0].includes('c.batch_crc32 = p.batch_crc32'));
+        });
+    });
+});

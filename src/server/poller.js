@@ -45,11 +45,6 @@ const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const logger = getLogger();
 
-// Retain at least this many broadcast hashes for the reorg walk-back, raised per chain to the
-// source reorg ceiling plus a margin so every reorg an honest source emits resolves (recentHashCap).
-const RECENT_HASH_CAP_FLOOR = 256;
-const RECENT_HASH_CAP_MARGIN = 16;
-
 // Derive the reorg-scoped lookups from the lifecycle registry, so forward streaming,
 // both rollbacks and the content-parity bound always name the same tables.
 const BLOCK_SCOPED_INDEX_TABLES = lifecycle.tablesWhere(t => t.rollback === 'index' && t.replication === 'stream:index');
@@ -125,8 +120,9 @@ function initializeCursorState(poller, chain, network){
     // Cap retained entries to recentHashCap heights.
     // Initialize the map before computing its chain-specific capacity.
     poller.recentBroadcastHashes = new Map();
-    poller.recentHashCap = Math.max(RECENT_HASH_CAP_FLOOR,
-        envConfig.rollbackDepthSafeCeiling(chain, network) + RECENT_HASH_CAP_MARGIN);
+    // Retain enough broadcast hashes that every reorg an honest source emits resolves
+    // (config.reorgWalkBackDepth, which also floors the sync_meta retention window).
+    poller.recentHashCap = envConfig.reorgWalkBackDepth(chain, network);
     poller.running = false;
 }
 
