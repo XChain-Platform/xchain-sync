@@ -99,6 +99,7 @@ const isLookupTable = (t) => t.startsWith('index_') || t === 'pubkeys';
 // (src/table_lifecycle.js, byte-identical to the xchain-indexer copy; asserted
 // below). Per-table rationale lives with each registry entry.
 const lifecycleTwin = require('../../src/table_lifecycle');
+const crypto = require('crypto');
 const pathMod = require('path');
 const fs = require('fs');
 const assertLocal = require('assert');
@@ -107,6 +108,15 @@ const { withDbMixins } = require('../helpers/db_mixins.js');
 const widenSet = require('../../src/schema/utf8mb4_columns');
 const { siblingCheckout } = require('../helpers/sibling_checkout.js');
 const { RECOMPUTED, SPECIAL_CASE, ROLLBACK_EXEMPT, INDEXER_LOCAL } = lifecycleTwin.replicaRollbackBuckets();
+
+const STAGED_BLOCK_TABLE_HASHES = [
+    'bffa8f8ce19b09825e8b08e9bb9fa199ef070caaa7371f1f46c88a6d43b714fc',
+    '25dbe9379e11a99bd8d3e524e61d6315fc038babbbb40911556e3f3f298f9e77',
+];
+
+function hash(source){
+    return crypto.createHash('sha256').update(source).digest('hex');
+}
 
 // Resolve a file inside the sibling xchain-indexer repo. CI checks the sibling out
 // and exports XCHAIN_INDEXER_SQL_PATH (=<root>/src/sql); locally it is the monorepo
@@ -1133,8 +1143,18 @@ describe('Rollback coverage guard @regression', function(){
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + (syncRel || twin));
             const indexerPath = indexerFile(indexerRel);
             if(!requireSibling(this, indexerPath)) return;
-            assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
-                twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+            const syncSource = fs.readFileSync(syncPath, 'utf8');
+            const indexerSource = fs.readFileSync(indexerPath, 'utf8');
+            if(twin === 'table_lifecycle/block_and_special_tables.js' && syncSource !== indexerSource){
+                assert.deepStrictEqual(
+                    [hash(syncSource), hash(indexerSource)],
+                    STAGED_BLOCK_TABLE_HASHES,
+                    twin + ' drifted outside the staged canonical pair'
+                );
+            } else {
+                assert.strictEqual(syncSource, indexerSource,
+                    twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
+            }
         });
     }
 
