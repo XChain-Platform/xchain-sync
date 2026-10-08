@@ -1,5 +1,5 @@
 {
-  "armed_map_fingerprint": "4952379bb656610c418b4d6f9b061db0c9d6b8a4980dec829aceda5e43bc48db",
+  "armed_map_fingerprint": "83014b5aaaaec771620cc3631ea9f984c555eb50dc17f347d2feb9dc8d0d258b",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -21,6 +21,7 @@
     "stateHash.ARCHIVE_HEAD_VERSIONS_SQL": "7efd9392082cb24c1ea46ff5fde1b373a4655db2fc638b7e0a462199ab6a342c",
     "stateHash.ARCHIVE_INVALID_HEIGHT_KEY_ACTIVATION": "98689bd20044b78aeda9b349cfbeeb22520bb0d0eff99cf9f4d39e35ff70b600",
     "stateHash.ARCHIVE_INVALID_STATE_HASH_ACTIVATION": "d4ed30b31061492fbb243c364c1d427555bd62d39cc884789151a9424730601e",
+    "stateHash.ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION": "ef92238ca39f95442381fa7ecd0bacacafd42f06b45ebe961d7e9391d80daf7c",
     "stateHash.BET_STATUS_STATE_HASH_ACTIVATION": "7bf25fc0105a5383368fd76a02d88b7483843de2bf7a9cf35b5fa449f7944503",
     "stateHash.COOLDOWN_TABLES": "b10e8cc6df5a6ca50fbc831d90fc5a5c0e75cb9f458ad88f26b180122870ee55",
     "stateHash.DEACTIVATION_TABLES": "481c4af051363d168feb5093e3bee56117815b4760e61151a73e18b59443b5f9",
@@ -42,8 +43,8 @@
     "swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION": "d9105d53199963f94287f25b3d87d1e625b77d56ac8baab6d6ee64029b0fae74",
     "train_activation.TRAIN_ACTIVATION": "1f7b8f196149e0bf068bfc430c6355a65788333e1eb2952c52462f0aa3526a6e"
   },
-  "armed_map_rows": 39,
-  "carrier_logic_digest": "f167a6315c74a4e26d34398656b5b3f89d88b9073170797336833982b397760c",
+  "armed_map_rows": 40,
+  "carrier_logic_digest": "c59f34aaefb77b35a70a949709e300add72c516ecda5482d316d307aea9bb818",
   "vendoredCoins": {
     "src/coins/BTC.js": "182baf5173e3846b94a5edc1ae15913a54fb266addfc45a3cf9a013bd9ec16c6",
     "src/coins/DOGE.js": "4659b45fb7a5c959ce2777ab9d5e7c193f3515f03cdd8cd23bb6b9c4d012fc11",
