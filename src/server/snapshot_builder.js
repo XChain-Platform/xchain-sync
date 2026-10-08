@@ -25,7 +25,7 @@
  ********************************************************************/
 
 const poolSizing = require('../db/pool_sizing');
-const { isSchemaGapError } = require('../db/schema_gap');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 const envConfig = require('../config');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');

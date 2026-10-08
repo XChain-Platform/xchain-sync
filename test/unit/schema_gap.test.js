@@ -13,7 +13,7 @@
 // must re-throw so the block is retried rather than broadcast short.
 
 const assert = require('assert');
-const { isSchemaGapError } = require('../../src/db/schema_gap');
+const { isSchemaGapError } = require('../../src/db/tables/schema_gap');
 
 describe('schemaGap.isSchemaGapError', function(){
 

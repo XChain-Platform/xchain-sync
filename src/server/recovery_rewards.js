@@ -37,7 +37,7 @@
  *
  ********************************************************************/
 
-const { isSchemaGapError } = require('../db/schema_gap');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 
 // Selects validator_rewards rows re-materialized (recovery_pending_rewards.applied_block)
 // inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)

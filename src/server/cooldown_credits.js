@@ -65,7 +65,7 @@
  ********************************************************************/
 
 const { gasTickSymbol } = require('../consensus-constants');
-const { isSchemaGapError } = require('../db/schema_gap');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 
 // The two Database finders behind each half of a maturity: the refund credit
 // and the escrow release written beside it under the same action_index.

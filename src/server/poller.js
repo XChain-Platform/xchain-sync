@@ -60,7 +60,7 @@ const BLOCK_SCOPED_INDEX_TABLES = lifecycle.tablesWhere(t => t.rollback === 'ind
 // schema gaps may be skipped; anything else must re-throw so poll's loop freezes the
 // cursor and retries the block. Mirrors SnapshotBuilder.streamIncrementalSnapshot's
 // errno discrimination. The predicate is the one every forward collector shares.
-const { isSchemaGapError } = require('../db/schema_gap');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 
 function initializePollerIdentity(poller, chain, network, db, broadcaster,
     transparencyLog, config, util){
