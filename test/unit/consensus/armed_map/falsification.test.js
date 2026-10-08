@@ -143,10 +143,7 @@ describe('armed map v2: falsification on temp trees', function () {
     });
 
     it('keeps all six shared row files byte-identical to the indexer canonical blobs', function () {
-        if (!fs.existsSync(indexerRoot())) {
-            if (process.env.XCHAIN_REQUIRE_SIBLINGS === '1') assert.fail('xchain-indexer checkout is required');
-            this.skip();
-        }
+        assert.ok(fs.existsSync(indexerRoot()), 'xchain-indexer checkout is required');
         for (const file of SHARED_ROW_FILES) {
             const canonical = readIndexerCanonical(file);
             const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
