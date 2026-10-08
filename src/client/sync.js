@@ -34,6 +34,7 @@ const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
 const BlockHasher = require('./block_hasher');
+const RollbackGuard = require('./rollback_guard');
 const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const replicatedTables = require('../schema/replicated_tables');
@@ -287,6 +288,7 @@ class ClientSync {
         this.maxRollbackDepth = envConfig.resolveMaxRollbackDepth(
             this.chain, this.network, this.config['MAX_ROLLBACK_DEPTH'],
             this.config['MAX_ROLLBACK_DEPTH_EXPLICIT']);
+        this.rollbackGuard = new RollbackGuard(this.maxRollbackDepth);
         // Independent block-hash recomputation (true byzantine / replication-
         // integrity detection). Verifies the replicated raw rows actually hash to
         // the committed hash, rather than trusting verbatim-replicated hashes.
@@ -3339,11 +3341,11 @@ class ClientSync {
     // clean match. Indexer-only (decoder has no synthetic chain hashes).
     //
     // A recompute ERROR (transient DB hiccup, schema gap) is logged loudly and
-    // treated as a non-halt on the LIVE path: a local infrastructure fault must
-    // not fork this validator off the chain (halts are reserved for genuine DATA
-    // divergence). The live block was individually delivered and will be folded
-    // by the next block's recompute, so failing open there loses one check, not
-    // the range. Bulk-range callers (bootstrap terminal, catch-up join/terminal)
+    // never halts: a local infrastructure fault must not fork this validator off
+    // the chain (halts are reserved for genuine DATA divergence). Callers that
+    // pass opts.holdTip (the live block path) get the error rethrown so the tip
+    // stays put for redelivery, the same as a state_hash read error; the default
+    // returns null. Bulk-range callers (bootstrap terminal, catch-up join/terminal)
     // pass opts.failClosed instead: there the recompute is the ONLY verification
     // of the whole applied range (the join recompute is what catches a
     // disconnect-spanning reorg stitched onto an orphaned tip), so an error is
@@ -3375,10 +3377,10 @@ class ClientSync {
                     continue;
                 }
                 if(opts.failClosed) throw e;
-                getLogger().error(util.format('Recompute verification errored at block %s (NOT halting on a recompute error):',
+                getLogger().error(util.format('Recompute verification errored at block %s (holding the tip, not halting):',
                     (event && event.block_index), e));
-                // Leave a durable mark that this height advanced without its recompute.
                 if(opts.recordUnverified) await this.recordSyncStateCounter('unverified_recompute', event && event.block_index);
+                if(opts.holdTip) throw e;
                 return null;
             }
         }
@@ -3688,7 +3690,7 @@ class ClientSync {
             await this.withApplyLock(() => this.applier.applyBlock(event));
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
-                let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true });
+                let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true, holdTip: true });
                 if(mismatches){
                     await this.haltOnDivergence(event.block_index, mismatches, this.sources.slice(0, 1), 'local-recompute-divergence');
                     return;
@@ -4020,10 +4022,6 @@ class ClientSync {
         return false;
     }
 
-    rollbackDepth(event){
-        return this.lastAppliedBlock - event.block_index + 1;
-    }
-
     async haltForExcessiveRollback(event, depth){
         await this.haltOnDivergence(event.block_index,
             [{ field: 'rollback_depth', depth, max: this.maxRollbackDepth }],
@@ -4054,13 +4052,14 @@ class ClientSync {
         if(this.ignoreReorgWithoutTip(event)) return;
         if(this.ignoreReorgAboveTip(event)) return;
 
-        let depth = this.rollbackDepth(event);
+        let depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
         if(depth > this.maxRollbackDepth){
             await this.haltForExcessiveRollback(event, depth);
             return;
         }
 
         try {
+            this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
             await this.applyReorgRollback(event);
         } catch(e){
             await this.haltForReorgRollbackFailure(event, e);
