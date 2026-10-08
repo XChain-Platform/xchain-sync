@@ -40,6 +40,13 @@
       "Integration: ClientRollback rollback then re-sync allows new data to be applied after rollback",
       "Integration: ClientRollback rollback with no actions handles block with no actions cleanly"
     ],
+    "0290d32138719430": [
+      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
+      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
+      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet and testnet inert, unknown network off",
+      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
+      "state_hash attest_batch_head class, follower twin @regression selection: stamped v5 head keyed by the completing chunk block, resolved status, total order"
+    ],
     "0351fed12642c8a1": [
       "ClientSync: runIncrementalCatchUp aborts the pass (no request, no apply) when the tip read faults",
       "ClientSync: runIncrementalCatchUp happy path: dbTip null \u2192 sinceBlock=1, calls applyIncrementalSnapshot",
@@ -800,19 +807,19 @@
       "Boundary: Reorg Detection sizes the recorded-hash window from the chain reorg ceiling",
       "Boundary: Reorg Detection stops at the 256-height floor on a chain whose ceiling is lower"
     ],
-    "30033d82229a4fd9": [
-      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
-      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
-      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
-      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
-      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
-      "armed map v2: manifest completeness over src/ the shim scan finds all fourteen shim and carrier files and all 39 rows"
-    ],
     "3005f26e0e504c49": [
       "01 Payload Throughput dense blocks (200 actions/block)",
       "01 Payload Throughput heavy blocks (50 actions/block)",
       "01 Payload Throughput light blocks (1 action/block)",
       "01 Payload Throughput medium blocks (10 actions/block)"
+    ],
+    "30916c5c70bdcf16": [
+      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
+      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
+      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
+      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
+      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
+      "armed map v2: manifest completeness over src/ the shim scan finds all fourteen shim and carrier files and all 40 rows"
     ],
     "3107b91431c55ba5": [
       "ServerPoller backfillGaps @regression is a no-op for the decoder (no transparency log)",
@@ -4027,9 +4034,6 @@
       "graceful shutdown resolveTimeoutMs prefers an explicit budget, then the env var, then the default",
       "graceful shutdown resolveTimeoutMs stays under Docker's 10s default stop grace"
     ],
-    "e569d1d59419919f": [
-      "state_hash attest batch-head stamp gap @regression covers only the legacy v0 attest request-status class"
-    ],
     "e596ac816b0afb6a": [
       "Boundary: Hash Continuity Check hash comparison boundaries empty string vs empty string is match",
       "Boundary: Hash Continuity Check hash comparison boundaries empty string vs null is mismatch",
@@ -4352,7 +4356,7 @@
   "scripts": {
     "test": {
       "fileCount": 355,
-      "titleCount": 2799,
+      "titleCount": 2803,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4510,7 +4514,7 @@
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
-        "test/unit/consensus/armed_map/completeness.test.js": "30033d82229a4fd9",
+        "test/unit/consensus/armed_map/completeness.test.js": "30916c5c70bdcf16",
         "test/unit/consensus/armed_map/falsification.test.js": "4acfae0d52008855",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
@@ -4663,7 +4667,7 @@
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "e569d1d59419919f",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
@@ -4994,7 +4998,7 @@
     },
     "test:regression": {
       "fileCount": 94,
-      "titleCount": 729,
+      "titleCount": 733,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5080,7 +5084,7 @@
         "test/unit/state_commitment_batched_node_writes.test/02_db_node_store_put_many_sql_shape.test.js": "e8b11f7dc180370c",
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "e569d1d59419919f",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
