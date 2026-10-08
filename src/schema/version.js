@@ -210,6 +210,16 @@
  *       (tick_id, action_index, amount) covering indexes to `credits`, `debits`
  *       and `escrows`. It changes neither replicated columns nor payload shape,
  *       so an older follower can still store every streamed row.
+ *  16 - (indexer only) the forward-dated 2026-10-08-token-bridge-fields
+ *       migration replaces its retired 2026-09-12 ledger entry. It adds the ISSUE
+ *       format 7 bridge opt-in columns to the wire-replicated `issues` and `tokens`
+ *       tables: bridge_chains, min_depth and lock_bridge on both, plus bridged on
+ *       tokens. These shapes were first versioned at 11, but an installation that
+ *       missed the retired migration can still identify as v15 without the columns;
+ *       this bump forces a schema refresh before it accepts those rows. The same-day
+ *       state-tree-roots-block-index-idx migration adds only a non-unique secondary
+ *       index to follower-derived `state_tree_roots`, so it is recorded index-only.
+ *       Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -230,17 +240,17 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 15, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 16, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-07',
+        through: '2026-10-08',
         accounted: [
-            // Index-only; no replicated column or payload shape changed.
-            '2026-10-07-ledger-covering-index.sql'
+            '2026-10-08-state-tree-roots-block-index-idx.sql',
+            '2026-10-08-token-bridge-fields.sql'
         ],
         indexOnly: [
-            '2026-10-07-ledger-covering-index.sql'
+            '2026-10-08-state-tree-roots-block-index-idx.sql'
         ]
     },
     decoder: {
