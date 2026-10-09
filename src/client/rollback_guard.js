@@ -40,6 +40,23 @@ class RollbackGuard {
         return this.depthFor(tip, target) > this.maxDepth;
     }
 
+    toState(){
+        return {
+            peak: this.peak,
+            low: this.low,
+        };
+    }
+
+    restoreState(state){
+        this.reset();
+        if(!state || typeof state !== 'object') return;
+        if(state.peak === null && state.low === null) return;
+        if(!Number.isSafeInteger(state.peak) || state.peak < 0) return;
+        if(!Number.isSafeInteger(state.low) || state.low < 0 || state.low > state.peak) return;
+        this.peak = state.peak;
+        this.low = state.low;
+    }
+
     expire(tip){
         if(this.peak === null) return;
         if(tip >= this.peak || tip - this.low >= this.maxDepth) this.reset();

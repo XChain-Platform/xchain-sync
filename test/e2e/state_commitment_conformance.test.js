@@ -15,33 +15,80 @@
 // (balance-helpers.minimalDecimal over the DECIMAL(60,18) credit/debit sums).
 // The two strings feed merkle.canonicalAmount and MUST be byte-identical, or
 // the follower's balances_root forks from the source and VERIFY_STATE_COMMITMENT
-// halts every replica. Nothing previously compared the two renders directly;
-// this suite runs the real SQL path against the real MariaDB (fixture tables
-// created from the canonical indexer DDL) and compares byte-for-byte against a
-// verbatim extraction of the indexer's mathjs pipeline, over both hand-picked
-// edge vectors and a fast-check fuzz sweep.
+// halts every replica. This suite runs the follower's real SQL path against the
+// real MariaDB (fixture tables created from the canonical indexer DDL) and
+// compares it byte-for-byte against the indexer's OWN getNetBalance run on the
+// same rows, over both hand-picked edge vectors and a fast-check fuzz sweep.
 //
-// The mathjs reference below is an EXTRACTION of:
-//   xchain-indexer/src/utility.js       bcnum / bcstr / bcsub (default mathjs config)
-//   xchain-indexer/src/stateCommitment.js getNetBalance tail: bcstr(bcsub(cr, dr, 18))
-// If the indexer's rendering ever changes, change it there first, then here.
+// The live reference is loaded from the sibling xchain-indexer checkout:
+//   src/db/state_commitment/ledger_reads.js  getNetBalance (SQL sums + bcstr(bcsub(cr, dr, 18)))
+//   src/utility/bcmath.js                    bcnum / bcstr / bcsub
+//   src/utility/validation/value_checks.js   isNumeric / isNull
+// Their bare imports (mathjs) resolve from this repo, since CI installs only
+// xchain-sync; the two package.json mathjs pins must match. Without the sibling
+// the suite falls back to the standalone mathjs extraction below, and fails
+// instead under XCHAIN_REQUIRE_SIBLINGS=1. With it, the extraction is checked
+// against the live render on every case, so the fallback cannot go stale.
 
 const assert  = require('assert');
 const fs      = require('fs');
 const path    = require('path');
+const Module  = require('module');
 const fc      = require('fast-check');
 const mathjs  = require('mathjs');
 const testDb  = require('./helpers/testDb');
 const { splitSqlStatements } = require('../../src/db/sql_util');
 const { getNetBalance } = require('../../src/state_commitment/index.js');
 const M = require('../../src/merkle.js');
+const { siblingCheckout, siblingsRequired } = require('../helpers/sibling_checkout.js');
 
 const DB_NAME  = 'xchain_e2e_state_commitment_conformance';
 // DB-backed fuzz: each run round-trips inserts + the net-balance SELECT, so the
 // default is lower than the pure in-process fuzz tiers. FUZZ_RUNS overrides.
 const NUM_RUNS = parseInt(process.env.FUZZ_RUNS || '200', 10);
 
-// ---- Indexer-side mathjs reference (extraction, see header) -----------------
+// ---- Live indexer render (sibling checkout, see header) -----------------------
+
+const INDEXER_FILES = [
+    '../../../xchain-indexer/src/db/state_commitment/ledger_reads.js',
+    '../../../xchain-indexer/src/utility/bcmath.js',
+    '../../../xchain-indexer/src/utility/validation/value_checks.js',
+    '../../../xchain-indexer/package.json',
+];
+
+// Compile a sibling file with its bare imports resolved from this repo's node_modules.
+function loadSiblingModule(absPath) {
+    const m = new Module(absPath, module);
+    m.filename = absPath;
+    m.paths = module.paths;
+    m._compile(fs.readFileSync(absPath, 'utf8'), absPath);
+    return m.exports;
+}
+
+// Bind the indexer's getNetBalance and util, or return null to use the extraction.
+function bindIndexerRender() {
+    const verdicts = INDEXER_FILES.map(p => siblingCheckout(__dirname, p));
+    const refused = verdicts.find(v => !v.usable);
+    if (refused) {
+        if (siblingsRequired())
+            throw new Error('XCHAIN_REQUIRE_SIBLINGS=1 but the live indexer render binding cannot run: ' + refused.reason);
+        console.log('      live indexer render binding skipped (' + refused.reason + '); using the standalone extraction');
+        return null;
+    }
+    const [ledgerReads, bcmath, valueChecks, pkg] = verdicts.map(v => v.path);
+    const indexerMathjs = JSON.parse(fs.readFileSync(pkg, 'utf8')).dependencies.mathjs;
+    const ownMathjs = require('../../package.json').dependencies.mathjs;
+    assert.strictEqual(indexerMathjs, ownMathjs,
+        `mathjs pins differ (xchain-indexer ${indexerMathjs}, xchain-sync ${ownMathjs}); the live render would run on the wrong mathjs`);
+    return {
+        getNetBalance: loadSiblingModule(ledgerReads).getNetBalance,
+        util: Object.assign({}, loadSiblingModule(valueChecks), loadSiblingModule(bcmath)),
+    };
+}
+
+let indexerRender = null;
+
+// ---- Standalone mathjs extraction (fallback, see header) ----------------------
 
 function refBcnum(num) {
     return mathjs.bignumber(String(num).trim());
@@ -116,10 +163,20 @@ async function seedCase(creditAmounts, debitAmounts) {
 async function assertConformance(creditAmounts, debitAmounts) {
     const { address, tick } = await seedCase(creditAmounts, debitAmounts);
     const sqlNet = await getNetBalance(db, address, tick);
-    const refNet = refNetBalance(creditAmounts, debitAmounts);
+    const extracted = refNetBalance(creditAmounts, debitAmounts);
+    const inputs = `credits=${JSON.stringify(creditAmounts)} debits=${JSON.stringify(debitAmounts)}`;
+    let refNet = extracted;
+    let basis = 'standalone extraction';
+    if (indexerRender) {
+        const indexerDb = { doQueryStrict: (q, a) => db.doQuery(q, a), util: indexerRender.util };
+        refNet = await indexerRender.getNetBalance(indexerDb, address, tick);
+        basis = 'live indexer getNetBalance';
+    }
     assert.strictEqual(sqlNet, refNet,
-        `byte-diff: SQL minimalDecimal render '${sqlNet}' != indexer bcsub/bcstr '${refNet}' ` +
-        `for credits=${JSON.stringify(creditAmounts)} debits=${JSON.stringify(debitAmounts)}`);
+        `byte-diff: SQL minimalDecimal render '${sqlNet}' != ${basis} '${refNet}' for ${inputs}`);
+    // Keep the fallback honest: with the sibling bound it must match the live render too.
+    assert.strictEqual(extracted, refNet,
+        `standalone extraction '${extracted}' drifted from the ${basis} '${refNet}' for ${inputs}`);
     // The render must also be a form canonicalAmount ACCEPTS (the indexer once
     // wedged on exponential notation below 1e-7); equal bytes + a clean
     // canonicalisation means the leaf value is identical on both sides.
@@ -155,6 +212,7 @@ const arbLedger = fc.record({
 describe('E2E: state-commitment getNetBalance conformance (SQL minimalDecimal vs indexer mathjs bcsub)', function() {
 
     before(async function() {
+        indexerRender = bindIndexerRender();
         db = await testDb.createDatabase(DB_NAME);
         await seedTables(db);
     });

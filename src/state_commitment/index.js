@@ -27,8 +27,7 @@
  *     applied block event rows, which already carry merged cooldown refunds).
  *   - getNetBalance renders the DECIMAL sum to a minimal-decimal string in SQL
  *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
- *     normalises both to the identical leaf value. xchain-sync has no mathjs
- *     dependency.
+ *     normalises both to the identical leaf value. This module needs no mathjs.
  *   - stakes_root IS recomputed here (BTC-only) from the ported _stakeWeightsSql +
  *     the frozen BTC capability config (consensus-constants.js), mirroring the
  *     indexer's gatherStakeEntries. Non-BTC chains commit the EMPTY_SMT_ROOT.
@@ -55,6 +54,11 @@
  *     and runs the same SQL text through getNonzeroNetBalances.
  *   - The leaf encoders _nz / _leafOrNull are the indexer's canonicalAmountOf /
  *     leafOrNull (leaf_values.js) under other names.
+ *   - getNetBalance subtracts the same two DECIMAL(60,18) credit and debit sums in
+ *     SQL and renders the net through minimalDecimal, where the indexer
+ *     (db/state_commitment/ledger_reads.js) selects both sums and returns
+ *     bcstr(bcsub(cr, dr, 18)). The case pins both sums and both renders; the
+ *     e2e state_commitment_conformance suite proves the renders agree.
  *
  * TWO DECLARED DIVERGENCES in the twinned SMT code, and they are the only ones
  * there. Each is root-neutral, each is pinned by its own case in
@@ -302,10 +306,11 @@ const EMPTY_CONSTANTS = (function(){
 })();
 
 // ---- Orphan-node observability (read-only; SPV spec §4.3) -------------------
-// TWIN PAIR: xchain-indexer/src/stateCommitment.js and xchain-sync/src/
-// stateCommitment.js each carry this comment + function; keep the whole block
-// BYTE-IDENTICAL, comments included (drift-guarded in both repos by
-// test/unit/blockhash-conformance-twin.test.js).
+// TWIN PAIR: xchain-indexer/src/state_commitment/persistent_smt.js and
+// xchain-sync/src/state_commitment/index.js each carry this comment + function;
+// keep the whole block BYTE-IDENTICAL, comments included (drift-guarded in both
+// repos by blockhash_conformance_twin.test.js, under test/unit/ in xchain-sync
+// and test/unit/consensus/ in xchain-indexer).
 //
 // Reports total vs reachable internal nodes in the content-addressed COW
 // state_tree_nodes store so unbounded growth (reorg orphans + per-block stake-

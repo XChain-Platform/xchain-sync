@@ -34,7 +34,21 @@ function indexerRoot() {
         : path.resolve(__dirname, '..', '..', '..', 'xchain-indexer');
 }
 
+const HUB_REMIRROR_RECOVERY_TABLES = [
+    'remote_token_snapshots',
+];
+
 describe('anchor recovery registry twin', function () {
+
+    it('declares hub re-mirroring for quorum tables absent from the archive', function () {
+        const recoveryTables = lifecycle.anchorRecoveryTables();
+        for (const table of HUB_REMIRROR_RECOVERY_TABLES) {
+            const entry = lifecycle.entry(table);
+            assert.strictEqual(entry.anchorRecovery, 'none', table);
+            assert.ok(entry.anchorRecoveryNote, table);
+            assert.ok(!recoveryTables.includes(table), table);
+        }
+    });
 
     it('declares archive recovery for every added quorum table', function () {
         for (const table of ARCHIVED_QUORUM_TABLES)

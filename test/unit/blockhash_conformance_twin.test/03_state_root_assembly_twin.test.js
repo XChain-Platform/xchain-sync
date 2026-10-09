@@ -27,7 +27,7 @@
 
 const assert = require('assert');
 
-const { normalize, extractFunction, loadPair } = require('./helpers/twin_sources.js');
+const { normalize, extractFunction, loadPair, sqlLiterals } = require('./helpers/twin_sources.js');
 
 const HEADER = 'xchain-sync/src/state_commitment/index.js';
 
@@ -130,5 +130,61 @@ describe('state-root assembly twins: leaf encoders @regression', function(){
                 syncName + ' differs from the indexer ' + idxName + ' by more than its name. Port the ' +
                 'change, or extend the root-neutral differences in the ' + HEADER + ' header');
         }
+    });
+});
+
+// The balances_root leaf value. The indexer selects the two sums and subtracts in mathjs;
+// this repo subtracts in SQL and renders through minimalDecimal. The e2e conformance suite
+// proves the renders agree on a database, so this tier pins the code that suite exercises.
+describe('state-root assembly twins: getNetBalance @regression', function(){
+    const sig = /async function getNetBalance\(db, address, tick\)\{/;
+    const from = 'xchain-indexer/src/db/state_commitment/ledger_reads.js';
+    const rerun = '. Re-run test/e2e/state_commitment_conformance.test.js against a database ' +
+        'before updating this case, and re-derive the getNetBalance difference in the ' + HEADER + ' header';
+
+    it('runs the same credit and debit sums on both sides (declared render difference)', function(){
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/db/state_commitment/ledger_reads.js');
+        if(!pair) return;
+        const idxFn = extractFunction(pair.indexer, sig, from);
+        const syncFn = extractFunction(pair.sync, sig, HEADER);
+        const idxSql = sqlLiterals(idxFn);
+        assert.strictEqual(idxSql.length, 1, 'the indexer getNetBalance is no longer one SQL literal' + rerun);
+        const m = idxSql[0].match(/^SELECT \((SELECT .+ FROM credits c .+)\) AS cr, \((SELECT .+ FROM debits d .+)\) AS dr$/);
+        assert.ok(m, 'the indexer getNetBalance no longer selects (credits) AS cr, (debits) AS dr' + rerun);
+        for(const sum of [m[1], m[2]])
+            assert.ok(sum.includes('SUM(CAST(') && sum.includes(' AS DECIMAL(60,18))'),
+                'an indexer getNetBalance sum no longer casts each amount to DECIMAL(60,18): ' + sum + rerun);
+        const call = syncFn.match(/\$\{minimalDecimal\(([\s\S]*?)\)\} AS net`/);
+        assert.ok(call, 'the ' + HEADER + ' getNetBalance no longer renders its net through minimalDecimal' + rerun);
+        assert.strictEqual(call[1].replace(/'[^']*'/g, '').replace(/[\s+]/g, ''), '',
+            'the minimalDecimal argument in ' + HEADER + ' getNetBalance is no longer plain string pieces' + rerun);
+        const syncExpr = [...call[1].matchAll(/'([^']*)'/g)].map(p => p[1]).join('').replace(/\s+/g, ' ').trim();
+        assert.strictEqual(syncExpr, '( (' + m[1] + ') - (' + m[2] + ') )',
+            'getNetBalance sums differ between xchain-sync and xchain-indexer' + rerun);
+        const params = '[address, tick, address, tick]);';
+        assert.ok(normalize(idxFn).endsWith(params + " const cr = rows.length ? String(rows[0].cr) : '0'; " +
+            "const dr = rows.length ? String(rows[0].dr) : '0'; return db.util.bcstr(db.util.bcsub(cr, dr, 18)); }"),
+            'the indexer getNetBalance params or bcstr(bcsub(cr, dr, 18)) tail changed' + rerun);
+        assert.ok(normalize(syncFn).endsWith(params + " return rows.length ? String(rows[0].net) : '0'; }"),
+            'the ' + HEADER + ' getNetBalance params or net tail changed' + rerun);
+    });
+
+    it('pins the two renders the leaf value goes through', function(){
+        const pair = loadPair(this, 'src/db/balance_helpers.js', 'src/utility/bcmath.js');
+        if(!pair) return;
+        const bcmath = 'xchain-indexer/src/utility/bcmath.js';
+        for(const [src, re, at, expected] of [
+            [pair.indexer, /bcnum\(num\)\{/, bcmath,
+             "bcnum(num){ let str = String(num).trim(); if(str === 'NaN' || str === 'Infinity' || " +
+             "str === '-Infinity' || !this.isNumeric(num)) return mathjs.bignumber(0); return mathjs.bignumber(str); }"],
+            [pair.indexer, /bcstr\(num\)\{/, bcmath, 'bcstr(num){ return this.bcnum(num).toFixed(); }'],
+            [pair.indexer, /bcsub\(numA, numB, decimals\)\{/, bcmath,
+             'bcsub(numA, numB, decimals){ let a = (!this.isNull(numA)) ? numA : 0; let b = (!this.isNull(numB)) ? ' +
+             'numB : 0; let d = (!this.isNull(decimals)) ? parseInt(decimals) : 0; return this.bcnum(mathjs.format(' +
+             "mathjs.subtract(mathjs.bignumber(a),mathjs.bignumber(b)),{notation: 'fixed', precision: d})); }"],
+            [pair.sync, /function minimalDecimal\(sumExpr\) \{/, 'xchain-sync/src/db/balance_helpers.js',
+             "function minimalDecimal(sumExpr) { return \"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(\" " +
+             "sumExpr ' AS CHAR)))'; }"],
+        ]) assert.strictEqual(normalize(extractFunction(src, re, at)), expected, 'the leaf render in ' + at + ' changed' + rerun);
     });
 });

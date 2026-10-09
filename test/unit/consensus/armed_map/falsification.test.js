@@ -34,13 +34,21 @@ const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/pack
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
+const INDEXER_CANONICAL_BLOBS = {
+    'shared_rows.js':   'fd181cb331581013f30231043012372301440ebf',
+    'shared_rows_1.js': 'fd0b20dc2865d029b60f15ce0907c433fd8e148d',
+    'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
+    'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
+    'shared_rows_4.js': 'd7730aea9734caa739c9763de51434a6d90a2f92',
+    'shared_rows_5.js': 'd4e7dad8996a3bf78d021c882df96a26a09d096c',
+};
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
-    'shared_rows_1.js': '6769da650408acc79b5db6fa0d93f835b077a37d8f7885e8aa81d61bcd8618de',
+    'shared_rows_1.js': '1ed80849231893f3801d91a2cacc7041b54e26eaa63a680c845dc93aa5e1d278',
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': 'd671489c2b683ec2a94d0f45da1056687c38f78959a9f1780825eb7e3a37d6ea',
     'shared_rows_4.js': 'a7adec088f9f94d9cb05db0bedc39b9d90dfc7eba2317d9b17c7e2766d6c241e',
-    'shared_rows_5.js': 'b10b0dea8f646cd1b97ca602f59eb4fa409de508ffa1182aa2b7b9f160b63dc4',
+    'shared_rows_5.js': 'efafaa6e3c1e5496fb5adea5c870fe713b9ed5eb06b95ba3a43f6e0984b77c6b',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
@@ -95,9 +103,10 @@ function indexerRoot() {
         : path.resolve(ROOT, '..', 'xchain-indexer');
 }
 
-// A shallow sibling clone (GitHub CI) holds only its tip commit, so the canonical is read from
-// the sibling's working tree; the pinned digests hold it to the reviewed bytes.
 function readIndexerCanonical(file) {
+    const result = spawnSync('git', ['cat-file', 'blob', INDEXER_CANONICAL_BLOBS[file]],
+        { cwd: indexerRoot(), encoding: null, env: cleanEnv() });
+    if (result.status === 0) return result.stdout;
     return fs.readFileSync(path.join(indexerRoot(), 'src/protocol_changes', file));
 }
 

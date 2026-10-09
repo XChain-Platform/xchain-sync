@@ -104,10 +104,10 @@ function commitmentMissing(cp){
 }
 
 // Does one validator entry carry the stake fields the weighted regime requires?
-// Blank source and missing weight are BOTH disqualifying: meetsStakeThreshold fails
-// closed on the former but silently reads the latter as '0', so the weight check has
-// to live here. A negative weight is rejected there and again here, since a caller
-// reaching this gate should never see one.
+// Blank source and a missing, blank or nonnumeric weight are all disqualifying.
+// meetsStakeThreshold also fails closed on each of these (its decimal check is the
+// stricter of the two), so this gate is defence in depth: keep both layers. A
+// negative weight is rejected there and again here.
 function isWeightedEntry(v){
     if(!v || typeof v !== 'object') return false;
     if(v.source === null || v.source === undefined || String(v.source).trim() === '') return false;
@@ -175,12 +175,11 @@ function verifyCheckpoint(checkpoint, validators){
         // upgraded, leaves stake quorum unconfirmable, so this fails closed, the
         // fail-safe direction for a light client.
         //
-        // EVERY entry, not some: `.some` let a set mix one weighted entry with unweighted
-        // ones and still pass, and meetsStakeThreshold reads a missing weight as '0', so
-        // the omitted stake left the denominator while the weighted signer kept the
-        // numerator. One 100-weight signature then cleared 3*100 > 2*100 against a set
-        // whose true stake was unknown. The length check is what fails an empty set,
-        // since `.every` is vacuously true on [].
+        // EVERY entry, not some: `.some` once let a set mix one weighted entry with
+        // unweighted ones, back when meetsStakeThreshold read a missing weight as '0', and
+        // one 100-weight signature cleared 3*100 > 2*100. meetsStakeThreshold now fails
+        // closed on a missing weight too; this gate stays as defence in depth. The length
+        // check is what fails an empty set, since `.every` is vacuously true on [].
         let hasWeights = vset.length > 0 && vset.every(v => isWeightedEntry(v));
         valid = hasWeights && swq.meetsStakeThreshold(vset, validSigners);
     } else {
@@ -243,8 +242,9 @@ async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl
 module.exports = {
     canonicalCheckpoint,
     verifySignature,
-    // Exported so light.js#verifyCheckpointWithProvenSet enforces THIS predicate
-    // rather than a second copy that can drift from it.
+    // Exported so callers enforce THIS predicate rather than a second copy that can
+    // drift from it: here client/sync.js checkpointSkipsAnchoring, and in the SDK twin
+    // protocol/light_client/validator_set_follow.js verifyCheckpointWithProvenSet.
     commitmentMissing,
     verifyCheckpoint,
     suppliedValidators,

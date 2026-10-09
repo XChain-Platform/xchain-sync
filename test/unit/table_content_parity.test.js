@@ -19,8 +19,9 @@
 // replicated table therefore passed every check a follower ran.
 //
 // Acceptance cases, modelled on test/integration/index_map_parity.test.js:
-//   1. every replicated table is committed by something: covered here, or
-//      knowingly excluded by one of the two declared classes;
+//   1. every replicated table is accounted for: covered here, or knowingly
+//      excluded by one of the two declared classes (an excluded state_hash table
+//      is committed only in the columns its section reads);
 //   2. a faithful replica matches the source, digest-for-digest;
 //   3. equal row count + substituted content DIVERGES (the case counts miss);
 //   4. row ORDER is not content: a reordered table still matches;
@@ -82,9 +83,11 @@ describe('Advisory table-content parity', function(){
         });
 
         it('the second exclusion class is exactly the state_hash (in-place mutated) tables', function(){
-            // These are excluded because they are ALREADY committed by the enforced
-            // state_hash, and because an in-place edit in a later block moves content
-            // inside an already-published window. Derived from the hash declarations,
+            // These are excluded because an in-place edit in a later block moves content
+            // inside an already-published window. The enforced state_hash commits those
+            // edits, but only the columns each section reads; the coverage contract in
+            // src/table_lifecycle.js names what that leaves to advisory checks or to
+            // nothing. This is a table-level guard only. Derived from the hash declarations,
             // so a new mutation class cannot join one without the other.
             let mutable  = new Set(lifecycle.contentParityMutableTables());
             let excluded = replicatedTables.contentParityExclusions('indexer');

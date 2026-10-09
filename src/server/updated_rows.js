@@ -261,8 +261,10 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     Chunking spans blocks by design, so the head's action_index is below the window and
     //     the action-scoped stream carries the completing chunk row but not the head's flipped
     //     status: every replica kept the head's PRE-FLIP verdict (still 'valid'), served a batch
-    //     the source had condemned, and nothing detected it because the class is unhashed
-    //     (stateHash.js reads attests at version = 0 only, so this divergence never halts).
+    //     the source had condemned, and nothing detected it: no state_hash class covered the
+    //     head stamp then. It is now the flag-day gated attest_batch_head class
+    //     (stateHash.ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION), so once that gate arms on a
+    //     network a missing carry halts the follower instead of diverging silently.
     //
     //     Keyed on the COMPLETING CHUNK's block_index, which attests rows always carry
     //     (NOT NULL, indexed, written by createAttestationBatchAction) - unlike the anchor
@@ -294,8 +296,8 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     action_index, exactly as the SLASH class does.
     //
     //     UN-GATED for class 5's reason: shipping the row is not a hash preimage, and the
-    //     carry must be live before any future state-hash twin of this class arms, or a
-    //     follower halts on a head row it was never sent.
+    //     carry must be live before the attest_batch_head state-hash class arms on a network,
+    //     or a follower halts on a head row it was never sent.
     try {
         let attestHeadRows = await db.findFailedAttestBatchHeads(
             ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, from, to, conn);

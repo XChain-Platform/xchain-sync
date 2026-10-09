@@ -257,7 +257,7 @@ function addServerConfig(config){
     // A comma-separated ALLOWLIST, not a single origin: handing `cors` the raw
     // string echoes it back verbatim to every caller, which is a multi-value
     // header no browser accepts. Parsed here rather than at the cors() call
-    // because api.js only ever sees cfg. See src/corsOrigin.js.
+    // because api.js only ever sees cfg. See src/http/cors_origin.js.
     config['CORS_ORIGIN']   = parseCorsOrigin(process.env.CORS_ORIGIN);
 
     config['BLOCK_POLL_INTERVAL'] = parseIntMin0(process.env.BLOCK_POLL_INTERVAL, 3000);
@@ -597,8 +597,8 @@ function addCheckpointConfig(config){
 
     // Freshness bound (in applied blocks) for the checkpoint anchor. When the newest
     // quorum checkpoint trails the replica tip by more than this, the anchor cannot
-    // catch a forged tail, so the gap is logged (advisory, never a halt: withholding is
-    // not proof of forgery, and halting on absence would hand an attacker a DoS-halt).
+    // catch a forged tail, so the gap is logged (advisory unless CHECKPOINT_FRESHNESS_STRICT:
+    // withholding is not proof of forgery, and halting on absence hands an attacker a DoS-halt).
     config['CHECKPOINT_FRESHNESS_BLOCKS'] = parseIntMin1(process.env.CHECKPOINT_FRESHNESS_BLOCKS, 500);
 
     // CHECKPOINT_FRESHNESS_STRICT: promote the freshness bound from
@@ -610,6 +610,12 @@ function addCheckpointConfig(config){
     // opt in accept that trade for the stronger guarantee. Only enforced once the
     // anchor has verified at least one checkpoint (the federation is demonstrably
     // live), so a replica that has never seen a checkpoint is not halted at startup.
+    // A cycle that anchors nothing (a withheld, unanchorable or unfetchable checkpoint,
+    // including an unreachable CHECKPOINT_ANCHOR_URL) is measured from the newest
+    // checkpoint this replica verified, so serving no anchorable checkpoint also halts.
+    // A quorum-valid checkpoint past the tip is a catch-up, not withholding, and is exempt.
+    // That base is in memory: a cleared halt re-fires each cycle until a fresh anchor
+    // verifies, and a restart drops the base until the next verify.
     config['CHECKPOINT_FRESHNESS_STRICT'] = (process.env.CHECKPOINT_FRESHNESS_STRICT || '').toLowerCase() === 'true';
 }
 
