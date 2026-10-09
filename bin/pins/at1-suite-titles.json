@@ -1002,6 +1002,12 @@
       "Boundary: Block Index Values large block indices beyond safe integer: precision loss documented",
       "Boundary: Block Index Values reorg boundary at block 1 reorg from 10 to 0: reorg event at block_index 1"
     ],
+    "3c4cdf0461e9d830": [
+      "hub consensus hash mismatch HTTP health reporting publishes a confirmed match without degrading health",
+      "hub consensus hash mismatch HTTP health reporting publishes mismatch detail without degrading health",
+      "hub consensus hash mismatch HTTP health reporting publishes unknown as the final two keys while starting",
+      "hub consensus hash mismatch health reporting records unknown, matching, and mismatching hub hash states"
+    ],
     "3db5faf2fec0a01f": [
       "BlockBroadcaster evictStaleValidators hard-removes a non-roster entry that stays stale past a second TTL window",
       "BlockBroadcaster evictStaleValidators keeps a roster member visible as stale indefinitely",
@@ -4371,8 +4377,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 356,
-      "titleCount": 2817,
+      "fileCount": 357,
+      "titleCount": 2821,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
@@ -4611,6 +4617,7 @@
         "test/unit/hub_client.test/10_credential_tier.test.js": "a9b77afc5d938dab",
         "test/unit/hub_client.test/11_apply_config_result_merges_params_into_existing_module.test.js": "afa95c8c1b2d6f8f",
         "test/unit/hub_consensus_hash.test.js": "37100c93c95b19e0",
+        "test/unit/hub_consensus_hash_mismatch_health.test.js": "3c4cdf0461e9d830",
         "test/unit/list_share_lifecycle_twin.test.js": "8da394513ed50006",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
