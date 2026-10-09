@@ -83,7 +83,9 @@ describe('hub consensus hash mismatch health reporting', function(){
             'BTC/testnet: hub ' + 'f'.repeat(64) + ' vs bundled ' + trueHashes().testnet.BTC
         ]);
     });
+});
 
+describe('hub consensus hash mismatch HTTP health reporting', function(){
     it('publishes unknown as the final two keys while starting', async function(){
         const health = await readHealth(new HubClient([]), false);
         assert.strictEqual(health.status, 503);
