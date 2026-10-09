@@ -1688,6 +1688,13 @@
       "state hash archive fold twin exports the archive fold predicates with their canonical SQL",
       "state hash archive fold twin is byte-identical to the xchain-indexer state hash module"
     ],
+    "6c93dad4cd12104b": [
+      "anchor recovery registry twin declares archive recovery for every added quorum table",
+      "anchor recovery registry twin declares hub re-mirroring for quorum tables absent from the archive",
+      "anchor recovery registry twin exports the archive recovery table derivation",
+      "anchor recovery registry twin keeps src/table_lifecycle.js byte-identical to the indexer canonical",
+      "anchor recovery registry twin keeps src/table_lifecycle/block_and_special_tables.js byte-identical to the indexer canonical"
+    ],
     "6c7b6eb10f3ced0f": [
       "Chaos: Sync Resilience CE-SYNC-01: Server Crash \u2192 Reconnect \u2192 Gap Healing client recovers from server crash and heals block gap",
       "Chaos: Sync Resilience CE-SYNC-02: Block Gap Detection \u2192 Incremental Catch-Up client detects and heals a multi-block gap via status event",
@@ -1874,6 +1881,13 @@
       "merkle: SPV light-client primitives @regression version + frozen constants EMPTY_0 / EMPTY[h] recurrence is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants leaf/node domain separation is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants scheme versions match the golden"
+    ],
+    "788443e1a0a8e472": [
+      "list sharing lifecycle registry twin keeps list_snapshots hub-mirrored and rollback-exempt",
+      "list sharing lifecycle registry twin keeps remote_token_snapshots hub-mirrored and retraction-owned",
+      "list sharing lifecycle registry twin keeps src/table_lifecycle/action_tables.js byte-identical to the indexer canonical",
+      "list sharing lifecycle registry twin keeps src/table_lifecycle/block_and_special_tables.js byte-identical to the indexer canonical",
+      "list sharing lifecycle registry twin streams and rolls back list_share_mirrors by action"
     ],
     "78e7aa9bd14646e5": [
       "decoder dispensers off-stream write list @regression counts exactly the pinned UPDATE/DELETE statements on dispensers in xchain-decoder/src",
@@ -4211,9 +4225,11 @@
     "test": {
       "fileCount": 362,
       "titleCount": 2864,
+      "titleCount": 2866,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "8973c4a41f8712ee",
+        "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
         "test/unit/api_app_factory.test.js": "4a99c6858a3aef3e",
         "test/unit/api_protocol_halt_freshness.test/01_apply_protocol_halt_freshness.test.js": "e2dd3b784dd1d118",
         "test/unit/api_unverified_recompute_status.test.js": "5384bbe767fab909",
@@ -4455,6 +4471,7 @@
         "test/unit/hub_consensus_hash.test.js": "37100c93c95b19e0",
         "test/unit/hub_consensus_hash_mismatch_health.test.js": "3c4cdf0461e9d830",
         "test/unit/list_share_lifecycle_twin.test.js": "8da394513ed50006",
+        "test/unit/list_share_lifecycle_twin.test.js": "788443e1a0a8e472",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
         "test/unit/missing_tables.test.js": "092adf2c2aa96019",
