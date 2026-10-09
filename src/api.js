@@ -614,42 +614,6 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
     return buildClientStatusRow(syncService, db, dbType, chain, network);
 }
 
-function createHealthHandler(syncService, cfg){
-    return (req, res) => {
-        if(typeof syncService.isReady === 'function' && !syncService.isReady()){
-            res.status(503);
-            return res.json({
-                status:       'starting',
-                mode:         cfg['SYNC_MODE'],
-                databases:    [],
-                hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-                ...consensusIdentityFields(),
-                last_updated: new Date().toISOString(),
-                ...hubConsensusHashFields(syncService)
-            });
-        }
-        let databases = [];
-        let degraded = false;
-        for(let { coin, network, dbType } of syncService.getChains()){
-            let db = syncService.getDatabase(coin, network, dbType);
-            if(!db) continue;
-            let entry = buildHealthEntry(syncService, cfg['SYNC_MODE'], db, coin, network, dbType);
-            if(healthEntryDegraded(entry)) degraded = true;
-            databases.push(entry);
-        }
-        if(degraded) res.status(503);
-        res.json({
-            status:       degraded ? 'degraded' : 'healthy',
-            mode:         cfg['SYNC_MODE'],
-            databases:    databases,
-            hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
-            ...consensusIdentityFields(),
-            last_updated: new Date().toISOString(),
-            ...hubConsensusHashFields(syncService)
-        });
-    };
-}
-
 // The REST surface, built over a SyncService-shaped provider and a config so the
 // running service and the e2e harness mount the same middleware order, limiters
 // and routes. Listening, the WebSocket upgrade path and process lifecycle stay in
@@ -691,7 +655,48 @@ function createApp(syncService, cfg, app = express()){
     // process stays up, so a bare liveness probe still looks fine. This endpoint
     // surfaces the per-database circuit state so monitoring can tell a healthy
     // replicator apart from one stalled on a database outage.
-    app.get('/health', createHealthHandler(syncService, cfg));
+    app.get('/health', (req, res) => {
+        // Startup is not health. server.listen() runs before syncService.start(),
+        // and start() can wait on the hub for MAX_HUB_WAIT_MS (default 5 min); until
+        // it returns there are no chains, so the loop below has nothing to degrade on
+        // and the probe reported 'healthy' with zero pollers running.
+        // Report 'starting' + 503 for that whole window instead.
+        if(typeof syncService.isReady === 'function' && !syncService.isReady()){
+            res.status(503);
+            return res.json({
+                status:       'starting',
+                mode:         cfg['SYNC_MODE'],
+                databases:    [],
+                hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
+                ...consensusIdentityFields(),
+                last_updated: new Date().toISOString(),
+                ...hubConsensusHashFields(syncService)
+            });
+        }
+        let chains = syncService.getChains();
+        let databases = [];
+        let degraded = false;
+        for(let { coin, network, dbType } of chains){
+            let db = syncService.getDatabase(coin, network, dbType);
+            if(!db) continue;
+            let entry = buildHealthEntry(syncService, cfg['SYNC_MODE'], db, coin, network, dbType);
+            if(healthEntryDegraded(entry)) degraded = true;
+            databases.push(entry);
+        }
+        if(degraded) res.status(503);
+        res.json({
+            status:       degraded ? 'degraded' : 'healthy',
+            mode:         cfg['SYNC_MODE'],
+            databases:    databases,
+            // Age of the last successful hub-config fetch (null until the first success).
+            // Sync rediscovers chains from hub config on a timer; a climbing age here while
+            // status stays healthy means the hub is unreachable and the chain set is stale.
+            hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
+            ...consensusIdentityFields(),
+            last_updated: new Date().toISOString(),
+            ...hubConsensusHashFields(syncService)
+        });
+    });
 
     // GET /status : all chains, nested by coin/network/dbType
     app.get('/status', (req, res) => {
