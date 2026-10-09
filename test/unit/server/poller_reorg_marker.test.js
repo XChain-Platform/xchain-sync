@@ -23,34 +23,49 @@ function hashRow(blockIndex){
 }
 
 function createPoller(markers){
-    markers = markers.map(row => ({ code: 'REORG', ...row }));
-    let newestEventId = markers.length === 0 ? null :
-        Math.max(...markers.map(row => Number(row.id)));
-    let db = {
+    let eventRows;
+    const setMarkers = rows => {
+        eventRows = rows.map(row => ({ code: 'REORG', ...row }));
+    };
+    setMarkers(markers);
+    const db = {
         getLastBlock: sinon.stub().resolves(100),
         getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex)),
-        getMaxRowId: sinon.stub().resolves(newestEventId),
-        getContentIdWindowRows: sinon.stub().resolves(markers)
+        getMaxRowId: sinon.stub().callsFake(async () => eventRows.length === 0 ? null :
+            Math.max(...eventRows.map(row => Number(row.id)))),
+        getContentIdWindowRows: sinon.stub().callsFake(async (table, fromId, toId) =>
+            eventRows.filter(row => Number(row.id) > fromId && Number(row.id) <= toId))
     };
-    let broadcaster = {
+    const broadcaster = {
         broadcast: sinon.stub(),
         updateStatus: sinon.stub(),
         getSubscriberCount: sinon.stub().returns(0)
     };
-    let transparencyLog = { pruneFrom: sinon.stub().resolves() };
-    let poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster,
+    const transparencyLog = { pruneFrom: sinon.stub().resolves() };
+    const poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster,
         transparencyLog, { BLOCK_POLL_INTERVAL: 100 }, { sleep: sinon.stub().resolves() });
     poller.lastPolledBlock = 100;
     poller.lastPolledBlockHash = 'ledger|actions|contract';
     poller.reorgMarkerCursorInitialized = true;
-    return { poller, db, broadcaster, transparencyLog };
+    return { poller, db, broadcaster, transparencyLog, setMarkers };
 }
 
 describe('ServerPoller indexer REORG marker rewind @regression', function(){
     afterEach(function(){ sinon.restore(); });
 
     it('rewinds when all three block hashes are unchanged', async function(){
-        let context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
+        const context = createPoller([]);
+
+        await context.poller.poll();
+
+        assert.strictEqual(context.transparencyLog.pruneFrom.called, false);
+        assert.strictEqual(context.broadcaster.broadcast.called, false);
+        assert.strictEqual(context.poller.lastPolledBlock, 100);
+
+        context.setMarkers([{
+            id: 7,
+            data: JSON.stringify({ block_index: 100, decoder_event_id: 51 })
+        }]);
 
         await context.poller.poll();
 
@@ -62,8 +77,45 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
         assert.strictEqual(context.poller.lastEventId, 7);
     });
 
+    it('seeds the cursor at startup and handles a marker arriving in the live loop', async function(){
+        const oldMarker = {
+            id: 12,
+            data: JSON.stringify({ block_index: 80, decoder_event_id: 40 })
+        };
+        const context = createPoller([oldMarker]);
+        sinon.stub(context.poller, 'resumeCursor').resolves(100);
+        context.poller.recentHashCap = 1;
+        sinon.stub(context.poller, 'readReorgWindow').resolves([{
+            block_index: 100,
+            hash: 'ledger|actions|contract'
+        }]);
+        sinon.stub(context.poller, 'backfillGaps').resolves(0);
+        let sleepCount = 0;
+        context.poller.util.sleep.callsFake(async () => {
+            sleepCount++;
+            if(sleepCount === 1){
+                context.setMarkers([oldMarker, {
+                    id: 13,
+                    data: JSON.stringify({ block_index: 100, decoder_event_id: 41 })
+                }]);
+            } else {
+                context.poller.stop();
+            }
+        });
+
+        await context.poller.start();
+
+        assert.strictEqual(sleepCount, 2);
+        assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
+        assert.ok(context.broadcaster.broadcast.calledWith('bitcoin', 'mainnet', sinon.match({
+            type: 'reorg', block_index: 100
+        })));
+        assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(context.poller.lastPolledBlock, 99);
+    });
+
     it('does not process the same marker twice', async function(){
-        let context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
+        const context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
         await context.poller.handleReorgMarkers();
 
         assert.strictEqual(await context.poller.handleReorgMarkers(), false);
@@ -71,7 +123,7 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
     });
 
     it('does not acknowledge a marker when transparency pruning fails', async function(){
-        let context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
+        const context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
         context.poller.lastEventId = 6;
         context.transparencyLog.pruneFrom.rejects(new Error('prune failed'));
 
@@ -87,7 +139,7 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
     afterEach(function(){ sinon.restore(); });
 
     it('uses the deepest fork when more than one marker arrives between polls', async function(){
-        let context = createPoller([
+        const context = createPoller([
             { id: 8, data: JSON.stringify({ block_index: 99 }) },
             { id: 9, data: JSON.stringify({ block_index: 97 }) }
         ]);
@@ -102,7 +154,7 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
     });
 
     it('never probes indexer markers for a decoder poller', async function(){
-        let context = createPoller([]);
+        const context = createPoller([]);
         context.poller.dbType = 'decoder';
 
         assert.deepStrictEqual(await context.poller.readNewReorgMarkers(), {
@@ -113,7 +165,7 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
     });
 
     it('seeds the marker cursor without replaying history at startup', async function(){
-        let context = createPoller([{ id: 12 }]);
+        const context = createPoller([{ id: 12 }]);
         context.poller.reorgMarkerCursorInitialized = false;
 
         await context.poller.initializeReorgMarkerCursor();
@@ -125,7 +177,7 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
     });
 
     it('advances past unrelated events without broadcasting a reorg', async function(){
-        let context = createPoller([{ id: 13, code: 'NOTICE', data: '{}' }]);
+        const context = createPoller([{ id: 13, code: 'NOTICE', data: '{}' }]);
         context.poller.lastEventId = 12;
 
         assert.strictEqual(await context.poller.handleReorgMarkers(), false);
