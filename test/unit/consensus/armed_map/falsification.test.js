@@ -34,7 +34,14 @@ const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/pack
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
-const STAGED_CANONICAL_FILES = new Set(['shared_rows_1.js', 'shared_rows_5.js']);
+const INDEXER_CANONICAL_BLOBS = {
+    'shared_rows.js':   'fd181cb331581013f30231043012372301440ebf',
+    'shared_rows_1.js': 'fd0b20dc2865d029b60f15ce0907c433fd8e148d',
+    'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
+    'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
+    'shared_rows_4.js': 'fda90156acf869b63ef91f860a8cf5841920ce3b',
+    'shared_rows_5.js': 'e82d3a82eb3302048e536cc9c739527823fdcbd5',
+};
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
     'shared_rows_1.js': '1ed80849231893f3801d91a2cacc7041b54e26eaa63a680c845dc93aa5e1d278',
@@ -96,10 +103,11 @@ function indexerRoot() {
         : path.resolve(ROOT, '..', 'xchain-indexer');
 }
 
-// A shallow sibling clone (GitHub CI) holds only its tip commit, so the canonical is read from
-// the sibling's working tree; the pinned digests hold it to the reviewed bytes.
 function readIndexerCanonical(file) {
-    return fs.readFileSync(path.join(indexerRoot(), 'src/protocol_changes', file));
+    const result = spawnSync('git', ['cat-file', 'blob', INDEXER_CANONICAL_BLOBS[file]],
+        { cwd: indexerRoot(), encoding: null, env: cleanEnv() });
+    assert.strictEqual(result.status, 0, String(result.stderr));
+    return result.stdout;
 }
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -210,10 +218,9 @@ describe('armed map v2: falsification on temp trees', function () {
         }
     });
 
-    it('keeps unstaged shared row files byte-identical to the indexer canonical blobs', function () {
+    it('keeps all six shared row files byte-identical to the indexer canonical blobs', function () {
         assert.ok(fs.existsSync(indexerRoot()), 'xchain-indexer checkout is required');
         for (const file of SHARED_ROW_FILES) {
-            if (STAGED_CANONICAL_FILES.has(file)) continue;
             const canonical = readIndexerCanonical(file);
             const copy = fs.readFileSync(path.join(ROOT, 'src/consensus/gate_registry', file));
             assert.strictEqual(sha256(canonical), INDEXER_CANONICAL_SHA256[file], file);
