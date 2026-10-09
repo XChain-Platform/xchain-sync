@@ -126,6 +126,8 @@ describe('deactivation_block sync-mirror', function(){
             const q = deactivationResets(db).find(c => c.args[0].includes('UPDATE contract_stakes cs'));
             assert.ok(q);
             assert.ok(q.args[0].includes('JOIN contract_unstakes cu'));
+            assert.ok(q.args[0].includes('cu.source_id = cs.source_id') && !q.args[0].includes('signing_pubkey_id'),
+                'a key rotation can leave the stake and cooldown rows on different keys, so join on source_id');
             assert.ok(q.args[0].includes('cs.deactivation_block = cu.block_index + ?'));
             assert.deepStrictEqual(q.args[1], [100, 6]);
         });

@@ -20,7 +20,7 @@
  *
  *   xchain-indexer/src/rollback/index.js:165   collectAffectedEntities (issues read
  *                                              at src/db/rollback/read_phase.js:136)
- *   xchain-indexer/src/rollback/commit.js:60   updateTokens(tickers, true)
+ *   xchain-indexer/src/rollback/commit.js:61   updateTokens(tickers, true)
  *   xchain-indexer/src/db/database/ledger_checks.js:132  updateTokenInfo
  *   xchain-indexer/src/db/issues/token_info.js:29        getTokenInfo, whose replay is
  *       issueReplay.rowsQuery, issueReplay.rowValues and issueReplay.foldRow

@@ -350,3 +350,51 @@ describe('ClientSync: rotation following under the hub\'s full coin name @regres
         assert.strictEqual(sync.getHaltInfo().reason, 'checkpoint-quorum-divergence');
     });
 });
+
+// On this path only the attested range step is authenticated, so these serve a /latest body that differs from it.
+describe('ClientSync: rotation following records only the attested checkpoint @regression', function(){
+    registerHooks();
+
+    function genuineRotation(){
+        const launch = makeSigner(), s1 = makeSigner(); pin(launch);
+        const SR0 = 'b0'.repeat(32), SR1 = 'b1'.repeat(32);
+        setSeed({ block_index: 90, snapshot_block: 84, state_root: SR0 });
+        const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
+        rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
+        rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
+        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        return { cp, s1 };
+    }
+
+    it('never records a forged checkpoint_seq served on /latest beside a genuine range', async function(){
+        const warn = sinon.stub(console, 'warn');
+        const { cp, s1 } = genuineRotation();
+        const forged = Object.assign({}, cp, { checkpoint_seq: 1e9,
+            validator_signatures: [{ pubkey: s1.pubkeyHex, sig: '00'.repeat(64) }] });
+        route(forged, [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), false, 'a served body that differs from the attested step waits');
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, null, 'the forged seq must not become the high-water mark');
+        const msgs = warn.getCalls().map(c => c.args.join(' '));
+        assert.ok(msgs.some(m => /differs from the attested range step/.test(m)),
+            'the mismatch must be logged by name, got: ' + msgs.join(' | '));
+
+        // The genuine checkpoint served next records the attested seq, so anchoring was not frozen.
+        route(cp, [cp]);
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync.isHalted(), false);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 1);
+    });
+
+    it('anchors an unsigned /latest body that equals the attested step on every signed field', async function(){
+        const { cp } = genuineRotation();
+        route(Object.assign({}, cp, { validator_signatures: [] }), [cp]);
+
+        await sync.verifyCheckpointQuorum();
+
+        assert.strictEqual(sync.isHalted(), false);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 1);
+    });
+});

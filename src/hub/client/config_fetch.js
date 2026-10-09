@@ -35,22 +35,40 @@ function localConsensusHashes(network){
 // Fold a getallconfigs delta (only the rows that changed since our cursor) into
 // the cached nested config map, mutating and returning `base`. The hub's configs
 // table is upsert-only (rows are never deleted), so applying successive deltas
-// reconstructs exactly the tree a full fetch would have produced.
+// reconstructs exactly the tree a full fetch would have produced. Keys come from
+// remote JSON, so it walks own keys only and ignores prototype-sensitive names.
 function mergeConfigDelta(base, delta){
-    for(let coin in delta){
-        if(!base[coin]) base[coin] = {};
-        for(let network in delta[coin]){
-            if(!base[coin][network]) base[coin][network] = {};
-            for(let module in delta[coin][network]){
-                if(!base[coin][network][module]) base[coin][network][module] = {};
-                let params = delta[coin][network][module];
-                for(let param in params){
-                    base[coin][network][module][param] = params[param];
+    for(const coin of safeConfigKeys(delta)){
+        const coinBase = ownConfigBranch(base, coin);
+        for(const network of safeConfigKeys(delta[coin])){
+            const networkBase = ownConfigBranch(coinBase, network);
+            for(const module of safeConfigKeys(delta[coin][network])){
+                const moduleBase = ownConfigBranch(networkBase, module);
+                const params = delta[coin][network][module];
+                for(const param of safeConfigKeys(params)){
+                    moduleBase[param] = params[param];
                 }
             }
         }
     }
     return base;
+}
+
+// Names that reach Object.prototype or a constructor when used as a key.
+const PROTOTYPE_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+
+// Own enumerable keys of a config level, minus prototype-sensitive ones; none for a non-object level.
+function safeConfigKeys(level){
+    if(!level || typeof level !== 'object' || Array.isArray(level)) return [];
+    return Object.keys(level).filter((key) => !PROTOTYPE_KEYS.includes(key));
+}
+
+// The child map at `key`, reused only when it is an own plain-object property, else a fresh one.
+function ownConfigBranch(obj, key){
+    const own = Object.prototype.hasOwnProperty.call(obj, key);
+    if(own && obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) return obj[key];
+    obj[key] = {};
+    return obj[key];
 }
 
 // If call failed over to a different endpoint than the one our cursor came

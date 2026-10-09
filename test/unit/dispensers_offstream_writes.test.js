@@ -46,12 +46,14 @@ const PINNED_WRITERS = {
     extendOpenDispenserExpirationBySource:  1,
     restoreDispenserExtensions:             1,
     deleteBlockRows:                        2,
-    purgeExpiredDispensers:                 1
+    purgeExpiredDispensers:                 2
 };
 const PINNED_STATEMENTS = Object.values(PINNED_WRITERS).reduce((a, b) => a + b, 0);
 
 // Match an in-place write on dispensers only (\b keeps dispenser_extension_undo out).
-const WRITE_RE = /\b(?:UPDATE|DELETE\s+FROM)\s+dispensers\b/gi;
+// The optional alias list admits the multi-table form purgeExpiredDispensers uses on its
+// cancel-grace path (DELETE d FROM dispensers d LEFT JOIN blocks ...).
+const WRITE_RE = /\b(?:UPDATE|DELETE(?:\s+\w+(?:\s*,\s*\w+)*)?\s+FROM)\s+dispensers\b/gi;
 
 // List runtime .js sources, skipping src/sql (one-time migrations are not runtime writes).
 function decoderSources(dir){
@@ -112,5 +114,25 @@ describe('decoder dispensers off-stream write list @regression', function(){
         assert.deepStrictEqual(missing, [],
             'the dispensers entry in the src/schema/replicated_tables.js header does not name: ' +
             missing.join(', '));
+    });
+
+    // The count above checks the pattern only through one total, where a missed statement
+    // and an under-pinned writer cancel out; pin the pattern's reach on its own.
+    it('the write pattern matches every dispensers write form and no other table', function(){
+        const count = (sql) => [...sql.matchAll(WRITE_RE)].length;
+        for(const sql of [
+            'UPDATE dispensers SET status = 10',
+            'update dispensers d set d.expired_block_index = NULL',
+            'DELETE FROM dispensers WHERE expired_block_index <= ?',
+            'DELETE d FROM dispensers d\n    LEFT JOIN blocks eb ON eb.block_index = d.expired_block_index',
+            'DELETE d, u FROM dispensers d JOIN dispenser_extension_undo u ON u.tx_index = d.tx_index',
+        ]) assert.strictEqual(count(sql), 1, 'WRITE_RE misses a dispensers write: ' + sql);
+        for(const sql of [
+            'DELETE FROM dispenser_extension_undo WHERE block_index >= ?',
+            'UPDATE dispenser_extension_undo SET restored = 1',
+            'DELETE d FROM dispenses d',
+            'SELECT * FROM dispensers WHERE status = 0',
+            'INSERT INTO dispensers (tx_index) VALUES (?)',
+        ]) assert.strictEqual(count(sql), 0, 'WRITE_RE matches a statement that does not write dispensers: ' + sql);
     });
 });
