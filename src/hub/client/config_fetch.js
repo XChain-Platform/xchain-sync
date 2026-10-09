@@ -222,6 +222,7 @@ module.exports = {
             this.hubConsensusHashMismatchDetails = [];
             return;
         }
+        let compared = false;
         let mismatches = [];
         for(const network of coins.NETWORKS){
             let served = hubHashes[network];
@@ -230,11 +231,14 @@ module.exports = {
             for(const tick of Object.keys(local)){
                 // A coin the hub does not serve is version skew, not drift; only a
                 // hash the hub DOES serve and that differs counts as a mismatch.
-                if(served[tick] && served[tick] !== local[tick])
-                    mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                if(served[tick]){
+                    compared = true;
+                    if(served[tick] !== local[tick])
+                        mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                }
             }
         }
-        this.hubConsensusHashMismatch = mismatches.length > 0;
+        this.hubConsensusHashMismatch = compared ? mismatches.length > 0 : null;
         this.hubConsensusHashMismatchDetails = mismatches;
         // This runs on every poll, so log only when the mismatch SET changes: a
         // standing divergence must not flood the log, and a drift that widens or

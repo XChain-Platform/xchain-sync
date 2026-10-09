@@ -71,6 +71,14 @@ describe('hub consensus hash mismatch health reporting', function(){
         assert.strictEqual(hub.hubConsensusHashMismatch, null);
         assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, []);
 
+        hub.checkHubConsensusHash({});
+        assert.strictEqual(hub.hubConsensusHashMismatch, null);
+        assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, []);
+
+        hub.checkHubConsensusHash({ testnet: { UNKNOWN: 'a'.repeat(64) } });
+        assert.strictEqual(hub.hubConsensusHashMismatch, null);
+        assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, []);
+
         hub.checkHubConsensusHash(trueHashes());
         assert.strictEqual(hub.hubConsensusHashMismatch, false);
         assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, []);
@@ -82,6 +90,10 @@ describe('hub consensus hash mismatch health reporting', function(){
         assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, [
             'BTC/testnet: hub ' + 'f'.repeat(64) + ' vs bundled ' + trueHashes().testnet.BTC
         ]);
+
+        hub.checkHubConsensusHash(trueHashes());
+        assert.strictEqual(hub.hubConsensusHashMismatch, false);
+        assert.deepStrictEqual(hub.hubConsensusHashMismatchDetails, []);
     });
 });
 
