@@ -43,4 +43,42 @@ describe('RollbackGuard', function(){
         assert.strictEqual(g.depthFor(103, 102), 2);
         assert.strictEqual(g.peak, null);
     });
+
+    it('round-trips an active streak through state', function(){
+        const g = new RollbackGuard(5);
+        g.record(100, 98);
+
+        const restored = new RollbackGuard(5);
+        restored.restoreState(g.toState());
+
+        assert.deepStrictEqual(restored.toState(), {peak: 100, low: 98});
+        assert.strictEqual(restored.depthFor(97, 96), 5);
+    });
+
+    it('round-trips reset state', function(){
+        const restored = new RollbackGuard(5);
+        restored.record(100, 98);
+        restored.restoreState(new RollbackGuard(5).toState());
+
+        assert.deepStrictEqual(restored.toState(), {peak: null, low: null});
+    });
+
+    it('stays reset when restored state is malformed', function(){
+        const malformedStates = [
+            null,
+            {},
+            {peak: 100},
+            {peak: '100', low: 98},
+            {peak: 100, low: null},
+            {peak: 98, low: 100},
+            {peak: -1, low: 0},
+        ];
+
+        for(const state of malformedStates){
+            const g = new RollbackGuard(5);
+            g.record(100, 98);
+            g.restoreState(state);
+            assert.deepStrictEqual(g.toState(), {peak: null, low: null});
+        }
+    });
 });
