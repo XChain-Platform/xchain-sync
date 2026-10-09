@@ -153,13 +153,6 @@
       "validation validateWsEvent rejects undefined event",
       "validation validateWsEvent rejects unknown event type"
     ],
-    "0a0b1c0489a3d846": [
-      "consensus gate registry has exactly the manifest row count",
-      "consensus gate registry keeps the SHARED block data-only",
-      "consensus gate registry stores frozen rows but gives each shim a mutable copy",
-      "consensus gate registry throws a RegistryMissError that names the missing key",
-      "consensus gate registry throws on a duplicate key"
-    ],
     "0a214ec4ff4e8d5c": [
       "Tier 2 - HubClient @tier2 getIndexerConfigs always returns an array",
       "Tier 2 - HubClient @tier2 getIndexerConfigs each returned entry has correct shape",
@@ -711,6 +704,14 @@
       "DATETIME column inventory matches a temporal declaration in each table definition",
       "DATETIME column inventory uses DATETIME definitions without TIMESTAMP type tokens"
     ],
+    "29c7591a9edf1c0f": [
+      "consensus gate registry has exactly the manifest row count",
+      "consensus gate registry keeps the SHARED block data-only",
+      "consensus gate registry names UNARMED instead of spelling its numeric sentinel in shared gate rows",
+      "consensus gate registry stores frozen rows but gives each shim a mutable copy",
+      "consensus gate registry throws a RegistryMissError that names the missing key",
+      "consensus gate registry throws on a duplicate key"
+    ],
     "29c90f8bd7e76e16": [
       "Boundary: WebSocket Limits backpressure (item 5410: drop only genuinely stalled peers) a fully-drained buffer keeps the peer healthy and clears any stall window",
       "Boundary: WebSocket Limits backpressure (item 5410: drop only genuinely stalled peers) arms but does not trip the stall window on the first non-draining send",
@@ -884,6 +885,15 @@
       "contract_state_root: key derivation @regression contract_index type does not change the key (driver bigint config is not consensus)",
       "contract_state_root: key derivation @regression is domain-separated from the balance and escrow key domains",
       "contract_state_root: key derivation @regression separates chain, network, contract and key (no field can be smeared into another)"
+    ],
+    "34c061c9206ef781": [
+      "RollbackGuard accumulates a rewind split across events",
+      "RollbackGuard ends the streak once the tip climbs a full limit above the low target",
+      "RollbackGuard ends the streak once the tip recovers to the peak",
+      "RollbackGuard measures a single event from the tip",
+      "RollbackGuard state serialization round-trips an active streak through state",
+      "RollbackGuard state serialization round-trips reset state",
+      "RollbackGuard state serialization stays reset when restored state is malformed"
     ],
     "34ecc125f5c3c276": [
       "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)",
@@ -1619,12 +1629,6 @@
       "BlockBroadcaster removeSubscription clears metadata on ws",
       "BlockBroadcaster removeSubscription handles ws with no metadata gracefully",
       "BlockBroadcaster removeSubscription removes from subscribers and ipConnections"
-    ],
-    "5744432e388b90b9": [
-      "RollbackGuard accumulates a rewind split across events",
-      "RollbackGuard ends the streak once the tip climbs a full limit above the low target",
-      "RollbackGuard ends the streak once the tip recovers to the peak",
-      "RollbackGuard measures a single event from the tip"
     ],
     "5751017b882d5474": [
       "BlockBroadcaster getSubscriberCount returns 0 for unknown chain/network",
@@ -2859,6 +2863,12 @@
       "Database.ensureReplicaUtf8mb4Columns widens every narrow column, one ALTER per table, with the twin module's exact clause",
       "Database.ensureReplicaUtf8mb4Columns widens only the columns the replica actually has, leaving the rest of the ALTER intact"
     ],
+    "9f200949803e9080": [
+      "ClientSync rollback guard persistence halts when a split rollback exceeds the limit across a restart",
+      "ClientSync rollback guard persistence treats a rollback guard read failure as an empty streak",
+      "ClientSync rollback guard reset boundaries resets the guard after a full snapshot is applied",
+      "ClientSync rollback guard reset boundaries resets the guard when an operator clears a max-depth halt"
+    ],
     "9f32bf1a82b5f6ab": [
       "ClientSync warnTrustPosture does not warn about single-source with 2+ sources",
       "ClientSync warnTrustPosture indexer with 2+ sources emits no SINGLE-SOURCE warning, but DOES warn the checkpoint anchor is off",
@@ -3423,6 +3433,16 @@
       "collectRedrivenValidatorRewards returns [] (no throw) when the source has no re-driven rows",
       "collectRedrivenValidatorRewards selects by the applied_block window with the survivors-only backdating guard",
       "collectRedrivenValidatorRewards swallows ONLY a schema gap (1146/1054); a transient fault propagates so the block is retried"
+    ],
+    "c810e94285998642": [
+      "ServerPoller indexer REORG marker cursor @regression advances past unrelated events without broadcasting a reorg",
+      "ServerPoller indexer REORG marker cursor @regression never probes indexer markers for a decoder poller",
+      "ServerPoller indexer REORG marker cursor @regression seeds the marker cursor without replaying history at startup",
+      "ServerPoller indexer REORG marker cursor @regression uses the deepest fork when more than one marker arrives between polls",
+      "ServerPoller indexer REORG marker retries @regression does not acknowledge a marker when transparency pruning fails",
+      "ServerPoller indexer REORG marker retries @regression does not process the same marker twice",
+      "ServerPoller indexer REORG marker rewind @regression rewinds when all three block hashes are unchanged",
+      "ServerPoller indexer REORG marker rewind @regression seeds the cursor at startup and handles a marker arriving in the live loop"
     ],
     "c887799f86d69a43": [
       "ClientSync: state_hash apply-time integrity halt @regression HALTS when the apply-time state_hash recompute disagrees with the source",
@@ -4447,7 +4467,8 @@
         "test/unit/client/archive_reset_predicate.test.js": "a54f9a2821a10c99",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
-        "test/unit/client/rollback_guard.test.js": "5744432e388b90b9",
+        "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
+        "test/unit/client/rollback_guard_persist.test.js": "9f200949803e9080",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
@@ -4540,7 +4561,7 @@
         "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
-        "test/unit/consensus/gate_registry.test.js": "0a0b1c0489a3d846",
+        "test/unit/consensus/gate_registry.test.js": "29c7591a9edf1c0f",
         "test/unit/consensus/regtest_env_twin.test.js": "cbad35bf1daff99f",
         "test/unit/consensus/stake_weight_collation_twin.test.js": "c4195dde3aa9c82f",
         "test/unit/consensus/state_hash_fold_twin.test.js": "6bf91ada4d7570c1",
@@ -4642,6 +4663,7 @@
         "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
         "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
+        "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server/updated_rows/accumulator.test.js": "547bbbb3e69a37dd",
         "test/unit/server/updated_rows/table_specs.test.js": "8f8f77d749f72058",
         "test/unit/server/updated_rows/token_rows.test.js": "4d7eee56f411f316",
@@ -5087,6 +5109,7 @@
         "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
         "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
+        "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js": "48914b893fa0ef67",
         "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js": "9e1eab683f917093",
         "test/unit/server_poller.test/03_backfill_gaps_regression.test.js": "3107b91431c55ba5",
