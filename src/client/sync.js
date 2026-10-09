@@ -848,6 +848,7 @@ class ClientSync {
 
         // The persisted truncation floor loads before the resume branch and its depth guard.
         await this.loadBootstrapBase();
+        await this.loadRollbackGuardState();
         await this.synchronizeStoredReplica();
         this.ensureLiveFollowTip();
         await this.prepareLiveFollow();
@@ -1287,7 +1288,10 @@ class ClientSync {
 
     async bootstrapApplySnapshot(snapshotData){
         if(await this.checkTrainActivation(snapshotData.block_height)) return false;
-        await this.withApplyLock(() => this.applier.applyFullSnapshot(snapshotData));
+        await this.withApplyLock(async () => {
+            await this.applier.applyFullSnapshot(snapshotData);
+            await this.resetRollbackGuardState();
+        });
         this.lastAppliedBlock = snapshotData.block_height;
         await this.refreshTipHashes();
         await this.clearBootstrapBase();
@@ -3577,6 +3581,46 @@ class ClientSync {
         }
     }
 
+    rollbackGuardStateKey(){ return 'rollback_guard:' + this.dbType; }
+
+    rollbackGuardState(){
+        return { peak: this.rollbackGuard.peak, low: this.rollbackGuard.low };
+    }
+
+    async persistRollbackGuardState(){
+        if(!this.db || typeof this.db.setSyncState !== 'function') return;
+        await this.db.setSyncState(this.rollbackGuardStateKey(),
+            JSON.stringify(this.rollbackGuardState()));
+    }
+
+    async loadRollbackGuardState(){
+        if(!this.db || typeof this.db.getSyncState !== 'function') return;
+        let raw;
+        try {
+            raw = await this.db.getSyncState(this.rollbackGuardStateKey());
+        } catch(e){
+            getLogger().error(util.format('rollback guard state read failed; starting a new streak:', e));
+            return;
+        }
+        if(raw === null || raw === undefined) return;
+        try {
+            const state = JSON.parse(raw);
+            if(!Number.isSafeInteger(state.peak) || !Number.isSafeInteger(state.low) ||
+               state.peak < 0 || state.low < 0 || state.low > state.peak)
+                throw new Error('invalid rollback guard state');
+            this.rollbackGuard.peak = state.peak;
+            this.rollbackGuard.low = state.low;
+        } catch(e){
+            getLogger().error(util.format('rollback guard state is invalid; starting a new streak:', e));
+        }
+    }
+
+    async resetRollbackGuardState(){
+        this.rollbackGuard.reset();
+        if(!this.db || typeof this.db.deleteSyncState !== 'function') return;
+        await this.db.deleteSyncState(this.rollbackGuardStateKey());
+    }
+
     // Operator clear: acknowledge an investigated divergence and allow resume.
     // Never automatic: a halted validator must not self-resume onto a contested
     // chain. Caller is responsible for restarting the sync loop afterwards.
@@ -3596,6 +3640,8 @@ class ClientSync {
         }
         try { await this.db.clearHalt(this.dbType); } catch(e){ getLogger().error(util.format('clearHalt persistence failed:', e)); }
         const was = this._halted;
+        if(was && was.reason === 'max-rollback-depth-exceeded')
+            await this.resetRollbackGuardState();
         this._halted = null;
         getLogger().info('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
             (was ? ' (was halted at block ' + was.blockIndex + ')' : ''));
@@ -4038,7 +4084,13 @@ class ClientSync {
     }
 
     async applyReorgRollback(event){
-        await this.withApplyLock(() => this.rollback.rollback(event.block_index));
+        await this.withApplyLock(async () => {
+            if(this.rollbackGuard){
+                this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
+                await this.persistRollbackGuardState();
+            }
+            await this.rollback.rollback(event.block_index);
+        });
         // The source rewrote dispensers off-stream for the orphaned blocks, so arm a reconcile
         // for the next status tick or catch-up rather than waiting out the interval.
         if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
@@ -4071,7 +4123,6 @@ class ClientSync {
         }
 
         try {
-            this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
             await this.applyReorgRollback(event);
         } catch(e){
             await this.haltForReorgRollbackFailure(event, e);

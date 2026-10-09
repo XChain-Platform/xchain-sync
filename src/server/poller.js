@@ -107,6 +107,9 @@ function initializeCursorState(poller, chain, network){
     // Compare content hashes after rollback and readvance in one interval.
     poller.lastPolledBlockHash = null;
 
+    poller.lastEventId = null;
+    poller.reorgMarkerCursorInitialized = false;
+
     // Bound recently broadcast hashes by block index and content hash.
     // Seed walk-back from the pre-reorg hash for net-forward reorgs.
     // Continue deep walk-back across later polls.
@@ -176,6 +179,7 @@ class ServerPoller {
     }
 
     async start(){
+        await this.initializeReorgMarkerCursor();
         this.lastPolledBlock = await this.resumeCursor();
         this.lastPolledBlockHash = await seedReorgWindow(this, logger);
         this.running = true;
@@ -295,6 +299,8 @@ class ServerPoller {
             return;
         }
 
+        if(await this.handleReorgMarkers()) return;
+
         if(this.lastPolledBlockHash !== null && await this.handleNetForwardReorg()) return;
 
         if(currentBlock < this.lastPolledBlock){
@@ -322,6 +328,85 @@ class ServerPoller {
         this.lastPolledBlock = currentBlock;
         this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
         await this.updateStatus();
+    }
+
+    async readLatestEventId(){
+        if(this.dbType === 'decoder') return null;
+        let eventId = await this.db.getMaxRowId('events');
+        if(eventId === null) return null;
+        eventId = Number(eventId);
+        if(!Number.isSafeInteger(eventId) || eventId < 1)
+            throw new Error('ServerPoller: invalid events cursor id=' + eventId);
+        return eventId;
+    }
+
+    async initializeReorgMarkerCursor(){
+        if(this.dbType === 'decoder' || typeof this.db.getMaxRowId !== 'function') return;
+        this.lastEventId = await this.readLatestEventId();
+        this.reorgMarkerCursorInitialized = true;
+    }
+
+    async readNewReorgMarkers(){
+        if(!this.reorgMarkerCursorInitialized || this.dbType === 'decoder')
+            return { markers: [], newestEventId: this.lastEventId };
+        let newestEventId = await this.readLatestEventId();
+        if(newestEventId === null || newestEventId === this.lastEventId)
+            return { markers: [], newestEventId };
+        if(this.lastEventId !== null && newestEventId < this.lastEventId)
+            throw new Error('ServerPoller: events cursor moved backwards from ' +
+                this.lastEventId + ' to ' + newestEventId);
+        let afterId = this.lastEventId === null ? 0 : this.lastEventId;
+        let rows = await this.db.getContentIdWindowRows('events', afterId, newestEventId);
+        return { markers: rows.filter(row => row.code === 'REORG'), newestEventId };
+    }
+
+    reorgMarkerBlock(row){
+        let parsed;
+        try {
+            parsed = JSON.parse(row.data);
+        } catch(e){
+            parsed = row.data;
+        }
+        let blockIndex = Number(parsed && typeof parsed === 'object'
+            ? parsed.block_index : parsed);
+        if(!Number.isSafeInteger(blockIndex) || blockIndex < 1)
+            throw new Error('ServerPoller: invalid REORG marker id=' + row.id);
+        return blockIndex;
+    }
+
+    async handleReorgMarkers(){
+        let { markers, newestEventId } = await this.readNewReorgMarkers();
+        if(markers.length === 0){
+            this.lastEventId = newestEventId;
+            return false;
+        }
+
+        let forkBlock = null;
+        for(let row of markers){
+            let markerId = Number(row.id);
+            if(!Number.isSafeInteger(markerId) || markerId < 1)
+                throw new Error('ServerPoller: invalid REORG marker id=' + row.id);
+            let markerBlock = this.reorgMarkerBlock(row);
+            forkBlock = forkBlock === null ? markerBlock : Math.min(forkBlock, markerBlock);
+        }
+
+        if(forkBlock > this.lastPolledBlock){
+            this.lastEventId = newestEventId;
+            return false;
+        }
+
+        logger.info('Indexer REORG marker detected for ' + this.chain + '/' + this.network +
+            ' at block ' + forkBlock);
+        if(this.transparencyLog)
+            await this.transparencyLog.pruneFrom(forkBlock);
+        this.broadcastReorg(forkBlock);
+        this.lastPolledBlock = forkBlock - 1;
+        this.lastEventId = newestEventId;
+        this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
+            ? this.recentBroadcastHashes.get(this.lastPolledBlock)
+            : await this.sourceBlockHash(this.lastPolledBlock);
+        await this.updateStatus();
+        return true;
     }
 
     async handleNetForwardReorg(){
