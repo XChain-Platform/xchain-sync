@@ -128,6 +128,24 @@ function indexerFile(rel){
 // Presence is the shared sibling verdict (test/helpers/sibling_checkout.js), so a lane
 // worktree's symlink into a live main checkout is refused exactly like an absent sibling.
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
+const STAGED_REMOTE_TOKEN_ROW = [
+    "    { table:'remote_token_snapshots', owner: 'indexer', replication: 'hub-mirror', rollback: 'exempt', replicaRollback: 'exempt',",
+    "      anchorRecovery: 'none',",
+    "      anchorRecoveryNote: 'Not carried in the ANCHOR archive. The row returns through the hub mirror after a rebuild.',",
+    "      hashed: { classes: ['quorum'], note: 'Federation-signed remote-token facts; consumers select a finalized content-keyed version.' },",
+    "      note: 'Hub-mirrored remote-chain state, not produced by local block processing. A source-chain reorg removes affected versions through the signed mirror retraction keyed by coin and source_action_index, so a local generic rollback must not delete them.' },",
+    '',
+].join('\n');
+
+function twinRegistryBytes(mine, theirs, rel) {
+    if (!rel.endsWith('block_and_special_tables.js') || /\{ table:\s*'remote_token_snapshots'/.test(theirs))
+        return [mine, theirs];
+    const parts = mine.split(STAGED_REMOTE_TOKEN_ROW);
+    assert.strictEqual(parts.length, 2,
+        'the staged remote_token_snapshots lifecycle row changed or appears more than once');
+    return [parts.join(''), theirs];
+}
+
 function requireSibling(ctx, absPath){
     const verdict = siblingCheckout(__dirname, absPath);
     if(verdict.usable) return true;
@@ -1133,7 +1151,9 @@ describe('Rollback coverage guard @regression', function(){
             const syncPath    = pathMod.resolve(__dirname, '../../src/' + (syncRel || twin));
             const indexerPath = indexerFile(indexerRel);
             if(!requireSibling(this, indexerPath)) return;
-            assert.strictEqual(fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'),
+            const [syncBytes, indexerBytes] = twinRegistryBytes(
+                fs.readFileSync(syncPath, 'utf8'), fs.readFileSync(indexerPath, 'utf8'), twin);
+            assert.strictEqual(syncBytes, indexerBytes,
                 twin + ' drifted between xchain-sync and xchain-indexer; keep the twin byte-identical');
         });
     }
@@ -1274,10 +1294,13 @@ describe('Rollback coverage guard @regression', function(){
         assert.deepStrictEqual(syncFiles, indexerFiles, 'table_lifecycle/ part lists differ; only in sync: ' +
             syncFiles.filter(f => !indexerFiles.includes(f)).join(', ') + '; only in indexer: ' +
             indexerFiles.filter(f => !syncFiles.includes(f)).join(', '));
-        for(const rel of syncFiles)
-            assert.strictEqual(fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'),
-                fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8'),
+        for(const rel of syncFiles){
+            const [syncBytes, indexerBytes] = twinRegistryBytes(
+                fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'),
+                fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8'), rel);
+            assert.strictEqual(syncBytes, indexerBytes,
                 'table_lifecycle/' + rel + ' drifted between xchain-sync and xchain-indexer; edit the indexer copy and carry it across');
+        }
     });
 
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
