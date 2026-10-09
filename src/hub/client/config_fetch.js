@@ -101,6 +101,9 @@ async function refetchAfterConfigRegression(hub, result){
 
 module.exports = {
 
+    hubConsensusHashMismatch: null,
+    hubConsensusHashMismatchDetails: Object.freeze([]),
+
     // Get all configs from the hub
     // Returns nested object: { coin: { network: { module: { param: value } } } }
     //
@@ -214,7 +217,12 @@ module.exports = {
     // Mirrors XChainIndexer.checkHubConsensusHash, widened to every coin and network
     // because sync serves whatever chain set the hub hands it.
     checkHubConsensusHash(hubHashes){
-        if(!hubHashes || typeof hubHashes !== 'object') return;   // older hub: field absent
+        if(!hubHashes || typeof hubHashes !== 'object'){
+            this.hubConsensusHashMismatch = null;
+            this.hubConsensusHashMismatchDetails = [];
+            return;
+        }
+        let compared = false;
         let mismatches = [];
         for(const network of coins.NETWORKS){
             let served = hubHashes[network];
@@ -223,10 +231,15 @@ module.exports = {
             for(const tick of Object.keys(local)){
                 // A coin the hub does not serve is version skew, not drift; only a
                 // hash the hub DOES serve and that differs counts as a mismatch.
-                if(served[tick] && served[tick] !== local[tick])
-                    mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                if(served[tick]){
+                    compared = true;
+                    if(served[tick] !== local[tick])
+                        mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                }
             }
         }
+        this.hubConsensusHashMismatch = compared ? mismatches.length > 0 : null;
+        this.hubConsensusHashMismatchDetails = mismatches;
         // This runs on every poll, so log only when the mismatch SET changes: a
         // standing divergence must not flood the log, and a drift that widens or
         // clears must still report.
