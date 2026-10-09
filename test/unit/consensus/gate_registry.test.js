@@ -41,6 +41,26 @@ describe('consensus gate registry', function () {
         }
     });
 
+    it('names UNARMED instead of spelling its numeric sentinel in shared gate rows', function () {
+        const rows = [
+            ['shared_rows_1.js', 'archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION', 1],
+            ['shared_rows_5.js', 'xchain_bridge_activation.XCHAIN_BRIDGE_ACTIVATION', 5],
+            ['shared_rows_5.js', 'list_share_producer_activation.LIST_SHARE_PRODUCER_ACTIVATION', 1],
+            ['shared_rows_5.js', 'list_share_consumer_activation.LIST_SHARE_CONSUMER_ACTIVATION', 2],
+            ['shared_rows_5.js', 'list_meta_activation.LIST_META_ACTIVATION', 2],
+        ];
+        for (const [part, key, expected] of rows) {
+            const source = fs.readFileSync(path.join(PARTS_DIR, part), 'utf8');
+            const start = source.indexOf("addGate('" + key + "'");
+            const end = source.indexOf('\n});', start);
+            assert.notStrictEqual(start, -1, key);
+            assert.notStrictEqual(end, -1, key);
+            const declaration = source.slice(start, end);
+            assert.strictEqual((declaration.match(/\bUNARMED\b/g) || []).length, expected, key);
+            assert.doesNotMatch(declaration, /\b9999999999\b/, key);
+        }
+    });
+
     it('has exactly the manifest row count', function () {
         const expected = new Set(manifest.EXPECTED_KEYS);
         const syncRows = registry.rows().filter(([key]) => expected.has(key));
