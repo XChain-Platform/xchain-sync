@@ -91,6 +91,8 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
         assert.strictEqual(context.transparencyLog.pruneFrom.called, false);
         assert.strictEqual(context.broadcaster.broadcast.called, false);
         assert.strictEqual(context.poller.lastPolledBlock, 100);
+        assert.ok(context.db.getMaxRowId.calledOnceWithExactly('events'));
+        assert.strictEqual(context.db.getContentIdWindowRows.called, false);
 
         context.setMarkers([{
             id: 7,
@@ -105,6 +107,8 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
         })));
         assert.strictEqual(context.poller.lastPolledBlock, 99);
         assert.strictEqual(context.poller.lastEventId, 7);
+        assert.ok(context.db.getMaxRowId.calledTwice);
+        assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 0, 7));
     });
 
     it('seeds the cursor at startup and handles a marker arriving in the live loop', async function(){
@@ -117,7 +121,13 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
         })));
         assert.strictEqual(context.poller.lastEventId, 13);
         assert.strictEqual(context.poller.lastPolledBlock, 99);
+        assert.strictEqual(context.db.getMaxRowId.callCount, 3);
+        assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 12, 13));
     });
+});
+
+describe('ServerPoller indexer REORG marker retries @regression', function(){
+    afterEach(function(){ sinon.restore(); });
 
     it('does not process the same marker twice', async function(){
         const context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
