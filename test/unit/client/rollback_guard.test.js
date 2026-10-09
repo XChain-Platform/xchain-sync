@@ -43,7 +43,9 @@ describe('RollbackGuard', function(){
         assert.strictEqual(g.depthFor(103, 102), 2);
         assert.strictEqual(g.peak, null);
     });
+});
 
+describe('RollbackGuard state serialization', function(){
     it('round-trips an active streak through state', function(){
         const g = new RollbackGuard(5);
         g.record(100, 98);
