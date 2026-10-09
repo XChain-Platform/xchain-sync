@@ -689,11 +689,12 @@ class ClientRollback {
 
             // Reverse orphaned cooldown-maturity completions, mirror of
             // xchain-indexer/src/rollback/cooldown_maturities.js reverseCooldownMaturities. When a capability/contract
-            // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit carrying
-            // the unstake's OWN (earlier-block) action_index and flips the surviving unstake row's
-            // status_id to 'completed' IN PLACE. Both effects live on rows whose action_index <
-            // firstActionIndex, so the dataTables delete below can't touch them; the credit has no
-            // block_index and can't be range-deleted at all. In the LEGACY attribution era the
+            // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit and a
+            // negative escrow release carrying the unstake's OWN (earlier-block) action_index,
+            // then flips the surviving unstake row's status_id to 'completed' IN PLACE. All three
+            // effects live on rows whose action_index < firstActionIndex, so the dataTables delete
+            // below can't touch them; the ledger rows have no block_index and can't be range-deleted.
+            // In the LEGACY attribution era the
             // maturity block mints NO actions row, so an orphaned range containing only such a
             // maturity leaves firstActionIndex null - this MUST run unconditionally (outside the
             // guard) or the replica keeps a phantom refund + stuck 'completed' unstake that the
@@ -715,11 +716,22 @@ class ClientRollback {
                             "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
                             "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
                             [gasTick, completedStatusId, block_index, block_index]);
+                        await this.db.doQuery(
+                            "DELETE e FROM escrows e " +
+                            "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
+                            "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
+                            "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+                            [gasTick, completedStatusId, block_index, block_index]);
                     }
                     // Contract maturity refund is paid in the unstake's own tick.
                     await this.db.doQuery(
                         "DELETE c FROM credits c " +
                         "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+                        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+                        [completedStatusId, block_index, block_index]);
+                    await this.db.doQuery(
+                        "DELETE e FROM escrows e " +
+                        "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
                         "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
                         [completedStatusId, block_index, block_index]);
                     // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
