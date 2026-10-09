@@ -589,11 +589,13 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // contract_stakes ← orphaned contract_unstakes (contract staking, all chains)
+                // contract_stakes ← orphaned contract_unstakes (contract staking, all chains).
+                // Join on source_id, as the indexer does: a DELEGATE v1 rotation can leave the
+                // stake and cooldown rows on different keys, so a key join misses in either order.
                 try {
                     await this.db.doQuery(
                         "UPDATE contract_stakes cs " +
-                        "JOIN contract_unstakes cu ON cu.signing_pubkey_id = cs.signing_pubkey_id " +
+                        "JOIN contract_unstakes cu ON cu.source_id = cs.source_id " +
                         "  AND cu.target_contract_index = cs.target_contract_index " +
                         "  AND cu.tick_id = cs.tick_id " +
                         "SET cs.deactivation_block = NULL " +
@@ -1100,12 +1102,14 @@ class ClientRollback {
             // these stayed in it the replica would have skipped them silently on every
             // reorg and kept serving epoch verdicts and absences for orphaned blocks --
             // a replica diverging from its source with nothing reporting it.
-            try {
-                await this.db.doQuery("DELETE FROM rollcall_gates WHERE close_block >= ?", [block_index]);
-                await this.db.doQuery("DELETE FROM rollcall_absences WHERE close_block >= ?", [block_index]);
-                await this.db.doQuery("DELETE FROM rollcalls WHERE close_block >= ?", [block_index]);
-            } catch(e){
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Each table has its own schema-gap guard: rollcall_gates ships in a later
+            // migration than the other two, so its absence must not skip their unwind.
+            for(const table of ['rollcall_gates', 'rollcall_absences', 'rollcalls']){
+                try {
+                    await this.db.doQuery("DELETE FROM " + table + " WHERE close_block >= ?", [block_index]);
+                } catch(e){
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
             }
 
             // oracle_prices is the per-action local mirror of PRICE v1 rows
@@ -1174,8 +1178,9 @@ class ClientRollback {
 
             // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
             // sync_meta AND merkle_epochs on reorg; the follower only mirrored
-            // sync_meta above. merkle_epochs is sync-owned, reaches followers only
-            // via the full-snapshot ride-along, and is applied INSERT IGNORE
+            // sync_meta above. merkle_epochs is sync-owned, reaches followers whole
+            // in full snapshots and in every indexer incremental catch-up
+            // (indexerFullDumpSet in snapshot_builder/table_sets.js), and is applied INSERT IGNORE
             // (ClientApplier.ignoreTables), so a reorg that re-roots a closed epoch
             // would leave the stale root in place forever: the corrected re-dump
             // collides on UNIQUE epoch and is silently skipped. Deleting the
@@ -1192,20 +1197,21 @@ class ClientRollback {
 
             // attest_validator_stats: running per-validator aggregate counters
             // (fulfilled/missed/slashed). This table is NOT block-streamed to
-            // replicas; it only arrives via full-snapshot ride-along, and the thin
+            // replicas; it arrives whole in full snapshots and in every indexer
+            // incremental catch-up (indexerFullDumpSet), and the thin
             // replica DB has none of the capability/governance machinery the source
             // uses to derive missed_count (the responsible-set capability snapshot),
             // so it cannot recompute these rows; reproducing that math here would
             // re-introduce the indexer-mirror drift the rollback guard exists to
             // catch. On reorg we therefore drop the rows whose most-recent touch is
             // in the orphaned range, so the replica never serves overcounted values
-            // and let the next full-snapshot ride-along restore correct counts
+            // and let the next incremental catch-up or full snapshot restore correct counts
             // from the (now reorg-safe) source. Contrast markets: its VALUES converge
             // via the full-dump UPSERT (ON DUPLICATE KEY UPDATE) on the next snapshot,
             // so only its two source ROW deletes need mirroring here (above).
-            // NOTE: between this DELETE and the next full snapshot, the replica
-            // serves no attest_validator_stats rows for the affected validators;
-            // this window is unbounded if full snapshots are infrequent. Acceptable
+            // NOTE: between this DELETE and the next indexer incremental catch-up,
+            // the replica serves no attest_validator_stats rows for the affected
+            // validators; a follower that stops catching up keeps the gap. Acceptable
             // trade-off: correctness is preferred over availability for this table.
             // PHASE-4 GATE: this drop is safe only while quality_score/slashed_count
             // are display aggregates with no consensus reader. Before Phase-4 lets

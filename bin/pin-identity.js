@@ -25,6 +25,9 @@
  *   coin registry   A local edit here is drift that reddens every consumer.
  *   the carrier     bin/pins/carrier-logic.json hashes each carrier's TOKEN
  *   logic pin       stream, so it moves on a logic change and on nothing else.
+ *                   It answers "same logic?" for THIS repo only: each repo pins
+ *                   its own carrier membership, so cross-repo digest values
+ *                   differ by design and must not be compared.
  *
  * So the pin records the v2 meaning hash, the per-row hashes behind it, the
  * row count, the carrier logic digest, and the sha256 of each vendored coin

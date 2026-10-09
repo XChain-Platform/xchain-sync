@@ -193,6 +193,23 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
         assertRefuses({ [VKEY]: JSON.stringify([{ pubkey: 'aa', weight: 100, source: 'S1' }]) }, 'string `weight`');
         assertRefuses({ [VKEY]: JSON.stringify([{ pubkey: 'aa', weight: '100' }]) }, 'string `source`');
     });
+
+    // Each of these is well typed but can never verify, so it must be named at startup
+    // instead of starting and halting later on a quorum failure that blames the source.
+    it('refuses a typed validator override the checkpoint verifier always rejects', function(){
+        const entry = (o) => JSON.stringify([Object.assign({}, goodSet[0], o)]);
+        assertRefuses({ [VKEY]: entry({ pubkey: 'aa' }) }, '64-hex');
+        assertRefuses({ [VKEY]: entry({ pubkey: 'zz'.repeat(32) }) }, '64-hex');
+        assertRefuses({ [VKEY]: entry({ source: '  ' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: 'lots' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '-5' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '0x10' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '0' }) }, 'zero total stake');
+        const mixed = goodSet.concat([{ pubkey: 'bb'.repeat(32), weight: '', source: 'S2' }]);
+        assertRefuses({ [VKEY]: JSON.stringify(mixed) }, 'entry 1 has an unusable stake field');
+        pinned.assertPinnedEnvOverrides({ [VKEY]: JSON.stringify(goodSet.concat(
+            [{ pubkey: 'BB'.repeat(32), weight: '0', source: 'S2' }])) });
+    });
 });
 
 describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){

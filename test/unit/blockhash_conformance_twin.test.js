@@ -222,7 +222,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         assert.strictEqual(
             extractTwinBlock(pair.sync, 'xchain-sync/src/state_commitment/index.js'),
             extractTwinBlock(pair.indexer, 'xchain-indexer/src/state_commitment/persistent_smt.js'),
-            'reportOrphanStats block drifted between xchain-sync stateCommitment.js and xchain-indexer persistent_smt.js; ' +
+            'reportOrphanStats block drifted between xchain-sync state_commitment/index.js and xchain-indexer persistent_smt.js; ' +
             'the header comment declares it a keep-BYTE-IDENTICAL twin (comments included)');
     });
 });
@@ -305,7 +305,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'cache was removed the engines are byte-identical again: port the change and ' +
                 'rewrite the DECLARED DIVERGENCE paragraph in xchain-sync/src/state_commitment/index.js');
             assert.ok(!syncEngine.includes(marker),
-                'xchain-sync stateCommitment.js now has ' + marker + '. If the cache was ' +
+                'xchain-sync state_commitment/index.js now has ' + marker + '. If the cache was ' +
                 'deliberately ported, rewrite the DECLARED DIVERGENCE paragraph in that file ' +
                 'and replace this case with a full byte comparison of the engine block');
         }

@@ -407,14 +407,14 @@ describe('Rollback coverage guard @regression', function(){
 
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
     // both the source (xchain-indexer/src/db/rollback/sweeps.js) and the replica
-    // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored
-    // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
-    // staleness window before hub-driven convergence (row:deleted). The predicates must
-    // also stay byte-identical to xchain-indexer/src/hub/hub_db_sync.js _applyRetraction so
-    // the local belt-and-suspenders delete and the hub-driven delete remove exactly the
-    // same rows. Both rollback files carry the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE>
-    // markers; this extracts the backtick literals and asserts whitespace-normalised
-    // equality. If you edit one, edit the other.
+    // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored cross_chain_calls /
+    // cross_chain_matches / bridge_transfers rows for the orphaned range, unbounded and unfenced,
+    // before hub-driven convergence (row:deleted). The two blocks match EACH OTHER and stay
+    // DIFFERENT from applyRetraction (xchain-indexer/src/hub/hub_db_sync/retractions.js), which
+    // is bounded and push_generation-fenced; never reconcile them (asymmetry note on
+    // purgeCrossChainMirrors, xchain-indexer/src/rollback/sweeps.js). Both rollback files carry
+    // the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE> markers; this extracts the backtick
+    // literals and asserts whitespace-normalised equality. If you edit one, edit the other.
     it('cross-chain mirror reorg delete SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function crossChainSql(path){
             const src = readSourceText(path);
@@ -1260,6 +1260,25 @@ describe('Rollback coverage guard @regression', function(){
             }
         });
     }
+
+    // The registry's row parts get the same walk, so a part added or edited on one side
+    // only fails here instead of passing because the per-file list above never named it.
+    // The parts are verbatim copies, so the compare is on raw bytes with no mask.
+    it('table_lifecycle/ holds the same registry parts with the same bytes in xchain-sync and xchain-indexer (cross-repo twin parts)', function(){
+        const fs = require('fs');
+        const syncDir    = pathMod.resolve(__dirname, '../../src/table_lifecycle');
+        const indexerDir = indexerFile('src/hub/table_lifecycle');
+        if(!requireSibling(this, indexerDir)) return;
+        const syncFiles = listTree(syncDir), indexerFiles = listTree(indexerDir);
+        assert.ok(syncFiles.length > 0, 'src/table_lifecycle/ is empty; the walk would compare nothing');
+        assert.deepStrictEqual(syncFiles, indexerFiles, 'table_lifecycle/ part lists differ; only in sync: ' +
+            syncFiles.filter(f => !indexerFiles.includes(f)).join(', ') + '; only in indexer: ' +
+            indexerFiles.filter(f => !syncFiles.includes(f)).join(', '));
+        for(const rel of syncFiles)
+            assert.strictEqual(fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'),
+                fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8'),
+                'table_lifecycle/' + rel + ' drifted between xchain-sync and xchain-indexer; edit the indexer copy and carry it across');
+    });
 
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
     // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same

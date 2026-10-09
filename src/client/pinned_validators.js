@@ -72,7 +72,9 @@
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const { coinTicker } = require('../consensus-constants');
+const swq = require('../consensus/stake_weighted_quorum');
 const logger = getLogger();
+const HEX64 = /^[0-9a-fA-F]{64}$/;
 
 // Fold a ticker or full coin name onto the uppercase ticker the pin maps are keyed by.
 function tickerOf(chain) {
@@ -117,22 +119,37 @@ function envKey(chain, network) {
     return 'CHECKPOINT_VALIDATORS_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied set into { set, error }: `set` when the
-// value is usable, `error` naming WHY it is not. The reason is what separates an
-// absent override from an explicitly supplied invalid one, which the getters cannot
-// express in their null and assertPinnedEnvOverrides refuses to start on.
+// Why entry i of an env-supplied set can never verify, or null when it can. The stake
+// fields are judged by the quorum module itself (swq.totalStake throws on a blank source
+// and on a missing, nonnumeric or negative weight), so this cannot drift from it.
+function entryError(v, i) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return 'entry ' + i + ' is not an object';
+    for (const f of ['pubkey', 'weight', 'source']) {
+        if (typeof v[f] !== 'string') return 'entry ' + i + ' has no string `' + f + '`';
+    }
+    if (!HEX64.test(v.pubkey)) return 'entry ' + i + ' `pubkey` is not a 64-hex Ed25519 public key';
+    try { swq.totalStake([v]); } catch (e) { return 'entry ' + i + ' has an unusable stake field (' + e.message + ')'; }
+    return null;
+}
+
+// Parse and validate an env-supplied set into { set, error }: `set` when the value is
+// usable, `error` naming WHY it is not. It refuses what the checkpoint verifier always
+// rejects (a bad pubkey, stake field or zero total stake), so a typo is named at startup
+// rather than surfacing later as a quorum halt that blames the source. The reason is what
+// separates an absent override from an explicitly supplied invalid one, which the getters
+// cannot express in their null and assertPinnedEnvOverrides refuses to start on.
 function parseValidatorSetEnv(raw) {
     let arr;
     try { arr = JSON.parse(raw); } catch (e) { return { set: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!Array.isArray(arr)) return { set: null, error: 'is not a JSON array' };
     if (arr.length === 0) return { set: null, error: 'is an empty array (an empty set verifies nothing)' };
     for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (!v || typeof v !== 'object' || Array.isArray(v)) return { set: null, error: 'entry ' + i + ' is not an object' };
-        for (const f of ['pubkey', 'weight', 'source']) {
-            if (typeof v[f] !== 'string') return { set: null, error: 'entry ' + i + ' has no string `' + f + '`' };
-        }
+        const error = entryError(arr[i], i);
+        if (error) return { set: null, error };
     }
+    let total;
+    try { total = swq.totalStake(arr); } catch (e) { return { set: null, error: 'has an unusable stake set (' + e.message + ')' }; }
+    if (total.lte(0)) return { set: null, error: 'has zero total stake (the stake-weighted quorum can never be met)' };
     return { set: arr, error: null };
 }
 

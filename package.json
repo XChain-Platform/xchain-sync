@@ -1,5 +1,6 @@
 {
   "name": "xchain-sync",
+  "private": true,
   "description": "Database replication service for the XChain Platform: syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
   "version": "0.22.4",
   "license": "AGPL-3.0-or-later",
@@ -86,6 +87,7 @@
     }
   },
   "engines": {
-    "node": ">=22.0.0"
+    "comment": "Bounded to Node 22 as a support declaration: it matches .nvmrc, CI and the digest-pinned node:22 Docker image, and newer majors are not validated against this stack. This service does not load xchain-vm, so the bound is not an ABI requirement.",
+    "node": ">=22.0.0 <23"
   }
 }

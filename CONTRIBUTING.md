@@ -33,7 +33,7 @@ xchain-sync/
 
 ### Prerequisites
 
-- **Node.js 22** exactly. The platform pins Node 22 fleet-wide: the `mariadb` driver is ESM-only (Node 18 fails with `ERR_REQUIRE_ESM`), and newer majors are not validated against the stack. `engines.node` declares `>=22.0.0`; use 22.
+- **Node.js 22** exactly. The platform pins Node 22 fleet-wide: the `mariadb` driver is ESM-only (Node 18 fails with `ERR_REQUIRE_ESM`), and newer majors are not validated against the stack. `engines.node` declares `>=22.0.0 <23`; use 22.
 - **MariaDB** reachable from the sync host for anything beyond unit tests.
 - A running `xchain-hub` instance for hub auto-discovery (server mode) or a configured `SYNC_SOURCES` list (client mode). For local work, a regtest stack provides both.
 

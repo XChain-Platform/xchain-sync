@@ -35,22 +35,40 @@ function localConsensusHashes(network){
 // Fold a getallconfigs delta (only the rows that changed since our cursor) into
 // the cached nested config map, mutating and returning `base`. The hub's configs
 // table is upsert-only (rows are never deleted), so applying successive deltas
-// reconstructs exactly the tree a full fetch would have produced.
+// reconstructs exactly the tree a full fetch would have produced. Keys come from
+// remote JSON, so it walks own keys only and ignores prototype-sensitive names.
 function mergeConfigDelta(base, delta){
-    for(let coin in delta){
-        if(!base[coin]) base[coin] = {};
-        for(let network in delta[coin]){
-            if(!base[coin][network]) base[coin][network] = {};
-            for(let module in delta[coin][network]){
-                if(!base[coin][network][module]) base[coin][network][module] = {};
-                let params = delta[coin][network][module];
-                for(let param in params){
-                    base[coin][network][module][param] = params[param];
+    for(const coin of safeConfigKeys(delta)){
+        const coinBase = ownConfigBranch(base, coin);
+        for(const network of safeConfigKeys(delta[coin])){
+            const networkBase = ownConfigBranch(coinBase, network);
+            for(const module of safeConfigKeys(delta[coin][network])){
+                const moduleBase = ownConfigBranch(networkBase, module);
+                const params = delta[coin][network][module];
+                for(const param of safeConfigKeys(params)){
+                    moduleBase[param] = params[param];
                 }
             }
         }
     }
     return base;
+}
+
+// Names that reach Object.prototype or a constructor when used as a key.
+const PROTOTYPE_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+
+// Own enumerable keys of a config level, minus prototype-sensitive ones; none for a non-object level.
+function safeConfigKeys(level){
+    if(!level || typeof level !== 'object' || Array.isArray(level)) return [];
+    return Object.keys(level).filter((key) => !PROTOTYPE_KEYS.includes(key));
+}
+
+// The child map at `key`, reused only when it is an own plain-object property, else a fresh one.
+function ownConfigBranch(obj, key){
+    const own = Object.prototype.hasOwnProperty.call(obj, key);
+    if(own && obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) return obj[key];
+    obj[key] = {};
+    return obj[key];
 }
 
 // If call failed over to a different endpoint than the one our cursor came
@@ -100,6 +118,9 @@ async function refetchAfterConfigRegression(hub, result){
 }
 
 module.exports = {
+
+    hubConsensusHashMismatch: null,
+    hubConsensusHashMismatchDetails: Object.freeze([]),
 
     // Get all configs from the hub
     // Returns nested object: { coin: { network: { module: { param: value } } } }
@@ -214,7 +235,12 @@ module.exports = {
     // Mirrors XChainIndexer.checkHubConsensusHash, widened to every coin and network
     // because sync serves whatever chain set the hub hands it.
     checkHubConsensusHash(hubHashes){
-        if(!hubHashes || typeof hubHashes !== 'object') return;   // older hub: field absent
+        if(!hubHashes || typeof hubHashes !== 'object'){
+            this.hubConsensusHashMismatch = null;
+            this.hubConsensusHashMismatchDetails = [];
+            return;
+        }
+        let compared = false;
         let mismatches = [];
         for(const network of coins.NETWORKS){
             let served = hubHashes[network];
@@ -223,10 +249,15 @@ module.exports = {
             for(const tick of Object.keys(local)){
                 // A coin the hub does not serve is version skew, not drift; only a
                 // hash the hub DOES serve and that differs counts as a mismatch.
-                if(served[tick] && served[tick] !== local[tick])
-                    mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                if(served[tick]){
+                    compared = true;
+                    if(served[tick] !== local[tick])
+                        mismatches.push(tick + '/' + network + ': hub ' + served[tick] + ' vs bundled ' + local[tick]);
+                }
             }
         }
+        this.hubConsensusHashMismatch = compared ? mismatches.length > 0 : null;
+        this.hubConsensusHashMismatchDetails = mismatches;
         // This runs on every poll, so log only when the mismatch SET changes: a
         // standing divergence must not flood the log, and a drift that widens or
         // clears must still report.

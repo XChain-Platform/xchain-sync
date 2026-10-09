@@ -30,8 +30,10 @@ const checkpoint = require('../../src/checkpoint');
 const SYNC_SRC = path.join(__dirname, '../../src');
 const SDK_SRC  = path.join(__dirname, '../../../xchain-sdk/src');
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
-// The four files this suite's header declares twins of the SDK copies.
-const TWINS = ['checkpoint.js', 'consensus/stake_weighted_quorum.js', 'consensus/equivocation_header.js'];
+// The three code files kept code-identical to the SDK copies. The CHECKPOINT_COMMITMENT
+// gate is a row in consensus/gate_registry/, whose part files are byte-checked against the
+// reference-impl in consensus_primitive_conformance.test.js, so they are not listed here.
+const TWINS =['checkpoint.js', 'consensus/stake_weighted_quorum.js', 'consensus/equivocation_header.js'];
 
 // Cut unquoted // comments (tracking ' " ` quote state per line) so the two
 // sides compare on CODE. The prose is independently worded in both copies and
@@ -84,7 +86,8 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
     // would keep sign==verify green while real hub-signed federation checkpoints silently fail to verify.
     // Pins the exact output to the same golden literal xchain-sdk/test/unit/checkpoint.test.js uses, so drift
     // of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies fails here, not in production.
-    // (mainnet CHECKPOINT_COMMITMENT is inert, so the canonical carries no SPV root suffix, matching the SDK's golden vector.)
+    // (snapshot_block 900120 sits below the mainnet 961000 flag day, so this pins the legacy rootless,
+    // unwrapped shape the SDK's golden vector uses; the boundary case below pins the armed shape.)
     it('canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)', function(){
         const cp = { chain: 'BTC', network: 'mainnet', block_index: 900123,
             block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32),
@@ -126,6 +129,45 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             checkpoint.canonicalCheckpoint(cp),
             expected,
             'sync canonicalCheckpoint drifted from the ACTIVE SPV-root XCHECKPOINT signing string; re-align the vendored twin to the SDK/hub/indexer/explorer copies');
+    });
+});
+
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
+
+    // Mainnet arms CHECKPOINT_COMMITMENT, the EQUIV header and the stake-weighted quorum
+    // together at snapshot_block 961000. Expected strings are written from the spec parts,
+    // not the builder, and the height is a literal, so moving the gate must touch this test.
+    it('canonicalCheckpoint pins the mainnet flag day (960999 legacy, 961000 roots and EQUIV wrap)', function(){
+        const base = { chain: 'BTC', network: 'mainnet', block_index: 961003,
+            block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32),
+            actions_hash: 'ef'.repeat(32), contract_hash: '01'.repeat(32), checkpoint_seq: 418,
+            state_root: 'd4'.repeat(32), state_root_version: 1,
+            block_merkle_root: 'e5'.repeat(32), block_merkle_version: 1 };
+        const head = 'XCHECKPOINT|BTC|mainnet|961003|' + 'ab'.repeat(32) + '|' + 'cd'.repeat(32) +
+            '|' + 'ef'.repeat(32) + '|' + '01'.repeat(32) + '|418|';
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(Object.assign({}, base, { snapshot_block: 960999 })),
+            head + '960999',
+            'one block below the mainnet flag day the canonical must stay rootless and unwrapped; the vendored builder has drifted');
+        const raw = head + '961000' + '|' + 'd4'.repeat(32) + '|1|' + 'e5'.repeat(32) + '|1';
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(Object.assign({}, base, { snapshot_block: 961000 })),
+            'EQUIV|XCHECKPOINT|BTC|mainnet|961003|418|0||' + raw,
+            'at the mainnet flag day the canonical must commit the roots and carry the EQUIV wrap; the vendored builder has drifted');
+    });
+
+    it('the mainnet checkpoint gates flip exactly at snapshot_block 961000', function(){
+        const eq  = require('../../src/consensus/equivocation_header');
+        const swq = require('../../src/consensus/stake_weighted_quorum');
+        assert.strictEqual(eq.isEquivHeaderActive(960999, 'mainnet'), false);
+        assert.strictEqual(eq.isEquivHeaderActive(961000, 'mainnet'), true);
+        assert.strictEqual(swq.isStakeWeightedQuorumActive(960999, 'mainnet'), false);
+        assert.strictEqual(swq.isStakeWeightedQuorumActive(961000, 'mainnet'), true);
+        const rootless = { chain: 'BTC', network: 'mainnet', state_root: null, block_merkle_root: null };
+        assert.strictEqual(checkpoint.commitmentMissing(Object.assign({}, rootless, { snapshot_block: 960999 })), false,
+            'a rootless row below the flag day is legacy, not missing its commitment');
+        assert.strictEqual(checkpoint.commitmentMissing(Object.assign({}, rootless, { snapshot_block: 961000 })), true,
+            'a rootless row at the flag day cannot be verified');
     });
 });
 
