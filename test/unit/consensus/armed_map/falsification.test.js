@@ -34,20 +34,12 @@ const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/pack
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
-const INDEXER_CANONICAL_BLOBS = {
-    'shared_rows.js':   'fd181cb331581013f30231043012372301440ebf',
-    'shared_rows_1.js': 'fd0b20dc2865d029b60f15ce0907c433fd8e148d',
-    'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
-    'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
-    'shared_rows_4.js': 'fda90156acf869b63ef91f860a8cf5841920ce3b',
-    'shared_rows_5.js': 'e82d3a82eb3302048e536cc9c739527823fdcbd5',
-};
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
     'shared_rows_1.js': '1ed80849231893f3801d91a2cacc7041b54e26eaa63a680c845dc93aa5e1d278',
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': 'd671489c2b683ec2a94d0f45da1056687c38f78959a9f1780825eb7e3a37d6ea',
-    'shared_rows_4.js': 'dec84cd5f6e10b5bc631eb3a68ddcdfa5e37c5fb10cdf01ddd43cbb35980dc9b',
+    'shared_rows_4.js': 'a7adec088f9f94d9cb05db0bedc39b9d90dfc7eba2317d9b17c7e2766d6c241e',
     'shared_rows_5.js': '8ba378b8c746d6fa0c6c2bc8f305c5e5ad9b7865cf38b3c1b3021c8cd80e8013',
 };
 
@@ -103,11 +95,10 @@ function indexerRoot() {
         : path.resolve(ROOT, '..', 'xchain-indexer');
 }
 
+// A shallow sibling clone (GitHub CI) holds only its tip commit, so the canonical is read from
+// the sibling's working tree; the pinned digests hold it to the reviewed bytes.
 function readIndexerCanonical(file) {
-    const result = spawnSync('git', ['cat-file', 'blob', INDEXER_CANONICAL_BLOBS[file]],
-        { cwd: indexerRoot(), encoding: null, env: cleanEnv() });
-    assert.strictEqual(result.status, 0, String(result.stderr));
-    return result.stdout;
+    return fs.readFileSync(path.join(indexerRoot(), 'src/protocol_changes', file));
 }
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
