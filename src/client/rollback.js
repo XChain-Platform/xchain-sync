@@ -145,6 +145,57 @@ function initializeDecoderTxScopedTables(){
     this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
 }
 
+async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex){
+    let params = [gasTick, completedStatusId, blockIndex, blockIndex];
+    await db.doQuery(
+        "DELETE c FROM credits c " +
+        "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
+        "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
+        "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+        params);
+    await db.doQuery(
+        "DELETE e FROM escrows e " +
+        "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
+        "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
+        "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+        params);
+}
+
+async function deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex){
+    let params = [completedStatusId, blockIndex, blockIndex];
+    await db.doQuery(
+        "DELETE c FROM credits c " +
+        "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+        params);
+    await db.doQuery(
+        "DELETE e FROM escrows e " +
+        "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
+        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+        params);
+}
+
+async function reverseCooldownMaturities(db, blockIndex){
+    try {
+        let completedStatusId = await db.getStatusId('completed');
+        let validStatusId = await db.getStatusId('valid');
+        if(completedStatusId === null || validStatusId === null) return;
+        let gasTick = gasTickSymbol();
+        if(gasTick){
+            await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex);
+        }
+        await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex);
+        await db.doQuery(
+            "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [validStatusId, completedStatusId, blockIndex, blockIndex]);
+        await db.doQuery(
+            "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [validStatusId, completedStatusId, blockIndex, blockIndex]);
+    } catch(e){
+        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+    }
+}
+
 class ClientRollback {
 
     constructor(db, util, coin, network) {
@@ -703,50 +754,7 @@ class ClientRollback {
             // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
             // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
             // Runs BEFORE the dataTables delete.
-            try {
-                let completedStatusId = await this.db.getStatusId('completed');
-                let validStatusId     = await this.db.getStatusId('valid');
-                if(completedStatusId !== null && validStatusId !== null){
-                    let gasTick = gasTickSymbol();
-                    if(gasTick){
-                        // Capability maturity refund is paid in GAS, keyed by the unstake's action_index.
-                        await this.db.doQuery(
-                            "DELETE c FROM credits c " +
-                            "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
-                            "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
-                            "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
-                            [gasTick, completedStatusId, block_index, block_index]);
-                        await this.db.doQuery(
-                            "DELETE e FROM escrows e " +
-                            "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
-                            "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
-                            "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
-                            [gasTick, completedStatusId, block_index, block_index]);
-                    }
-                    // Contract maturity refund is paid in the unstake's own tick.
-                    await this.db.doQuery(
-                        "DELETE c FROM credits c " +
-                        "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
-                        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
-                        [completedStatusId, block_index, block_index]);
-                    await this.db.doQuery(
-                        "DELETE e FROM escrows e " +
-                        "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
-                        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
-                        [completedStatusId, block_index, block_index]);
-                    // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
-                    await this.db.doQuery(
-                        "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                        [validStatusId, completedStatusId, block_index, block_index]);
-                    await this.db.doQuery(
-                        "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                        [validStatusId, completedStatusId, block_index, block_index]);
-                }
-            } catch(e){
-                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
-                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
-            }
+            await reverseCooldownMaturities(this.db, block_index);
 
             // Reset an anchor batch's surviving archive-head parent (v1/v6,
             // ARCHIVE_HEAD_VERSIONS in state_hash.js) stamped 'invalid_archive' by an

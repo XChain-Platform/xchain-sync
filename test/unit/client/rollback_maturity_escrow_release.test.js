@@ -33,7 +33,6 @@ function maturityReleaseDeletes(db){
 
 describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
     afterEach(function(){ sinon.restore(); });
-
     it('deletes both backdated releases with the same keys as their refund credits', async function(){
         const db = createMockDb();
         const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
