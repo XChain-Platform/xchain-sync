@@ -23,10 +23,14 @@ function hashRow(blockIndex){
 }
 
 function createPoller(markers){
+    markers = markers.map(row => ({ code: 'REORG', ...row }));
+    let newestEventId = markers.length === 0 ? null :
+        Math.max(...markers.map(row => Number(row.id)));
     let db = {
         getLastBlock: sinon.stub().resolves(100),
         getBlockHashRow: sinon.stub().callsFake(async blockIndex => hashRow(blockIndex)),
-        doQuery: sinon.stub().callsFake(async sql => /FROM events/.test(sql) ? markers : [])
+        getMaxRowId: sinon.stub().resolves(newestEventId),
+        getContentIdWindowRows: sinon.stub().resolves(markers)
     };
     let broadcaster = {
         broadcast: sinon.stub(),
@@ -42,7 +46,7 @@ function createPoller(markers){
     return { poller, db, broadcaster, transparencyLog };
 }
 
-describe('ServerPoller indexer REORG marker @regression', function(){
+describe('ServerPoller indexer REORG marker rewind @regression', function(){
     afterEach(function(){ sinon.restore(); });
 
     it('rewinds when all three block hashes are unchanged', async function(){
@@ -55,13 +59,12 @@ describe('ServerPoller indexer REORG marker @regression', function(){
             type: 'reorg', block_index: 100
         })));
         assert.strictEqual(context.poller.lastPolledBlock, 99);
-        assert.strictEqual(context.poller.lastReorgMarkerId, 7);
+        assert.strictEqual(context.poller.lastEventId, 7);
     });
 
     it('does not process the same marker twice', async function(){
         let context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
         await context.poller.handleReorgMarkers();
-        context.db.doQuery.resolves([]);
 
         assert.strictEqual(await context.poller.handleReorgMarkers(), false);
         assert.strictEqual(context.transparencyLog.pruneFrom.callCount, 1);
@@ -69,37 +72,44 @@ describe('ServerPoller indexer REORG marker @regression', function(){
 
     it('does not acknowledge a marker when transparency pruning fails', async function(){
         let context = createPoller([{ id: 7, data: JSON.stringify({ block_index: 100 }) }]);
-        context.poller.lastReorgMarkerId = 6;
+        context.poller.lastEventId = 6;
         context.transparencyLog.pruneFrom.rejects(new Error('prune failed'));
 
         await assert.rejects(() => context.poller.handleReorgMarkers(), /prune failed/);
 
-        assert.strictEqual(context.poller.lastReorgMarkerId, 6);
+        assert.strictEqual(context.poller.lastEventId, 6);
         assert.strictEqual(context.poller.lastPolledBlock, 100);
         assert.strictEqual(context.broadcaster.broadcast.called, false);
     });
+});
+
+describe('ServerPoller indexer REORG marker cursor @regression', function(){
+    afterEach(function(){ sinon.restore(); });
 
     it('uses the deepest fork when more than one marker arrives between polls', async function(){
         let context = createPoller([
             { id: 8, data: JSON.stringify({ block_index: 99 }) },
             { id: 9, data: JSON.stringify({ block_index: 97 }) }
         ]);
-        context.poller.lastReorgMarkerId = 7;
+        context.poller.lastEventId = 7;
 
         await context.poller.handleReorgMarkers();
 
         assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(97));
         assert.strictEqual(context.poller.lastPolledBlock, 96);
-        assert.strictEqual(context.poller.lastReorgMarkerId, 9);
-        assert.deepStrictEqual(context.db.doQuery.firstCall.args[1], [7]);
+        assert.strictEqual(context.poller.lastEventId, 9);
+        assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 7, 9));
     });
 
     it('never probes indexer markers for a decoder poller', async function(){
         let context = createPoller([]);
         context.poller.dbType = 'decoder';
 
-        assert.deepStrictEqual(await context.poller.readNewReorgMarkers(), []);
-        assert.strictEqual(context.db.doQuery.called, false);
+        assert.deepStrictEqual(await context.poller.readNewReorgMarkers(), {
+            markers: [], newestEventId: null
+        });
+        assert.strictEqual(context.db.getMaxRowId.called, false);
+        assert.strictEqual(context.db.getContentIdWindowRows.called, false);
     });
 
     it('seeds the marker cursor without replaying history at startup', async function(){
@@ -108,9 +118,20 @@ describe('ServerPoller indexer REORG marker @regression', function(){
 
         await context.poller.initializeReorgMarkerCursor();
 
-        assert.strictEqual(context.poller.lastReorgMarkerId, 12);
+        assert.strictEqual(context.poller.lastEventId, 12);
         assert.strictEqual(context.poller.reorgMarkerCursorInitialized, true);
-        assert.match(context.db.doQuery.firstCall.args[0], /ORDER BY id DESC LIMIT 1/);
+        assert.ok(context.db.getMaxRowId.calledOnceWithExactly('events'));
+        assert.strictEqual(context.broadcaster.broadcast.called, false);
+    });
+
+    it('advances past unrelated events without broadcasting a reorg', async function(){
+        let context = createPoller([{ id: 13, code: 'NOTICE', data: '{}' }]);
+        context.poller.lastEventId = 12;
+
+        assert.strictEqual(await context.poller.handleReorgMarkers(), false);
+
+        assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(context.transparencyLog.pruneFrom.called, false);
         assert.strictEqual(context.broadcaster.broadcast.called, false);
     });
 });

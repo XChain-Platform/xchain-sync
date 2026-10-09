@@ -107,7 +107,7 @@ function initializeCursorState(poller, chain, network){
     // Compare content hashes after rollback and readvance in one interval.
     poller.lastPolledBlockHash = null;
 
-    poller.lastReorgMarkerId = null;
+    poller.lastEventId = null;
     poller.reorgMarkerCursorInitialized = false;
 
     // Bound recently broadcast hashes by block index and content hash.
@@ -330,35 +330,34 @@ class ServerPoller {
         await this.updateStatus();
     }
 
-    async readLatestReorgMarkerId(){
+    async readLatestEventId(){
         if(this.dbType === 'decoder') return null;
-        let rows = await this.db.doQuery(
-            "SELECT id FROM events WHERE code='REORG' ORDER BY id DESC LIMIT 1",
-            [], null, { rethrow: true }
-        );
-        if(rows.length === 0) return null;
-        let markerId = Number(rows[0].id);
-        if(!Number.isSafeInteger(markerId) || markerId < 1)
-            throw new Error('ServerPoller: invalid REORG marker id=' + rows[0].id);
-        return markerId;
+        let eventId = await this.db.getMaxRowId('events');
+        if(eventId === null) return null;
+        eventId = Number(eventId);
+        if(!Number.isSafeInteger(eventId) || eventId < 1)
+            throw new Error('ServerPoller: invalid events cursor id=' + eventId);
+        return eventId;
     }
 
     async initializeReorgMarkerCursor(){
-        if(this.dbType === 'decoder' || typeof this.db.doQuery !== 'function') return;
-        this.lastReorgMarkerId = await this.readLatestReorgMarkerId();
+        if(this.dbType === 'decoder' || typeof this.db.getMaxRowId !== 'function') return;
+        this.lastEventId = await this.readLatestEventId();
         this.reorgMarkerCursorInitialized = true;
     }
 
     async readNewReorgMarkers(){
-        if(!this.reorgMarkerCursorInitialized || this.dbType === 'decoder') return [];
-        let query = "SELECT id, data FROM events WHERE code='REORG'";
-        let args = [];
-        if(this.lastReorgMarkerId !== null){
-            query += ' AND id > ?';
-            args.push(this.lastReorgMarkerId);
-        }
-        query += ' ORDER BY id ASC';
-        return await this.db.doQuery(query, args, null, { rethrow: true });
+        if(!this.reorgMarkerCursorInitialized || this.dbType === 'decoder')
+            return { markers: [], newestEventId: this.lastEventId };
+        let newestEventId = await this.readLatestEventId();
+        if(newestEventId === null || newestEventId === this.lastEventId)
+            return { markers: [], newestEventId };
+        if(this.lastEventId !== null && newestEventId < this.lastEventId)
+            throw new Error('ServerPoller: events cursor moved backwards from ' +
+                this.lastEventId + ' to ' + newestEventId);
+        let afterId = this.lastEventId === null ? 0 : this.lastEventId;
+        let rows = await this.db.getContentIdWindowRows('events', afterId, newestEventId);
+        return { markers: rows.filter(row => row.code === 'REORG'), newestEventId };
     }
 
     reorgMarkerBlock(row){
@@ -376,22 +375,23 @@ class ServerPoller {
     }
 
     async handleReorgMarkers(){
-        let rows = await this.readNewReorgMarkers();
-        if(rows.length === 0) return false;
+        let { markers, newestEventId } = await this.readNewReorgMarkers();
+        if(markers.length === 0){
+            this.lastEventId = newestEventId;
+            return false;
+        }
 
         let forkBlock = null;
-        let newestId = this.lastReorgMarkerId;
-        for(let row of rows){
+        for(let row of markers){
             let markerId = Number(row.id);
             if(!Number.isSafeInteger(markerId) || markerId < 1)
                 throw new Error('ServerPoller: invalid REORG marker id=' + row.id);
-            newestId = markerId;
             let markerBlock = this.reorgMarkerBlock(row);
             forkBlock = forkBlock === null ? markerBlock : Math.min(forkBlock, markerBlock);
         }
 
         if(forkBlock > this.lastPolledBlock){
-            this.lastReorgMarkerId = newestId;
+            this.lastEventId = newestEventId;
             return false;
         }
 
@@ -401,7 +401,7 @@ class ServerPoller {
             await this.transparencyLog.pruneFrom(forkBlock);
         this.broadcastReorg(forkBlock);
         this.lastPolledBlock = forkBlock - 1;
-        this.lastReorgMarkerId = newestId;
+        this.lastEventId = newestEventId;
         this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
             ? this.recentBroadcastHashes.get(this.lastPolledBlock)
             : await this.sourceBlockHash(this.lastPolledBlock);
