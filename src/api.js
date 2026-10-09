@@ -52,6 +52,16 @@ const statusUtil = new Utility();
 // the W1 to W4 window is gone since W5 (activation-registry C4).
 function consensusIdentityFields(){ return { armed_map_fingerprint: computeArmedMapFingerprint().hex, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
 
+function hubConsensusHashFields(syncService){
+    let hub = syncService.hubClient;
+    return {
+        hub_consensus_hash_mismatch: hub && typeof hub.hubConsensusHashMismatch === 'boolean'
+            ? hub.hubConsensusHashMismatch : null,
+        hub_consensus_hash_mismatch_details: hub && Array.isArray(hub.hubConsensusHashMismatchDetails)
+            ? hub.hubConsensusHashMismatchDetails : []
+    };
+}
+
 dotenv.config();
 
 // Before anything else logs. checkStartupEnv's console.error calls are exactly
@@ -659,7 +669,8 @@ function createApp(syncService, cfg, app = express()){
                 databases:    [],
                 hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
                 ...consensusIdentityFields(),
-                last_updated: new Date().toISOString()
+                last_updated: new Date().toISOString(),
+                ...hubConsensusHashFields(syncService)
             });
         }
         let chains = syncService.getChains();
@@ -682,7 +693,8 @@ function createApp(syncService, cfg, app = express()){
             // status stays healthy means the hub is unreachable and the chain set is stale.
             hub_config_age_seconds: syncService.getHubConfigAgeSeconds(),
             ...consensusIdentityFields(),
-            last_updated: new Date().toISOString()
+            last_updated: new Date().toISOString(),
+            ...hubConsensusHashFields(syncService)
         });
     });
 
