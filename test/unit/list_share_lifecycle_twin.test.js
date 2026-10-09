@@ -42,6 +42,16 @@ describe('list sharing lifecycle registry twin', function () {
         assert.strictEqual(entry.rollback, 'action');
     });
 
+    it('keeps remote_token_snapshots hub-mirrored and retraction-owned', function () {
+        const entry = lifecycle.entry('remote_token_snapshots');
+        assert.strictEqual(entry.replication, 'hub-mirror');
+        assert.strictEqual(entry.rollback, 'exempt');
+        assert.strictEqual(entry.replicaRollback, 'exempt');
+        assert.strictEqual(entry.anchorRecovery, 'none');
+        assert.ok(entry.anchorRecoveryNote);
+        assert.deepStrictEqual(entry.hashed.classes, ['quorum']);
+    });
+
     for (const [own, canonical] of TWIN_FILES) {
         it('keeps ' + own + ' byte-identical to the indexer canonical', function () {
             const verdict = siblingCheckout(__dirname, indexerRoot());

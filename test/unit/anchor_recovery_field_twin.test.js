@@ -23,6 +23,10 @@ const ARCHIVED_QUORUM_TABLES = [
     'price_snapshots',
 ];
 
+const HUB_REMIRROR_RECOVERY_TABLES = [
+    'remote_token_snapshots',
+];
+
 const TWIN_FILES = [
     ['src/table_lifecycle.js', 'src/hub/table_lifecycle.js'],
     ['src/table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
@@ -47,6 +51,16 @@ describe('anchor recovery registry twin', function () {
         const recoveryTables = lifecycle.anchorRecoveryTables();
         for (const table of ARCHIVED_QUORUM_TABLES)
             assert.ok(recoveryTables.includes(table), table);
+    });
+
+    it('declares hub re-mirroring for quorum tables absent from the archive', function () {
+        const recoveryTables = lifecycle.anchorRecoveryTables();
+        for (const table of HUB_REMIRROR_RECOVERY_TABLES) {
+            const entry = lifecycle.entry(table);
+            assert.strictEqual(entry.anchorRecovery, 'none', table);
+            assert.ok(entry.anchorRecoveryNote, table);
+            assert.ok(!recoveryTables.includes(table), table);
+        }
     });
 
     for (const [own, canonical] of TWIN_FILES) {
