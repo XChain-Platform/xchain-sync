@@ -50,6 +50,36 @@ function createPoller(markers){
     return { poller, db, broadcaster, transparencyLog, setMarkers };
 }
 
+async function startWithMarkerAfterFirstPoll(){
+    const oldMarker = {
+        id: 12,
+        data: JSON.stringify({ block_index: 80, decoder_event_id: 40 })
+    };
+    const context = createPoller([oldMarker]);
+    sinon.stub(context.poller, 'resumeCursor').resolves(100);
+    context.poller.recentHashCap = 1;
+    sinon.stub(context.poller, 'readReorgWindow').resolves([{
+        block_index: 100,
+        hash: 'ledger|actions|contract'
+    }]);
+    sinon.stub(context.poller, 'backfillGaps').resolves(0);
+    let sleepCount = 0;
+    context.poller.util.sleep.callsFake(async () => {
+        sleepCount++;
+        if(sleepCount === 1){
+            context.setMarkers([oldMarker, {
+                id: 13,
+                data: JSON.stringify({ block_index: 100, decoder_event_id: 41 })
+            }]);
+        } else {
+            context.poller.stop();
+        }
+    });
+
+    await context.poller.start();
+    return { context, sleepCount };
+}
+
 describe('ServerPoller indexer REORG marker rewind @regression', function(){
     afterEach(function(){ sinon.restore(); });
 
@@ -78,32 +108,7 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
     });
 
     it('seeds the cursor at startup and handles a marker arriving in the live loop', async function(){
-        const oldMarker = {
-            id: 12,
-            data: JSON.stringify({ block_index: 80, decoder_event_id: 40 })
-        };
-        const context = createPoller([oldMarker]);
-        sinon.stub(context.poller, 'resumeCursor').resolves(100);
-        context.poller.recentHashCap = 1;
-        sinon.stub(context.poller, 'readReorgWindow').resolves([{
-            block_index: 100,
-            hash: 'ledger|actions|contract'
-        }]);
-        sinon.stub(context.poller, 'backfillGaps').resolves(0);
-        let sleepCount = 0;
-        context.poller.util.sleep.callsFake(async () => {
-            sleepCount++;
-            if(sleepCount === 1){
-                context.setMarkers([oldMarker, {
-                    id: 13,
-                    data: JSON.stringify({ block_index: 100, decoder_event_id: 41 })
-                }]);
-            } else {
-                context.poller.stop();
-            }
-        });
-
-        await context.poller.start();
+        const { context, sleepCount } = await startWithMarkerAfterFirstPoll();
 
         assert.strictEqual(sleepCount, 2);
         assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
