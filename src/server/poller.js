@@ -107,6 +107,9 @@ function initializeCursorState(poller, chain, network){
     // Compare content hashes after rollback and readvance in one interval.
     poller.lastPolledBlockHash = null;
 
+    poller.lastReorgMarkerId = null;
+    poller.reorgMarkerCursorInitialized = false;
+
     // Bound recently broadcast hashes by block index and content hash.
     // Seed walk-back from the pre-reorg hash for net-forward reorgs.
     // Continue deep walk-back across later polls.
@@ -176,6 +179,7 @@ class ServerPoller {
     }
 
     async start(){
+        await this.initializeReorgMarkerCursor();
         this.lastPolledBlock = await this.resumeCursor();
         this.lastPolledBlockHash = await seedReorgWindow(this, logger);
         this.running = true;
@@ -295,6 +299,8 @@ class ServerPoller {
             return;
         }
 
+        if(await this.handleReorgMarkers()) return;
+
         if(this.lastPolledBlockHash !== null && await this.handleNetForwardReorg()) return;
 
         if(currentBlock < this.lastPolledBlock){
@@ -322,6 +328,85 @@ class ServerPoller {
         this.lastPolledBlock = currentBlock;
         this.lastPolledBlockHash = await this.sourceBlockHash(currentBlock);
         await this.updateStatus();
+    }
+
+    async readLatestReorgMarkerId(){
+        if(this.dbType === 'decoder') return null;
+        let rows = await this.db.doQuery(
+            "SELECT id FROM events WHERE code='REORG' ORDER BY id DESC LIMIT 1",
+            [], null, { rethrow: true }
+        );
+        if(rows.length === 0) return null;
+        let markerId = Number(rows[0].id);
+        if(!Number.isSafeInteger(markerId) || markerId < 1)
+            throw new Error('ServerPoller: invalid REORG marker id=' + rows[0].id);
+        return markerId;
+    }
+
+    async initializeReorgMarkerCursor(){
+        if(this.dbType === 'decoder' || typeof this.db.doQuery !== 'function') return;
+        this.lastReorgMarkerId = await this.readLatestReorgMarkerId();
+        this.reorgMarkerCursorInitialized = true;
+    }
+
+    async readNewReorgMarkers(){
+        if(!this.reorgMarkerCursorInitialized || this.dbType === 'decoder') return [];
+        let query = "SELECT id, data FROM events WHERE code='REORG'";
+        let args = [];
+        if(this.lastReorgMarkerId !== null){
+            query += ' AND id > ?';
+            args.push(this.lastReorgMarkerId);
+        }
+        query += ' ORDER BY id ASC';
+        return await this.db.doQuery(query, args, null, { rethrow: true });
+    }
+
+    reorgMarkerBlock(row){
+        let parsed;
+        try {
+            parsed = JSON.parse(row.data);
+        } catch(e){
+            parsed = row.data;
+        }
+        let blockIndex = Number(parsed && typeof parsed === 'object'
+            ? parsed.block_index : parsed);
+        if(!Number.isSafeInteger(blockIndex) || blockIndex < 1)
+            throw new Error('ServerPoller: invalid REORG marker id=' + row.id);
+        return blockIndex;
+    }
+
+    async handleReorgMarkers(){
+        let rows = await this.readNewReorgMarkers();
+        if(rows.length === 0) return false;
+
+        let forkBlock = null;
+        let newestId = this.lastReorgMarkerId;
+        for(let row of rows){
+            let markerId = Number(row.id);
+            if(!Number.isSafeInteger(markerId) || markerId < 1)
+                throw new Error('ServerPoller: invalid REORG marker id=' + row.id);
+            newestId = markerId;
+            let markerBlock = this.reorgMarkerBlock(row);
+            forkBlock = forkBlock === null ? markerBlock : Math.min(forkBlock, markerBlock);
+        }
+
+        if(forkBlock > this.lastPolledBlock){
+            this.lastReorgMarkerId = newestId;
+            return false;
+        }
+
+        logger.info('Indexer REORG marker detected for ' + this.chain + '/' + this.network +
+            ' at block ' + forkBlock);
+        if(this.transparencyLog)
+            await this.transparencyLog.pruneFrom(forkBlock);
+        this.broadcastReorg(forkBlock);
+        this.lastPolledBlock = forkBlock - 1;
+        this.lastReorgMarkerId = newestId;
+        this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
+            ? this.recentBroadcastHashes.get(this.lastPolledBlock)
+            : await this.sourceBlockHash(this.lastPolledBlock);
+        await this.updateStatus();
+        return true;
     }
 
     async handleNetForwardReorg(){
