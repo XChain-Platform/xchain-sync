@@ -109,6 +109,15 @@ describe('ClientSync rollback guard persistence', function(){
         assert.deepStrictEqual(sync.rollbackGuardState(), { peak: null, low: null });
         assert.strictEqual(errorStub.called, true);
     });
+});
+
+describe('ClientSync rollback guard reset boundaries', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){ sinon.restore(); });
 
     it('resets the guard after a full snapshot is applied', async function(){
         const durableState = new Map([
