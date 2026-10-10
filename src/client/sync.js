@@ -379,10 +379,9 @@ class ClientSync {
         // federation sequence only advances, so a lower seq means the source rewound
         // (withholding the newer checkpoints that would catch a forged tail). null until
         // the first checkpoint is anchored. INERT unless VERIFY_CHECKPOINT_QUORUM is on.
-        this._lastVerifiedCheckpointSeq = null;
-        // block_index of the newest checkpoint the anchor verified (directly or by rotation
-        // follow). Strict freshness measures the tip from it. null until the first anchor.
-        this._lastVerifiedCheckpointBlock = null;
+        // Newest verified checkpoint block. Restored from sync_state at startup so a restart
+        // cannot erase the strict-freshness base. null until the first anchor.
+        this._lastVerifiedCheckpointSeq = this._lastVerifiedCheckpointBlock = null;
 
         // Truncated-replica join block. Set by bootstrapFromHeight when this chain
         // is seeded from a recent height (SYNC_BOOTSTRAP_DEPTH_*) rather than full
@@ -866,8 +865,9 @@ class ClientSync {
         if(haltAction === 'restart') return this.start();
         if(haltAction === 'stop') return;
 
-        // The persisted truncation floor loads before the resume branch and its depth guard.
+        // Durable client guards load before the resume branch can apply more blocks.
         await this.loadBootstrapBase();
+        await this.loadVerifiedCheckpointBlock();
         await this.loadRollbackGuardState();
         await this.synchronizeStoredReplica();
         this.ensureLiveFollowTip();
@@ -3847,7 +3847,7 @@ class ClientSync {
         if(cmp.status === 'missing') return 'unanchored';       // height not recomputed here (truncated bootstrap)
         if(cmp.status === 'mismatch') return this.haltCheckpoint(cp, cmp.mismatches, 'checkpoint-quorum-divergence');
         this.recordVerifiedCheckpointSeq(cp.checkpoint_seq);
-        this.recordVerifiedCheckpointBlock(cp.block_index);
+        await this.recordVerifiedCheckpointBlock(cp.block_index);
         getLogger().info('Checkpoint-quorum anchor OK: ' + this.chain + '/' + this.network +
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
@@ -3875,7 +3875,7 @@ class ClientSync {
                 'checkpoint-quorum-divergence');
         }
         let r = await this.followCheckpointForward(cp, seed, source);
-        let rotationMismatches = this.processRotationFollow(cp, source, r);
+        let rotationMismatches = await this.processRotationFollow(cp, source, r);
         if(rotationMismatches) return this.haltCheckpoint(cp, rotationMismatches, r.haltReason || 'checkpoint-quorum-divergence');
         return r.verdict === 'ok' ? 'verified' : 'unanchored';
     }
@@ -3949,7 +3949,7 @@ class ClientSync {
         getLogger().warn('Checkpoint-quorum anchor: stale anchor for ' + this.chain + '/' + this.network +
             ' (latest checkpoint at ' + cp.block_index + ', replica tip ' + this.lastAppliedBlock +
             ', >' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' blocks behind); tail past it is unanchored');
-        if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointSeq !== null){
+        if(this.config['CHECKPOINT_FRESHNESS_STRICT'] && this._lastVerifiedCheckpointBlock !== null){
             return [{ field: 'checkpoint_freshness', a: 'tip ' + this.lastAppliedBlock,
                 b: 'newest anchor ' + cp.block_index + ' (>' + this.config['CHECKPOINT_FRESHNESS_BLOCKS'] + ' behind)' }];
         }
@@ -3959,10 +3959,10 @@ class ClientSync {
     // Record a successful rotation follow, return divergence mismatches, or log a wait.
     // The seq recorded is the ATTESTED range step's, never the served body's: the served
     // checkpoint failed the pinned quorum, so none of its own fields are authenticated.
-    processRotationFollow(cp, source, result){
+    async processRotationFollow(cp, source, result){
         if(result.verdict === 'ok'){
             this.recordVerifiedCheckpointSeq(result.attested.checkpoint_seq);
-            this.recordVerifiedCheckpointBlock(result.attested.block_index);
+            await this.recordVerifiedCheckpointBlock(result.attested.block_index);
             getLogger().info('Checkpoint-quorum anchor OK (rotation-followed): ' + this.chain + '/' +
                 this.network + ' block ' + result.attested.block_index + ' (seq ' + result.attested.checkpoint_seq + ')');
             return null;
@@ -3982,12 +3982,33 @@ class ClientSync {
             this._lastVerifiedCheckpointSeq = seq;
     }
 
-    // Advance the high-water mark of verified checkpoint heights, the base strict freshness
-    // measures from. Monotonic, like the seq.
-    recordVerifiedCheckpointBlock(blockIndex){
-        if(typeof blockIndex !== 'number') return;
-        if(this._lastVerifiedCheckpointBlock === null || blockIndex > this._lastVerifiedCheckpointBlock)
-            this._lastVerifiedCheckpointBlock = blockIndex;
+    verifiedCheckpointBlockKey(){ return 'verified_checkpoint_block:' + this.dbType; }
+
+    // Restore the durable strict-freshness base before startup catch-up can run an
+    // anchor cycle. Invalid values remain unset rather than weakening the monotonic
+    // high-water mark with a value that cannot be a block height.
+    async loadVerifiedCheckpointBlock(){
+        if(this._lastVerifiedCheckpointBlock !== null) return;
+        if(!this.db || typeof this.db.getSyncState !== 'function') return;
+        let value = await this.db.getSyncState(this.verifiedCheckpointBlockKey());
+        if(value === null || value === undefined) return;
+        let blockIndex = Number(value);
+        if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
+        this._lastVerifiedCheckpointBlock = blockIndex;
+        getLogger().info('Reloaded verified checkpoint block ' + blockIndex + ' for ' +
+            this.chain + '/' + this.network + '/' + this.dbType + ' (survives restart)');
+    }
+
+    // Advance and durably persist the verified checkpoint height that strict freshness
+    // measures from. Both the memory value and sync_state marker are monotonic.
+    async recordVerifiedCheckpointBlock(blockIndex){
+        if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
+        if(this._lastVerifiedCheckpointBlock !== null && blockIndex <= this._lastVerifiedCheckpointBlock) return;
+        if(this.db && typeof this.db.setSyncState === 'function'){
+            let persisted = await this.db.setSyncState(this.verifiedCheckpointBlockKey(), String(blockIndex));
+            if(persisted === false) return;
+        }
+        this._lastVerifiedCheckpointBlock = blockIndex;
     }
 
     // Compare a checkpoint's committed roots to the replica's OWN recomputed

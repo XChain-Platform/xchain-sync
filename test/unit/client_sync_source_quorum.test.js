@@ -337,7 +337,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             let { sync } = makeSync('http://a:3006', { CHECKPOINT_FRESHNESS_STRICT: true,
                 CHECKPOINT_FRESHNESS_BLOCKS: 500, CHECKPOINT_VERIFY_INTERVAL: 1 });
             sync.lastAppliedBlock = 1000;
-            sync._lastVerifiedCheckpointSeq = 4; // already anchored once -> strict is enforced
+            sync._lastVerifiedCheckpointBlock = 100; // already anchored once -> strict is enforced
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
             await sync.verifyCheckpointQuorum();
             assert.strictEqual(sync.isHalted(), true);
@@ -351,7 +351,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             let { sync } = makeSync('http://a:3006', { CHECKPOINT_FRESHNESS_STRICT: true,
                 CHECKPOINT_FRESHNESS_BLOCKS: 500, CHECKPOINT_VERIFY_INTERVAL: 1 });
             sync.lastAppliedBlock = 1000;
-            sync._lastVerifiedCheckpointSeq = null; // never anchored -> not enforced at startup
+            sync._lastVerifiedCheckpointBlock = null; // never anchored -> not enforced at startup
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
             await sync.verifyCheckpointQuorum();
             assert.notStrictEqual((sync.getHaltInfo() || {}).reason, 'checkpoint-freshness-stale',
@@ -362,7 +362,7 @@ describe('ClientSync: multi-source Byzantine quorum @regression', function(){
             let { sync } = makeSync('http://a:3006', { CHECKPOINT_FRESHNESS_STRICT: false,
                 CHECKPOINT_FRESHNESS_BLOCKS: 500, CHECKPOINT_VERIFY_INTERVAL: 1 });
             sync.lastAppliedBlock = 1000;
-            sync._lastVerifiedCheckpointSeq = 4;
+            sync._lastVerifiedCheckpointBlock = 100;
             pinAndFetch(sync, { block_index: 100, state_root: 'aa'.repeat(32), checkpoint_seq: 5 });
             await sync.verifyCheckpointQuorum();
             assert.notStrictEqual((sync.getHaltInfo() || {}).reason, 'checkpoint-freshness-stale',
