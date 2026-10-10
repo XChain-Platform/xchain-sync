@@ -94,7 +94,8 @@ describe('ClientSync: checkpoint-quorum anchor @regression', function(){
 
         assert.strictEqual(sync.isHalted(), false, 'a quorum-signed checkpoint matching local state must not halt');
         assert.ok(getStub.calledOnce, 'fetched the signed checkpoint');
-        assert.ok(db.doQuery.calledOnce, 'read the local state_tree_roots row');
+        assert.strictEqual(db.doQuery.getCalls().filter(call =>
+            call.args[0].includes('state_tree_roots')).length, 1, 'read the local state_tree_roots row once');
     });
 
     it('HALTS when the checkpoint quorum is INVALID under the pinned set (rogue signer)', async function(){

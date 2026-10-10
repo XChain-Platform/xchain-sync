@@ -47,7 +47,7 @@ function signedCp(signer, o){
     return cp;
 }
 
-let sync, rootsByHeight, stakeByHeight, getStub, signer;
+let sync, rootsByHeight, stakeByHeight, syncState, getStub, signer;
 
 function makeSync(chain, extra){
     const db = {
@@ -56,6 +56,8 @@ function makeSync(chain, extra){
         recordHalt: sinon.stub().resolves({ block_index: 0 }),
         getActiveHalt: sinon.stub().resolves(null),
         clearHalt: sinon.stub().resolves(1),
+        getSyncState: sinon.stub().callsFake(async key => syncState.has(key) ? syncState.get(key) : null),
+        setSyncState: sinon.stub().callsFake(async (key, value) => { syncState.set(key, value); }),
         doQuery: sinon.stub().callsFake(async (sql, params) => {
             if(sql.includes('state_tree_roots')) return rootsByHeight[params[0]] ? [rootsByHeight[params[0]]] : [];
             return [];
@@ -85,7 +87,7 @@ function serve(latest, range){
 
 function registerHooks(chain, extra){
     beforeEach(function(){
-        rootsByHeight = {}; stakeByHeight = {};
+        rootsByHeight = {}; stakeByHeight = {}; syncState = new Map();
         signer = makeSigner();
         process.env[ENVKEY] = JSON.stringify([{ pubkey: signer.pubkeyHex, weight: '100', source: signer.pubkeyHex }]);
         getStub = sinon.stub(axios, 'get');
@@ -168,8 +170,48 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
-        sync.recordVerifiedCheckpointBlock(500);
+        await sync.recordVerifiedCheckpointBlock(500);
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
+        assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+    });
+
+    it('retries persistence after a sync-state write failure', async function(){
+        const cp = signedCp(signer);
+        rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
+        serve(cp);
+        sync.db.setSyncState.onFirstCall().resolves(false);
+
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, null);
+        assert.strictEqual(syncState.has('verified_checkpoint_block:indexer'), false);
+
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync.db.setSyncState.callCount, 2);
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
+        assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+    });
+});
+
+describe('ClientSync: strict freshness counts unanchored cycles @regression', function(){
+    registerHooks();
+
+    it('restores the verified height during start and enforces strict freshness', async function(){
+        syncState.set('verified_checkpoint_block:indexer', '990');
+        makeSync('BTC');
+        serve(new Error('anchor unavailable after restart'));
+        sinon.stub(sync, 'loadBootstrapBase').resolves();
+        sinon.stub(sync, 'loadRollbackGuardState').resolves();
+        sinon.stub(sync, 'synchronizeStoredReplica').callsFake(async function(){
+            assert.strictEqual(this._lastVerifiedCheckpointBlock, 990);
+            this.lastAppliedBlock = 1600;
+            await this.verifyCheckpointQuorum();
+        });
+        sinon.stub(sync, 'prepareLiveFollow').resolves();
+        sinon.stub(sync, 'beginLiveFollow');
+        sinon.stub(sync.util, 'sleep').callsFake(async function(){ sync.running = false; });
+
+        await sync.start();
+        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
     });
 });
 
