@@ -53,6 +53,19 @@ describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
         assert.deepStrictEqual(deletes[1].args[1], [8, 100, 100]);
     });
 
+    it('limits release deletes to negative amounts so positive slash escrows survive', async function(){
+        const db = createMockDb();
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+
+        await rollback.rollback(100);
+
+        const deletes = maturityReleaseDeletes(db);
+        assert.strictEqual(deletes.length, 2, 'expected capability and contract escrow-release deletes');
+        for(const releaseDelete of deletes){
+            assert.match(releaseDelete.args[0], /CAST\(e\.amount AS DECIMAL\(60,18\)\) < 0/);
+        }
+    });
+
     it('deletes the releases before resetting status and before generic escrow deletion', async function(){
         const db = createMockDb();
         const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
