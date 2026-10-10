@@ -222,6 +222,14 @@
  *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique secondary
  *       index on the follower-derived `state_tree_roots` table, so it is recorded
  *       index-only. Decoder is unaffected and stays at 4.
+ *  17 - (indexer only) `bet_edits`, a new table (BET format 4 membership-list
+ *       edits) created by the 2026-10-09-bet-edits migration. It is stream:action
+ *       wire-replicated, so a v16 follower has no table to receive the streamed
+ *       rows and fails the block under ClientApplier's strict apply. It is DERIVED
+ *       in src/table_lifecycle/action_tables.js and rolled back by
+ *       `action_index >= ?`. The same frontier date carries
+ *       2026-10-09-remote-token-snapshots, which touches no wire-replicated table.
+ *       Decoder is unaffected and stays at 4.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -242,20 +250,18 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 16, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 17, decoder: 4 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-08',
+        through: '2026-10-09',
         accounted: [
-            // Index-only on a follower-derived table; no replicated payload changed.
-            '2026-10-08-state-tree-roots-block-index-idx.sql',
-            // Renamed byte-identically; its replicated columns were accounted at v11.
-            '2026-10-08-token-bridge-fields.sql'
+            // New stream:action table, versioned at 17.
+            '2026-10-09-bet-edits.sql',
+            // No wire-replicated table changes.
+            '2026-10-09-remote-token-snapshots.sql'
         ],
-        indexOnly: [
-            '2026-10-08-state-tree-roots-block-index-idx.sql'
-        ]
+        indexOnly: []
     },
     decoder: {
         through: '2026-08-22',
