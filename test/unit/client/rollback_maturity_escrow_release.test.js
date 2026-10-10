@@ -28,7 +28,7 @@ function createMockDb(firstActionIndex = 500){
 }
 
 function maturityReleaseDeletes(db){
-    return db.doQuery.getCalls().filter(c => /^DELETE e FROM escrows e/.test(c.args[0]));
+    return db.doQuery.getCalls().filter(c => /^DELETE e FROM escrows AS e/.test(c.args[0]));
 }
 
 describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
@@ -83,7 +83,7 @@ describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
     it('rolls back the transaction when a release delete faults', async function(){
         const db = createMockDb();
         const deadlock = Object.assign(new Error('deadlock deleting escrow release'), { errno: 1213 });
-        db.doQuery.withArgs(sinon.match(/^DELETE e FROM escrows e/)).rejects(deadlock);
+        db.doQuery.withArgs(sinon.match(/^DELETE e FROM escrows AS e/)).rejects(deadlock);
         const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
 
         await assert.rejects(() => rollback.rollback(100), /deadlock deleting escrow release/);

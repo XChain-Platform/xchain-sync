@@ -154,7 +154,7 @@ async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId
         "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
         params);
     await db.doQuery(
-        "DELETE e FROM escrows e " +
+        "DELETE e FROM escrows AS e " +
         "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
         "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
         "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
@@ -169,7 +169,7 @@ async function deleteContractMaturityLedgerRows(db, completedStatusId, blockInde
         "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
         params);
     await db.doQuery(
-        "DELETE e FROM escrows e " +
+        "DELETE e FROM escrows AS e " +
         "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
         "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
         params);
