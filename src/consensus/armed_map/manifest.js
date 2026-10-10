@@ -39,6 +39,7 @@ const EXPECTED_KEYS = Object.freeze([
     'consensus-constants.BTC_STAKE_CAPABILITIES',
     'consensus-constants.GAS_TICK',
     'consensus-constants.VALIDATOR_QUERY_LIMIT',
+    'cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION',
     'equivocation_header.ENGINE_TAGS',
     'equivocation_header.EQUIV_HEADER_ACTIVATION',
     'stake_weight_collation_activation.STAKE_WEIGHT_COLLATION',

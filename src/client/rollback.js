@@ -32,6 +32,7 @@ const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
+const gateRegistry = require('../consensus/gate_registry');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -145,7 +146,14 @@ function initializeDecoderTxScopedTables(){
     this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
 }
 
-async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex){
+// From this height a rollback also deletes the escrow release an orphaned legacy maturity
+// paired with its refund credit. Below it the release survives, as it did on every replica
+// before the rule, and the re-maturity then writes a second release for the one bond. Read
+// at the rollback's own target block, the same key and height the indexer reads, so a
+// replica and its source cross the switch on the same block.
+const MATURITY_ESCROW_REVERSAL_KEY = 'cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION';
+
+async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases){
     let params = [gasTick, completedStatusId, blockIndex, blockIndex];
     await db.doQuery(
         "DELETE c FROM credits c " +
@@ -153,6 +161,7 @@ async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId
         "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
         "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
         params);
+    if(!deleteReleases) return;
     await db.doQuery(
         "DELETE e FROM escrows AS e " +
         "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
@@ -161,13 +170,14 @@ async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId
         params);
 }
 
-async function deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex){
+async function deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases){
     let params = [completedStatusId, blockIndex, blockIndex];
     await db.doQuery(
         "DELETE c FROM credits c " +
         "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
         "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
         params);
+    if(!deleteReleases) return;
     await db.doQuery(
         "DELETE e FROM escrows AS e " +
         "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
@@ -175,16 +185,17 @@ async function deleteContractMaturityLedgerRows(db, completedStatusId, blockInde
         params);
 }
 
-async function reverseCooldownMaturities(db, blockIndex){
+async function reverseCooldownMaturities(db, blockIndex, network, coin){
     try {
         let completedStatusId = await db.getStatusId('completed');
         let validStatusId = await db.getStatusId('valid');
         if(completedStatusId === null || validStatusId === null) return;
         let gasTick = gasTickSymbol();
+        let deleteReleases = gateRegistry.activeAt(MATURITY_ESCROW_REVERSAL_KEY, network, coin, Number(blockIndex), null);
         if(gasTick){
-            await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex);
+            await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases);
         }
-        await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex);
+        await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases);
         await db.doQuery(
             "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
             [validStatusId, completedStatusId, blockIndex, blockIndex]);
@@ -754,7 +765,7 @@ class ClientRollback {
             // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
             // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
             // Runs BEFORE the dataTables delete.
-            await reverseCooldownMaturities(this.db, block_index);
+            await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
 
             // Reset an anchor batch's surviving archive-head parent (v1/v6,
             // ARCHIVE_HEAD_VERSIONS in state_hash.js) stamped 'invalid_archive' by an
