@@ -4004,8 +4004,10 @@ class ClientSync {
     async recordVerifiedCheckpointBlock(blockIndex){
         if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
         if(this._lastVerifiedCheckpointBlock !== null && blockIndex <= this._lastVerifiedCheckpointBlock) return;
-        if(this.db && typeof this.db.setSyncState === 'function')
-            await this.db.setSyncState(this.verifiedCheckpointBlockKey(), String(blockIndex));
+        if(this.db && typeof this.db.setSyncState === 'function'){
+            let persisted = await this.db.setSyncState(this.verifiedCheckpointBlockKey(), String(blockIndex));
+            if(persisted === false) return;
+        }
         this._lastVerifiedCheckpointBlock = blockIndex;
     }
 

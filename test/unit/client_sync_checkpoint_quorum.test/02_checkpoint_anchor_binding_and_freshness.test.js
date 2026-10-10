@@ -179,9 +179,9 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         const cp = signedCp(signer);
         rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
         serve(cp);
-        sync.db.setSyncState.onFirstCall().rejects(new Error('sync-state write failed'));
+        sync.db.setSyncState.onFirstCall().resolves(false);
 
-        await assert.rejects(sync.verifyCheckpointQuorum(), /sync-state write failed/);
+        await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, null);
         assert.strictEqual(syncState.has('verified_checkpoint_block:indexer'), false);
 
