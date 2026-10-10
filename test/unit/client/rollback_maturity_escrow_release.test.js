@@ -65,6 +65,10 @@ describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
             assert.match(releaseDelete.args[0], /CAST\(e\.amount AS DECIMAL\(60,18\)\) < 0/);
         }
     });
+});
+
+describe('ClientRollback cooldown-maturity escrow-release transaction handling', function(){
+    afterEach(function(){ sinon.restore(); });
 
     it('deletes the releases before resetting status and before generic escrow deletion', async function(){
         const db = createMockDb();
