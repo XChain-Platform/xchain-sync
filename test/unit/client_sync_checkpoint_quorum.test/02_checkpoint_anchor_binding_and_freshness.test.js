@@ -190,6 +190,10 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
         assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
     });
+});
+
+describe('ClientSync: strict freshness counts unanchored cycles @regression', function(){
+    registerHooks();
 
     it('restores the verified height during start and enforces strict freshness', async function(){
         syncState.set('verified_checkpoint_block:indexer', '990');

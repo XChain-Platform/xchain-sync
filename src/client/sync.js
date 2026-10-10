@@ -379,11 +379,9 @@ class ClientSync {
         // federation sequence only advances, so a lower seq means the source rewound
         // (withholding the newer checkpoints that would catch a forged tail). null until
         // the first checkpoint is anchored. INERT unless VERIFY_CHECKPOINT_QUORUM is on.
-        this._lastVerifiedCheckpointSeq = null;
-        // block_index of the newest checkpoint the anchor verified (directly or by rotation
-        // follow). Strict freshness measures the tip from it. Restored from sync_state at
-        // startup so a restart cannot erase the freshness base. null until the first anchor.
-        this._lastVerifiedCheckpointBlock = null;
+        // Newest verified checkpoint block. Restored from sync_state at startup so a restart
+        // cannot erase the strict-freshness base. null until the first anchor.
+        this._lastVerifiedCheckpointSeq = this._lastVerifiedCheckpointBlock = null;
 
         // Truncated-replica join block. Set by bootstrapFromHeight when this chain
         // is seeded from a recent height (SYNC_BOOTSTRAP_DEPTH_*) rather than full
