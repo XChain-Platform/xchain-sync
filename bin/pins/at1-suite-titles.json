@@ -4287,7 +4287,7 @@
       "Tier 2 - ClientRollback @tier2 rollback transaction is always committed or rolled back, never leaked",
       "Tier 2 - ClientRollback @tier2 rollback when firstActionIndex is null, action-scoped DELETEs use no action_index filter"
     ],
-    "fbacabd1d99ae343": [
+    "082588dcc7b8a7d8": [
       "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a checkpoint for another network",
       "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a genuine checkpoint for another chain",
       "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a range step for another chain",
@@ -4301,7 +4301,8 @@
       "ClientSync: strict freshness counts unanchored cycles @regression does not halt on an unanchorable checkpoint while the last anchor is within the bound",
       "ClientSync: strict freshness counts unanchored cycles @regression does not halt while catching up to a quorum-valid checkpoint past the tip",
       "ClientSync: strict freshness counts unanchored cycles @regression records the verified height and never lowers it",
-      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height and enforces strict freshness after restart",
+      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height during start and enforces strict freshness",
+      "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
       "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
     ],
     "fc128a24fee83524": [
@@ -4549,7 +4550,7 @@
         "test/unit/client_sync.test/startup_catch_up_404_level.test.js": "4afbe50e37085854",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
-        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "fbacabd1d99ae343",
+        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
         "test/unit/client_sync_dispenser_reconcile_after_reorg.test.js": "2b28d2ad3e43acb2",
         "test/unit/client_sync_dispenser_reconcile_tick.test.js": "422bb0e33ab3603c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
@@ -5100,7 +5101,7 @@
         "test/unit/client_sync.test/events/06_handle_event.test.js": "e962afbc1dd6ade5",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
-        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "fbacabd1d99ae343",
+        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
         "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "83270a69eb7e38bb",
         "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js": "2de09f9ac8510fc7",

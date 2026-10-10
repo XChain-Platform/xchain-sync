@@ -175,27 +175,38 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
     });
 
-    it('restores the verified height and enforces strict freshness after restart', async function(){
+    it('retries persistence after a sync-state write failure', async function(){
         const cp = signedCp(signer);
         rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
         serve(cp);
-        await sync.verifyCheckpointQuorum();
-        assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+        sync.db.setSyncState.onFirstCall().rejects(new Error('sync-state write failed'));
 
-        makeSync('BTC');
-        sync.lastAppliedBlock = 1600;
-        await sync.loadVerifiedCheckpointBlock();
+        await assert.rejects(sync.verifyCheckpointQuorum(), /sync-state write failed/);
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, null);
+        assert.strictEqual(syncState.has('verified_checkpoint_block:indexer'), false);
+
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync.db.setSyncState.callCount, 2);
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
+        assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+    });
 
-        serve(new Error('anchor unavailable after restart'));
-        await sync.verifyCheckpointQuorum();
-        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
-
+    it('restores the verified height during start and enforces strict freshness', async function(){
+        syncState.set('verified_checkpoint_block:indexer', '990');
         makeSync('BTC');
-        sync.lastAppliedBlock = 1600;
-        await sync.loadVerifiedCheckpointBlock();
-        serve(cp);
-        await sync.verifyCheckpointQuorum();
+        serve(new Error('anchor unavailable after restart'));
+        sinon.stub(sync, 'loadBootstrapBase').resolves();
+        sinon.stub(sync, 'loadRollbackGuardState').resolves();
+        sinon.stub(sync, 'synchronizeStoredReplica').callsFake(async function(){
+            assert.strictEqual(this._lastVerifiedCheckpointBlock, 990);
+            this.lastAppliedBlock = 1600;
+            await this.verifyCheckpointQuorum();
+        });
+        sinon.stub(sync, 'prepareLiveFollow').resolves();
+        sinon.stub(sync, 'beginLiveFollow');
+        sinon.stub(sync.util, 'sleep').callsFake(async function(){ sync.running = false; });
+
+        await sync.start();
         assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
     });
 });

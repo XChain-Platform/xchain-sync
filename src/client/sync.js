@@ -4006,9 +4006,9 @@ class ClientSync {
     async recordVerifiedCheckpointBlock(blockIndex){
         if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
         if(this._lastVerifiedCheckpointBlock !== null && blockIndex <= this._lastVerifiedCheckpointBlock) return;
+        if(this.db && typeof this.db.setSyncState === 'function')
+            await this.db.setSyncState(this.verifiedCheckpointBlockKey(), String(blockIndex));
         this._lastVerifiedCheckpointBlock = blockIndex;
-        if(!this.db || typeof this.db.setSyncState !== 'function') return;
-        await this.db.setSyncState(this.verifiedCheckpointBlockKey(), String(blockIndex));
     }
 
     // Compare a checkpoint's committed roots to the replica's OWN recomputed
