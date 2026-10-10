@@ -230,6 +230,22 @@
  *       `action_index >= ?`. The same frontier date carries
  *       2026-10-09-remote-token-snapshots, which touches no wire-replicated table.
  *       Decoder is unaffected and stays at 4.
+ *  18 - (indexer) and 5 - (decoder): BIGINT values past Number.MAX_SAFE_INTEGER
+ *       travel as their exact base-10 string instead of a rounded JSON Number
+ *       (src/util/wire_codec.js bigIntTypeCast, installed on the shared pool);
+ *       safe integers are still JSON Numbers, so no row below 2^53 changes on
+ *       the wire. The columns this reaches are the unsigned 64-bit ones the
+ *       protocol accepts up to 2^64-1: `expiration` on orders, swaps,
+ *       dispensers, their edit tables and coinpay_obligations, bet_feeds
+ *       `deadline`, `refund_window` and `expire_at`, tokens
+ *       `callback_block`, `mint_start_block` and `mint_stop_block`, and
+ *       decoder `dispensers.expiration`. The shared pool serves both dbTypes,
+ *       so both keys advance together. No DDL is involved and either side can
+ *       store either form; the bump is what pairs the two ends, because an
+ *       older follower reads its own rows back rounded and an older server
+ *       sends them rounded, so a mixed pair would disagree on exactly these
+ *       values with nothing to say why. Rows a follower already stored rounded
+ *       are not rewritten by this change; they are corrected by a re-snapshot.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -250,7 +266,7 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 17, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {

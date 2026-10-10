@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer } = require('../../src/util/wire_codec');
+const { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer, bigIntTypeCast } = require('../../src/util/wire_codec');
 
 // Simulate the wire trip: a row is encoded, JSON-serialized, parsed back, and
 // each column value decoded, exactly what SnapshotBuilder/BlockBroadcaster do
@@ -203,6 +203,100 @@ describe('Unit: wireCodec bigIntReplacer', function(){
             assert.match(src, /bigIntAsNumber:\s*true/,
                 'flipping bigIntAsNumber changes the BIGINT wire form, a SCHEMA_VERSION change');
             assert.doesNotMatch(src, /bigIntAsNumber:\s*(?:false|this\.|\()/);
+        });
+    });
+});
+
+// A driver column as the pool's typeCast sees it: its type name, a reader for the
+// cell's decimal text, and next(), the driver's own (rounding) reader. reads
+// counts how often each ran, since both consume the cell's bytes.
+function castCell(type, text){
+    let reads = { string: 0, next: 0 };
+    let column = { type: type, string: () => { reads.string++; return text; } };
+    let next = () => { reads.next++; return text === null ? null : Number(text); };
+    return { value: bigIntTypeCast(column, next), reads: reads };
+}
+
+// The whole trip for one BIGINT cell: source read, row encode, JSON out, JSON in,
+// column decode. What comes back is the value the client binds on insert.
+function replicateBigInt(text){
+    let row = { action_index: 7, expiration: castCell('BIGINT', text).value };
+    let json = JSON.stringify(encodeTables({ orders: [row] }), bigIntReplacer);
+    return { json: json, applied: decodeValue(JSON.parse(json).orders[0].expiration) };
+}
+
+// Unsigned 64-bit columns replicate exactly: a value past 2^53 is never a Number.
+describe('Unit: wireCodec bigIntTypeCast', function(){
+    describe('bigIntTypeCast', function(){
+        it('returns the largest unsigned 64-bit value as its exact decimal string', function(){
+            let cell = castCell('BIGINT', '18446744073709551615');
+            assert.strictEqual(cell.value, '18446744073709551615');
+        });
+
+        it('returns the first values past the safe-integer range as exact strings', function(){
+            assert.strictEqual(castCell('BIGINT', '9007199254740992').value, '9007199254740992');
+            assert.strictEqual(castCell('BIGINT', '9007199254740993').value, '9007199254740993');
+            assert.strictEqual(castCell('BIGINT', '-9007199254740993').value, '-9007199254740993');
+        });
+
+        it('returns a safe integer as the Number it always was', function(){
+            assert.strictEqual(castCell('BIGINT', '0').value, 0);
+            assert.strictEqual(castCell('BIGINT', '42').value, 42);
+            assert.strictEqual(castCell('BIGINT', '4294967295').value, 4294967295);
+            assert.strictEqual(castCell('BIGINT', '9007199254740991').value, 9007199254740991);
+            assert.strictEqual(castCell('BIGINT', '-9007199254740991').value, -9007199254740991);
+        });
+
+        it('returns a NULL cell as null', function(){
+            assert.strictEqual(castCell('BIGINT', null).value, null);
+        });
+
+        it('reads a BIGINT cell once, from its text, and never through the rounding reader', function(){
+            for(const text of ['42', '18446744073709551615', null]){
+                assert.deepStrictEqual(castCell('BIGINT', text).reads, { string: 1, next: 0 });
+            }
+        });
+
+        it('leaves every other column type to the driver reader', function(){
+            for(const type of ['INT', 'VARCHAR', 'NEWDECIMAL', 'DATETIME', 'BLOB', 'JSON']){
+                let cell = castCell(type, '18446744073709551615');
+                assert.deepStrictEqual(cell.reads, { string: 0, next: 1 }, type);
+            }
+        });
+    });
+});
+
+describe('Unit: wireCodec bigIntTypeCast', function(){
+    describe('round-trip (cast → encode → JSON → parse → decode)', function(){
+        it('replicates 18446744073709551615 digit for digit', function(){
+            let out = replicateBigInt('18446744073709551615');
+            assert.strictEqual(out.json, '{"orders":[{"action_index":7,"expiration":"18446744073709551615"}]}');
+            assert.strictEqual(out.applied, '18446744073709551615');
+        });
+
+        it('replicates a value just above 2^53 digit for digit', function(){
+            let out = replicateBigInt('9007199254740993');
+            assert.strictEqual(out.json, '{"orders":[{"action_index":7,"expiration":"9007199254740993"}]}');
+            assert.strictEqual(out.applied, '9007199254740993');
+            // The form this replaces: the same value as a Number has already lost its last digit.
+            assert.notStrictEqual(String(Number('9007199254740993')), '9007199254740993');
+        });
+
+        it('leaves a safe value as the same JSON Number on the wire', function(){
+            let out = replicateBigInt('4102444800');
+            assert.strictEqual(out.json, '{"orders":[{"action_index":7,"expiration":4102444800}]}');
+            assert.strictEqual(out.applied, 4102444800);
+        });
+    });
+});
+
+describe('Unit: wireCodec bigIntTypeCast', function(){
+    describe('pool wiring', function(){
+        it('the shared pool installs bigIntTypeCast from wire_codec as its typeCast', function(){
+            const src = require('fs').readFileSync(require('path').join(__dirname, '../../src/db/index.js'), 'utf8');
+            assert.match(src, /\{[^}]*\bbigIntTypeCast\b[^}]*\}\s*=\s*require\('\.\.\/util\/wire_codec'\)/);
+            assert.match(src, /typeCast:\s*bigIntTypeCast\b/,
+                'dropping the cast rounds BIGINT values past 2^53 again, a SCHEMA_VERSION change');
         });
     });
 });

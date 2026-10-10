@@ -357,10 +357,11 @@ class BlockHasher {
     // part of the preimage: here a reordering is not a divergence, only differing
     // CONTENT is.
     //
-    // Values are stringified defensively: the shared pool returns BIGINTs as Numbers
-    // on both sides, and a stray BigInt or numeric string still agrees. A BIGINT past
-    // 2^53 rounded on the source read is invisible here, since both sides hold the
-    // same rounded Number. Buffers go to hex and Dates to ISO so neither a binary
+    // Values are stringified defensively: the shared pool returns a BIGINT as a
+    // Number while it is a safe integer and as its exact decimal string above that,
+    // on both sides, so the two forms of one value agree here and a follower that
+    // stored a rounded value past 2^53 no longer matches its source. Buffers go to
+    // hex and Dates to ISO so neither a binary
     // column nor the local timezone can fork the digest. Columns the follower is not
     // expected to match (the stripped surrogate id, generated columns, in-place
     // edited columns) are dropped per the registry declaration.

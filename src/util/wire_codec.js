@@ -32,18 +32,23 @@
  * peer on the old format fails closed at bootstrap rather than re-introducing
  * the corruption.
  *
- * BIGINT columns travel as JSON Numbers: the shared pool sets bigIntAsNumber
- * (src/db/index.js poolOptions), so the driver hands every route a JS Number.
- * That form is exact only up to Number.MAX_SAFE_INTEGER; a larger value is
- * rounded on the source read and replicated rounded, and content parity cannot
- * see it because both sides then hold the same Number. A column that can pass
- * 2^53 needs another type (amounts are VARCHAR) before it is replicated.
+ * BIGINT columns travel in one of two forms, chosen per value by bigIntTypeCast
+ * below, which the shared pool installs as its typeCast (src/db/index.js
+ * poolOptions): a JSON Number while the value is a safe integer, and its exact
+ * base-10 string once it passes Number.MAX_SAFE_INTEGER. The unsigned 64-bit
+ * columns (the expiration, deadline and block-height fields the protocol accepts
+ * up to 2^64-1) therefore replicate exactly, where the driver's own
+ * bigIntAsNumber read rounded them on the source and could hand a follower a
+ * value past the column's range. The client binds the string as an ordinary
+ * parameter and MariaDB stores it exactly; it reads it back through the same
+ * cast, so content parity compares the same form on both sides.
  * bigIntReplacer below is still the one replacer every server route serializes
  * with (the live broadcast and every snapshot, page and table stream), writing
  * any BigInt that does reach it as its exact base-10 string. The client applies
  * values without coercion, so two routes emitting different forms would
- * replicate the same column differently. Flipping bigIntAsNumber or changing
- * either form is a wire-format change under the same SCHEMA_VERSION rule.
+ * replicate the same column differently. Flipping bigIntAsNumber, dropping the
+ * cast or changing either form is a wire-format change under the same
+ * SCHEMA_VERSION rule.
  *
  ********************************************************************/
 
@@ -97,4 +102,21 @@ function bigIntReplacer(key, value){
     return typeof raw === 'bigint' ? raw.toString() : value;
 }
 
-module.exports = { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer };
+// Pool typeCast: read every BIGINT cell from its decimal text, so a value past
+// Number.MAX_SAFE_INTEGER keeps every digit. A safe integer stays a Number (the
+// form every BIGINT had before, so ids, heights and counts are unchanged); a
+// larger one is returned as the exact string the server sent. The driver's
+// next() cannot be used for these: under bigIntAsNumber it has already rounded.
+// Exactly one of column.string() and next() runs per cell, because each consumes
+// the cell's bytes. column.string() reads a length-encoded text cell, so this
+// cast holds for the text protocol only (query and queryStream, which is all
+// this service issues); a prepared-statement read would hand it 8 raw bytes.
+function bigIntTypeCast(column, next){
+    if(column.type !== 'BIGINT') return next();
+    const text = column.string();
+    if(text === null || text === undefined) return null;
+    const approx = Number(text);
+    return Number.isSafeInteger(approx) ? approx : text;
+}
+
+module.exports = { BINARY_TAG, encodeRow, encodeTables, decodeValue, bigIntReplacer, bigIntTypeCast };

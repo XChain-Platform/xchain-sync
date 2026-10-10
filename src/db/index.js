@@ -49,6 +49,7 @@ const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
+const { bigIntTypeCast } = require('../util/wire_codec');
 const logger = getLogger();
 
 // Columns that a key rebuild in ensureReplicaSecondaryIndexes NAMES, with the
@@ -153,6 +154,10 @@ function poolOptions(database){
         idleTimeout:        60000,
         insertIdAsNumber:   true,
         bigIntAsNumber:     true,
+        // BIGINT cells are read from their decimal text: a safe integer is still a
+        // Number, and a value past 2^53 (an unsigned 64-bit expiration, deadline
+        // or block field) is its exact decimal string instead of a rounded Number.
+        typeCast:           bigIntTypeCast,
         // Pin pooled sessions so NOW(), CURRENT_TIMESTAMP defaults, and the
         // TIMESTAMP-to-DATETIME retype evaluate in UTC wherever MariaDB runs.
         // This is safe because every wire-replicated temporal column is a
@@ -168,7 +173,8 @@ function poolOptions(database){
         // the snapshot channel; SnapshotBuilder full-dumps it). Do not scope or
         // drop it per dbType; test/unit/replicated_datetime_columns.test.js pins
         // the inventory and this flag. (dispensers.expiration is a BIGINT unix
-        // timestamp, replicated as a number via bigIntAsNumber.)
+        // timestamp, replicated through bigIntTypeCast: a Number while it is a
+        // safe integer, its exact decimal string above that.)
         dateStrings:        true,
         minDelayValidation: 3000,
         queryTimeout:       poolParams.queryTimeout
