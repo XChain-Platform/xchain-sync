@@ -12,6 +12,9 @@ const assert = require('assert');
 const sinon = require('sinon');
 const ClientRollback = require('../../../src/client/rollback');
 const Utility = require('../../../src/util');
+const gateRegistry = require('../../../src/consensus/gate_registry');
+
+const GATE_KEY = 'cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION';
 
 function createMockDb(firstActionIndex = 500){
     const db = {
@@ -30,6 +33,59 @@ function createMockDb(firstActionIndex = 500){
 function maturityReleaseDeletes(db){
     return db.doQuery.getCalls().filter(c => /^DELETE e FROM escrows AS e/.test(c.args[0]));
 }
+
+function maturityRefundDeletes(db){
+    return db.doQuery.getCalls().filter(c => /^DELETE c FROM credits c/.test(c.args[0]) && /cooldown_end_block/.test(c.args[0]));
+}
+
+function maturityStatusResets(db){
+    return db.doQuery.getCalls().filter(c => /^UPDATE (contract_)?unstakes SET status_id = \? WHERE status_id = \? AND cooldown_end_block/.test(c.args[0]));
+}
+
+describe('ClientRollback cooldown-maturity escrow-release reversal: activation', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    it('keeps the releases on an unarmed network and still deletes the credits and resets the status', async function(){
+        for(const network of ['mainnet', 'testnet']){
+            for(const firstActionIndex of [500, null]){
+                const db = createMockDb(firstActionIndex);
+                const rollback = new ClientRollback(db, new Utility(), 'BTC', network);
+
+                await rollback.rollback(100);
+
+                assert.strictEqual(maturityReleaseDeletes(db).length, 0, network + ': the release must survive below the activation');
+                assert.strictEqual(maturityRefundDeletes(db).length, 2, network + ': both refund credits are still deleted');
+                assert.strictEqual(maturityStatusResets(db).length, 2, network + ': both completed flips are still reset');
+            }
+        }
+    });
+
+    it('reads the switch at the rollback target block, for this network and coin', async function(){
+        const activeAt = sinon.stub(gateRegistry, 'activeAt').callThrough();
+        activeAt.withArgs(GATE_KEY).callsFake((key, network, coin, height) => height >= 500);
+
+        const below = createMockDb();
+        await new ClientRollback(below, new Utility(), 'BTC', 'testnet').rollback(499);
+        assert.strictEqual(maturityReleaseDeletes(below).length, 0, 'one block below the height keeps the releases');
+        assert.strictEqual(maturityRefundDeletes(below).length, 2);
+
+        const at = createMockDb();
+        await new ClientRollback(at, new Utility(), 'BTC', 'testnet').rollback(500);
+        assert.strictEqual(maturityReleaseDeletes(at).length, 2, 'the height itself deletes them');
+        assert.strictEqual(maturityRefundDeletes(at).length, 2);
+
+        const reads = activeAt.getCalls().filter(c => c.args[0] === GATE_KEY).map(c => c.args.slice(1));
+        assert.deepStrictEqual(reads, [['testnet', 'BTC', 499, null], ['testnet', 'BTC', 500, null]]);
+    });
+
+    it('the row is unarmed on mainnet and every testnet chain and active from regtest genesis', function(){
+        for(const coin of ['BTC', 'LTC', 'DOGE', null]){
+            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'mainnet', coin, 1e9, null), false);
+            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'testnet', coin, 1e9, null), false);
+            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'regtest', coin, 0, null), true);
+        }
+    });
+});
 
 describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
     afterEach(function(){ sinon.restore(); });
