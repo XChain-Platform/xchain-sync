@@ -13,6 +13,20 @@ const {
     previousBlockHash, decoderLinkBroken, decoderLinkState
 } = require('../../../src/client/decoder_link');
 
+// A findIndexTransactionsByIds stub that records how it was called.
+function countingDb(rows){
+    const db = {
+        calls: 0,
+        requestedIds: undefined,
+        findIndexTransactionsByIds: async ids => {
+            db.calls++;
+            db.requestedIds = ids;
+            return rows;
+        }
+    };
+    return db;
+}
+
 describe('previousBlockHash', function(){
     it('returns null without a block row or previous hash id', async function(){
         assert.strictEqual(await previousBlockHash(null, []), null);
@@ -21,46 +35,35 @@ describe('previousBlockHash', function(){
     });
 
     it('finds the hash in supplied rows by string-equivalent id', async function(){
-        let calls = 0;
-        const db = { findIndexTransactionsByIds: async () => { calls++; return []; } };
+        const db = countingDb([]);
 
         const hash = await previousBlockHash(
             { previous_block_hash_id: 7 }, [{ id: '7', hash: 'parent' }], db
         );
 
         assert.strictEqual(hash, 'parent');
-        assert.strictEqual(calls, 0);
+        assert.strictEqual(db.calls, 0);
     });
 
     it('does not query the database when a supplied matching row has no hash', async function(){
-        let calls = 0;
-        const db = { findIndexTransactionsByIds: async () => {
-            calls++;
-            return [{ id: 7, hash: 'stored-parent' }];
-        } };
+        const db = countingDb([{ id: 7, hash: 'stored-parent' }]);
 
         const hash = await previousBlockHash(
             { previous_block_hash_id: 7 }, [{ id: '7', hash: null }], db
         );
 
         assert.strictEqual(hash, null);
-        assert.strictEqual(calls, 0);
+        assert.strictEqual(db.calls, 0);
     });
 
     it('falls back to the database when the supplied rows miss', async function(){
-        let calls = 0;
-        let requestedIds;
-        const db = { findIndexTransactionsByIds: async ids => {
-            calls++;
-            requestedIds = ids;
-            return [{ id: '7', hash: 'stored-parent' }];
-        } };
+        const db = countingDb([{ id: '7', hash: 'stored-parent' }]);
 
         const hash = await previousBlockHash({ previous_block_hash_id: 7 }, [], db);
 
         assert.strictEqual(hash, 'stored-parent');
-        assert.strictEqual(calls, 1);
-        assert.deepStrictEqual(requestedIds, [7]);
+        assert.strictEqual(db.calls, 1);
+        assert.deepStrictEqual(db.requestedIds, [7]);
     });
 
     it('returns null when the database has no lookup method', async function(){

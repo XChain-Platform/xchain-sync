@@ -78,37 +78,43 @@ describe('decoder transactions.data width', function(){
         });
     });
 
-    describe('discoverChains wiring', function(){
-        let service;
-        beforeEach(function(){
-            service = new SyncService({
-                SYNC_MODE: 'client', HUB_API_HOST: 'localhost', HUB_PORT: 10000, HUB_REPOLL_INTERVAL: 300000,
-                REPLICA_DB_HOST: 'localhost', REPLICA_DB_PORT: 3306, REPLICA_DB_USER: 'u', REPLICA_DB_PASS: 'p'
-            });
-            sinon.stub(console, 'log');
-            sinon.stub(console, 'error');
-            sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([]);
-            sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([decoderCfg('narrowcoin'), decoderCfg('widecoin')]);
-            for(let m of ['createDatabase', 'verifyDatabaseOnce', 'verifySyncTables', 'ensureReplicatedColumns',
-                          'ensureReplicaSecondaryIndexes', 'ensureReplicaUtf8mb4Columns',
-                          'assertStakeWeightOrderingCollation', 'ensureDatetimeColumns'])
-                sinon.stub(Database.prototype, m).resolves(false);
-            sinon.stub(Database.prototype, 'close').resolves();
-            sinon.stub(service, 'startClientSyncForChain');
-            sinon.stub(Database.prototype, 'readTransactionsDataCharset').callsFake(async function(){
-                let narrow = this.dbName === 'narrowcoin_dec';
-                return [{ CHARACTER_SET_NAME: narrow ? 'utf8mb3' : 'utf8mb4' }];
-            });
-        });
-        afterEach(function(){ sinon.restore(); });
-
-        it('refuses the narrow chain only and registers the wide one', async function(){
-            let chains = await service.discoverChains();
-            assert.deepStrictEqual(chains.map(c => c.key), ['widecoin:mainnet:decoder']);
-            assert.strictEqual(service.databases.has('narrowcoin:mainnet:decoder'), false);
-            let closes = name => Database.prototype.close.thisValues.filter(d => d.dbName === name).length;
-            assert.strictEqual(closes('narrowcoin_dec'), 2);
-            assert.strictEqual(closes('widecoin_dec'), 1);
-        });
-    });
+    describe('discoverChains wiring', describeDiscoverChainsWiring);
 });
+
+function stubDiscoverChains(service){
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+    sinon.stub(service.hubClient, 'getIndexerConfigs').resolves([]);
+    sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([decoderCfg('narrowcoin'), decoderCfg('widecoin')]);
+    for(let m of ['createDatabase', 'verifyDatabaseOnce', 'verifySyncTables', 'ensureReplicatedColumns',
+                  'ensureReplicaSecondaryIndexes', 'ensureReplicaUtf8mb4Columns',
+                  'assertStakeWeightOrderingCollation', 'ensureDatetimeColumns'])
+        sinon.stub(Database.prototype, m).resolves(false);
+    sinon.stub(Database.prototype, 'close').resolves();
+    sinon.stub(service, 'startClientSyncForChain');
+    sinon.stub(Database.prototype, 'readTransactionsDataCharset').callsFake(async function(){
+        let narrow = this.dbName === 'narrowcoin_dec';
+        return [{ CHARACTER_SET_NAME: narrow ? 'utf8mb3' : 'utf8mb4' }];
+    });
+}
+
+function describeDiscoverChainsWiring(){
+    let service;
+    beforeEach(function(){
+        service = new SyncService({
+            SYNC_MODE: 'client', HUB_API_HOST: 'localhost', HUB_PORT: 10000, HUB_REPOLL_INTERVAL: 300000,
+            REPLICA_DB_HOST: 'localhost', REPLICA_DB_PORT: 3306, REPLICA_DB_USER: 'u', REPLICA_DB_PASS: 'p'
+        });
+        stubDiscoverChains(service);
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('refuses the narrow chain only and registers the wide one', async function(){
+        let chains = await service.discoverChains();
+        assert.deepStrictEqual(chains.map(c => c.key), ['widecoin:mainnet:decoder']);
+        assert.strictEqual(service.databases.has('narrowcoin:mainnet:decoder'), false);
+        let closes = name => Database.prototype.close.thisValues.filter(d => d.dbName === name).length;
+        assert.strictEqual(closes('narrowcoin_dec'), 2);
+        assert.strictEqual(closes('widecoin_dec'), 1);
+    });
+}
