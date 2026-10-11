@@ -26,30 +26,36 @@ function touchedLedger(){
     return sqlTouched.concat(helperTouched);
 }
 
-describe('ClientApplier schema_migrations classification', function(){
-    beforeEach(function(){
-        db = withDbMixins({
-            doQuery: sinon.stub().resolves([]),
-            beginTransaction: sinon.stub().resolves(),
-            commitTransaction: sinon.stub().resolves(),
-            rollbackTransaction: sinon.stub().resolves()
-        });
-        sinon.spy(db, 'deleteAllRows');
-        sinon.spy(db, 'deleteRowsByKeyValues');
-        applier = new ClientApplier(db, new Utility());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
+function setupApplier(){
+    db = withDbMixins({
+        doQuery: sinon.stub().resolves([]),
+        beginTransaction: sinon.stub().resolves(),
+        commitTransaction: sinon.stub().resolves(),
+        rollbackTransaction: sinon.stub().resolves()
     });
+    sinon.spy(db, 'deleteAllRows');
+    sinon.spy(db, 'deleteRowsByKeyValues');
+    applier = new ClientApplier(db, new Utility());
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+}
+
+function stubLocalTables(){
+    db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
+        { table_name: 'blocks' },
+        { table_name: 'schema_migrations' }
+    ]);
+}
+
+describe('ClientApplier schema_migrations classification', function(){
+    beforeEach(setupApplier);
 
     afterEach(function(){
         sinon.restore();
     });
 
     it('full snapshot leaves the replica schema_migrations rows untouched', async function(){
-        db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
-            { table_name: 'blocks' },
-            { table_name: 'schema_migrations' }
-        ]);
+        stubLocalTables();
         await applier.applyFullSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
             block_height: 10,
@@ -64,10 +70,7 @@ describe('ClientApplier schema_migrations classification', function(){
     });
 
     it('full snapshot leaves the ledger alone when only the local enumeration lists it', async function(){
-        db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
-            { table_name: 'blocks' },
-            { table_name: 'schema_migrations' }
-        ]);
+        stubLocalTables();
         await applier.applyFullSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
             block_height: 10,
