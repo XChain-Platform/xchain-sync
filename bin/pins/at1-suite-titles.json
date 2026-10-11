@@ -102,6 +102,24 @@
       "XCHAIN_ESC locked leaf: journal reads @regression incremental application equals a full rebuild of the same live set",
       "XCHAIN_ESC locked leaf: journal reads @regression the touched set is per LOCKER, and only for blocks that changed a total"
     ],
+    "082588dcc7b8a7d8": [
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a checkpoint for another network",
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a genuine checkpoint for another chain",
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a range step for another chain",
+      "ClientSync: served checkpoint binding to this replica @regression anchors a ticker-form checkpoint on a replica named by the full coin name",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint carries no state_root",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint is rootless past the commitment flag day",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint fetch fails",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint past the tip fails the pinned quorum",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the source serves a regressed seq",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt before any checkpoint has been verified",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt on an unanchorable checkpoint while the last anchor is within the bound",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt while catching up to a quorum-valid checkpoint past the tip",
+      "ClientSync: strict freshness counts unanchored cycles @regression records the verified height and never lowers it",
+      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height during start and enforces strict freshness",
+      "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
+      "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
+    ],
     "08cfd623d53406ec": [
       "Boundary: Transparency Log Pagination page parameter page=\"abc\": defaults to 0",
       "Boundary: Transparency Log Pagination page parameter page=-100: clamped to 0",
@@ -131,6 +149,17 @@
       "missingReplicatedTables returns an empty array when the schema carries every replicated table",
       "missingReplicatedTables returns null (unknown), never [], when the table listing is unavailable",
       "missingReplicatedTables scopes to the dbType (decoder set, not indexer set)"
+    ],
+    "0965c972c6dc32ce": [
+      "ClientRollback cooldown-maturity escrow-release reversal deletes both backdated releases with the same keys as their refund credits",
+      "ClientRollback cooldown-maturity escrow-release reversal keeps a positive escrows row on the unstake's action and deletes only the negative release, as the indexer does",
+      "ClientRollback cooldown-maturity escrow-release reversal limits release deletes to negative amounts so positive slash escrows survive",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation keeps the releases on an unarmed network and still deletes the credits and resets the status",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation reads the switch at the rollback target block, for this network and coin",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation the row is unarmed on mainnet and every testnet chain and active from regtest genesis",
+      "ClientRollback cooldown-maturity escrow-release transaction handling deletes releases for an action-empty maturity range",
+      "ClientRollback cooldown-maturity escrow-release transaction handling deletes the releases before resetting status and before generic escrow deletion",
+      "ClientRollback cooldown-maturity escrow-release transaction handling rolls back the transaction when a release delete faults"
     ],
     "09f74f1da00d6cad": [
       "validation validateWsEvent accepts block event with block_index 0",
@@ -800,14 +829,6 @@
       "01 Payload Throughput heavy blocks (50 actions/block)",
       "01 Payload Throughput light blocks (1 action/block)",
       "01 Payload Throughput medium blocks (10 actions/block)"
-    ],
-    "30916c5c70bdcf16": [
-      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
-      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
-      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
-      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
-      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
-      "armed map v2: manifest completeness over src/ the shim scan finds all fourteen shim and carrier files and all 40 rows"
     ],
     "3107b91431c55ba5": [
       "ServerPoller backfillGaps @regression is a no-op for the decoder (no transparency log)",
@@ -2201,6 +2222,40 @@
       "ClientSync: the release manifest is the source of the train requirement @regression no manifest at all is not a halt",
       "ClientSync: the release manifest is the source of the train requirement @regression reads the requirement from RELEASE_MANIFEST_PATH and halts at its height"
     ],
+    "84756c5ba4034f32": [
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
+      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
+      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
+      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
+      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer ignores a global BigInt.prototype.toJSON patch",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer is the only BigInt replacer: every server serializer imports it from wire_codec",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer passes a Number BIGINT, the bigIntAsNumber driver form, through as a JSON Number",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer the shared pool sets bigIntAsNumber: true, so BIGINT travels as a Number",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a BigInt above the safe-integer range as its exact decimal string",
+      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a top-level BigInt and one inside encodeTables output as strings",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast leaves every other column type to the driver reader",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast reads a BIGINT cell once, from its text, and never through the rounding reader",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast returns a NULL cell as null",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast returns a safe integer as the Number it always was",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast returns the first values past the safe-integer range as exact strings",
+      "Unit: wireCodec bigIntTypeCast bigIntTypeCast returns the largest unsigned 64-bit value as its exact decimal string",
+      "Unit: wireCodec bigIntTypeCast pool wiring the shared pool installs bigIntTypeCast from wire_codec as its typeCast",
+      "Unit: wireCodec bigIntTypeCast round-trip (cast \u2192 encode \u2192 JSON \u2192 parse \u2192 decode) leaves a safe value as the same JSON Number on the wire",
+      "Unit: wireCodec bigIntTypeCast round-trip (cast \u2192 encode \u2192 JSON \u2192 parse \u2192 decode) replicates 18446744073709551615 digit for digit",
+      "Unit: wireCodec bigIntTypeCast round-trip (cast \u2192 encode \u2192 JSON \u2192 parse \u2192 decode) replicates a value just above 2^53 digit for digit"
+    ],
     "84a5d698b7b87edc": [
       "ClientApplier applyBlock accepts a live block payload with a matching schema_version",
       "ClientApplier applyBlock applies block in a transaction",
@@ -2679,30 +2734,6 @@
       "updatedRows.collectUpdatedRows carries COINPay-settled order_matches rows keyed by the window of the fulfilled status",
       "updatedRows.collectUpdatedRows rethrows a non-schema error from the COINPay match class (never a silent drop)",
       "updatedRows.collectUpdatedRows skips the COINPay match class on a pre-COINPay schema instead of throwing"
-    ],
-    "9d933da3a4fc8f8a": [
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode a sentinel-shaped object with extra keys (collision guard)",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT decode when the tag value is not a string",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue does NOT re-wrap an already-decoded Buffer",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves an ordinary JSON object untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue leaves arrays untouched",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue passes scalars and null through unchanged",
-      "Unit: wireCodec (binary-safe row serialization) decodeValue restores a sentinel to the exact Buffer",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow does not mutate the input row",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow passes non-object inputs through",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow returns the same object reference when there are no Buffers",
-      "Unit: wireCodec (binary-safe row serialization) encodeRow wraps a Buffer column in the base64 sentinel",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables encodes Buffer columns across every row of every table",
-      "Unit: wireCodec (binary-safe row serialization) encodeTables passes non-object input through",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves a larger binary payload",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves an empty Buffer",
-      "Unit: wireCodec (binary-safe row serialization) round-trip (encode \u2192 JSON \u2192 parse \u2192 decode) preserves arbitrary binary bytes including 0x00 and 0xFF",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer ignores a global BigInt.prototype.toJSON patch",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer is the only BigInt replacer: every server serializer imports it from wire_codec",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer passes a Number BIGINT, the bigIntAsNumber driver form, through as a JSON Number",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer the shared pool sets bigIntAsNumber: true, so BIGINT travels as a Number",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a BigInt above the safe-integer range as its exact decimal string",
-      "Unit: wireCodec bigIntReplacer bigIntReplacer writes a top-level BigInt and one inside encodeTables output as strings"
     ],
     "9e08b97fcd02776a": [
       "ClientSync constructor: SYNC_MODE_<CHAIN>=infra-only vs the halting verification gates constructs in infra-only when all three gates are explicitly false, and carries the mode to the subscribe URL",
@@ -3189,6 +3220,14 @@
     "ba95e284dc4b4796": [
       "ServerPoller CI suite selection keeps CI lifecycle detection out of the production poller module",
       "ServerPoller CI suite selection selects the safety suites explicitly in the CI script"
+    ],
+    "bc76b5fff0359653": [
+      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
+      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
+      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
+      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
+      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
+      "armed map v2: manifest completeness over src/ the shim scan finds all fifteen shim and carrier files and all 41 rows"
     ],
     "bce5f38ce4fa01fe": [
       "SyncService state-tree orphan metric passes the coin ticker @regression reads the ticker-keyed roots, so a fully reachable store reports zero orphans"
@@ -4287,24 +4326,6 @@
       "Tier 2 - ClientRollback @tier2 rollback transaction is always committed or rolled back, never leaked",
       "Tier 2 - ClientRollback @tier2 rollback when firstActionIndex is null, action-scoped DELETEs use no action_index filter"
     ],
-    "082588dcc7b8a7d8": [
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a checkpoint for another network",
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a genuine checkpoint for another chain",
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a range step for another chain",
-      "ClientSync: served checkpoint binding to this replica @regression anchors a ticker-form checkpoint on a replica named by the full coin name",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint carries no state_root",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint is rootless past the commitment flag day",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint fetch fails",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint past the tip fails the pinned quorum",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the source serves a regressed seq",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt before any checkpoint has been verified",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt on an unanchorable checkpoint while the last anchor is within the bound",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt while catching up to a quorum-valid checkpoint past the tip",
-      "ClientSync: strict freshness counts unanchored cycles @regression records the verified height and never lowers it",
-      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height during start and enforces strict freshness",
-      "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
-      "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
-    ],
     "fc128a24fee83524": [
       "vendored checkpoint verifier (twin conformance) @regression a garbage-then-valid duplicate for one signer still PASSES (seen marked after verify)",
       "vendored checkpoint verifier (twin conformance) @regression an empty validator set can never verify",
@@ -4435,8 +4456,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 362,
-      "titleCount": 2866,
+      "fileCount": 363,
+      "titleCount": 2887,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4507,6 +4528,7 @@
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
         "test/unit/client/rollback_guard_persist.test.js": "9f200949803e9080",
+        "test/unit/client/rollback_maturity_escrow_release.test.js": "0965c972c6dc32ce",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
@@ -4597,7 +4619,7 @@
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
-        "test/unit/consensus/armed_map/completeness.test.js": "30916c5c70bdcf16",
+        "test/unit/consensus/armed_map/completeness.test.js": "bc76b5fff0359653",
         "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
@@ -4799,7 +4821,7 @@
         "test/unit/utf8mb4_replica_widen.test.js": "9e46fbfae5839c05",
         "test/unit/utility.test.js": "436350992c034c95",
         "test/unit/validation.test.js": "8abfcb4541ad0c52",
-        "test/unit/wire_codec.test.js": "9d933da3a4fc8f8a"
+        "test/unit/wire_codec.test.js": "84756c5ba4034f32"
       }
     },
     "test:boundary": {
@@ -5085,7 +5107,7 @@
     },
     "test:regression": {
       "fileCount": 97,
-      "titleCount": 769,
+      "titleCount": 771,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
