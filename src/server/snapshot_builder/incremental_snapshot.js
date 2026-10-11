@@ -134,7 +134,7 @@ module.exports = {
         }
     },
 
-    setIncrementalHeaders(res,dbType, schemaVersion, lastBlock, sinceBlock, hashRow){
+    setIncrementalHeaders(res, dbType, schemaVersion, lastBlock, sinceBlock, hashRow){
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('X-Block-Height', lastBlock);
