@@ -61,10 +61,10 @@ function createMockLog(){
     };
 }
 
-describe('ServerPoller', function(){
+let poller, db, broadcaster, log, config, util;
 
-    let poller, db, broadcaster, log, config, util;
-
+// Shared per-test fixture, registered inside each top-level describe below.
+function installPollerHooks(){
     beforeEach(function(){
         db = createMockDb();
         broadcaster = createMockBroadcaster();
@@ -79,6 +79,11 @@ describe('ServerPoller', function(){
     afterEach(function(){
         sinon.restore();
     });
+}
+
+describe('ServerPoller', function(){
+
+    installPollerHooks();
 
     describe('buildBlockPayload', function(){
         it('fails closed on a TRANSIENT updated_rows collection error (deadlock 1213) so the block is retried, not broadcast without updated_rows @regression', async function(){
@@ -126,8 +131,12 @@ describe('ServerPoller', function(){
             assert.ok(idxCall);
             assert.deepStrictEqual([...idxCall.args[1]].sort((a, b) => a - b), [1, 2, 3, 5]);
         });
-
     });
+});
+
+describe('ServerPoller', function(){
+
+    installPollerHooks();
 
     describe('buildBlockPayload', function(){
         it('streams the blocks.state_hash_id index_transactions row with the live block @regression', async function(){
@@ -178,8 +187,12 @@ describe('ServerPoller', function(){
             assert.ok(idxCall);
             assert.deepStrictEqual([...idxCall.args[1]].sort((a, b) => a - b), [11, 12, 13]);
         });
-
     });
+});
+
+describe('ServerPoller', function(){
+
+    installPollerHooks();
 
     describe('buildBlockPayload', function(){
         it('fetches index_addresses by source_id from transactions', async function(){
@@ -203,8 +216,12 @@ describe('ServerPoller', function(){
             // Should deduplicate source_ids: [10, 20]
             assert.strictEqual(addrCall.args[1].length, 2);
         });
-
     });
+});
+
+describe('ServerPoller', function(){
+
+    installPollerHooks();
 
     describe('buildBlockPayload', function(){
         it('extracts the remaining indexer index tables from referenced _id columns', async function(){
@@ -251,7 +268,14 @@ describe('ServerPoller', function(){
             assert.ok(genericTables.some(sql => sql.includes('`index_addresses`')),
                 'generic pass should re-fetch index_addresses over the full ref set');
         });
+    });
+});
 
+describe('ServerPoller', function(){
+
+    installPollerHooks();
+
+    describe('buildBlockPayload', function(){
         it('does not run the generic index pass for the decoder', async function(){
             let decoderDb = createMockDb();
             decoderDb.dbType = 'decoder';
@@ -288,7 +312,14 @@ describe('ServerPoller', function(){
             assert.deepStrictEqual(payload.data.escrows, [other, release],
                 'the release joins the action-scoped escrows, it does not replace them');
         });
+    });
+});
 
+describe('ServerPoller', function(){
+
+    installPollerHooks();
+
+    describe('buildBlockPayload', function(){
         // Once UNSTAKE_COOLDOWN_COMPLETION_ACTION is active the indexer writes the refund
         // and the release under a synthetic UNSTAKE action minted AT the maturity block, so
         // the action-scoped read carries them and the unstake-keyed joins match nothing.
