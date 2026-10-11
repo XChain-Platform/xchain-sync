@@ -61,42 +61,29 @@ function createMockLog(){
     };
 }
 
-describe('ServerPoller', function(){
+// Per-test fixtures shared by every buildBlockPayload group below; the
+// top-level beforeEach refreshes them so each test sees fresh stubs.
+const t = {};
 
-    let poller, db, broadcaster, log, config, util;
-
-    beforeEach(function(){
-        db = createMockDb();
-        broadcaster = createMockBroadcaster();
-        log = createMockLog();
-        config = { BLOCK_POLL_INTERVAL: 3000 };
-        util = new Utility();
-        poller = new ServerPoller('bitcoin', 'mainnet', db, broadcaster, log, config, util);
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-
-    afterEach(function(){
-        sinon.restore();
-    });
-
+// Missing hash row, payload shape and derived validator rewards.
+function describeNullAndStructure(){
     describe('buildBlockPayload', function(){
         it('returns null when block hash row is missing', async function(){
-            db.getBlockHashRow.resolves(null);
-            let result = await poller.buildBlockPayload(100);
+            t.db.getBlockHashRow.resolves(null);
+            let result = await t.poller.buildBlockPayload(100);
             assert.strictEqual(result, null);
         });
 
         it('builds complete payload with correct structure', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
-            db.getBlockScopedRows.resolves([{ block_index: 100 }]);
-            db.getTransactions.resolves([{ tx_index: 1, block_index: 100, source_id: 10, tx_hash_id: 20 }]);
-            db.getActions.resolves([{ action_index: 50, tx_index: 1 }]);
+            t.db.getBlockScopedRows.resolves([{ block_index: 100 }]);
+            t.db.getTransactions.resolves([{ tx_index: 1, block_index: 100, source_id: 10, tx_hash_id: 20 }]);
+            t.db.getActions.resolves([{ action_index: 50, tx_index: 1 }]);
 
-            let payload = await poller.buildBlockPayload(100);
+            let payload = await t.poller.buildBlockPayload(100);
 
             assert.strictEqual(payload.type, 'block');
             assert.strictEqual(payload.chain, 'bitcoin');
@@ -116,46 +103,49 @@ describe('ServerPoller', function(){
             // The BTC-side derivation mints the row while processing block 961700 but stamps
             // block_index = SNAPSHOT_BLOCK 961500, so getBlockScopedRows(961700) never sees it
             // and a continuously-live follower never received it (#5605).
-            db.getBlockHashRow.resolves({ block_index: 961700, block_time: 1700000000, ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+            t.db.getBlockHashRow.resolves({ block_index: 961700, block_time: 1700000000, ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
             let derived = { id: 9, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 961500,
                 amount: '1.00000000', block_index: 961500, derive_block_index: 961700 };
-            db.doQuery.withArgs(sinon.match(/vr\.derive_block_index BETWEEN \? AND \?/)).resolves([derived]);
-            let payload = await poller.buildBlockPayload(961700);
+            t.db.doQuery.withArgs(sinon.match(/vr\.derive_block_index BETWEEN \? AND \?/)).resolves([derived]);
+            let payload = await t.poller.buildBlockPayload(961700);
             assert.ok(payload.data.validator_rewards, 'derived reward must ride the validator_rewards payload');
             assert.deepStrictEqual(payload.data.validator_rewards, [derived]);
-            let q = db.doQuery.getCalls().find(c => /vr\.derive_block_index BETWEEN \? AND \?/.test(c.args[0]));
+            let q = t.db.doQuery.getCalls().find(c => /vr\.derive_block_index BETWEEN \? AND \?/.test(c.args[0]));
             assert.deepStrictEqual(q.args[1], [961700, 961700], 'keyed on THIS block as the materialization window');
         });
 
     });
+}
 
+// contract_emissions sourcing, sync_meta and burst state_hash.
+function describeEmissionsAndSyncMeta(){
     describe('buildBlockPayload', function(){
         it('streams contract_emissions via getEmissionRowsForBlock, not getActionScopedRows', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
             // Internal SLASH emission: action_index is NULL; getActionScopedRows would drop it.
-            db.getEmissionRowsForBlock.resolves([
+            t.db.getEmissionRowsForBlock.resolves([
                 { execution_index: 10, emitted_action: 'SLASH', action_index: null, position: 0 }
             ]);
 
-            let payload = await poller.buildBlockPayload(100);
+            let payload = await t.poller.buildBlockPayload(100);
 
-            assert.ok(db.getEmissionRowsForBlock.calledOnceWith(100),
+            assert.ok(t.db.getEmissionRowsForBlock.calledOnceWith(100),
                 'contract_emissions must be sourced via getEmissionRowsForBlock');
-            assert.ok(!db.getActionScopedRows.getCalls().some(c => c.args[0] === 'contract_emissions'),
+            assert.ok(!t.db.getActionScopedRows.getCalls().some(c => c.args[0] === 'contract_emissions'),
                 'contract_emissions must NOT go through getActionScopedRows');
             assert.ok(payload.data['contract_emissions'], 'emission rows present in payload');
             assert.strictEqual(payload.data['contract_emissions'][0].action_index, null);
         });
 
         it('includes a sync_meta transparency row in the indexer payload', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
             });
-            let payload = await poller.buildBlockPayload(100);
+            let payload = await t.poller.buildBlockPayload(100);
 
             assert.ok(payload.data['sync_meta'], 'sync_meta present in indexer payload');
             assert.strictEqual(payload.data['sync_meta'].length, 1);
@@ -168,14 +158,14 @@ describe('ServerPoller', function(){
         });
 
         it('ships state_hash NULL for burst-built blocks (viewTip ahead of B)', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
             });
             // Catch-up burst: the pinned view's tip sits ahead of the block being
             // built, so updated_rows carry tip-state and the follower's apply-time
             // recompute at B must be skipped via the existing NULL gate.
-            let payload = await poller.buildBlockPayload(100, null, 105);
+            let payload = await t.poller.buildBlockPayload(100, null, 105);
             assert.strictEqual(payload.state_hash, null,
                 'burst-built payload must ship state_hash NULL');
             assert.strictEqual(payload.ledger_hash, 'lh',
@@ -183,29 +173,32 @@ describe('ServerPoller', function(){
         });
 
     });
+}
 
+// Steady-state hashes/roots and the decoder payload.
+function describeStateHashAndDecoder(){
     describe('buildBlockPayload', function(){
         it('keeps state_hash when the view tip IS the block (steady state) or is unknown', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 100, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
             });
-            let steady = await poller.buildBlockPayload(100, null, 100);
+            let steady = await t.poller.buildBlockPayload(100, null, 100);
             assert.strictEqual(steady.state_hash, 'sh', 'steady-state payload keeps state_hash');
-            let noTip = await poller.buildBlockPayload(100, null);
+            let noTip = await t.poller.buildBlockPayload(100, null);
             assert.strictEqual(noTip.state_hash, 'sh', 'unknown view tip keeps state_hash');
         });
 
         it('ships state_root NULL for burst blocks but keeps balances/merkle roots (@regression)', async function(){
             // block 1000000 is past the state-commitment flag-day for bitcoin/mainnet.
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 1000000, block_time: 1700000000,
                 ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch', state_hash: 'sh'
             });
             // Catch-up burst: state_root folds the follower-recomputed stakes_root, which
             // is read from live tip-state stake tables during a burst, so it must be NULLed
             // exactly like state_hash. balances_root/block_merkle_root are B-scoped and stay.
-            let burst = await poller.buildBlockPayload(1000000, null, 1000005);
+            let burst = await t.poller.buildBlockPayload(1000000, null, 1000005);
             assert.strictEqual(burst.state_root, null,
                 'burst-built payload must ship state_root NULL');
             assert.strictEqual(burst.balances_root, 'br',
@@ -213,7 +206,7 @@ describe('ServerPoller', function(){
             assert.strictEqual(burst.block_merkle_root, 'bmr',
                 'block_merkle_root stays verified on the burst path');
 
-            let steady = await poller.buildBlockPayload(1000000, null, 1000000);
+            let steady = await t.poller.buildBlockPayload(1000000, null, 1000000);
             assert.strictEqual(steady.state_root, 'sr',
                 'steady-state payload keeps state_root');
         });
@@ -225,7 +218,7 @@ describe('ServerPoller', function(){
                 block_index: 100, block_time: 1700000000, block_hash: 'bh'
             });
             // Decoder has no transparency log.
-            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, t.broadcaster, null, t.config, t.util);
 
             let payload = await decoderPoller.buildBlockPayload(100);
             assert.strictEqual(payload.data['sync_meta'], undefined, 'decoder payload has no sync_meta');
@@ -233,48 +226,51 @@ describe('ServerPoller', function(){
         });
 
     });
+}
 
+// Block-scoped rows and per-table read error handling.
+function describeTableReadErrors(){
     describe('buildBlockPayload', function(){
         it('includes block-scoped table rows in data', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
             let blockRows = [{ block_index: 1, block_time: 100 }];
-            db.getBlockScopedRows.resolves(blockRows);
+            t.db.getBlockScopedRows.resolves(blockRows);
 
-            let payload = await poller.buildBlockPayload(1);
+            let payload = await t.poller.buildBlockPayload(1);
             assert.ok(payload.data['blocks']);
         });
 
         it('skips a per-table SCHEMA-GAP read error (errno 1146) and still builds the block @regression', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
             let gap = new Error('table missing'); gap.errno = 1146;
-            db.getBlockScopedRows.rejects(gap);
-            db.getTransactions.resolves([]);
-            db.getActions.resolves([]);
+            t.db.getBlockScopedRows.rejects(gap);
+            t.db.getTransactions.resolves([]);
+            t.db.getActions.resolves([]);
 
-            let payload = await poller.buildBlockPayload(1);
+            let payload = await t.poller.buildBlockPayload(1);
             assert.ok(payload); // Should not be null
             assert.strictEqual(payload.type, 'block');
         });
 
         it('fails closed on a TRANSIENT per-table read error (deadlock 1213) so the block is retried, not broadcast incomplete @regression', async function(){
-            db.getBlockHashRow.resolves({
+            t.db.getBlockHashRow.resolves({
                 block_index: 1, block_time: 100,
                 ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c'
             });
             let transient = new Error('Deadlock found when trying to get lock'); transient.errno = 1213;
-            db.getBlockScopedRows.rejects(transient);
-            db.getTransactions.resolves([]);
-            db.getActions.resolves([]);
+            t.db.getBlockScopedRows.rejects(transient);
+            t.db.getTransactions.resolves([]);
+            t.db.getActions.resolves([]);
 
             let threw = false;
             try {
-                await poller.buildBlockPayload(1);
+                await t.poller.buildBlockPayload(1);
             } catch(e){
                 threw = true;
                 assert.strictEqual(e.errno, 1213);
@@ -283,4 +279,27 @@ describe('ServerPoller', function(){
         });
 
     });
+}
+
+describe('ServerPoller', function(){
+
+    beforeEach(function(){
+        t.db = createMockDb();
+        t.broadcaster = createMockBroadcaster();
+        t.log = createMockLog();
+        t.config = { BLOCK_POLL_INTERVAL: 3000 };
+        t.util = new Utility();
+        t.poller = new ServerPoller('bitcoin', 'mainnet', t.db, t.broadcaster, t.log, t.config, t.util);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    describeNullAndStructure();
+    describeEmissionsAndSyncMeta();
+    describeStateHashAndDecoder();
+    describeTableReadErrors();
 });
