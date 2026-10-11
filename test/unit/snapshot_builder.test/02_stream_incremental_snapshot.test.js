@@ -52,6 +52,11 @@ function streamIncrementalSnapshotStatusTests(){
         assert.strictEqual(res.status.calledWith(404), true);
     });
 
+    streamIncrementalSnapshotCoinTests();
+    streamIncrementalSnapshotStreamTests();
+}
+
+function streamIncrementalSnapshotCoinTests(){
     // An unrecognized coin has no frozen activation delay, so the catch-up would
     // silently omit the deactivation_block updated rows; refuse before any byte.
     it('rejects an indexer catch-up for an unrecognized coin before opening the snapshot', async function(){
@@ -70,7 +75,9 @@ function streamIncrementalSnapshotStatusTests(){
             /unrecognized coin "NOT-A-COIN"/);
         assert.strictEqual(writer.write.called, false);
     });
+}
 
+function streamIncrementalSnapshotStreamTests(){
     it('streams incremental data with since_block field', async function(){
         let db = createMockDb();
         db.getLastBlock.resolves(100);
