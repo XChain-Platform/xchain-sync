@@ -109,6 +109,48 @@ describe('ClientRollback cooldown-maturity escrow-release reversal', function(){
         assert.deepStrictEqual(deletes[1].args[1], [8, 100, 100]);
     });
 
+    it('limits release deletes to negative amounts so positive slash escrows survive', async function(){
+        const db = createMockDb();
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+
+        await rollback.rollback(100);
+
+        const deletes = maturityReleaseDeletes(db);
+        assert.strictEqual(deletes.length, 2, 'expected capability and contract escrow-release deletes');
+        for(const releaseDelete of deletes){
+            assert.match(releaseDelete.args[0], /CAST\(e\.amount AS DECIMAL\(60,18\)\) < 0/);
+        }
+    });
+
+    it('keeps a positive escrows row on the unstake\'s action and deletes only the negative release, as the indexer does', async function(){
+        // Escrows rows sharing the matured unstake's action keys: the negative release the
+        // maturity wrote and a positive escrows row (a slash or re-lock) on the same action.
+        const rows = [
+            { action_index: 40, address_id: 7, tick_id: 2, amount: '-12.5' },
+            { action_index: 40, address_id: 7, tick_id: 2, amount: '3.000000000000000001' },
+            { action_index: 40, address_id: 7, tick_id: 2, amount: '0' }
+        ];
+        const db = createMockDb();
+        db.doQuery.withArgs(sinon.match(/^DELETE e FROM escrows AS e/)).callsFake(async (sql) => {
+            const signFiltered = /CAST\(e\.amount AS DECIMAL\(60,18\)\) < 0/.test(sql);
+            for(let i = rows.length - 1; i >= 0; i--){
+                if(!signFiltered || Number(rows[i].amount) < 0) rows.splice(i, 1);
+            }
+            return [];
+        });
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+
+        await rollback.rollback(100);
+
+        assert.strictEqual(maturityReleaseDeletes(db).length, 2, 'expected capability and contract escrow-release deletes');
+        assert.deepStrictEqual(rows.map(r => r.amount), ['3.000000000000000001', '0'],
+            'only the negative release is removed; the positive and zero escrows rows survive');
+    });
+});
+
+describe('ClientRollback cooldown-maturity escrow-release transaction handling', function(){
+    afterEach(function(){ sinon.restore(); });
+
     it('deletes the releases before resetting status and before generic escrow deletion', async function(){
         const db = createMockDb();
         const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
