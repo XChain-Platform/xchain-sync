@@ -105,16 +105,7 @@ module.exports = {
             writer = new SnapshotStreamWriter(gzip, res);
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
-
-            let tableOrder = await this.getOrderedTables(db, conn);
-            let first = true;
-
-            let selectCtx = await this.buildIncrementalSelectCtx(db, dbType, sinceBlock, lastBlock, conn, skipLookups);
-
-            for(let table of tableOrder){
-                first = await this.streamIncrementalTable(writer, db, table, selectCtx, first);
-            }
-
+            await this.streamIncrementalTables(writer, db, dbType, sinceBlock, lastBlock, conn, skipLookups);
             await writer.write('}');
             await this.writeIncrementalUpdatedRows(writer, db, dbType, sinceBlock, lastBlock, coin, conn);
             await writer.write('}');
@@ -130,7 +121,20 @@ module.exports = {
         }
     },
 
-    setIncrementalHeaders(res, dbType, schemaVersion, lastBlock, sinceBlock, hashRow){
+    // Write every table of the "tables" object, in dependency order, under the
+    // per-dbType scoping rules built by buildIncrementalSelectCtx.
+    async streamIncrementalTables(writer, db, dbType, sinceBlock, lastBlock, conn, skipLookups){
+        let tableOrder = await this.getOrderedTables(db, conn);
+        let first = true;
+
+        let selectCtx = await this.buildIncrementalSelectCtx(db, dbType, sinceBlock, lastBlock, conn, skipLookups);
+
+        for(let table of tableOrder){
+            first = await this.streamIncrementalTable(writer, db, table, selectCtx, first);
+        }
+    },
+
+    setIncrementalHeaders(res,dbType, schemaVersion, lastBlock, sinceBlock, hashRow){
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('X-Block-Height', lastBlock);
