@@ -63,50 +63,46 @@ function installDoQuery(db, policy){
     return created;
 }
 
-describe('ClientSync.fetchAndApplySchema multi-pass + fail-closed halt', function(){
-    let db, sync;
-    beforeEach(function(){
-        db = createMockDb();
-        sync = makeSync(db);
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
+// The CREATE TABLE fixpoint cases: an ordering miss resolves, a genuine fault halts.
+// state.db and state.sync are rebuilt by the describe's beforeEach.
+function registerFixpointCases(state){
     it('resolves FK ordering across passes without halting', async function(){
         // B is listed before A but depends on A, so B fails until A exists.
         sinon.stub(axios, 'get').resolves({ data: { tables: {
             B: 'CREATE TABLE `B` (id INT)',
             A: 'CREATE TABLE `A` (id INT)'
         }}});
-        const created = installDoQuery(db, (table, have) => {
+        const created = installDoQuery(state.db, (table, have) => {
             if(table === 'B' && !have.has('A')){ const e = new Error('FK'); e.errno = 1215; return e; }
             return 'ok';
         });
 
-        await sync.fetchAndApplySchema('http://a:3006');
+        await state.sync.fetchAndApplySchema('http://a:3006');
 
         assert.ok(created.has('A') && created.has('B'), 'both tables created');
-        assert.strictEqual(sync.isHalted(), false, 'ordering miss must not halt');
-        assert.ok(db.recordHalt.notCalled, 'no durable halt for an ordering miss');
+        assert.strictEqual(state.sync.isHalted(), false, 'ordering miss must not halt');
+        assert.ok(state.db.recordHalt.notCalled, 'no durable halt for an ordering miss');
     });
 
     it('records a durable halt when a genuine DDL fault survives the fixpoint', async function(){
         sinon.stub(axios, 'get').resolves({ data: { tables: {
             C: 'CREATE TABLE `C` (id INT)'
         }}});
-        installDoQuery(db, () => { const e = new Error('access denied'); e.errno = 1142; return e; });
+        installDoQuery(state.db, () => { const e = new Error('access denied'); e.errno = 1142; return e; });
 
-        await sync.fetchAndApplySchema('http://a:3006');
+        await state.sync.fetchAndApplySchema('http://a:3006');
 
-        assert.strictEqual(sync.isHalted(), true, 'genuine fault must halt');
-        const info = sync.getHaltInfo();
+        assert.strictEqual(state.sync.isHalted(), true, 'genuine fault must halt');
+        const info = state.sync.getHaltInfo();
         assert.strictEqual(info.reason, 'schema-apply-failed');
         assert.deepStrictEqual(info.mismatches, [{ table: 'C', errno: 1142, message: 'access denied' }]);
-        assert.ok(db.recordHalt.calledOnce, 'halt persisted via recordHalt');
-        assert.strictEqual(db.recordHalt.firstCall.args[2], 'schema-apply-failed');
+        assert.ok(state.db.recordHalt.calledOnce, 'halt persisted via recordHalt');
+        assert.strictEqual(state.db.recordHalt.firstCall.args[2], 'schema-apply-failed');
     });
+}
 
+// The column self-heal, fetch-failure and bootstrap-abort cases.
+function registerHaltPathCases(state){
     // The table already exists, so the apply never reaches CREATE TABLE and the fault is in the column
     // self-heal. That path used to swallow the server's refusal and report success, leaving the replica to
     // fail every later row on errno 1054 with halted:false. The refusal now reaches the fixpoint.
@@ -114,39 +110,53 @@ describe('ClientSync.fetchAndApplySchema multi-pass + fail-closed halt', functio
         sinon.stub(axios, 'get').resolves({ data: { tables: {
             pubkeys: 'CREATE TABLE `pubkeys` (id INT)'
         }}});
-        db.doQuery = sinon.stub().callsFake(async (sql) => {
+        state.db.doQuery = sinon.stub().callsFake(async (sql) => {
             if(/information_schema\.tables/.test(sql)) return [{ ok: 1 }];   // table already exists
             return [];
         });
         const refusal = new Error('there can be only one auto column and it must be defined as a key');
         refusal.errno = 1075;
-        db.addMissingColumns = sinon.stub().rejects(refusal);
+        state.db.addMissingColumns = sinon.stub().rejects(refusal);
 
-        await sync.fetchAndApplySchema('http://a:3006');
+        await state.sync.fetchAndApplySchema('http://a:3006');
 
-        assert.strictEqual(sync.isHalted(), true, 'a refused ALTER must halt, not pass silently');
-        const info = sync.getHaltInfo();
+        assert.strictEqual(state.sync.isHalted(), true, 'a refused ALTER must halt, not pass silently');
+        const info = state.sync.getHaltInfo();
         assert.strictEqual(info.reason, 'schema-apply-failed');
         assert.deepStrictEqual(info.mismatches.map(m => [m.table, m.errno]), [['pubkeys', 1075]]);
-        assert.ok(db.recordHalt.calledOnce);
+        assert.ok(state.db.recordHalt.calledOnce);
     });
 
     it('does NOT halt on a schema-fetch transport failure (not a DDL fault)', async function(){
         sinon.stub(axios, 'get').rejects(new Error('ECONNREFUSED'));
-        await sync.fetchAndApplySchema('http://a:3006');
-        assert.strictEqual(sync.isHalted(), false, 'a fetch failure is left to the retry loop');
-        assert.ok(db.recordHalt.notCalled);
+        await state.sync.fetchAndApplySchema('http://a:3006');
+        assert.strictEqual(state.sync.isHalted(), false, 'a fetch failure is left to the retry loop');
+        assert.ok(state.db.recordHalt.notCalled);
     });
 
     it('aborts the bootstrap round once a schema halt is recorded', async function(){
         sinon.stub(axios, 'get').resolves({ data: { tables: {
             C: 'CREATE TABLE `C` (id INT)'
         }}});
-        installDoQuery(db, () => { const e = new Error('disk full'); e.errno = 1021; return e; });
-        sync.sources = ['http://a:3006'];
+        installDoQuery(state.db, () => { const e = new Error('disk full'); e.errno = 1021; return e; });
+        state.sync.sources = ['http://a:3006'];
 
-        const ok = await sync.bootstrapRotateSources();
+        const ok = await state.sync.bootstrapRotateSources();
         assert.strictEqual(ok, false, 'round returns false (does not proceed to snapshot download)');
-        assert.strictEqual(sync.isHalted(), true);
+        assert.strictEqual(state.sync.isHalted(), true);
     });
+}
+
+describe('ClientSync.fetchAndApplySchema multi-pass + fail-closed halt', function(){
+    const state = {};
+    beforeEach(function(){
+        state.db = createMockDb();
+        state.sync = makeSync(state.db);
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    registerFixpointCases(state);
+    registerHaltPathCases(state);
 });

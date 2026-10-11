@@ -105,16 +105,7 @@ module.exports = {
             writer = new SnapshotStreamWriter(gzip, res);
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"since_block":' + sinceBlock + ',"tables":{');
-
-            let tableOrder = await this.getOrderedTables(db, conn);
-            let first = true;
-
-            let selectCtx = await this.buildIncrementalSelectCtx(db, dbType, sinceBlock, lastBlock, conn, skipLookups);
-
-            for(let table of tableOrder){
-                first = await this.streamIncrementalTable(writer, db, table, selectCtx, first);
-            }
-
+            await this.streamIncrementalTables(writer, db, dbType, sinceBlock, lastBlock, conn, skipLookups);
             await writer.write('}');
             await this.writeIncrementalUpdatedRows(writer, db, dbType, sinceBlock, lastBlock, coin, conn);
             await writer.write('}');
@@ -127,6 +118,19 @@ module.exports = {
             // A client abort mid-stream is not a server error (see streamFullSnapshot).
             if(e && e.aborted) return;
             throw e;
+        }
+    },
+
+    // Write every table of the "tables" object, in dependency order, under the
+    // per-dbType scoping rules built by buildIncrementalSelectCtx.
+    async streamIncrementalTables(writer, db, dbType, sinceBlock, lastBlock, conn, skipLookups){
+        let tableOrder = await this.getOrderedTables(db, conn);
+        let first = true;
+
+        let selectCtx = await this.buildIncrementalSelectCtx(db, dbType, sinceBlock, lastBlock, conn, skipLookups);
+
+        for(let table of tableOrder){
+            first = await this.streamIncrementalTable(writer, db, table, selectCtx, first);
         }
     },
 

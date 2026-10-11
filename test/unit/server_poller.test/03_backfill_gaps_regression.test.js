@@ -61,9 +61,57 @@ function createMockLog(){
     };
 }
 
-describe('ServerPoller', function(){
+// Rebuilt for every test by the beforeEach in the ServerPoller suite below; the
+// suite body is a module-level function so each stays a reviewable size.
+let poller, db, broadcaster, log, config, util;
 
-    let poller, db, broadcaster, log, config, util;
+function backfillGapsTests(){
+    it('is a no-op for the decoder (no transparency log)', async function(){
+        let decoderDb = createMockDb();
+        decoderDb.dbType = 'decoder';
+        let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+        let n = await decoderPoller.backfillGaps();
+        assert.strictEqual(n, 0);
+    });
+
+    it('is a no-op when the transparency log reports no gaps', async function(){
+        log.findGaps.resolves([]);
+        let n = await poller.backfillGaps();
+        assert.strictEqual(n, 0);
+        assert.strictEqual(log.recordBlock.called, false);
+        assert.strictEqual(log.recommitEpoch.called, false);
+    });
+
+    it('replays recordBlock for each missing block and recomputes affected epochs', async function(){
+        // Interior holes at 150 and 201 (epochs 2 and 3 with epochSize 100).
+        log.findGaps.resolves([150, 201]);
+        db.getBlockHashRow.callsFake(async (idx) => ({
+            block_index: idx, block_time: idx * 10,
+            ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
+        }));
+
+        let n = await poller.backfillGaps();
+
+        assert.strictEqual(n, 2);
+        let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
+        assert.deepStrictEqual(recorded, [150, 201]);
+        let recomputed = log.recommitEpoch.getCalls().map(c => c.args[0]).sort();
+        assert.deepStrictEqual(recomputed, [2, 3], 'epochs spanning the holes are rebuilt');
+    });
+
+    it('skips a gap whose source block has vanished (reorg) without recording it', async function(){
+        log.findGaps.resolves([150]);
+        db.getBlockHashRow.resolves(null);  // block no longer in source
+
+        let n = await poller.backfillGaps();
+
+        assert.strictEqual(n, 1);  // counted as detected
+        assert.strictEqual(log.recordBlock.called, false);
+        assert.strictEqual(log.recommitEpoch.called, false);
+    });
+}
+
+describe('ServerPoller', function(){
 
     beforeEach(function(){
         db = createMockDb();
@@ -80,49 +128,5 @@ describe('ServerPoller', function(){
         sinon.restore();
     });
 
-    describe('backfillGaps @regression', function(){
-        it('is a no-op for the decoder (no transparency log)', async function(){
-            let decoderDb = createMockDb();
-            decoderDb.dbType = 'decoder';
-            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
-            let n = await decoderPoller.backfillGaps();
-            assert.strictEqual(n, 0);
-        });
-
-        it('is a no-op when the transparency log reports no gaps', async function(){
-            log.findGaps.resolves([]);
-            let n = await poller.backfillGaps();
-            assert.strictEqual(n, 0);
-            assert.strictEqual(log.recordBlock.called, false);
-            assert.strictEqual(log.recommitEpoch.called, false);
-        });
-
-        it('replays recordBlock for each missing block and recomputes affected epochs', async function(){
-            // Interior holes at 150 and 201 (epochs 2 and 3 with epochSize 100).
-            log.findGaps.resolves([150, 201]);
-            db.getBlockHashRow.callsFake(async (idx) => ({
-                block_index: idx, block_time: idx * 10,
-                ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
-            }));
-
-            let n = await poller.backfillGaps();
-
-            assert.strictEqual(n, 2);
-            let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
-            assert.deepStrictEqual(recorded, [150, 201]);
-            let recomputed = log.recommitEpoch.getCalls().map(c => c.args[0]).sort();
-            assert.deepStrictEqual(recomputed, [2, 3], 'epochs spanning the holes are rebuilt');
-        });
-
-        it('skips a gap whose source block has vanished (reorg) without recording it', async function(){
-            log.findGaps.resolves([150]);
-            db.getBlockHashRow.resolves(null);  // block no longer in source
-
-            let n = await poller.backfillGaps();
-
-            assert.strictEqual(n, 1);  // counted as detected
-            assert.strictEqual(log.recordBlock.called, false);
-            assert.strictEqual(log.recommitEpoch.called, false);
-        });
-    });
+    describe('backfillGaps @regression', backfillGapsTests);
 });
