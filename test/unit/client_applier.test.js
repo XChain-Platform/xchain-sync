@@ -149,41 +149,43 @@ function registerApplyBlockCases2(){
     });
 }
 
-function registerApplyBlockCases3(){
-    it('mirrors the anchor-reward winner collapse from this block\'s reconcile-log pre-images (keyed delete, after inserts, in-txn)', async function(){
-        // The source pre-images each loser validator_rewards row into
-        // anchor_reward_reconcile_log and DELETEs it; the log replicated, the DELETE
-        // never did, so a replica holding the loser stayed AHEAD forever (#5605/#5610).
-        db.dbType = 'indexer';
-        await applier.applyBlock({
-            schema_version: liveVersion(),
-            block_index: 961700,
-            data: {
-                blocks: [{ block_index: 961700 }],
-                anchor_reward_reconcile_log: [{ id: 1, reward_type: 'anchor_BTC', round_reference: 961500,
-                    source_id: 7, signing_pubkey_id: 3, amount: '1.00000000', reward_block_index: 961500,
-                    reward_derive_block_index: 961700, block_index: 961700 }]
-            }
-        });
-        let calls = db.doQuery.getCalls();
-        let del = calls.find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
-        assert.ok(del, 'expected the loser-row delete mirror');
-        assert.ok(/d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id/.test(del.args[0]));
-        assert.ok(/d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(del.args[0]),
-            'NULL-safe round_reference match (the UNIQUE key component is nullable)');
-        // round_qualifier joined reward_unique in the 2026-08-24 indexer migration and
-        // anchor_reward_reconcile_log pre-images it. Without this predicate the keyed
-        // delete ALSO matches the other archive snapshot's reward whenever a hub rebase
-        // reissued the MATCH_BATCH_SEQ round_reference, destroying a row the source still
-        // holds.
-        assert.ok(/AND d\.round_qualifier <=> vr\.round_qualifier/.test(del.args[0]),
-            'the mirror delete must carry the full five-column reward identity');
-        assert.ok(/WHERE d\.block_index = \?$/.test(del.args[0]), 'scoped to THIS block\'s reconcile rows');
-        assert.deepStrictEqual(del.args[1], [961700]);
-        let logInsert = calls.findIndex(c => /anchor_reward_reconcile_log/.test(c.args[0]) && /^INSERT/.test(c.args[0]));
-        assert.ok(logInsert >= 0 && logInsert < calls.indexOf(del), 'the log rows are inserted before the mirror reads them');
-        assert.strictEqual(db.commitTransaction.calledOnce, true);
+async function assertsReconcileDeleteMirror(){
+    // The source pre-images each loser validator_rewards row into
+    // anchor_reward_reconcile_log and DELETEs it; the log replicated, the DELETE
+    // never did, so a replica holding the loser stayed AHEAD forever (#5605/#5610).
+    db.dbType = 'indexer';
+    await applier.applyBlock({
+        schema_version: liveVersion(),
+        block_index: 961700,
+        data: {
+            blocks: [{ block_index: 961700 }],
+            anchor_reward_reconcile_log: [{ id: 1, reward_type: 'anchor_BTC', round_reference: 961500,
+                source_id: 7, signing_pubkey_id: 3, amount: '1.00000000', reward_block_index: 961500,
+                reward_derive_block_index: 961700, block_index: 961700 }]
+        }
     });
+    let calls = db.doQuery.getCalls();
+    let del = calls.find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
+    assert.ok(del, 'expected the loser-row delete mirror');
+    assert.ok(/d\.source_id = vr\.source_id AND d\.signing_pubkey_id = vr\.signing_pubkey_id/.test(del.args[0]));
+    assert.ok(/d\.reward_type = vr\.reward_type AND d\.round_reference <=> vr\.round_reference/.test(del.args[0]),
+        'NULL-safe round_reference match (the UNIQUE key component is nullable)');
+    // round_qualifier joined reward_unique in the 2026-08-24 indexer migration and
+    // anchor_reward_reconcile_log pre-images it. Without this predicate the keyed
+    // delete ALSO matches the other archive snapshot's reward whenever a hub rebase
+    // reissued the MATCH_BATCH_SEQ round_reference, destroying a row the source still
+    // holds.
+    assert.ok(/AND d\.round_qualifier <=> vr\.round_qualifier/.test(del.args[0]),
+        'the mirror delete must carry the full five-column reward identity');
+    assert.ok(/WHERE d\.block_index = \?$/.test(del.args[0]), 'scoped to THIS block\'s reconcile rows');
+    assert.deepStrictEqual(del.args[1], [961700]);
+    let logInsert = calls.findIndex(c => /anchor_reward_reconcile_log/.test(c.args[0]) && /^INSERT/.test(c.args[0]));
+    assert.ok(logInsert >= 0 && logInsert < calls.indexOf(del), 'the log rows are inserted before the mirror reads them');
+    assert.strictEqual(db.commitTransaction.calledOnce, true);
+}
+
+function registerApplyBlockCases3(){
+    it('mirrors the anchor-reward winner collapse from this block\'s reconcile-log pre-images (keyed delete, after inserts, in-txn)', assertsReconcileDeleteMirror);
     it('does not issue the reconcile delete mirror when the block carries no reconcile-log rows', async function(){
         db.dbType = 'indexer';
         await applier.applyBlock({ schema_version: liveVersion(), block_index: 5, data: { blocks: [{ block_index: 5 }], validator_rewards: [{ id: 1, source_id: 1, signing_pubkey_id: 2, reward_type: 'anchor_BTC', round_reference: 1, amount: '1', block_index: 5 }] } });
