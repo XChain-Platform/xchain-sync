@@ -68,166 +68,147 @@ const HARDCODED = {
     HASH_CONFIRM_TIMEOUT: 5000,
 };
 
+let config;
+
+// Save/restore env vars around each property iteration
+function withFuzzedEnv(envObj, fn) {
+    let saved = {};
+    for (let key of CONFIG_ENV_KEYS) {
+        saved[key] = process.env[key];
+    }
+    try {
+        // Apply fuzzed values
+        for (let key of CONFIG_ENV_KEYS) {
+            let val = envObj[key];
+            if (val === undefined || val === null) {
+                delete process.env[key];
+            } else {
+                process.env[key] = String(val);
+            }
+        }
+        return fn();
+    } finally {
+        // Restore original values
+        for (let key of CONFIG_ENV_KEYS) {
+            if (saved[key] === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = saved[key];
+            }
+        }
+    }
+}
+
+// Arbitrary for a full env var object
+function fuzzedEnv() {
+    let entries = {};
+    for (let key of CONFIG_ENV_KEYS) {
+        entries[key] = envVarString();
+    }
+    return fc.record(entries);
+}
+
+// Run check(result) against getConfig() for every fuzzed env
+function assertForFuzzedEnv(check) {
+    fc.assert(fc.property(
+        fuzzedEnv(),
+        (envObj) => {
+            withFuzzedEnv(envObj, () => {
+                check(config.getConfig());
+            });
+        }
+    ), { numRuns: NUM_RUNS });
+}
+
+function describeCrashSafety() {
+
+    it('never throws for any combination of env var values', function () {
+        assertForFuzzedEnv(() => {});
+    });
+}
+
+function describeReturnShape() {
+
+    it('always returns an object with all required keys', function () {
+        assertForFuzzedEnv((result) => {
+            for (let key of REQUIRED_KEYS) {
+                assert.ok(key in result, 'Missing key: ' + key);
+            }
+        });
+    });
+
+    it('numeric fields are always integers', function () {
+        assertForFuzzedEnv((result) => {
+            for (let key in NUMERIC_KEYS) {
+                assert.ok(Number.isInteger(result[key]),
+                    key + ' should be integer, got: ' + typeof result[key] + ' (' + result[key] + ')');
+            }
+        });
+    });
+
+    it('numeric fields respect minimum values', function () {
+        assertForFuzzedEnv((result) => {
+            for (let key in NUMERIC_KEYS) {
+                assert.ok(result[key] >= NUMERIC_KEYS[key],
+                    key + ' should be >= ' + NUMERIC_KEYS[key] + ', got: ' + result[key]);
+            }
+        });
+    });
+}
+
+function describeVerifyHashes() {
+
+    it('is always a boolean', function () {
+        assertForFuzzedEnv((result) => {
+            assert.strictEqual(typeof result.VERIFY_HASHES, 'boolean');
+        });
+    });
+
+    it('is false only when env var is exactly "false" (case-insensitive)', function () {
+        fc.assert(fc.property(
+            envVarString(),
+            (val) => {
+                let envObj = {};
+                for (let key of CONFIG_ENV_KEYS) envObj[key] = undefined;
+                envObj.VERIFY_HASHES = val;
+
+                withFuzzedEnv(envObj, () => {
+                    let result = config.getConfig();
+                    let strVal = val === undefined || val === null ? '' : String(val);
+                    if (strVal.toLowerCase() === 'false') {
+                        assert.strictEqual(result.VERIFY_HASHES, false,
+                            'Expected false for VERIFY_HASHES="' + val + '"');
+                    } else {
+                        assert.strictEqual(result.VERIFY_HASHES, true,
+                            'Expected true for VERIFY_HASHES="' + val + '"');
+                    }
+                });
+            }
+        ), { numRuns: NUM_RUNS });
+    });
+}
+
+function describeHardcodedConstants() {
+
+    it('are never overridden by env vars', function () {
+        assertForFuzzedEnv((result) => {
+            for (let key in HARDCODED) {
+                assert.strictEqual(result[key], HARDCODED[key],
+                    key + ' should always be ' + HARDCODED[key] + ', got: ' + result[key]);
+            }
+        });
+    });
+}
+
 describe('Tier 3 - config.getConfig @tier3', function () {
     this.timeout(0);
-    let config;
 
     before(function () {
         config = require('../../../src/config');
     });
 
-    // Save/restore env vars around each property iteration
-    function withFuzzedEnv(envObj, fn) {
-        let saved = {};
-        for (let key of CONFIG_ENV_KEYS) {
-            saved[key] = process.env[key];
-        }
-        try {
-            // Apply fuzzed values
-            for (let key of CONFIG_ENV_KEYS) {
-                let val = envObj[key];
-                if (val === undefined || val === null) {
-                    delete process.env[key];
-                } else {
-                    process.env[key] = String(val);
-                }
-            }
-            return fn();
-        } finally {
-            // Restore original values
-            for (let key of CONFIG_ENV_KEYS) {
-                if (saved[key] === undefined) {
-                    delete process.env[key];
-                } else {
-                    process.env[key] = saved[key];
-                }
-            }
-        }
-    }
-
-    // Arbitrary for a full env var object
-    function fuzzedEnv() {
-        let entries = {};
-        for (let key of CONFIG_ENV_KEYS) {
-            entries[key] = envVarString();
-        }
-        return fc.record(entries);
-    }
-
-    describe('crash safety', function () {
-
-        it('never throws for any combination of env var values', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        config.getConfig();
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-    });
-
-    describe('return shape', function () {
-
-        it('always returns an object with all required keys', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        for (let key of REQUIRED_KEYS) {
-                            assert.ok(key in result, 'Missing key: ' + key);
-                        }
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-
-        it('numeric fields are always integers', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        for (let key in NUMERIC_KEYS) {
-                            assert.ok(Number.isInteger(result[key]),
-                                key + ' should be integer, got: ' + typeof result[key] + ' (' + result[key] + ')');
-                        }
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-
-        it('numeric fields respect minimum values', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        for (let key in NUMERIC_KEYS) {
-                            assert.ok(result[key] >= NUMERIC_KEYS[key],
-                                key + ' should be >= ' + NUMERIC_KEYS[key] + ', got: ' + result[key]);
-                        }
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-    });
-
-    describe('VERIFY_HASHES', function () {
-
-        it('is always a boolean', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        assert.strictEqual(typeof result.VERIFY_HASHES, 'boolean');
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-
-        it('is false only when env var is exactly "false" (case-insensitive)', function () {
-            fc.assert(fc.property(
-                envVarString(),
-                (val) => {
-                    let envObj = {};
-                    for (let key of CONFIG_ENV_KEYS) envObj[key] = undefined;
-                    envObj.VERIFY_HASHES = val;
-
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        let strVal = val === undefined || val === null ? '' : String(val);
-                        if (strVal.toLowerCase() === 'false') {
-                            assert.strictEqual(result.VERIFY_HASHES, false,
-                                'Expected false for VERIFY_HASHES="' + val + '"');
-                        } else {
-                            assert.strictEqual(result.VERIFY_HASHES, true,
-                                'Expected true for VERIFY_HASHES="' + val + '"');
-                        }
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-    });
-
-    describe('hardcoded constants', function () {
-
-        it('are never overridden by env vars', function () {
-            fc.assert(fc.property(
-                fuzzedEnv(),
-                (envObj) => {
-                    withFuzzedEnv(envObj, () => {
-                        let result = config.getConfig();
-                        for (let key in HARDCODED) {
-                            assert.strictEqual(result[key], HARDCODED[key],
-                                key + ' should always be ' + HARDCODED[key] + ', got: ' + result[key]);
-                        }
-                    });
-                }
-            ), { numRuns: NUM_RUNS });
-        });
-    });
+    describe('crash safety', describeCrashSafety);
+    describe('return shape', describeReturnShape);
+    describe('VERIFY_HASHES', describeVerifyHashes);
+    describe('hardcoded constants', describeHardcodedConstants);
 });
