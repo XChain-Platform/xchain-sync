@@ -302,21 +302,6 @@
       "contract_state_root: strict reads @regression a faulting full build THROWS rather than committing EMPTY over a populated table",
       "contract_state_root: strict reads @regression a faulting latest-value read THROWS rather than DELETING the key from the tree"
     ],
-    "158cc6c75f54ea23": [
-      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete rethrows a non-schema fault and swallows only a schema gap",
-      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete runs when firstActionIndex is null (an action-free orphaned range)",
-      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete runs when firstActionIndex is set",
-      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS a supplied-but-unknown coin is a hard error (never a silent wrong delay)",
-      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS an omitted coin leaves activationDelay null (legacy path)",
-      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS matches the indexer golden (BTC 6 / LTC 24 / DOGE 60)",
-      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS resolves both the ticker and the full coin name (any case), since cfg.coin varies",
-      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set contract_delegations reset is the value-threshold form (no child row) at block+delay",
-      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set contract_stakes reset joins contract_unstakes on pubkey+contract+tick",
-      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set delegations reset is the value-threshold form (no child row survives the flag-day) at block+delay",
-      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set emits exactly four deactivation_block resets",
-      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set stakes reset joins unstakes and matches the EXACT stamped value (precise, not blanket)",
-      "deactivation_block sync-mirror without a coin the mirror is skipped (and warns, not silent) emits zero resets and warns"
-    ],
     "1628e91f205184a5": [
       "SyncService getHubConfigAgeSeconds returns null when the hub has never answered",
       "SyncService getHubConfigAgeSeconds returns whole seconds since the last successful fetch"
@@ -1995,6 +1980,21 @@
       "SnapshotBuilder streamFullSnapshot sets correct response headers",
       "SnapshotBuilder streamFullSnapshot skips tables with 0 rows",
       "SnapshotBuilder streamFullSnapshot streams valid gzip JSON for tables with data"
+    ],
+    "7325ee1c1fad486f": [
+      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete rethrows a non-schema fault and swallows only a schema gap",
+      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete runs when firstActionIndex is null (an action-free orphaned range)",
+      "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete runs when firstActionIndex is set",
+      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS a supplied-but-unknown coin is a hard error (never a silent wrong delay)",
+      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS an omitted coin leaves activationDelay null (legacy path)",
+      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS matches the indexer golden (BTC 6 / LTC 24 / DOGE 60)",
+      "deactivation_block sync-mirror frozen per-chain ACTIVATION_DELAY_BLOCKS resolves both the ticker and the full coin name (any case), since cfg.coin varies",
+      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set contract_delegations reset is the value-threshold form (no child row) at block+delay",
+      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set contract_stakes reset joins contract_unstakes on source_id",
+      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set delegations reset is the value-threshold form (no child row survives the flag-day) at block+delay",
+      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set emits exactly four deactivation_block resets",
+      "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set stakes reset joins unstakes and matches the EXACT stamped value (precise, not blanket)",
+      "deactivation_block sync-mirror without a coin the mirror is skipped (and warns, not silent) emits zero resets and warns"
     ],
     "73d07ebbe093fcfd": [
       "replication schema version and migration frontier @regression carries a frontier for exactly the same dbTypes",
@@ -4676,7 +4676,7 @@
         "test/unit/db_stake_weights_as_of.test.js": "b2abd7d66eac518f",
         "test/unit/db_swq_source_cap.test.js": "910a4f5c866b3b8b",
         "test/unit/db_weightless_stake_row.test.js": "8597f4afbe495528",
-        "test/unit/deactivation_block_mirror.test.js": "158cc6c75f54ea23",
+        "test/unit/deactivation_block_mirror.test.js": "7325ee1c1fad486f",
         "test/unit/decoder_link_transactions_data_width.test.js": "3891a3bad72fe9b5",
         "test/unit/decoder_table_classification.test.js": "59a6088c6ff7fee2",
         "test/unit/derived_rewards.test.js": "a665881376c1eaaf",
