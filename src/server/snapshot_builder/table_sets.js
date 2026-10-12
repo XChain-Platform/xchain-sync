@@ -308,15 +308,10 @@ function indexerFullDumpSet(){
 //     credits/debits it applies (ClientApplier.rebuildBalancesTouchedBy).
 //   - state_tree_nodes: content-addressed SMT node store with no block or action
 //     key; the follower re-seeds its own tree (seedSnapshotRoots) after the apply.
-//   - push_generations: the source node's hub-push reorg fence counter, bumped in
-//     its own rollback; no replica reads it. Its registry entry pairs replication
-//     'snapshot' with replicaRollback 'local'; once that entry leaves the
-//     'snapshot' class, the incremental classification test asks for its removal.
 // Payload-neutral: these tables already contributed no rows to an incremental.
 const INDEXER_INCREMENTAL_SKIP = new Set([
     'balances',
     'state_tree_nodes',
-    'push_generations',
 ]);
 
 module.exports = {
