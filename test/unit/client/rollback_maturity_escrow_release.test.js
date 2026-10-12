@@ -78,11 +78,14 @@ describe('ClientRollback cooldown-maturity escrow-release reversal: activation',
         assert.deepStrictEqual(reads, [['testnet', 'BTC', 499, null], ['testnet', 'BTC', 500, null]]);
     });
 
-    it('the row is unarmed on mainnet and every testnet chain and active from regtest genesis', function(){
+    it('the row is unarmed on mainnet, armed on every testnet chain by the v0.23.0 cut, and active from regtest genesis', function(){
         for(const coin of ['BTC', 'LTC', 'DOGE', null]){
             assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'mainnet', coin, 1e9, null), false);
-            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'testnet', coin, 1e9, null), false);
             assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'regtest', coin, 0, null), true);
+        }
+        for(const coin of ['BTC', 'LTC', 'DOGE']){
+            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'testnet', coin, 1e9, null), true);
+            assert.strictEqual(gateRegistry.activeAt(GATE_KEY, 'testnet', coin, 1, null), false);
         }
     });
 });

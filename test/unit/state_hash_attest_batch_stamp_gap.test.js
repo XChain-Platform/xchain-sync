@@ -53,10 +53,11 @@ describe('state_hash attest_batch_head class, follower twin @regression', functi
         for(const k of Object.keys(maps)) maps[k].regtest = prev[k];
     });
 
-    it('gate: regtest armed from genesis, mainnet and testnet inert, unknown network off', function(){
+    it('gate: regtest armed from genesis, mainnet inert, testnet armed by the v0.23.0 cut, unknown network off', function(){
         assert.strictEqual(isAttestBatchHeadStateHashActive(1, 'regtest', 'DOGE'), true);
         assert.strictEqual(isAttestBatchHeadStateHashActive(999999999, 'mainnet', 'DOGE'), false);
-        assert.strictEqual(isAttestBatchHeadStateHashActive(999999999, 'testnet', 'DOGE'), false);
+        assert.strictEqual(isAttestBatchHeadStateHashActive(999999999, 'testnet', 'DOGE'), true);
+        assert.strictEqual(isAttestBatchHeadStateHashActive(1, 'testnet', 'DOGE'), false);
         assert.strictEqual(isAttestBatchHeadStateHashActive(999999999, 'mainnet', null), false);
         assert.strictEqual(isAttestBatchHeadStateHashActive(7, 'nonexistent', 'BTC'), false);
         assert.strictEqual(isAttestBatchHeadStateHashActive('x', 'regtest', 'BTC'), false);
