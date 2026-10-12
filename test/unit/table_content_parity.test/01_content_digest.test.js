@@ -11,6 +11,7 @@
 const assert = require('assert');
 
 const BlockHasher = require('../../../src/client/block_hasher');
+const lifecycle   = require('../../../src/table_lifecycle');
 const Utility     = require('../../../src/util');
 
 const hasherFor = () => new BlockHasher(null, new Utility());
@@ -73,11 +74,19 @@ describe('Advisory table-content parity', function(){
             // its own (localSurrogateIdTables), so the two sides legitimately disagree.
             let source  = [{ id: 7,  block_index: 100, block_hash: 'aa' }];
             let replica = [{ id: 41, block_index: 100, block_hash: 'aa' }];
-            assert.strictEqual(hasherFor({}).contentDigest('blocks', source),
-                               hasherFor({}).contentDigest('blocks', replica));
+            const hasher = hasherFor({});
+            const registryColumns = lifecycle.contentParityExcludedColumns('blocks');
+            assert.strictEqual(hasher.contentDigest('blocks', source),
+                               hasher.contentDigest('blocks', replica));
+            assert.strictEqual(hasher.contentDigest('blocks', source),
+                               hasher.contentDigest('blocks', source, registryColumns));
+            assert.strictEqual(hasher.contentDigest('blocks', source, ['id']),
+                               hasher.contentDigest('blocks', replica, ['id']));
+            assert.notStrictEqual(hasher.contentDigest('blocks', source, []),
+                                  hasher.contentDigest('blocks', replica, []));
             // ...but the same difference in a column that IS replicated must diverge.
-            assert.notStrictEqual(hasherFor({}).contentDigest('blocks', source),
-                                  hasherFor({}).contentDigest('blocks', [{ id: 41, block_index: 100, block_hash: 'bb' }]));
+            assert.notStrictEqual(hasher.contentDigest('blocks', source),
+                                  hasher.contentDigest('blocks', [{ id: 41, block_index: 100, block_hash: 'bb' }]));
         });
 
         it('the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm', function(){

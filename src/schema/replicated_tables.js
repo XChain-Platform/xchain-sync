@@ -227,7 +227,8 @@ function contentParityPlan(dbType){
         if(lifecycle.contentParityCarveOut(table, type) !== null) return; // operator ruling
         if(OPERATIONAL_LOG_TABLES.includes(table)) return;               // ids diverge by construction
         if(plan.some(p => p.table === table)) return;                    // topology buckets can overlap
-        plan.push({ table: table, bound: bound });
+        const excludedColumns = lifecycle.contentParityExcludedColumns(table);
+        plan.push({ table, bound, excludedColumns });
     };
     for(let table of (t.blockScoped || [])) add(table, 'block');
     for(let table of (t.txScoped    || [])) add(table, 'tx');
