@@ -40,13 +40,6 @@
       "Integration: ClientRollback rollback then re-sync allows new data to be applied after rollback",
       "Integration: ClientRollback rollback with no actions handles block with no actions cleanly"
     ],
-    "0290d32138719430": [
-      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
-      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
-      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet and testnet inert, unknown network off",
-      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
-      "state_hash attest_batch_head class, follower twin @regression selection: stamped v5 head keyed by the completing chunk block, resolved status, total order"
-    ],
     "0351fed12642c8a1": [
       "ClientSync: runIncrementalCatchUp aborts the pass (no request, no apply) when the tip read faults",
       "ClientSync: runIncrementalCatchUp happy path: dbTip null \u2192 sinceBlock=1, calls applyIncrementalSnapshot",
@@ -149,17 +142,6 @@
       "missingReplicatedTables returns an empty array when the schema carries every replicated table",
       "missingReplicatedTables returns null (unknown), never [], when the table listing is unavailable",
       "missingReplicatedTables scopes to the dbType (decoder set, not indexer set)"
-    ],
-    "0965c972c6dc32ce": [
-      "ClientRollback cooldown-maturity escrow-release reversal deletes both backdated releases with the same keys as their refund credits",
-      "ClientRollback cooldown-maturity escrow-release reversal keeps a positive escrows row on the unstake's action and deletes only the negative release, as the indexer does",
-      "ClientRollback cooldown-maturity escrow-release reversal limits release deletes to negative amounts so positive slash escrows survive",
-      "ClientRollback cooldown-maturity escrow-release reversal: activation keeps the releases on an unarmed network and still deletes the credits and resets the status",
-      "ClientRollback cooldown-maturity escrow-release reversal: activation reads the switch at the rollback target block, for this network and coin",
-      "ClientRollback cooldown-maturity escrow-release reversal: activation the row is unarmed on mainnet and every testnet chain and active from regtest genesis",
-      "ClientRollback cooldown-maturity escrow-release transaction handling deletes releases for an action-empty maturity range",
-      "ClientRollback cooldown-maturity escrow-release transaction handling deletes the releases before resetting status and before generic escrow deletion",
-      "ClientRollback cooldown-maturity escrow-release transaction handling rolls back the transaction when a release delete faults"
     ],
     "09f74f1da00d6cad": [
       "validation validateWsEvent accepts block event with block_index 0",
@@ -744,6 +726,13 @@
       "Integration: WebSocket Broadcasting per-IP connection limit closes connection when limit exceeded",
       "Integration: WebSocket Broadcasting subscribe and receive block receives block event after new block is polled",
       "Integration: WebSocket Broadcasting subscribe and receive block receives reorg event"
+    ],
+    "2cf644b2dea304b0": [
+      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
+      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
+      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet inert, testnet armed by the v0.23.0 cut, unknown network off",
+      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
+      "state_hash attest_batch_head class, follower twin @regression selection: stamped v5 head keyed by the completing chunk block, resolved status, total order"
     ],
     "2d5af37f72b7535a": [
       "M-17: state-commitment input reads fail closed outside a transaction CONTROL: plain doQuery still swallows the same failure and answers []",
@@ -1795,6 +1784,17 @@
     "68f10a273308ebbe": [
       "Integration: REST API Proxy-trust rate-limit wiring collapses every caller onto the socket address when TRUST_PROXY is off",
       "Integration: REST API Proxy-trust rate-limit wiring gives independent snapshot buckets to distinct forwarded clients when TRUST_PROXY is on"
+    ],
+    "6a3241c076e978ef": [
+      "ClientRollback cooldown-maturity escrow-release reversal deletes both backdated releases with the same keys as their refund credits",
+      "ClientRollback cooldown-maturity escrow-release reversal keeps a positive escrows row on the unstake's action and deletes only the negative release, as the indexer does",
+      "ClientRollback cooldown-maturity escrow-release reversal limits release deletes to negative amounts so positive slash escrows survive",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation keeps the releases on an unarmed network and still deletes the credits and resets the status",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation reads the switch at the rollback target block, for this network and coin",
+      "ClientRollback cooldown-maturity escrow-release reversal: activation the row is unarmed on mainnet, armed on every testnet chain by the v0.23.0 cut, and active from regtest genesis",
+      "ClientRollback cooldown-maturity escrow-release transaction handling deletes releases for an action-empty maturity range",
+      "ClientRollback cooldown-maturity escrow-release transaction handling deletes the releases before resetting status and before generic escrow deletion",
+      "ClientRollback cooldown-maturity escrow-release transaction handling rolls back the transaction when a release delete faults"
     ],
     "6aff270db2df60a7": [
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression the shadow value never reaches a committed column (source pin, both twins)",
@@ -4528,7 +4528,7 @@
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
         "test/unit/client/rollback_guard_persist.test.js": "9f200949803e9080",
-        "test/unit/client/rollback_maturity_escrow_release.test.js": "0965c972c6dc32ce",
+        "test/unit/client/rollback_maturity_escrow_release.test.js": "6a3241c076e978ef",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
@@ -4776,7 +4776,7 @@
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "2cf644b2dea304b0",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
@@ -5196,7 +5196,7 @@
         "test/unit/state_commitment_batched_node_writes.test/02_db_node_store_put_many_sql_shape.test.js": "e8b11f7dc180370c",
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "0290d32138719430",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "2cf644b2dea304b0",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
