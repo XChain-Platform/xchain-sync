@@ -122,7 +122,7 @@ describe('deactivation_block sync-mirror', function(){
             assert.deepStrictEqual(q.args[1], [106]);
         });
 
-        it('contract_stakes reset joins contract_unstakes on pubkey+contract+tick', function(){
+        it('contract_stakes reset joins contract_unstakes on source_id', function(){
             const q = deactivationResets(db).find(c => c.args[0].includes('UPDATE contract_stakes cs'));
             assert.ok(q);
             assert.ok(q.args[0].includes('JOIN contract_unstakes cu'));
