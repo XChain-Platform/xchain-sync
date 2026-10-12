@@ -50,6 +50,15 @@ const VEC_DIR   = path.join(DOCS_DIR, 'protocol', 'test-vectors');
 const CANON_VERDICT = siblingCheckout(__dirname, CANON_DIR);
 const VEC_VERDICT = siblingCheckout(__dirname, VEC_DIR);
 
+// List the regular .js files of one side's consensus/gate_registry/, sorted; empty when absent.
+function registryParts(root){
+    const dir = path.join(root, 'consensus', 'gate_registry');
+    if(!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name.endsWith('.js')).map((d) => d.name).sort();
+}
+const LOCAL_PARTS = registryParts(LOCAL_DIR);
+
 let quorumVec = null, equivVec = null, activationVec = null;
 if(VEC_VERDICT.usable){
     try {
@@ -174,9 +183,26 @@ describe('consensus-primitive conformance: byte-identity to canonical source @re
     });
 
     // Compare the activation-registry parts too: a one-sided row edit here forks the
-    // follower at its flag day. The per-repo entry gate_registry.js is not a twin.
-    ['core.js', 'shared_rows.js', 'regtest_env.js', 'shared_rows_1.js', 'shared_rows_2.js',
-        'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'].forEach(function(f){
+    // follower at its flag day. The per-repo entry gate_registry.js is not a twin. The
+    // part list is the local directory listing, held equal to the canonical listing, so
+    // a part added or dropped on one side fails here instead of going unchecked.
+    it('gate_registry/ holds the vendored parts', function(){
+        assert.ok(LOCAL_PARTS.length > 0,
+            'src/consensus/gate_registry/ is missing or empty, so the per-part byte guard would check nothing');
+    });
+
+    it('gate_registry/ file set equals xchain-documentation/protocol/reference-impl', function(){
+        const canon = registryParts(CANON_DIR);
+        assert.ok(canon.length > 0, 'the canonical gate_registry/ under ' + CANON_DIR + ' is missing or empty');
+        const missing = canon.filter((f) => !LOCAL_PARTS.includes(f));
+        const extra   = LOCAL_PARTS.filter((f) => !canon.includes(f));
+        assert.deepStrictEqual({ missing, extra }, { missing: [], extra: [] },
+            'gate_registry/ file sets differ. Missing from this copy: [' + missing.join(', ') +
+            ']. Present only in this copy: [' + extra.join(', ') +
+            ']. Vendor the canonical part(s) with reconcile-twins.sh and wire them into src/consensus/gate_registry.js.');
+    });
+
+    LOCAL_PARTS.forEach(function(f){
         it('gate_registry/' + f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
             const rel   = path.join('consensus', 'gate_registry', f);
             const local = fs.readFileSync(path.join(LOCAL_DIR, rel), 'utf8');

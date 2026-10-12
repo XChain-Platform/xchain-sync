@@ -68,11 +68,13 @@ async function collectTokenSupplyRows(db, from, to, conn, acc){
 async function collectTokenEditRows(db, from, to, conn, acc){
     // 7. tokens metadata refresh on surviving token rows, class 6's sibling one column
     //    family over. Every valid ISSUE re-derives the WHOLE tokens row from the tick's
-    //    `issues` history (issue/settle.js -> createToken, then updateTokens ->
-    //    getTokenInfo's replay), so an ISSUE that EDITS an existing tick is an in-place
-    //    UPDATE of owner_id, description, the seven locks, the callback and list fields,
-    //    the mint window and the bridge opt-in. action_index stays pinned at the FIRST
-    //    issuance while the edit's UPDATE moves last_action_index to the editing ISSUE, and
+    //    `issues` history (issue/token_state.js merges the ISSUE over getTokenInfo's
+    //    replay, then issue/settle.js -> createToken writes it; the forward updateTokens
+    //    moves only owner_id and last_action_index), so an ISSUE that EDITS an existing
+    //    tick is an in-place UPDATE of owner_id, description, the seven locks, the
+    //    callback and list fields, the mint window and the bridge opt-in. action_index
+    //    stays pinned at the FIRST issuance while the edit's UPDATE moves
+    //    last_action_index to the editing ISSUE, and
     //    the action-scoped stream keys on action_index, so - exactly as with supply - it
     //    carries the new `issues` row but never the edited `tokens` row it produced.
     //

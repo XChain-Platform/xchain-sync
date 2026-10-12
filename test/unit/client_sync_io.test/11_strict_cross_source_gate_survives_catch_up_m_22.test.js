@@ -87,8 +87,8 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
     it('a strict cross-source timeout records the block and retains its pending hash', async function(){
         let clock = sinon.useFakeTimers();
         ({ sync, db, applier } = makeStrictSync());
-        // lastAppliedBlock=5 with null lastHashes: verifyChainContinuity returns
-        // valid (no prev hashes), so block 6 reaches the cross-source stage.
+        // lastAppliedBlock=5 with null lastHashes: block 6 is contiguous, so it passes
+        // verifyChainContinuity and reaches the cross-source stage.
         sync.lastAppliedBlock = 5;
         sync.lastHashes = null;
         let event = { type: 'block', block_index: 6,

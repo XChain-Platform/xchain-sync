@@ -1670,8 +1670,8 @@ class ClientSync {
     //
     // Call it AFTER any lookup re-page: until those index_* rows land, getBlockHashRow
     // resolves NULL through a LEFT JOIN miss. A null row is not stored - lastHashes is
-    // left on the older block rather than nulled, because verifyChainContinuity treats
-    // a null prevHashes as "nothing to chain to" and would stop detecting gaps.
+    // left on the older block rather than nulled. The gap check reads only the height,
+    // so it keeps working whichever hashes the pair holds.
     async refreshTipHashes(){
         if(typeof this.lastAppliedBlock !== 'number') return;
         let hashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
@@ -2764,6 +2764,9 @@ class ClientSync {
             // Best-effort: leave the existing local dispensers intact on any failure.
             getLogger().error(util.format('Dispensers reconcile failed against ' + source +
                 ' (local table left intact):', (e && e.message) ? e.message : e));
+            // A source column this replica lacks fails the replace with errno 1054 on every
+            // later reconcile, and no other live-follow path meets it, so heal the schema here.
+            try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
             return false;
         }
     }
@@ -3607,10 +3610,15 @@ class ClientSync {
         return { peak: this.rollbackGuard.peak, low: this.rollbackGuard.low };
     }
 
+    // Throw when the streak is not durable, so applyReorgRollback refuses the rollback
+    // (a restart would otherwise forget depth already spent and pass a split rewind).
     async persistRollbackGuardState(){
         if(!this.db || typeof this.db.setSyncState !== 'function') return;
-        await this.db.setSyncState(this.rollbackGuardStateKey(),
-            JSON.stringify(this.rollbackGuardState()));
+        let saved = await this.db.setSyncState(this.rollbackGuardStateKey(),
+            JSON.stringify(this.rollbackGuardState()), { rethrow: true });
+        if(saved === false)
+            throw new Error('rollback guard state ' + this.rollbackGuardStateKey() +
+                ' could not be persisted; refusing to roll back');
     }
 
     async loadRollbackGuardState(){
@@ -3867,9 +3875,15 @@ class ClientSync {
     }
 
     // A checkpoint that failed the pinned set: follow validator rotation from the pinned
-    // seed, or halt when there is no seed to follow from.
+    // seed, or halt when there is no seed this chain can follow from.
     async anchorByRotation(cp, source){
         let seed = getPinnedCheckpoint(this.chain, this.network);
+        // A seed on a chain that cannot follow rotation would wait forever, so it halts like no seed
+        if(seed && !this.canFollowRotation()){
+            getLogger().error('Checkpoint-quorum anchor: pinned seed for ' + this.chain + '/' + this.network +
+                ' is unused, since rotation following is BTC-only; halting as with no seed');
+            seed = null;
+        }
         if(!seed){
             return this.haltCheckpoint(cp, [{ field: 'checkpoint_quorum', a: 'quorum-signed', b: 'INVALID under pinned set' }],
                 'checkpoint-quorum-divergence');
@@ -3917,9 +3931,9 @@ class ClientSync {
             this.network + ' from ' + source + ' (' + error.message + '); anchor not refreshed this cycle');
     }
 
-    // True when the checkpoint cannot be anchored this cycle: rootless, malformed, or a seq
-    // regression. Rootless at or above the flag-day is logged. No skip halts here; strict
-    // freshness measures a skipped cycle from the last verified anchor (enforceVerifiedAnchorFreshness).
+    // True when the checkpoint cannot be anchored this cycle: rootless, below the commitment
+    // flag-day, malformed, or a seq regression. Rootless at or above the flag-day is logged. No skip
+    // halts here; strict freshness measures a skipped cycle from the last verified anchor.
     checkpointSkipsAnchoring(cp){
         if(checkpointVerifier.commitmentMissing(cp)){
             getLogger().warn('Checkpoint-quorum anchor: source served a ROOTLESS checkpoint for ' +
@@ -3929,7 +3943,8 @@ class ClientSync {
                 'source may be withholding anchorable checkpoints, not anchoring this cycle');
             return true;
         }
-        if(cp.state_root == null) return true;                   // pre-commitment: nothing to anchor
+        // Pre-commitment: nothing to anchor, since below the flag day a served root is unsigned
+        if(cp.state_root == null || !checkpointVerifier.commitmentActive(cp)) return true;
         if(typeof cp.block_index !== 'number') return true;      // malformed: no height to anchor
         // A genuine federation sequence only advances, so a lower seq means the source rewound.
         if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
@@ -4019,6 +4034,10 @@ class ClientSync {
         let local = rows[0], mism = [];
         if(String(local.state_root).toLowerCase() !== String(c.state_root).toLowerCase())
             mism.push({ field: 'state_root', a: c.state_root, b: local.state_root });
+        // A signed block_merkle_root with no local value to check it against waits, never
+        // matches (the column is NOT NULL, so this only fires if that invariant breaks).
+        if(!mism.length && c.block_merkle_root != null && local.block_merkle_root == null)
+            return { status: 'missing', mismatches: [] };
         if(c.block_merkle_root != null && local.block_merkle_root != null
                 && String(local.block_merkle_root).toLowerCase() !== String(c.block_merkle_root).toLowerCase())
             mism.push({ field: 'block_merkle_root', a: c.block_merkle_root, b: local.block_merkle_root });
@@ -4045,8 +4064,13 @@ class ClientSync {
             if(M.canonicalAmount(String(r.weight == null ? '0' : r.weight)) === ZERO) continue;   // zero cannot qualify
             set.push({ pubkey: String(r.pubkey), weight: String(r.weight), source: String(r.source) });
         }
+        // Carry the cap overflow so meetsStakeThreshold's truncated-snapshot guard still sees it
+        if(rows && rows.truncated === true) set.truncated = true;
         return set;
     }
+
+    // Signer sets live only in BTC's stakes (spec §4.1), so other chains cannot follow rotation.
+    canFollowRotation(){ return this.coinTicker === 'BTC'; }
 
     // Roll the pinned trust root FORWARD to `cp` across validator rotation (spec §7.3),
     // seeded by the out-of-band pinned checkpoint. BTC-only: the signer set for every
@@ -4073,8 +4097,7 @@ class ClientSync {
     // audited source cannot withhold the rotation chain either.
     async followCheckpointForward(cp, seed, source){
         let rangeSource = source || this.config['CHECKPOINT_ANCHOR_URL'] || this.sources[0];
-        // Signer sets live only in BTC's stakes, so other chains cannot follow rotation
-        if(this.coinTicker !== 'BTC') return { verdict: 'wait', reason: 'rotation following is BTC-only' };
+        if(!this.canFollowRotation()) return { verdict: 'wait', reason: 'rotation following is BTC-only' };
         if(!seed || seed.state_root == null || typeof seed.block_index !== 'number')
             return { verdict: 'wait', reason: 'pinned seed checkpoint is malformed' };
         if(cp.block_index <= seed.block_index) return { verdict: 'wait', reason: 'checkpoint is not past the pinned seed' };
@@ -4143,14 +4166,20 @@ class ClientSync {
         // Stop at a checkpoint past the replica tip, since it is not recomputed here yet
         if(next.block_index > this.lastAppliedBlock)
             return { verdict: 'wait', reason: 'range checkpoint ' + next.block_index + ' is past the replica tip' };
-        // Stop at a rootless (pre-commitment) checkpoint, since it anchors nothing
-        if(next.state_root == null)
-            return { verdict: 'wait', reason: 'pre-commitment checkpoint ' + next.block_index + ' in range' };
+        // Stop at a pre-commitment checkpoint: rootless, or its roots are outside the signed bytes
+        if(next.state_root == null || !checkpointVerifier.commitmentActive(next))
+            return { verdict: 'wait', reason: 'pre-commitment checkpoint ' + next.block_index +
+                ' in range (roots not signed)' };
         // The set that signs `next` is the oracle_publish set at next.snapshot_block;
         // trust it only once that height is attested by the current trust root.
         if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
             return { verdict: 'wait', reason: 'signer set at snapshot ' + next.snapshot_block + ' not yet attested' };
         let vset = await this.oraclePublishSetAt(next.snapshot_block);
+        // A set past the stake-weight cap under-counts S: never attest on it, but a cap
+        // overflow is not proof of divergence, so wait rather than halt.
+        if(vset.truncated === true)
+            return { verdict: 'wait', reason: 'oracle_publish signer set at snapshot ' + next.snapshot_block +
+                ' is truncated (federation exceeds the stake-weight cap); step not attested' };
         if(!checkpointVerifier.verifyCheckpoint(next, vset).valid)
             return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum',
                 a: 'quorum-signed (federation)',
@@ -4200,7 +4229,7 @@ class ClientSync {
         // for the next status tick or catch-up rather than waiting out the interval.
         if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
         this.lastAppliedBlock = event.block_index - 1;
-        // Reload the new tip's hashes, genesis block 0 included (a null tip turns off the gap check).
+        // Reload the new tip's hashes, genesis block 0 included (the head-duplicate fork check reads them).
         if(this.lastAppliedBlock >= 0)
             this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
         else

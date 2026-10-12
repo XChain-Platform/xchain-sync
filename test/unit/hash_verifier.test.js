@@ -95,8 +95,16 @@ describe('HashVerifier', function(){
         });
 
         it('returns valid when prevHashes is null', function(){
-            let result = verifier.verifyChainContinuity(null, null, { block_index: 5 });
+            let result = verifier.verifyChainContinuity(5, null, { block_index: 6 });
             assert.strictEqual(result.valid, true);
+        });
+
+        it('returns invalid for a block gap when prevHashes is null', function(){
+            let result = verifier.verifyChainContinuity(4, null, { block_index: 8 });
+            assert.strictEqual(result.valid, false);
+            assert.ok(result.reason.includes('Block gap'), result.reason);
+            assert.ok(result.reason.includes('5'), result.reason);
+            assert.ok(result.reason.includes('8'), result.reason);
         });
     });
 });

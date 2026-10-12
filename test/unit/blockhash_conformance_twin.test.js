@@ -29,7 +29,8 @@
  *   2. every consensus SQL literal, in gathering order (credits, debits,
  *      escrows, actions, contracts, contract_state, executions, emissions,
  *      deposits, withdrawals, previous-block hashes)
- *   3. the BURN/GAS/DONATE/REWARD canonicalization loops
+ *   3. the BURN/GAS/DONATE/REWARD canonicalization loops, in all three copies
+ *      (the follower's db.getLedgerLeafRows included)
  *   4. the hash-assembly tail (block_index / previous_hash / hash_version fold)
  *   5. utility jsonStringify + getDataHash (the shared preimage serializer)
  *   6. reportOrphanStats (documented byte-identical twin; compared RAW, header
@@ -55,30 +56,7 @@ const { stripComments, normalize, extractFunction, sqlLiterals, syncFile, loadPa
     require('./blockhash_conformance_twin.test/helpers/twin_sources.js');
 
 const indexerGatheringSource = require('./blockhash_conformance_twin.test/helpers/indexer_gathering.js').make({ assert, stripComments, extractFunction, sqlLiterals });
-
-// Assert the three canonicalization loops run INSIDE fnSrc, after the escrows
-// gather (afterText) and before hashing (beforeText), with nothing reassigning or
-// reordering a ledger row set between the last loop and the hash.
-function assertCanonicalizedBeforeHash(fnSrc, from, afterText, beforeText){
-    const body  = stripComments(fnSrc);
-    const start = body.indexOf(afterText);
-    const end   = body.indexOf(beforeText, start);
-    assert.ok(start !== -1 && end > start, from + ' no longer has `' + afterText + '` followed by `' + beforeText + '`');
-    const loopRe = /for \(const row of ledger\.(credits|debits|escrows)\)\s+row\.address = canonicalizeHashAddress\(row\.address\);/g;
-    const seen = new Set();
-    let m, lastEnd = -1;
-    while((m = loopRe.exec(body)) !== null){
-        assert.ok(m.index > start && m.index < end, 'the ' + m[1] + ' canonicalization loop in ' + from +
-            ' runs outside the window between the escrows gather and the hash');
-        seen.add(m[1]);
-        lastEnd = m.index + m[0].length;
-    }
-    assert.deepStrictEqual([...seen].sort(), ['credits', 'debits', 'escrows'],
-        from + ' must canonicalize BURN/GAS/DONATE/REWARD addresses on all three ledger row sets ' +
-        'before hashing; a missing loop leaks the per-chain address encoding into the hash on one side only');
-    assert.doesNotMatch(body.slice(lastEnd, end), /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
-        from + ' reassigns or reorders a canonicalized ledger row set before hashing it');
-}
+const { assertCanonicalizedBeforeHash } = require('./blockhash_conformance_twin.test/helpers/canonicalized_before_hash.js');
 
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     it('BLOCK_HASH_VERSION is identical across BlockHasher.js and indexer db/shared.js', function(){
@@ -158,6 +136,17 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         assert.ok(/FROM blocks b/.test(hashSql[hashSql.length - 1]),
             'the extra computeBlockHashes literal must be the previous-block-hash chaining query; ' +
             'if it is a gathering SELECT instead, getBlockLeafRows is missing one');
+        // The third copy of the canonicalization loops: getBlockLeafRows takes its ledger
+        // from getLedgerLeafRows, which must canonicalize after the SQL sort and never reorder.
+        assertCanonicalizedBeforeHash(
+            extractFunction(dbSrc, /async function getLedgerLeafRows\(db, block_index, conn, queries\)\{/, 'db/actions.js'),
+            'db.getLedgerLeafRows', 'ledger.escrows = await db.doQueryStrict(', 'return ledger;');
+        const leafFn = stripComments(extractFunction(dbSrc,
+            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')).replace(/\s+/g, ' ');
+        assert.strictEqual(leafFn.split('let ledger = await getLedgerLeafRows(this, block_index, conn, {').length - 1, 1,
+            'db.getBlockLeafRows must take its ledger rows from getLedgerLeafRows exactly once');
+        assert.doesNotMatch(leafFn, /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
+            'db.getBlockLeafRows reassigns or reorders a canonicalized ledger row set before returning it');
     });
 
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){

@@ -239,6 +239,35 @@ function registerFullSnapshotCases4(){
         await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name/);
     });
 }
+function registerFullSnapshotCases5(){
+    it('refuses a local-only table with an invalid name before any clear, and commits nothing', async function(){
+        // A local-only table never reaches insertRows, so only the clear step can refuse it.
+        db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
+            { table_name: 'blocks' },
+            { table_name: 'stray-table' }
+        ]);
+        let snapshot = {
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { blocks: [{ block_index: 1 }] }
+        };
+        await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name in full-snapshot clear: stray-table/);
+        for(let call of db.doQuery.getCalls())
+            assert.strictEqual(/^DELETE/.test(call.args[0]), false, 'no table is cleared: ' + call.args[0]);
+        assert.strictEqual(db.commitTransaction.called, false);
+        assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+    });
+    it('refuses an invalid payload table name that carries zero rows', async function(){
+        let snapshot = {
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { blocks: [{ block_index: 1 }], 'bad-empty': [] }
+        };
+        await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name/);
+        assert.strictEqual(db.commitTransaction.called, false);
+        assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+    });
+}
 describe('ClientApplier', function(){
     registerHooks();
 
@@ -247,5 +276,6 @@ describe('ClientApplier', function(){
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();
         registerFullSnapshotCases4();
+        registerFullSnapshotCases5();
     });
 });

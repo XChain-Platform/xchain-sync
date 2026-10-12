@@ -103,9 +103,10 @@ const {
 } = require('./updated_rows/table_specs.js');
 const { add } = require('./updated_rows/accumulator.js');
 const { collectTokenSupplyRows, collectTokenEditRows } = require('./updated_rows/token_rows.js');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 
-// Query classes skip missing tables or columns on older source schemas. Other
-// numeric database errors propagate to the caller.
+// Query classes skip only a schema gap (errno 1146/1054) on an older source schema.
+// Every other error, one with no errno included, propagates to the caller's gate.
 async function collectDeactivationAndSlashRows(db, from, to, activationDelay, conn, acc){
     // 1. deactivation_block stamps: indexed range scan on each table. A stamp of
     //    value V was written by an action in block V - delay, so a stamp landed in
@@ -116,7 +117,7 @@ async function collectDeactivationAndSlashRows(db, from, to, activationDelay, co
                 let rows = await db.findDeactivationStampedRows(table, from + activationDelay, to + activationDelay, conn);
                 add(acc, table, rows);
             } catch(e){
-                if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
                 // Table/column may not exist on older source schemas; skip.
             }
         }
@@ -130,7 +131,7 @@ async function collectDeactivationAndSlashRows(db, from, to, activationDelay, co
             let rows = await db.findSlashDebitedRows(spec, from, to, conn);
             add(acc, spec.table, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table may not exist on older source schemas; skip.
         }
     }
@@ -147,7 +148,7 @@ async function collectRotationAndRequestRows(db, from, to, conn, acc){
             let rows = await db.findRotatedStakeRows(rotTbl, from, to, conn);
             add(acc, rotTbl, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table may not exist on older source schemas; skip.
         }
     }
@@ -160,7 +161,7 @@ async function collectRotationAndRequestRows(db, from, to, conn, acc){
             let rows = await db.findResolvedRequestRows(table, from, to, conn);
             add(acc, table, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -180,7 +181,7 @@ async function collectPollAndCooldownRows(db, from, to, conn, acc){
             let rows = await db.findFinalizedPollRows(table, from, to, conn);
             add(acc, table, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -198,7 +199,7 @@ async function collectPollAndCooldownRows(db, from, to, conn, acc){
             let rows = await db.findMaturedCooldownRows(table, from, to, conn);
             add(acc, table, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table/column may not exist on older source schemas; skip.
         }
     }
@@ -219,7 +220,7 @@ async function collectBetStatusRows(db, from, to, conn, acc){
             let rows = await db.findBetStampedRows(spec, where, args, conn);
             add(acc, spec.table, rows);
         } catch(e){
-            if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+            if(!isSchemaGapError(e)) throw e;
             // Table/columns may not exist on older source schemas; skip.
         }
     }
@@ -248,7 +249,7 @@ async function collectInvalidArchiveRows(db, from, to, conn, acc){
         let anchorRows = await db.findInvalidArchiveHeadRows(from, to, conn);
         add(acc, 'anchor_actions', anchorRows);
     } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        if(!isSchemaGapError(e)) throw e;
         // Table/columns may not exist on older source schemas; skip.
     }
 }
@@ -303,7 +304,7 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
             ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, from, to, conn);
         add(acc, 'attests', attestHeadRows);
     } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        if(!isSchemaGapError(e)) throw e;
         // Table/columns may not exist on older source schemas (pre-batch-rail builds); skip.
     }
 }
@@ -318,7 +319,7 @@ async function collectCoinpayMatchRows(db, from, to, conn, acc){
         let matchRows = await db.findCoinpaySettledMatches(from, to, conn);
         add(acc, 'order_matches', matchRows);
     } catch(e){
-        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        if(!isSchemaGapError(e)) throw e;
         // Tables may not exist on older source schemas (pre-COINPay builds); skip.
     }
 }

@@ -76,6 +76,17 @@ describe('ClientRollback', function(){
             assert.ok(decoderDb.doQuery.getCalls().some(c =>
                 /DELETE FROM `blocks` WHERE block_index >= /.test(c.args[0]) && c.args[1][0] === 50));
             assert.strictEqual(decoderDb.commitTransaction.calledOnce, true);
+
+            // Check the delete order: children before parents, so tx-scoped, then transactions, then blocks.
+            const sql = decoderDb.doQuery.getCalls().map(c => c.args[0]);
+            const txScoped = sql.findIndex(s => /DELETE FROM `transaction_outputs`/.test(s));
+            const txs = sql.findIndex(s => /DELETE FROM `transactions` WHERE block_index/.test(s));
+            const blocks = sql.findIndex(s => /DELETE FROM `blocks` WHERE block_index/.test(s));
+            assert.ok(txScoped >= 0 && txScoped < txs, 'tx-scoped tables must be deleted before transactions');
+            assert.ok(txs < blocks, 'transactions must be deleted before blocks');
+            const order = decoderRollback.decoderBlockTables;
+            assert.ok(order.indexOf('transactions') >= 0 && order.indexOf('transactions') < order.indexOf('blocks'),
+                'decoderBlockTables must list transactions before blocks');
         });
 
         it('skips tx-scoped deletes when no transactions are in range', async function(){

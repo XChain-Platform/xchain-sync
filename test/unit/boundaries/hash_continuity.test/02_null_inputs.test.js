@@ -32,8 +32,20 @@ describe('Boundary: Hash Continuity Check', function(){
     });
     describe('null prevHashes', function(){
         it('valid: prevBlockIndex=5, prevHashes=null → skips check', function(){
-            let result = verifier.verifyChainContinuity(null, null, { block_index: 6 });
+            let result = verifier.verifyChainContinuity(5, null, { block_index: 6 });
             assert.strictEqual(result.valid, true);
+            assert.strictEqual(result.reason, null);
+        });
+        it('invalid: prevBlockIndex=5, prevHashes=null, block 9 is still a gap', function(){
+            let result = verifier.verifyChainContinuity(5, null, { block_index: 9 });
+            assert.strictEqual(result.valid, false);
+            assert.ok(result.reason.includes('Block gap'), result.reason);
+            assert.ok(result.reason.includes('6'), result.reason);
+            assert.ok(result.reason.includes('9'), result.reason);
+        });
+        it('invalid: prevBlockIndex=5, prevHashes=null, block 5 repeats the tip', function(){
+            let result = verifier.verifyChainContinuity(5, null, { block_index: 5 });
+            assert.strictEqual(result.valid, false);
         });
     });
 });

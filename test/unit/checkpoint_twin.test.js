@@ -23,13 +23,13 @@ const crypto = require('crypto');
 const fs     = require('fs');
 const path   = require('path');
 const checkpoint = require('../../src/checkpoint');
+const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js');
 
-// Sibling resolution + hard-fail policy: same conventions as
-// blockhash-conformance-twin.test.js. Skip when the SDK checkout is absent,
-// throw where XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip impossible.
+// Sibling resolution goes through siblingCheckout: skip when the SDK checkout is
+// absent or links into a live main checkout, and throw where
+// XCHAIN_REQUIRE_SIBLINGS=1 makes green-by-skip impossible.
 const SYNC_SRC = path.join(__dirname, '../../src');
 const SDK_SRC  = path.join(__dirname, '../../../xchain-sdk/src');
-const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
 // The three code files kept code-identical to the SDK copies. The CHECKPOINT_COMMITMENT
 // gate is a row in consensus/gate_registry/, whose part files are byte-checked against the
 // reference-impl in consensus_primitive_conformance.test.js, so they are not listed here.
@@ -238,13 +238,7 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
     // red. This compares the whole file, code only, against the sibling.
     for(const file of TWINS) it('src/' + file + ' is code-identical to the xchain-sdk copy (comments excepted)', function(){
         const theirs = path.join(SDK_SRC, file);
-        if(!fs.existsSync(theirs)){
-            if(SIBLING_REQUIRED)
-                throw new Error('checkpoint twin guard cannot run: sibling missing at ' + theirs
-                    + ' (check out xchain-sdk, or unset XCHAIN_REQUIRE_SIBLINGS to accept the gap)');
-            this.skip();
-            return;
-        }
+        if(!skipOrFail(this, siblingCheckout(__dirname, theirs), 'the checkpoint twin guard')) return;
         const mine = codeOnly(fs.readFileSync(path.join(SYNC_SRC, file), 'utf8'));
         const sdk  = codeOnly(fs.readFileSync(theirs, 'utf8'));
         if(mine === sdk) return;

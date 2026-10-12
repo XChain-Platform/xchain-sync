@@ -36,6 +36,8 @@ const { SnapshotStreamWriter } = require('./snapshot_builder/stream_writer');
 const {
     OPERATOR_LOCAL_TABLES,
     SOURCE_UNSTREAMED_TABLES,
+    REPLICA_LEDGER_TABLES,
+    INDEXER_INCREMENTAL_SKIP,
     PRIORITY_TABLES,
     TRAILING_TABLES,
     orderSnapshotTables,
@@ -127,7 +129,8 @@ class SnapshotBuilder {
     async getOrderedTables(db, conn){
         let rows = await db.findStreamableTableNames(conn);
         let allTables = rows.map(r => r.table_name || r.TABLE_NAME)
-            .filter(t => !OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t));
+            .filter(t => !OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t) &&
+                         !REPLICA_LEDGER_TABLES.has(t));
         return orderSnapshotTables(allTables);
     }
 
@@ -177,6 +180,7 @@ class SnapshotBuilder {
             if(skipLookups && lookupSet.has(table)) return null;
             return db.findAllRows(table, conn);
         }
+        if(INDEXER_INCREMENTAL_SKIP.has(table)) return null;
         if(table === 'contract_emissions') return this.selectEmissionRows(db, sinceBlock, conn);
         if(firstActionIndex !== null) return this.selectActionScopedRows(db, table, firstActionIndex, conn);
         if(table === 'credits' || table === 'escrows'){
@@ -315,6 +319,8 @@ Object.assign(SnapshotBuilder.prototype, fullSnapshot, incrementalSnapshot, tabl
 SnapshotBuilder.SnapshotStreamWriter = SnapshotStreamWriter;
 SnapshotBuilder.OPERATOR_LOCAL_TABLES = OPERATOR_LOCAL_TABLES;
 SnapshotBuilder.SOURCE_UNSTREAMED_TABLES = SOURCE_UNSTREAMED_TABLES;
+SnapshotBuilder.REPLICA_LEDGER_TABLES = REPLICA_LEDGER_TABLES;
+SnapshotBuilder.INDEXER_INCREMENTAL_SKIP = INDEXER_INCREMENTAL_SKIP;
 SnapshotBuilder.orderSnapshotTables = orderSnapshotTables;
 SnapshotBuilder.decoderIncrementalSets = decoderIncrementalSets;
 

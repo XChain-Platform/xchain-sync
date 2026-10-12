@@ -124,9 +124,10 @@ function initializeDecoderBlockTables(client){
     // Block-scoped tables, deleted by block_index. Derived from the decoder
     // replication topology (the same source ServerPoller streams from) so the
     // stream and rollback sides can no longer drift apart table-by-table,
-    // mirroring the lifecycle-derived indexer lists above. Order matters:
-    // rollback deletes transactions before blocks (tx rows scope the tx-scoped
-    // tables above them), while the topology lists blocks first - hence the
+    // mirroring the lifecycle-derived indexer lists above. Deletes run in
+    // dependency order, transactions before blocks; no FK joins the two today, so
+    // the order is a convention pinned by test/unit/client_rollback.test/
+    // 06_rollback_decoder.test.js. The topology lists blocks first - hence the
     // copy-and-reverse.
     client.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
 }
@@ -228,6 +229,12 @@ class ClientRollback {
             return this.rollbackDecoder(block_index);
         }
         return this.rollbackIndexer(block_index);
+    }
+
+    // Highest surviving id of an index lookup table, 0 when empty (the source's maxId rule).
+    async readSurvivingMaxId(table){
+        let rows = await this.db.doQuery('SELECT MAX(id) AS max_id FROM ' + table, []);
+        return rows && rows[0] && rows[0].max_id != null ? rows[0].max_id : 0;
     }
 
     // Indexer rollback (original behaviour)
@@ -465,8 +472,9 @@ class ClientRollback {
                 // source records each debit's pre-slash `prev_amount`). The action-scoped
                 // delete below drops orphaned-range rows but never re-streams the surviving
                 // mutated row, so the replica keeps the slashed amount and diverges from the
-                // source after a reorg. Mirror the source restore (xchain-indexer
-                // rollback.js): copy back the HIGHEST orphaned `prev_amount` per row.
+                // source after a reorg. Mirror the source restore (xchain-indexer/src/db/rollback/
+                // stake_restores.js restoreContractSlashAmounts): copy back the HIGHEST orphaned
+                // `prev_amount` per row.
                 // The restored value is a pure string copy, byte-identical to the source (no
                 // arithmetic on the amount itself). Keys only on block_index/stake_action_index,
                 // so it ports cleanly (no ACTIVATION_DELAY_BLOCKS dependency).
@@ -1006,15 +1014,21 @@ class ClientRollback {
             // the local delete the source's reproduced row pages back in cleanly (the
             // address_id/pair PK is free again). balances needs no mirror here: the replica
             // recomputes it wholesale (rebuildBalances) so the orphan never re-derives.
+            //
+            // Both sweeps carry the source's `> surviving MAX(id)` bound, read after the
+            // index-lookup delete above: only ids the reorg took off the top of the dense
+            // counter are dangling. A replica hole below MAX(id) is a missing lookup row,
+            // not a rolled-back one, so its referencing row must survive as on the source.
             try {
+                let tickerMax = await this.readSurvivingMaxId('index_tickers');
                 await this.db.doQuery(
                     // A side that is the native coin stores 0, not a ticker id, and 0 is not
                     // a dangling reference: matching it here deleted every token/native
                     // market the source keeps, so the replica served an empty market list
                     // after any reorg. Mirrors the source's exemption exactly.
-                    "DELETE FROM markets WHERE (tick1_id <> ? AND tick1_id NOT IN (SELECT id FROM index_tickers)) " +
-                    "OR (tick2_id <> ? AND tick2_id NOT IN (SELECT id FROM index_tickers))",
-                    [MARKET_NATIVE_TICK_ID, MARKET_NATIVE_TICK_ID]);
+                    "DELETE FROM markets WHERE (tick1_id <> ? AND tick1_id > ? AND tick1_id NOT IN (SELECT id FROM index_tickers)) " +
+                    "OR (tick2_id <> ? AND tick2_id > ? AND tick2_id NOT IN (SELECT id FROM index_tickers))",
+                    [MARKET_NATIVE_TICK_ID, tickerMax, MARKET_NATIVE_TICK_ID, tickerMax]);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -1061,8 +1075,10 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
             try {
+                let addressMax = await this.readSurvivingMaxId('index_addresses');
                 await this.db.doQuery(
-                    "DELETE FROM pubkeys WHERE address_id NOT IN (SELECT id FROM index_addresses)", []);
+                    "DELETE FROM pubkeys WHERE address_id > ? AND address_id NOT IN (SELECT id FROM index_addresses)",
+                    [addressMax]);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.

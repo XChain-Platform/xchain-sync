@@ -32,10 +32,13 @@ module.exports = {
         let existing = null;
         try { existing = await this.getActiveHalt(dbType); } catch(e){ existing = null; }
         if(existing && Number(existing.block_index) === Number(blockIndex)) return existing;
+        // Strict: a failed INSERT must throw so every caller's CRITICAL catch fires; the
+        // default doQuery would log it and return [], leaving no row the gate can count.
         await this.doQuery(
             "INSERT INTO sync_halt (db_type, block_index, reason, mismatches, sources) VALUES (?, ?, ?, ?, ?)",
             [dbType, blockIndex, String(reason || 'divergence').slice(0, 64),
-             JSON.stringify(mismatches || []), JSON.stringify(sources || [])]
+             JSON.stringify(mismatches || []), JSON.stringify(sources || [])],
+            null, { rethrow: true }
         );
         try { return await this.getActiveHalt(dbType); } catch(e){ return null; }
     },
@@ -52,10 +55,11 @@ module.exports = {
         return (rows && rows.length) ? rows[0] : null;
     },
 
+    // Strict, so a failed clear reaches the caller's 'clearHalt persistence failed' log.
     async clearHalt(dbType){
         let res = await this.doQuery(
             "UPDATE sync_halt SET cleared_at=NOW() WHERE db_type=? AND cleared_at IS NULL",
-            [dbType]
+            [dbType], null, { rethrow: true }
         );
         return res ? res.affectedRows : 0;
     },

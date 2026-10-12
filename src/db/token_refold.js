@@ -15,13 +15,17 @@
  * Replica refold of the `tokens` metadata columns from surviving `issues`
  *
  * The reverse leg of updated_rows class 7 (src/server/updated_rows/token_rows.js).
- * The source rewrites the WHOLE tokens row from the tick's valid ISSUE history on
- * every refresh, and its reorg refreshes every tick the orphaned range touched:
+ * The source writes the WHOLE tokens row from the tick's valid ISSUE history. A
+ * forward ISSUE merges its fields over getTokenInfo's replay of the earlier issues
+ * (xchain-indexer/src/actions/issue/token_state.js loadTokenState) and createToken
+ * writes the result; the forward updateTokens then moves only owner_id and
+ * last_action_index. Its reorg runs the full replay for every tick the orphaned
+ * range touched:
  *
  *   xchain-indexer/src/rollback/index.js:165   collectAffectedEntities (issues read
  *                                              at src/db/rollback/read_phase.js:136)
  *   xchain-indexer/src/rollback/commit.js:61   updateTokens(tickers, true)
- *   xchain-indexer/src/db/database/ledger_checks.js:132  updateTokenInfo
+ *   xchain-indexer/src/db/database/ledger_checks.js:135  updateTokenInfo
  *   xchain-indexer/src/db/issues/token_info.js:29        getTokenInfo, whose replay is
  *       issueReplay.rowsQuery, issueReplay.rowValues and issueReplay.foldRow
  *   xchain-indexer/src/db/tokens/token_writer.js:26      createToken, via
@@ -39,7 +43,8 @@
  *
  * test/unit/client_rollback.test/07_token_refold.test.js runs the indexer's own
  * getTokenInfo + createToken beside this port over the same issue rows when the
- * sibling checkout is present.
+ * sibling checkout is present. That pins the rollback leg only: the refolded row
+ * equals the forward one only while ISSUE's merge and validation agree with foldRow.
  *
  ********************************************************************/
 
