@@ -79,6 +79,7 @@ ci_tier_deferred() {
 # >>> ci-tier timer (generated block; re-run the tier wirer to update) >>>
 run_tier() {
   ci_tier_deferred "$1" && return 0  # ci-tier guard (generated)
+  if [ "${CI_TIER:-full}" = "fast" ] && [ -n "${FAILED:-}" ]; then echo; echo "ci:full ===== $1 NOT RUN (a push stops at its first red tier, its verdict already red; the full sweep runs it) ====="; return 0; fi  # ci-tier stop (generated)
   local name="$1"; shift
   local __ci_tier_t0=$SECONDS
   echo; echo "ci:full ===== $name ====="
@@ -181,6 +182,7 @@ run_tier "e2e: cross-repo consensus drift guards" \
   npx mocha --timeout 10000 \
     test/unit/rollback_coverage.test.js \
     test/unit/blockhash_conformance_twin.test.js \
+    test/unit/blockhash_conformance_twin.test/*.test.js \
     test/unit/protocol_address_roles_twin.test.js \
     test/unit/stakes_validator_set_parity.test.js \
     test/unit/generated_columns.test.js \

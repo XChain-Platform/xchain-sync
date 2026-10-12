@@ -13,6 +13,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const balanceHelpers = require('../../../src/db/balance_helpers');
 const ClientApplier  = require('../../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../../src/schema/version');
 const suite = require('./helpers/balance_rebuild_scoped_suite');
 
 describe('Integration: scoped balance rebuilds', function() {
@@ -26,7 +27,7 @@ describe('Integration: scoped balance rebuilds', function() {
             let applier = new ClientApplier(suite.db, suite.testDb.util);
             let spy = sinon.spy(balanceHelpers, 'rebuildBalances');
             try {
-                await applier.applyBlock({ block_index: 999, data: { credits: suite.newCredits, debits: suite.newDebits } });
+                await applier.applyBlock({ schema_version: SCHEMA_VERSION.indexer, block_index: 999, data: { credits: suite.newCredits, debits: suite.newDebits } });
                 assert.deepStrictEqual(spy.firstCall.args[1], { addressIds: [3, 2], tickIds: [2, 1] },
                     'applier passed a scope (not a full rebuild)');
             } finally {

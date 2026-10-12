@@ -61,9 +61,59 @@ function createMockLog(){
     };
 }
 
-describe('ServerPoller', function(){
+let poller, db, broadcaster, log, config, util;
 
-    let poller, db, broadcaster, log, config, util;
+function resumeCursorSuite(){
+    it('indexer resumes from the transparency-log high-water mark, not the source tip', async function(){
+        // sync_meta recorded up to 100; source DB has since advanced to 250 (e.g.
+        // the indexer ran on while the sync server was down).
+        log.getHighWaterMark.resolves(100);
+        db.getLastBlock.resolves(250);
+
+        let cursor = await poller.resumeCursor();
+
+        assert.strictEqual(cursor, 100, 'must resume from sync_meta high-water mark');
+        assert.strictEqual(db.getLastBlock.called, false, 'must not seed from the source tip');
+    });
+
+    it('indexer resume is null on a fresh node (empty sync_meta)', async function(){
+        log.getHighWaterMark.resolves(null);
+        let cursor = await poller.resumeCursor();
+        assert.strictEqual(cursor, null, 'null lets poll initialise from the current tip');
+    });
+
+    it('decoder resumes from the source tip (no transparency log)', async function(){
+        let decoderDb = createMockDb();
+        decoderDb.dbType = 'decoder';
+        decoderDb.getLastBlock.resolves(777);
+        let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
+
+        let cursor = await decoderPoller.resumeCursor();
+        assert.strictEqual(cursor, 777);
+    });
+
+    it('does not skip blocks advanced during downtime when polling resumes', async function(){
+        // Restart-mid-advance: recorded through block 100, source now at 105.
+        // After seeding the cursor from the high-water mark, poll must record
+        // every block in [101, 105]: none may be skipped.
+        log.getHighWaterMark.resolves(100);
+        db.getLastBlock.resolves(105);
+        db.getBlockHashRow.callsFake(async (idx) => ({
+            block_index: idx, block_time: idx * 10,
+            ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
+        }));
+
+        poller.lastPolledBlock = await poller.resumeCursor();
+        await poller.poll();
+
+        let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
+        assert.deepStrictEqual(recorded, [101, 102, 103, 104, 105],
+            'every downtime block must be recorded in the transparency log');
+        assert.strictEqual(poller.lastPolledBlock, 105);
+    });
+}
+
+describe('ServerPoller', function(){
 
     beforeEach(function(){
         db = createMockDb();
@@ -80,53 +130,5 @@ describe('ServerPoller', function(){
         sinon.restore();
     });
 
-    describe('resumeCursor (restart resume) @regression', function(){
-        it('indexer resumes from the transparency-log high-water mark, not the source tip', async function(){
-            // sync_meta recorded up to 100; source DB has since advanced to 250 (e.g.
-            // the indexer ran on while the sync server was down).
-            log.getHighWaterMark.resolves(100);
-            db.getLastBlock.resolves(250);
-
-            let cursor = await poller.resumeCursor();
-
-            assert.strictEqual(cursor, 100, 'must resume from sync_meta high-water mark');
-            assert.strictEqual(db.getLastBlock.called, false, 'must not seed from the source tip');
-        });
-
-        it('indexer resume is null on a fresh node (empty sync_meta)', async function(){
-            log.getHighWaterMark.resolves(null);
-            let cursor = await poller.resumeCursor();
-            assert.strictEqual(cursor, null, 'null lets poll initialise from the current tip');
-        });
-
-        it('decoder resumes from the source tip (no transparency log)', async function(){
-            let decoderDb = createMockDb();
-            decoderDb.dbType = 'decoder';
-            decoderDb.getLastBlock.resolves(777);
-            let decoderPoller = new ServerPoller('bitcoin', 'mainnet', decoderDb, broadcaster, null, config, util);
-
-            let cursor = await decoderPoller.resumeCursor();
-            assert.strictEqual(cursor, 777);
-        });
-
-        it('does not skip blocks advanced during downtime when polling resumes', async function(){
-            // Restart-mid-advance: recorded through block 100, source now at 105.
-            // After seeding the cursor from the high-water mark, poll must record
-            // every block in [101, 105]: none may be skipped.
-            log.getHighWaterMark.resolves(100);
-            db.getLastBlock.resolves(105);
-            db.getBlockHashRow.callsFake(async (idx) => ({
-                block_index: idx, block_time: idx * 10,
-                ledger_hash: 'l' + idx, actions_hash: 'a' + idx, contract_hash: 'c' + idx
-            }));
-
-            poller.lastPolledBlock = await poller.resumeCursor();
-            await poller.poll();
-
-            let recorded = log.recordBlock.getCalls().map(c => c.args[0]);
-            assert.deepStrictEqual(recorded, [101, 102, 103, 104, 105],
-                'every downtime block must be recorded in the transparency log');
-            assert.strictEqual(poller.lastPolledBlock, 105);
-        });
-    });
+    describe('resumeCursor (restart resume) @regression', resumeCursorSuite);
 });

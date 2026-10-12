@@ -214,7 +214,7 @@ async function probeTargets(targets) {
 function reportProbe(targets, applierBugs, unverified, verified) {
     // Always printed. A guard that reports nothing on success gives no way to notice
     // it has quietly stopped covering anything, which is how the sibling-skip trap in
-    // generatedColumns.test.js stayed invisible.
+    // generated_columns.test.js stayed invisible.
     process.stdout.write('\n      [' + verified + '/' + targets.length +
                          ' tables round-tripped through the applier' +
                          (applierBugs.length ? ', ' + applierBugs.length + ' APPLIER BUG' +

@@ -45,7 +45,7 @@ const replicatedTables = require('../../src/schema/replicated_tables');
 // so those are the two DDL trees to scan. The decoder topology is declared
 // literally in src/schema/replicated_tables.js and is not generated from this registry.
 //
-// The indexer half is a sibling checkout, resolved the way generatedColumns.test.js
+// The indexer half is a sibling checkout, resolved the way generated_columns.test.js
 // resolves it: absent in a standalone checkout, and XCHAIN_REQUIRE_SIBLINGS=1 turns
 // green-by-skip into a failure.
 const INDEXER_SQL = process.env.XCHAIN_INDEXER_SQL_PATH

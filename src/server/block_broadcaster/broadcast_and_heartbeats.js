@@ -13,13 +13,10 @@
  **********************************************************************/
 
 const WebSocket = require('ws');
-const { encodeTables } = require('../../util/wire_codec');
+const { encodeTables, bigIntReplacer } = require('../../util/wire_codec');
 const util = require('node:util');
 const { getLogger } = require('../../observability');
 const logger = getLogger();
-
-// JSON replacer that converts BigInt to string (mariadb driver returns BigInt for BIGINT columns)
-const bigIntReplacer = (k, v) => typeof v === 'bigint' ? v.toString() : v;
 
 function buildInfraMessage(event, infraTables, subs){
     let infraMessage = null;

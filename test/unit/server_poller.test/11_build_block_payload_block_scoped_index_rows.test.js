@@ -9,7 +9,10 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const sinon = require('sinon');
+const lifecycle = require('../../../src/table_lifecycle');
 const ServerPoller = require('../../../src/server/poller');
 const Utility = require('../../../src/util');
 const { withDbMixins } = require('../../helpers/db_mixins.js');
@@ -108,5 +111,27 @@ describe('ServerPoller buildBlockPayload block-scoped index rows', function(){
         assert.deepStrictEqual(payload.data.index_tickers, [TICKER_ROW]);
         assert.strictEqual(payload.data.index_addresses.filter(row => row.id === ADDRESS_ROW.id).length, 1);
         assert.strictEqual(payload.data.index_tickers.filter(row => row.id === TICKER_ROW.id).length, 1);
+    });
+
+    // The forward pass must stream exactly the lookups the registry rolls back by block,
+    // so a lookup later moved to rollback 'index' is streamed with no edit here.
+    it('reads the block-scoped lookups the lifecycle registry declares, and only those', async function(){
+        const registrySet = lifecycle.tablesWhere(t => t.rollback === 'index' && t.replication === 'stream:index');
+        assert.ok(registrySet.length > 0, 'registry declares at least one block-scoped lookup');
+        const db = createDb(false);
+        const read = sinon.spy(db, 'getBlockScopedRows');
+        const poller = createPoller(db);
+        sinon.stub(poller, 'addUpdatedPayloadRows').resolves();
+
+        await poller.addBlockScopedIndexRows({ data: {} }, BLOCK_INDEX, null);
+
+        assert.deepStrictEqual(read.getCalls().map(c => c.args[0]).sort(), registrySet.slice().sort());
+    });
+
+    it('derives the block-scoped lookup list instead of hand-listing it', function(){
+        const source = fs.readFileSync(path.join(__dirname, '../../../src/server/poller.js'), 'utf8');
+        assert.ok(!/\[\s*'index_addresses'\s*,\s*'index_tickers'\s*\]/.test(source),
+            'ServerPoller.addBlockScopedIndexRows hand-lists its lookups; derive them from ' +
+            "lifecycle.tablesWhere(t => t.rollback === 'index' && t.replication === 'stream:index')");
     });
 });

@@ -13,18 +13,20 @@
  **********************************************************************
  *
  * Generator for test/fixtures/merkle-vectors.json: the frozen golden lock for
- * src/merkle.js (SPV light-client primitives, spec §3-§5), sibling of
+ * the canonical xchain-indexer merkle module (SPV light-client primitives,
+ * spec §3-§5), sibling of
  * gen-block-hash-vectors.js / gen-state-hash-vectors.js.
  *
  * It embeds canonical INPUTS and computes the expected OUTPUTS with the REAL
- * src/merkle.js, so the committed JSON authentically locks the scheme; the unit
- * test (test/unit/consensus/merkle.test.js) reloads the JSON, recomputes from the same
- * inputs, and asserts byte-equality. This merkle.js is meant to stay byte-
- * identical to its twin in the indexer, so this golden plus the e2e recompute
- * scenario together form the cross-repo drift guard.
+ * xchain-indexer module, so the committed JSON authentically locks the scheme;
+ * the unit test reloads the JSON and recomputes from the same inputs with the
+ * sync twin. This golden plus the e2e recompute scenario form the cross-repo
+ * drift guard.
  *
  * Run manually and commit the output:
  *   node test/fixtures/gen-merkle-vectors.js
+ * Verify the committed JSON is current without writing (exits 1 on drift):
+ *   node test/fixtures/gen-merkle-vectors.js --check
  *
  ********************************************************************/
 
@@ -32,7 +34,7 @@
 
 const fs   = require('fs');
 const path = require('path');
-const M    = require('../../src/merkle.js');
+const M    = require('../../../xchain-indexer/src/consensus/merkle.js');
 
 // canonical INPUTS (frozen)
 const CHAIN = 'BTC', NETWORK = 'regtest';
@@ -181,7 +183,16 @@ function main(){
     };
 
     const dest = path.join(__dirname, 'merkle-vectors.json');
-    fs.writeFileSync(dest, JSON.stringify(out, null, 2) + '\n');
+    const body = JSON.stringify(out, null, 2) + '\n';
+    if(process.argv.includes('--check')){
+        if(fs.readFileSync(dest, 'utf8') !== body){
+            console.error('merkle-vectors.json is stale: rerun node test/fixtures/gen-merkle-vectors.js and commit');
+            process.exit(1);
+        }
+        console.log('merkle-vectors.json is current');
+        return;
+    }
+    fs.writeFileSync(dest, body);
     console.log('wrote ' + dest);
     console.log('balances_root:     ' + balances_root);
     console.log('stakes_root:       ' + stakes_root);

@@ -73,43 +73,39 @@ describe('ClientSync.dispenserReconcileIntervalDue (wall-clock term)', function(
     });
 });
 
-describe('ClientSync status tick fires the stale dispensers reconcile', function(){
-    let logStub;
+function tickCtx(over){
+    let ctx = {
+        dbType: 'decoder',
+        config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
+        sources: ['http://source1:3006'],
+        lastKnownServerBlock: 500,
+        lastAppliedBlock: 500,
+        _halted: null,
+        _lastDispenserReconcileAt: 1000,
+        _catchUpCount: 3,
+        _dispenserReconcileInFlight: false,
+        recordUpstreamStatus: sinon.stub(),
+        logGap: sinon.stub(),
+        incrementalCatchUp: sinon.stub().resolves(),
+        maybeVerifyCompleteness: sinon.stub().resolves(),
+        reconcileDispensers: sinon.stub().resolves(),
+        dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
+    };
+    return Object.assign(ctx, over || {});
+}
 
-    function tickCtx(over){
-        let ctx = {
-            dbType: 'decoder',
-            config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
-            sources: ['http://source1:3006'],
-            lastKnownServerBlock: 500,
-            lastAppliedBlock: 500,
-            _halted: null,
-            _lastDispenserReconcileAt: 1000,
-            _catchUpCount: 3,
-            _dispenserReconcileInFlight: false,
-            recordUpstreamStatus: sinon.stub(),
-            logGap: sinon.stub(),
-            incrementalCatchUp: sinon.stub().resolves(),
-            maybeVerifyCompleteness: sinon.stub().resolves(),
-            reconcileDispensers: sinon.stub().resolves(),
-            dispenserReconcileIntervalDue: ClientSync.prototype.dispenserReconcileIntervalDue
-        };
-        return Object.assign(ctx, over || {});
+function tick(ctx, nowMs){
+    let clock = sinon.useFakeTimers({ now: nowMs, toFake: ['Date'] });
+    try {
+        return ClientSync.prototype.handleEvent.call(ctx,
+            { type: 'status', block_height: 500 }, 0);
+    } finally {
+        clock.restore();
     }
+}
 
-    function tick(ctx, nowMs){
-        let clock = sinon.useFakeTimers({ now: nowMs, toFake: ['Date'] });
-        try {
-            return ClientSync.prototype.handleEvent.call(ctx,
-                { type: 'status', block_height: 500 }, 0);
-        } finally {
-            clock.restore();
-        }
-    }
-
-    beforeEach(function(){ logStub = sinon.stub(console, 'log'); });
-    afterEach(function(){ sinon.restore(); logStub = null; });
-
+// Ticks past the bound that must fire the reconcile, and what that firing leaves alone.
+function tickFiresTests(){
     it('reconciles on a tick when the stamp is older than the interval', async function(){
         let ctx = tickCtx();
         await tick(ctx, 1000 + 60000);
@@ -125,7 +121,10 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
         await tick(ctx, 1000 + 60000);
         assert.strictEqual(ctx._catchUpCount, 3);
     });
+}
 
+// Ticks the guards must keep from reconciling.
+function tickGuardTests(){
     it('does not reconcile inside the interval', async function(){
         let ctx = tickCtx();
         await tick(ctx, 1000 + 59999);
@@ -155,7 +154,10 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
         await tick(ctx, 1000 + 60000);
         assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
+}
 
+// The in-flight flag and the fresh stamp that end a firing.
+function tickSettleTests(){
     it('clears the in-flight flag even when the reconcile rejects', async function(){
         let ctx = tickCtx({ reconcileDispensers: sinon.stub().rejects(new Error('boom')) });
         await assert.rejects(() => tick(ctx, 1000 + 60000), /boom/);
@@ -173,6 +175,15 @@ describe('ClientSync status tick fires the stale dispensers reconcile', function
         await tick(ctx, 61001);
         assert.strictEqual(ctx.reconcileDispensers.calledOnce, true);
     });
+}
+
+describe('ClientSync status tick fires the stale dispensers reconcile', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); });
+    afterEach(function(){ sinon.restore(); });
+
+    tickFiresTests();
+    tickGuardTests();
+    tickSettleTests();
 });
 
 // A replica that bootstrapped from a full snapshot never reconciles, so the bound

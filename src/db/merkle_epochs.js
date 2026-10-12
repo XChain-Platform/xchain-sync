@@ -124,6 +124,19 @@ module.exports = {
     },
 
     /**
+     * The first block a not-yet-re-committed reorg marker recorded for an epoch's leaves.
+     *
+     * @param {number} epoch
+     * @returns {Promise<object[]>} one row whose start_block is NULL when no marker is pending
+     */
+    async findPendingReorgMarkerStart(epoch){
+        return await this.doQuery(
+            "SELECT MIN(start_block) AS start_block FROM merkle_reorgs WHERE epoch = ? AND new_root IS NULL",
+            [epoch]
+        );
+    },
+
+    /**
      * Record the audit marker for a committed epoch a reorg invalidates.
      *
      * @param {number} block_index the reorg height

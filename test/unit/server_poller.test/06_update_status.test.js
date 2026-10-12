@@ -61,10 +61,9 @@ function createMockLog(){
     };
 }
 
-describe('ServerPoller', function(){
+let poller, db, broadcaster, log, config, util;
 
-    let poller, db, broadcaster, log, config, util;
-
+function registerHooks(){
     beforeEach(function(){
         db = createMockDb();
         broadcaster = createMockBroadcaster();
@@ -79,106 +78,118 @@ describe('ServerPoller', function(){
     afterEach(function(){
         sinon.restore();
     });
+}
+
+function registerStatusShapeCases(){
+    it('calls broadcaster.updateStatus with correct shape', async function(){
+        poller.lastPolledBlock = 50;
+        db.getBlockHashRow.resolves({
+            block_index: 50, block_time: 1700000000,
+            ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
+        });
+
+        await poller.updateStatus();
+
+        assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
+        let args = broadcaster.updateStatus.firstCall.args;
+        assert.strictEqual(args[0], 'bitcoin');
+        assert.strictEqual(args[1], 'mainnet');
+        assert.strictEqual(args[2].block_height, 50);
+        assert.strictEqual(args[2].ledger_hash, 'lh');
+    });
+
+    it('handles null lastPolledBlock', async function(){
+        poller.lastPolledBlock = null;
+        await poller.updateStatus();
+        let status = broadcaster.updateStatus.firstCall.args[2];
+        assert.strictEqual(status.block_height, null);
+        assert.strictEqual(status.block_time, null);
+    });
+
+    // An undated status is indistinguishable from a stale one, which is what let a
+    // cached healthy object keep certifying freshness after the poll started failing.
+    it('stamps measured_at on a successful measurement, and publishes nothing on a failed one', async function(){
+        poller.lastPolledBlock = 50;
+        db.getBlockHashRow.resolves({ block_index: 50, block_time: 1700000000,
+            ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
+
+        let before = Date.now();
+        await poller.updateStatus();
+        let status = broadcaster.updateStatus.firstCall.args[2];
+        assert.ok(typeof status.measured_at === 'number' && status.measured_at >= before,
+            'a successful poll dates its own observation');
+
+        // The confirmed fault path: the block-hash read rejects, so nothing is
+        // published and the previous healthy object survives in the cache untouched.
+        broadcaster.updateStatus.resetHistory();
+        db.getBlockHashRow.rejects(new Error('replica read failed'));
+        await assert.rejects(() => poller.updateStatus());
+        assert.strictEqual(broadcaster.updateStatus.called, false,
+            'a failed measurement publishes no status, so only its AGE can expose it');
+    });
+}
+
+function registerReplicationFreshnessCases(){
+    // Replication freshness. source_block_height falls back to
+    // db.getLastBlock(), a MAX(block_index) against the SERVED database, so on
+    // a node fronting a native SQL replica both heights freeze together when
+    // replication stops applying and the derived lag reads 0. These pin the
+    // fail-closed rules: only a confirmed primary or a confirmed in-window
+    // replica may report fresh.
+    describe('replication freshness', function(){
+        function statusAfter(){ return broadcaster.updateStatus.firstCall.args[2]; }
+
+        it('reports fresh on a primary (not a replica at all)', async function(){
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: false, running: null, secondsBehind: null });
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, false);
+            assert.strictEqual(statusAfter().replica_seconds_behind, null);
+        });
+
+        it('reports fresh on a replica inside the lag ceiling', async function(){
+            config.SYNC_REPLICA_MAX_LAG_S = 120;
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, false);
+            assert.strictEqual(statusAfter().replica_seconds_behind, 5);
+        });
+
+        it('reports stale past the lag ceiling', async function(){
+            config.SYNC_REPLICA_MAX_LAG_S = 120;
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 900 });
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, true);
+        });
+
+        it('reports stale when the SQL thread stopped (Seconds_Behind NULL)', async function(){
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: false, secondsBehind: null });
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, true,
+                'a stopped applier is unbounded lag; this is the failure that published lag 0');
+        });
+
+        it('fails closed when the replication status is unreadable', async function(){
+            db.getReplicaStatus = sinon.stub().resolves({ isReplica: null, running: null, secondsBehind: null });
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, true);
+        });
+
+        it('fails closed when the read throws', async function(){
+            db.getReplicaStatus = sinon.stub().rejects(new Error('boom'));
+            await poller.updateStatus(100);
+            assert.strictEqual(statusAfter().replica_stale, true);
+        });
+    });
+}
+
+describe('ServerPoller', function(){
+    registerHooks();
 
     describe('updateStatus', function(){
-        it('calls broadcaster.updateStatus with correct shape', async function(){
-            poller.lastPolledBlock = 50;
-            db.getBlockHashRow.resolves({
-                block_index: 50, block_time: 1700000000,
-                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch'
-            });
-
-            await poller.updateStatus();
-
-            assert.strictEqual(broadcaster.updateStatus.calledOnce, true);
-            let args = broadcaster.updateStatus.firstCall.args;
-            assert.strictEqual(args[0], 'bitcoin');
-            assert.strictEqual(args[1], 'mainnet');
-            assert.strictEqual(args[2].block_height, 50);
-            assert.strictEqual(args[2].ledger_hash, 'lh');
-        });
-
-        it('handles null lastPolledBlock', async function(){
-            poller.lastPolledBlock = null;
-            await poller.updateStatus();
-            let status = broadcaster.updateStatus.firstCall.args[2];
-            assert.strictEqual(status.block_height, null);
-            assert.strictEqual(status.block_time, null);
-        });
-
-        // An undated status is indistinguishable from a stale one, which is what let a
-        // cached healthy object keep certifying freshness after the poll started failing.
-        it('stamps measured_at on a successful measurement, and publishes nothing on a failed one', async function(){
-            poller.lastPolledBlock = 50;
-            db.getBlockHashRow.resolves({ block_index: 50, block_time: 1700000000,
-                ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
-
-            let before = Date.now();
-            await poller.updateStatus();
-            let status = broadcaster.updateStatus.firstCall.args[2];
-            assert.ok(typeof status.measured_at === 'number' && status.measured_at >= before,
-                'a successful poll dates its own observation');
-
-            // The confirmed fault path: the block-hash read rejects, so nothing is
-            // published and the previous healthy object survives in the cache untouched.
-            broadcaster.updateStatus.resetHistory();
-            db.getBlockHashRow.rejects(new Error('replica read failed'));
-            await assert.rejects(() => poller.updateStatus());
-            assert.strictEqual(broadcaster.updateStatus.called, false,
-                'a failed measurement publishes no status, so only its AGE can expose it');
-        });
+        registerStatusShapeCases();
     });
 
     describe('updateStatus', function(){
-        // Replication freshness. source_block_height falls back to
-        // db.getLastBlock(), a MAX(block_index) against the SERVED database, so on
-        // a node fronting a native SQL replica both heights freeze together when
-        // replication stops applying and the derived lag reads 0. These pin the
-        // fail-closed rules: only a confirmed primary or a confirmed in-window
-        // replica may report fresh.
-        describe('replication freshness', function(){
-            function statusAfter(){ return broadcaster.updateStatus.firstCall.args[2]; }
-
-            it('reports fresh on a primary (not a replica at all)', async function(){
-                db.getReplicaStatus = sinon.stub().resolves({ isReplica: false, running: null, secondsBehind: null });
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, false);
-                assert.strictEqual(statusAfter().replica_seconds_behind, null);
-            });
-
-            it('reports fresh on a replica inside the lag ceiling', async function(){
-                config.SYNC_REPLICA_MAX_LAG_S = 120;
-                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 5 });
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, false);
-                assert.strictEqual(statusAfter().replica_seconds_behind, 5);
-            });
-
-            it('reports stale past the lag ceiling', async function(){
-                config.SYNC_REPLICA_MAX_LAG_S = 120;
-                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: true, secondsBehind: 900 });
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, true);
-            });
-
-            it('reports stale when the SQL thread stopped (Seconds_Behind NULL)', async function(){
-                db.getReplicaStatus = sinon.stub().resolves({ isReplica: true, running: false, secondsBehind: null });
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, true,
-                    'a stopped applier is unbounded lag; this is the failure that published lag 0');
-            });
-
-            it('fails closed when the replication status is unreadable', async function(){
-                db.getReplicaStatus = sinon.stub().resolves({ isReplica: null, running: null, secondsBehind: null });
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, true);
-            });
-
-            it('fails closed when the read throws', async function(){
-                db.getReplicaStatus = sinon.stub().rejects(new Error('boom'));
-                await poller.updateStatus(100);
-                assert.strictEqual(statusAfter().replica_stale, true);
-            });
-        });
+        registerReplicationFreshnessCases();
     });
 });

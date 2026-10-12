@@ -28,6 +28,16 @@ function indexerRoot() {
 
 describe('list sharing lifecycle registry twin', function () {
 
+    it('keeps remote_token_snapshots hub-mirrored and retraction-owned', function () {
+        const entry = lifecycle.entry('remote_token_snapshots');
+        assert.strictEqual(entry.replication, 'hub-mirror');
+        assert.strictEqual(entry.rollback, 'exempt');
+        assert.strictEqual(entry.replicaRollback, 'exempt');
+        assert.strictEqual(entry.anchorRecovery, 'none');
+        assert.ok(entry.anchorRecoveryNote);
+        assert.deepStrictEqual(entry.hashed.classes, ['quorum']);
+    });
+
     it('keeps list_snapshots hub-mirrored and rollback-exempt', function () {
         const entry = lifecycle.entry('list_snapshots');
         assert.strictEqual(entry.replication, 'hub-mirror');

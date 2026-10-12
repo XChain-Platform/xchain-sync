@@ -27,7 +27,7 @@ const testDbModule = require('./testDb');
 //     populated the table, which is exactly the kind of path-dependence the
 //     oracle exists to reject.)
 //
-// The rest is NOT restated here. src/tableLifecycle.js already declares which
+// The rest is NOT restated here. src/table_lifecycle.js already declares which
 // columns the two sides may legitimately disagree on, and this oracle drifted
 // from it: `blocks.id` is the local surrogate ClientApplier strips before
 // insert (localSurrogateIdTables), so once a reorg renumbers the source the

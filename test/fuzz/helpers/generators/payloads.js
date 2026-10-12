@@ -71,6 +71,7 @@ function blockDataObject() {
 function blockPayload() {
     return fc.record({
         type: fc.constant('block'),
+        schema_version: fc.constant(SCHEMA_VERSION.indexer),
         chain: coinString(),
         network: networkString(),
         block_index: blockIndex(),
@@ -88,8 +89,10 @@ function partialBlockPayload() {
         blockPayload(),
         fc.record({ block_index: blockIndex() }),
         fc.record({ data: fc.anything() }),
-        fc.record({ block_index: blockIndex(), data: fc.constant({}) }),
+        // Shapes that pass the early return carry the version: a block without one is refused by design.
+        fc.record({ schema_version: fc.constant(SCHEMA_VERSION.indexer), block_index: blockIndex(), data: fc.constant({}) }),
         fc.record({
+            schema_version: fc.constant(SCHEMA_VERSION.indexer),
             block_index: fc.oneof(blockIndex(), fc.constantFrom(null, undefined, NaN, 'abc', -1)),
             data: fc.oneof(blockDataObject(), fc.constant(null), fc.constant(undefined)),
         }),

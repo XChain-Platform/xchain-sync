@@ -12,6 +12,7 @@
 const zlib = require('zlib');
 const { PassThrough } = require('stream');
 const setup = require('../../helpers/setup');
+const { SCHEMA_VERSION } = require('../../../../src/schema/version');
 
 // Binary payload chosen to break a naive toString() round-trip: contains a NUL,
 // 0xFF, and bytes that are not valid UTF-8.
@@ -52,6 +53,7 @@ async function captureFullSnapshot(builder, db){
 function makeBroadcastEvent(){
     return {
         type: 'block', chain: 'bitcoin', network: 'mainnet', dbType: 'indexer',
+        schema_version: SCHEMA_VERSION.indexer,
         block_index: 1, block_time: 100,
         data: {
             gated_files: [

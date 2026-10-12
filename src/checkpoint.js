@@ -104,10 +104,10 @@ function commitmentMissing(cp){
 }
 
 // Does one validator entry carry the stake fields the weighted regime requires?
-// Blank source and missing weight are BOTH disqualifying: meetsStakeThreshold fails
-// closed on the former but silently reads the latter as '0', so the weight check has
-// to live here. A negative weight is rejected there and again here, since a caller
-// reaching this gate should never see one.
+// Blank source and a missing, blank or nonnumeric weight are all disqualifying.
+// meetsStakeThreshold also fails closed on each of these (its decimal check is the
+// stricter of the two), so this gate is defence in depth: keep both layers. A
+// negative weight is rejected there and again here.
 function isWeightedEntry(v){
     if(!v || typeof v !== 'object') return false;
     if(v.source === null || v.source === undefined || String(v.source).trim() === '') return false;
@@ -175,12 +175,11 @@ function verifyCheckpoint(checkpoint, validators){
         // upgraded, leaves stake quorum unconfirmable, so this fails closed, the
         // fail-safe direction for a light client.
         //
-        // EVERY entry, not some: `.some` let a set mix one weighted entry with unweighted
-        // ones and still pass, and meetsStakeThreshold reads a missing weight as '0', so
-        // the omitted stake left the denominator while the weighted signer kept the
-        // numerator. One 100-weight signature then cleared 3*100 > 2*100 against a set
-        // whose true stake was unknown. The length check is what fails an empty set,
-        // since `.every` is vacuously true on [].
+        // EVERY entry, not some: `.some` once let a set mix one weighted entry with
+        // unweighted ones, back when meetsStakeThreshold read a missing weight as '0', and
+        // one 100-weight signature cleared 3*100 > 2*100. meetsStakeThreshold now fails
+        // closed on a missing weight too; this gate stays as defence in depth. The length
+        // check is what fails an empty set, since `.every` is vacuously true on [].
         let hasWeights = vset.length > 0 && vset.every(v => isWeightedEntry(v));
         valid = hasWeights && swq.meetsStakeThreshold(vset, validSigners);
     } else {
@@ -196,13 +195,35 @@ function verifyCheckpoint(checkpoint, validators){
     };
 }
 
-// Convenience: fetch a checkpoint (+ the qualifying validator set) from an
-// explorer's verify endpoint and re-verify LOCALLY. The server's `verified`
-// flag is ignored; only local crypto decides.
+// The caller's out-of-band validator set, or null when none was supplied.
+function suppliedValidators(opts){
+    if (!opts || opts.validators === undefined) return null;
+    if (!Array.isArray(opts.validators))
+        throw new TypeError('CheckpointVerifier: opts.validators must be an array');
+    return opts.validators;
+}
+
+// Judge a verify-endpoint body against the supplied set, else the served one.
+// Only a supplied set anchors the verdict: the served set comes from the same
+// response as the checkpoint, so it proves only that the served signers signed.
+function verifyServedCheckpoint(body, supplied){
+    let set = supplied !== null ? supplied : (body.validators || []);
+    let result = verifyCheckpoint(body.checkpoint, set);
+    return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
+        validatorSource: supplied !== null ? 'supplied' : 'explorer' }, result);
+}
+
+// Convenience: fetch a checkpoint from an explorer's verify endpoint and
+// re-verify its signatures LOCALLY; the server's `verified` flag is ignored.
+// Without opts.validators the set is the explorer's own, so this trusts the
+// explorer for WHO the validators are; pass a set obtained out of band (or use
+// the light client) for a verdict that does not.
 //   explorerUrl: e.g. 'https://explorer.xchain.io'
 //   coin:        explorer coin code (e.g. 'BTC', 'TBTC', 'RDOGE')
 //   blockIndex:  checkpointed height
-async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl){
+//   opts:        { validators } an out-of-band set that replaces the served one
+async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl, opts){
+    let supplied = suppliedValidators(opts);
     let f = fetchImpl || (typeof fetch === 'function' ? fetch : null);
     if (!f) throw new Error('CheckpointVerifier: no fetch implementation available');
     // Trim trailing slashes without a quantified-group regex: /\/+$/ backtracks
@@ -215,16 +236,18 @@ async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl
     if (!res.ok) throw new Error('CheckpointVerifier: explorer returned HTTP ' + res.status);
     let body = await res.json();
     if (!body || !body.checkpoint) throw new Error('CheckpointVerifier: no checkpoint in response');
-    let result = verifyCheckpoint(body.checkpoint, body.validators || []);
-    return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available }, result);
+    return verifyServedCheckpoint(body, supplied);
 }
 
 module.exports = {
     canonicalCheckpoint,
     verifySignature,
-    // Exported so light.js#verifyCheckpointWithProvenSet enforces THIS predicate
-    // rather than a second copy that can drift from it.
+    // Exported so callers enforce THIS predicate rather than a second copy that can
+    // drift from it: here client/sync.js checkpointSkipsAnchoring, and in the SDK twin
+    // protocol/light_client/validator_set_follow.js verifyCheckpointWithProvenSet.
     commitmentMissing,
     verifyCheckpoint,
+    suppliedValidators,
+    verifyServedCheckpoint,
     fetchAndVerifyCheckpoint
 };

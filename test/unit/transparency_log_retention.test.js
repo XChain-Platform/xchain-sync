@@ -279,3 +279,96 @@ describe('TransparencyLog sync_meta retention', function(){
         });
     });
 });
+
+describe('TransparencyLog sync_meta retention reorg floor', function(){
+
+    afterEach(function(){ sinon.restore(); });
+
+    it('raises a window below the floor so the cutoff stays outside the reorg reach', async function(){
+        // tip 1000, window 50, floor 256: the cutoff is 744, never 950.
+        let db  = createDb({ hwm: 1000, boundary: 700 });
+        let log = new TransparencyLog(db, 100, false, 50, 256);
+        sinon.stub(console, 'log');
+        let result = await log.pruneSyncMeta();
+        assert.strictEqual(result.cutoff, 744);
+        let bound = db.doQuery.getCalls().find(c => /MAX\(end_block\) AS eb/.test(c.args[0]));
+        assert.deepStrictEqual(bound.args[1], [744]);
+    });
+
+    it('applies the floor to an explicit window argument too', async function(){
+        let db  = createDb({ hwm: 1000, boundary: 700 });
+        let log = new TransparencyLog(db, 100, false, 50000, 256);
+        sinon.stub(console, 'log');
+        assert.strictEqual((await log.pruneSyncMeta(10)).cutoff, 744);
+    });
+
+    it('leaves a window at or above the floor unchanged', async function(){
+        let db  = createDb({ hwm: 1000000, boundary: 950000 });
+        let log = new TransparencyLog(db, 100, false, 50000, 256);
+        sinon.stub(console, 'log');
+        assert.strictEqual((await log.pruneSyncMeta()).cutoff, 950000);
+    });
+
+    it('never arms retention: with no window the floor reads nothing', async function(){
+        let db  = createDb({ hwm: 1000000, boundary: 950000 });
+        let log = new TransparencyLog(db, 100, false, 0, 256);
+        assert.deepStrictEqual(await log.pruneSyncMeta(), { enabled: false, deleted: 0 });
+        assert.strictEqual(db.doQuery.called, false);
+    });
+});
+
+describe('TransparencyLog re-commit after a reorg into pruned leaves', function(){
+
+    afterEach(function(){ sinon.restore(); });
+
+    // Epoch 1 survived retention only from block 61 on; markerStart is the first leaf it was committed over.
+    function reorgDb(markerStart, firstLeaf){
+        let db = withDbMixins({ doQuery: sinon.stub().resolves([]) });
+        let rows = [];
+        for(let b = firstLeaf; b <= 100; b++) rows.push({ block_index: b, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
+        db.doQuery.withArgs(sinon.match(/FROM sync_meta/)).resolves(rows);
+        db.doQuery.withArgs(sinon.match(/MIN\(start_block\) AS start_block FROM merkle_reorgs/))
+            .resolves([{ start_block: markerStart }]);
+        return db;
+    }
+
+    function inserted(db){
+        return db.doQuery.getCalls().filter(c => /INSERT INTO merkle_epochs/.test(c.args[0]));
+    }
+
+    it('refuses to re-commit an epoch whose leaves no longer reach its committed start', async function(){
+        let db  = reorgDb(1, 61);
+        let log = new TransparencyLog(db, 100);
+        sinon.stub(console, 'error');
+        await log.commitEpoch(1);
+        assert.strictEqual(inserted(db).length, 0, 'no root is published over a truncated leaf set');
+        assert.ok(!db.doQuery.getCalls().some(c => /UPDATE merkle_reorgs SET new_root/.test(c.args[0])),
+            'the audit marker is not backfilled with a partial root');
+    });
+
+    it('re-commits a reorged epoch whose leaves are all still present', async function(){
+        let db  = reorgDb(1, 1);
+        let log = new TransparencyLog(db, 100);
+        sinon.stub(console, 'log');
+        await log.commitEpoch(1);
+        assert.strictEqual(inserted(db).length, 1);
+    });
+
+    it('still commits a partial first epoch that was never reorged', async function(){
+        let db  = reorgDb(null, 61);
+        let log = new TransparencyLog(db, 100);
+        sinon.stub(console, 'log');
+        await log.commitEpoch(1);
+        assert.strictEqual(inserted(db).length, 1, 'a log that started mid-epoch keeps committing');
+    });
+
+    it('treats a schema with no merkle_reorgs table as never reorged', async function(){
+        let db  = reorgDb(1, 61);
+        let missing = Object.assign(new Error('no such table'), { errno: 1146 });
+        db.doQuery.withArgs(sinon.match(/MIN\(start_block\) AS start_block FROM merkle_reorgs/)).rejects(missing);
+        let log = new TransparencyLog(db, 100);
+        sinon.stub(console, 'log');
+        await log.commitEpoch(1);
+        assert.strictEqual(inserted(db).length, 1);
+    });
+});

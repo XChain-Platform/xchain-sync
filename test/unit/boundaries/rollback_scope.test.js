@@ -24,6 +24,31 @@ function createMockDb(){
     };
 }
 
+// The per-chain hub-mirror deletes are the same rollback scope stated in the other
+// shape: every bind is either this replica's coin or the same firstActionIndex the
+// generic loop cut from. bridge_transfers is one-sided (one src_chain/src_action_index
+// pair), cross_chain_matches is two-sided (a_* and b_*), so bind counts differ and
+// only the VALUES are pinned, per table.
+// Pin the literal ticker: production passes the hub's full name ('bitcoin'), and the
+// source writes these columns as 'BTC', so reading the coin back off the object would pass on either.
+function assertMirrorDeletes(db, firstActionIndex){
+    let coin = 'BTC';
+    let expectedMirrorBinds = {
+        cross_chain_calls:   [coin, firstActionIndex],
+        cross_chain_matches: [coin, firstActionIndex, coin, firstActionIndex],
+        bridge_transfers:    [coin, firstActionIndex]
+    };
+    for(let table of Object.keys(expectedMirrorBinds)){
+        let mirrorDeletes = db.doQuery.getCalls().filter(c =>
+            c.args[0].includes('DELETE') && c.args[0].includes(table)
+        );
+        assert.strictEqual(mirrorDeletes.length, 1,
+            'expected exactly one reorg delete against ' + table);
+        assert.deepStrictEqual(mirrorDeletes[0].args[1], expectedMirrorBinds[table],
+            table + ' reorg delete must bind the replica coin and firstActionIndex');
+    }
+}
+
 describe('Boundary: Rollback Scope', function(){
 
     let rollback, db;
@@ -53,7 +78,7 @@ describe('Boundary: Rollback Scope', function(){
     let rollback, db;
     beforeEach(function(){
         db = createMockDb();
-        rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        rollback = new ClientRollback(db, new Utility(), 'bitcoin', 'regtest');
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
@@ -74,7 +99,7 @@ describe('Boundary: Rollback Scope', function(){
         // cross_chain_calls / cross_chain_matches / bridge_transfers are likewise per-chain
         // scoped bespoke deletes (source/a/b/src `_action_index >=`) that bind
         // [coin, firstActionIndex, ...], so exclude them too. Excluding a table here only
-        // moves it: the mirror assertion below re-proves that each of the three still ran
+        // moves it: assertMirrorDeletes below re-proves that each of the three still ran
         // and still cut from firstActionIndex, so the exclusion list cannot silence a
         // mirror delete that stopped happening or started cutting from somewhere else.
         let actionDeletes = db.doQuery.getCalls().filter(c =>
@@ -86,26 +111,7 @@ describe('Boundary: Rollback Scope', function(){
         for(let call of actionDeletes){
             assert.deepStrictEqual(call.args[1], [100]);
         }
-        // The per-chain hub-mirror deletes are the same rollback scope stated in the other
-        // shape: every bind is either this replica's coin or the same firstActionIndex the
-        // generic loop cut from. bridge_transfers is one-sided (one src_chain/src_action_index
-        // pair), cross_chain_matches is two-sided (a_* and b_*), so bind counts differ and
-        // only the VALUES are pinned, per table.
-        let coin = rollback.coin;
-        let expectedMirrorBinds = {
-            cross_chain_calls:   [coin, 100],
-            cross_chain_matches: [coin, 100, coin, 100],
-            bridge_transfers:    [coin, 100]
-        };
-        for(let table of Object.keys(expectedMirrorBinds)){
-            let mirrorDeletes = db.doQuery.getCalls().filter(c =>
-                c.args[0].includes('DELETE') && c.args[0].includes(table)
-            );
-            assert.strictEqual(mirrorDeletes.length, 1,
-                'expected exactly one reorg delete against ' + table);
-            assert.deepStrictEqual(mirrorDeletes[0].args[1], expectedMirrorBinds[table],
-                table + ' reorg delete must bind the replica coin and firstActionIndex');
-        }
+        assertMirrorDeletes(db, 100);
     });
 });
 

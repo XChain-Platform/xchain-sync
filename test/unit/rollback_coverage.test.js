@@ -407,14 +407,14 @@ describe('Rollback coverage guard @regression', function(){
 
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
     // both the source (xchain-indexer/src/db/rollback/sweeps.js) and the replica
-    // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored
-    // cross_chain_calls / cross_chain_matches rows for the orphaned range, closing the
-    // staleness window before hub-driven convergence (row:deleted). The predicates must
-    // also stay byte-identical to xchain-indexer/src/hub/hub_db_sync.js _applyRetraction so
-    // the local belt-and-suspenders delete and the hub-driven delete remove exactly the
-    // same rows. Both rollback files carry the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE>
-    // markers; this extracts the backtick literals and asserts whitespace-normalised
-    // equality. If you edit one, edit the other.
+    // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored cross_chain_calls /
+    // cross_chain_matches / bridge_transfers rows for the orphaned range, unbounded and unfenced,
+    // before hub-driven convergence (row:deleted). The two blocks match EACH OTHER and stay
+    // DIFFERENT from applyRetraction (xchain-indexer/src/hub/hub_db_sync/retractions.js), which
+    // is bounded and push_generation-fenced; never reconcile them (asymmetry note on
+    // purgeCrossChainMirrors, xchain-indexer/src/rollback/sweeps.js). Both rollback files carry
+    // the SQL between //<CROSS-CHAIN-MIRROR-REORG-DELETE> markers; this extracts the backtick
+    // literals and asserts whitespace-normalised equality. If you edit one, edit the other.
     it('cross-chain mirror reorg delete SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
         function crossChainSql(path){
             const src = readSourceText(path);
@@ -831,6 +831,8 @@ describe('Rollback coverage guard @regression', function(){
               re: /JOIN index_statuses vs ON vs\.status = valid SET p\.status_id = vs\.id/ },
             { name: 'head predicate (v5, chunk 0, below the orphaned range)',
               re: /WHERE p\.version = ATTEST_BATCH_HEAD_VERSION AND p\.batch_chunk_index = 0 AND p\.action_index < \?/ },
+            { name: 'encoding scope (the orphaned continuation declares the head\'s chunk count and body CRC)',
+              re: /AND c\.action_index >= \? AND c\.batch_total_chunks = p\.batch_total_chunks AND c\.batch_crc32 = p\.batch_crc32 / },
         ];
         for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
@@ -1221,12 +1223,73 @@ describe('Rollback coverage guard @regression', function(){
         });
     }
 
+    // The substantive assertions of those three suites live in their parts directories, so
+    // the entry pin above locks only thin shells. Walk each directory on both sides with no
+    // hard-coded list: a part present on one side only, or edited on one side only, fails.
+    const listTree = (root) => {
+        const fs = require('fs'), out = [];
+        (function walk(rel){
+            for(const ent of fs.readdirSync(pathMod.join(root, rel), { withFileTypes: true })){
+                const child = rel ? rel + '/' + ent.name : ent.name;
+                if(ent.isDirectory()) walk(child); else out.push(child);
+            }
+        })('');
+        return out.sort();
+    };
+    for(const parts of [
+        'state_subtree_activation.test',
+        'contract_state_subtree.test',
+        'escrow_leaf_subtree.test',
+    ]){
+        it(parts + '/ holds the same files with the same masked bytes in xchain-sync and xchain-indexer (cross-repo twin parts)', function(){
+            const fs = require('fs');
+            const syncDir    = pathMod.resolve(__dirname, '../../test/unit/' + parts);
+            const indexerDir = indexerFile('test/unit/' + parts);
+            if(!requireSibling(this, indexerDir)) return;
+            const syncFiles = listTree(syncDir), indexerFiles = listTree(indexerDir);
+            assert.ok(syncFiles.length > 0, parts + '/ is empty; the walk would compare nothing');
+            assert.deepStrictEqual(syncFiles, indexerFiles, parts + '/ lists differ; only in sync: ' +
+                syncFiles.filter(f => !indexerFiles.includes(f)).join(', ') + '; only in indexer: ' +
+                indexerFiles.filter(f => !syncFiles.includes(f)).join(', '));
+            for(const rel of syncFiles){
+                const mine = maskTwinDepth(fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'));
+                assert.ok(mine.trim().length > 0, parts + '/' + rel + ' is empty');
+                assert.strictEqual(mine, maskTwinDepth(fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8')),
+                    parts + '/' + rel + ' drifted between xchain-sync and xchain-indexer; edit the indexer copy '
+                    + 'and carry it across, keeping only the src/<feature>/ segment of its requires different');
+            }
+        });
+    }
+
+    // The registry's row parts get the same walk, so a part added or edited on one side
+    // only fails here instead of passing because the per-file list above never named it.
+    // The parts are verbatim copies, so the compare is on raw bytes with no mask.
+    it('table_lifecycle/ holds the same registry parts with the same bytes in xchain-sync and xchain-indexer (cross-repo twin parts)', function(){
+        const fs = require('fs');
+        const syncDir    = pathMod.resolve(__dirname, '../../src/table_lifecycle');
+        const indexerDir = indexerFile('src/hub/table_lifecycle');
+        if(!requireSibling(this, indexerDir)) return;
+        const syncFiles = listTree(syncDir), indexerFiles = listTree(indexerDir);
+        assert.ok(syncFiles.length > 0, 'src/table_lifecycle/ is empty; the walk would compare nothing');
+        assert.deepStrictEqual(syncFiles, indexerFiles, 'table_lifecycle/ part lists differ; only in sync: ' +
+            syncFiles.filter(f => !indexerFiles.includes(f)).join(', ') + '; only in indexer: ' +
+            indexerFiles.filter(f => !syncFiles.includes(f)).join(', '));
+        for(const rel of syncFiles)
+            assert.strictEqual(fs.readFileSync(pathMod.join(syncDir, rel), 'utf8'),
+                fs.readFileSync(pathMod.join(indexerDir, rel), 'utf8'),
+                'table_lifecycle/' + rel + ' drifted between xchain-sync and xchain-indexer; edit the indexer copy and carry it across');
+    });
+
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
     // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
     // block columns, or the integrity hash covers a different row set than it protects.
     it('state_hash.js selection predicates mirror the replicated mutation classes', function(){
         const fs = require('fs'), pathMod = require('path');
-        const src = fs.readFileSync(pathMod.resolve(__dirname, '../../src/consensus/state_hash.js'), 'utf8')
+        // The selections live in the section collectors under state_hash/, behind the facade.
+        const hashDir = pathMod.resolve(__dirname, '../../src/consensus/state_hash');
+        const src = [pathMod.resolve(__dirname, '../../src/consensus/state_hash.js')]
+            .concat(fs.readdirSync(hashDir).filter((n) => n.endsWith('.js')).sort().map((n) => pathMod.join(hashDir, n)))
+            .map((p) => fs.readFileSync(p, 'utf8')).join('\n')
             .replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
         const PREDICATES = [
             { name: 'deactivation_block stamp',  re: /WHERE deactivation_block BETWEEN \? AND \?/ },
@@ -1265,6 +1328,14 @@ describe('Rollback coverage guard @regression', function(){
             .replace(/\s+/g, ' ');
         assert.ok(/computeStateHash\( ?event\.block_index,.*?this\.network, this\.coinTicker\)/.test(cs),
             'ClientSync must pass this.coinTicker (the normalized TICKER, not this.chain) as the coin gate parameter to computeStateHash');
+    });
+
+    // The e2e source-side state_hash must key per-chain activations like the follower does.
+    it('the e2e state_hash fixture passes the coin ticker, matching the follower', function(){
+        const fx = fs.readFileSync(pathMod.resolve(__dirname, '../e2e/helpers/fixtures.js'), 'utf8')
+            .replace(/\s+/g, ' ');
+        assert.ok(/computeStateHash\( ?blockIndex,.*?network, coinTicker\(chain\)\)/.test(fx),
+            'computeAndStoreStateHash must pass coinTicker(chain), not the full chain name, as the coin gate parameter');
     });
 
     // Value-level fixture assertions (F-1, F-2, F-5).
@@ -1402,10 +1473,10 @@ describe('Rollback coverage guard @regression', function(){
         const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
         const derived = lifecycleTwin.tablesWhere(t =>
             ['local', 'hub-mirror', 'follower-derived'].includes(t.replication));
-        // The ONLY permitted members with no registry entry: mempool_transactions is a
-        // decoder-DB table (registry covers the indexer DB); sync_halt / sync_state are
+        // The ONLY permitted members with no registry entry: mempool_transactions and
+        // dispenser_extension_undo are decoder-DB tables (registry covers the indexer DB); sync_halt / sync_state are
         // replica-created control tables the full-snapshot clear loop must never wipe.
-        const NON_REGISTRY = ['mempool_transactions', 'sync_halt', 'sync_state'];
+        const NON_REGISTRY = ['mempool_transactions', 'dispenser_extension_undo', 'sync_halt', 'sync_state'];
         const expected = new Set([...derived, ...NON_REGISTRY]);
 
         for(const t of expected){

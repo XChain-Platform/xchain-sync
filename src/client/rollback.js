@@ -29,9 +29,10 @@ const balanceHelpers = require('../db/balance_helpers');
 const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
-const { activationDelayBlocks, gasTickSymbol } = require('../consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
 const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
+const gateRegistry = require('../consensus/gate_registry');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -48,91 +49,173 @@ const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
 // require indexer code, so the value is restated rather than imported.
 const MARKET_NATIVE_TICK_ID = 0;
 
+function initializeDependencies(client, db, util){
+    client.db   = db;
+    client.util = util;
+}
+
+function initializeNetwork(client, network){
+    // The replica's own network, the key for the publisher-scoped archive reset below.
+    // MANDATORY since ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION armed (2026-09-09): an
+    // omitted or misspelled network resolves to no threshold and so reads as inactive,
+    // which would silently run the legacy unscoped reset on a fleet whose source
+    // indexer runs the scoped one. That is the divergence this gate exists to prevent,
+    // so an un-wired construction site must fail loudly at construction instead.
+    // The production wiring (SyncService.startClientSyncForChain) passes cfg.network.
+    if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
+        throw new Error('ClientRollback: network is required and must be one of ' +
+            Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
+            ' (got ' + JSON.stringify(network) + '); the publisher-scoped archive reset ' +
+            'is armed and an unknown network would silently fall back to the legacy unscoped rule');
+    }
+    client.network = network;
+}
+
+function initializeCoin(client, coin){
+    // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
+    // indexer's reorg deactivation_block re-NULL resets (see rollbackIndexer). A wrong
+    // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
+    // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
+    // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
+    // skipped (with a warning) rather than run with a wrong value. The production wiring
+    // (SyncService.startClientSyncForChain) always passes cfg.coin.
+    // Store the TICKER: cfg.coin is the full name, while the source binds source_chain
+    // and tests COIN === 'BTC' in ticker form, so the reorg mirror deletes need it too.
+    client.coin = coinTicker(coin);
+    let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
+    if(delay === undefined){
+        throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
+    }
+    client.activationDelay = delay;
+}
+
+function initializeRollbackTables(client){
+    // Generic rollback table lists, generated from the table-lifecycle
+    // registry (src/table_lifecycle.js, the byte-identical twin of the
+    // xchain-indexer copy). replicaRollbackTables() yields exactly the
+    // source indexer's generic lists minus indexer-local tables that never
+    // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
+    // can no longer drift apart table-by-table: a table added to the
+    // registry joins both sides at once. Per-table rationale lives with
+    // the registry entries; the bespoke in-place resets/restores below
+    // stay hand-written (and remain drift-guarded by the parity tests in
+    // test/unit/rollback_coverage.test.js).
+    let rollbackLists = lifecycle.replicaRollbackTables();
+    client.blockTables  = rollbackLists.blockTables;
+    client.indexTables  = rollbackLists.indexTables;
+    client.dataTables   = rollbackLists.dataTables;
+}
+
+function initializeDecoderBlockTables(client){
+    // ── Decoder-DB rollback (used by rollbackDecoder) ──
+    // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
+    // are deleted before the block-scoped transactions row that gave them their
+    // tx_index scope. index_*/pubkeys/events are append-only and left untouched
+    // (the sync stream re-introduces them with INSERT IGNORE).
+    //
+    // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
+    // purely local artifacts that no longer feed any consensus value: under the
+    // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
+    // (address/tick/action/status), not from address_id/tick_id/etc. (see
+    // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/client/block_hasher.js). If a
+    // lookup id is ever reintroduced into a consensus-visible projection, these orphan
+    // rows would silently fork hashes after a reorg and this skip would become a bug.
+
+    // Block-scoped tables, deleted by block_index. Derived from the decoder
+    // replication topology (the same source ServerPoller streams from) so the
+    // stream and rollback sides can no longer drift apart table-by-table,
+    // mirroring the lifecycle-derived indexer lists above. Order matters:
+    // rollback deletes transactions before blocks (tx rows scope the tx-scoped
+    // tables above them), while the topology lists blocks first - hence the
+    // copy-and-reverse.
+    client.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
+}
+
+function initializeDecoderTxScopedTables(){
+    // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
+    // Also topology-derived. dispensers is absent from the topology's txScoped by
+    // design: it is not per-block replicated (the decoder live-prunes it, which
+    // the block stream can't model (see src/schema/replicated_tables.js)); it SEEDS from
+    // the full snapshot and is then held in parity by the periodic apply-side reconcile
+    // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace), which
+    // the dispensers (decoder) carve-out in src/schema/replicated_tables.js names as
+    // the whole of its parity story.
+    // Deleting its rows on a reorg would corrupt that replicated state with no
+    // per-block stream to restore them before the next reconcile, so a reorg leaves
+    // dispensers untouched and ClientSync arms that reconcile instead.
+    this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
+}
+
+// From this height a rollback also deletes the escrow release an orphaned legacy maturity
+// paired with its refund credit. Below it the release survives, as it did on every replica
+// before the rule, and the re-maturity then writes a second release for the one bond. Read
+// at the rollback's own target block, the same key and height the indexer reads, so a
+// replica and its source cross the switch on the same block.
+const MATURITY_ESCROW_REVERSAL_KEY = 'cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION';
+
+async function deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases){
+    let params = [gasTick, completedStatusId, blockIndex, blockIndex];
+    await db.doQuery(
+        "DELETE c FROM credits c " +
+        "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
+        "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
+        "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
+        params);
+    if(!deleteReleases) return;
+    await db.doQuery(
+        "DELETE e FROM escrows AS e " +
+        "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
+        "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
+        "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ? AND CAST(e.amount AS DECIMAL(60,18)) < 0",
+        params);
+}
+
+async function deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases){
+    let params = [completedStatusId, blockIndex, blockIndex];
+    await db.doQuery(
+        "DELETE c FROM credits c " +
+        "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
+        params);
+    if(!deleteReleases) return;
+    await db.doQuery(
+        "DELETE e FROM escrows AS e " +
+        "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
+        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ? AND CAST(e.amount AS DECIMAL(60,18)) < 0",
+        params);
+}
+
+async function reverseCooldownMaturities(db, blockIndex, network, coin){
+    try {
+        let completedStatusId = await db.getStatusId('completed');
+        let validStatusId = await db.getStatusId('valid');
+        if(completedStatusId === null || validStatusId === null) return;
+        let gasTick = gasTickSymbol();
+        let deleteReleases = gateRegistry.activeAt(MATURITY_ESCROW_REVERSAL_KEY, network, coin, Number(blockIndex), null);
+        if(gasTick){
+            await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases);
+        }
+        await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases);
+        await db.doQuery(
+            "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [validStatusId, completedStatusId, blockIndex, blockIndex]);
+        await db.doQuery(
+            "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [validStatusId, completedStatusId, blockIndex, blockIndex]);
+    } catch(e){
+        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+    }
+}
+
 class ClientRollback {
 
     constructor(db, util, coin, network) {
-        this.db   = db;
-        this.util = util;
-
-        // The replica's own network, the key for the publisher-scoped archive reset below.
-        // MANDATORY since ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION armed (2026-09-09): an
-        // omitted or misspelled network resolves to no threshold and so reads as inactive,
-        // which would silently run the legacy unscoped reset on a fleet whose source
-        // indexer runs the scoped one. That is the divergence this gate exists to prevent,
-        // so an un-wired construction site must fail loudly at construction instead.
-        // The production wiring (SyncService.startClientSyncForChain) passes cfg.network.
-        if(!ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION.hasOwnProperty(network)){
-            throw new Error('ClientRollback: network is required and must be one of ' +
-                Object.keys(ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION).join(', ') +
-                ' (got ' + JSON.stringify(network) + '); the publisher-scoped archive reset ' +
-                'is armed and an unknown network would silently fall back to the legacy unscoped rule');
-        }
-        this.network = network;
-
-        // Frozen per-chain STAKING.ACTIVATION_DELAY_BLOCKS, needed to mirror the source
-        // indexer's reorg deactivation_block re-NULL resets (see rollbackIndexer). A wrong
-        // or zero delay would wrongly clear legitimately-earned deactivations, so a coin that
-        // is supplied but unrecognized is a hard error (real misconfiguration). An omitted
-        // coin is legacy/no-op: activationDelay stays null and the deactivation mirror is
-        // skipped (with a warning) rather than run with a wrong value. The production wiring
-        // (SyncService.startClientSyncForChain) always passes cfg.coin.
-        this.coin = coin;
-        let delay = activationDelayBlocks(coin); // null if omitted, undefined if unrecognized
-        if(delay === undefined){
-            throw new Error('ClientRollback: unrecognized coin "' + coin + '" - no frozen ACTIVATION_DELAY_BLOCKS (see src/consensus-constants.js)');
-        }
-        this.activationDelay = delay;
-
-        // Generic rollback table lists, generated from the table-lifecycle
-        // registry (src/table_lifecycle.js, the byte-identical twin of the
-        // xchain-indexer copy). replicaRollbackTables() yields exactly the
-        // source indexer's generic lists minus indexer-local tables that never
-        // exist on a replica (e.g. pending_hub_pushes), so the two rollbacks
-        // can no longer drift apart table-by-table: a table added to the
-        // registry joins both sides at once. Per-table rationale lives with
-        // the registry entries; the bespoke in-place resets/restores below
-        // stay hand-written (and remain drift-guarded by the parity tests in
-        // test/unit/rollback_coverage.test.js).
-        let rollbackLists = lifecycle.replicaRollbackTables();
-        this.blockTables  = rollbackLists.blockTables;
-        this.indexTables  = rollbackLists.indexTables;
-        this.dataTables   = rollbackLists.dataTables;
-
-        // ── Decoder-DB rollback (used by rollbackDecoder) ──
-        // Decoder schema has no actions / balances / sync_meta. Tx-scoped tables
-        // are deleted before the block-scoped transactions row that gave them their
-        // tx_index scope. index_*/pubkeys/events are append-only and left untouched
-        // (the sync stream re-introduces them with INSERT IGNORE).
-        //
-        // Leaving orphan index_* rows is safe ONLY because their AUTO_INCREMENT ids are
-        // purely local artifacts that no longer feed any consensus value: under the
-        // current BLOCK_HASH_VERSION the block hashes are computed from the RESOLVED strings
-        // (address/tick/action/status), not from address_id/tick_id/etc. (see
-        // xchain-indexer/src/db/actions.js getBlockHashes + xchain-sync/src/client/block_hasher.js). If a
-        // lookup id is ever reintroduced into a consensus-visible projection, these orphan
-        // rows would silently fork hashes after a reorg and this skip would become a bug.
-
-        // Block-scoped tables, deleted by block_index. Derived from the decoder
-        // replication topology (the same source ServerPoller streams from) so the
-        // stream and rollback sides can no longer drift apart table-by-table,
-        // mirroring the lifecycle-derived indexer lists above. Order matters:
-        // rollback deletes transactions before blocks (tx rows scope the tx-scoped
-        // tables above them), while the topology lists blocks first - hence the
-        // copy-and-reverse.
-        this.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
-
-        // Tx-scoped tables, deleted by tx_index for the rolled-back blocks' transactions.
-        // Also topology-derived. dispensers is absent from the topology's txScoped by
-        // design: it is not per-block replicated (the decoder live-prunes it, which
-        // the block stream can't model (see src/schema/replicated_tables.js)); it SEEDS from
-        // the full snapshot and is then held in parity by the periodic apply-side reconcile
-        // (ClientSync.reconcileDispensers -> ClientApplier.applyDispensersReplace), which
-        // the dispensers (decoder) carve-out in src/schema/replicated_tables.js names as
-        // the whole of its parity story.
-        // Deleting its rows on a reorg would corrupt that replicated state with no
-        // per-block stream to restore them before the next reconcile, so a reorg leaves
-        // dispensers untouched.
-        this.decoderTxScopedTables = [...replicatedTables.getTopology('decoder').txScoped];
+        initializeDependencies(this, db, util);
+        initializeNetwork(this, network);
+        initializeCoin(this, coin);
+        initializeRollbackTables(this);
+        initializeDecoderBlockTables(this);
+        initializeDecoderTxScopedTables.call(this);
     }
 
     // Roll back all data at or after the given block_index.
@@ -170,9 +253,11 @@ class ClientRollback {
         // floor"; it is skipped there rather than deleting a market the source keeps.
         // Guarded on the method existing, mirroring ClientSync.persistBootstrapBase,
         // so db instances without the durable store degrade to full-history behaviour.
+        // rethrow, as the first-action read above: a fault read as "unset" would run the
+        // COINPay re-derive and the market sweep on a truncated replica's partial history.
         let truncatedReplica = false;
         if(this.db && typeof this.db.getSyncState === 'function'){
-            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'));
+            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'), { rethrow: true });
             truncatedReplica = (base !== null && base !== undefined && parseInt(base, 10) > 0);
         }
 
@@ -566,11 +651,13 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
-                // contract_stakes ← orphaned contract_unstakes (contract staking, all chains)
+                // contract_stakes ← orphaned contract_unstakes (contract staking, all chains).
+                // Join on source_id, as the indexer does: a DELEGATE v1 rotation can leave the
+                // stake and cooldown rows on different keys, so a key join misses in either order.
                 try {
                     await this.db.doQuery(
                         "UPDATE contract_stakes cs " +
-                        "JOIN contract_unstakes cu ON cu.signing_pubkey_id = cs.signing_pubkey_id " +
+                        "JOIN contract_unstakes cu ON cu.source_id = cs.source_id " +
                         "  AND cu.target_contract_index = cs.target_contract_index " +
                         "  AND cu.tick_id = cs.tick_id " +
                         "SET cs.deactivation_block = NULL " +
@@ -664,11 +751,12 @@ class ClientRollback {
 
             // Reverse orphaned cooldown-maturity completions, mirror of
             // xchain-indexer/src/rollback/cooldown_maturities.js reverseCooldownMaturities. When a capability/contract
-            // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit carrying
-            // the unstake's OWN (earlier-block) action_index and flips the surviving unstake row's
-            // status_id to 'completed' IN PLACE. Both effects live on rows whose action_index <
-            // firstActionIndex, so the dataTables delete below can't touch them; the credit has no
-            // block_index and can't be range-deleted at all. In the LEGACY attribution era the
+            // UNSTAKE cooldown matures, processCooldownCompletions writes a refund credit and a
+            // negative escrow release carrying the unstake's OWN (earlier-block) action_index,
+            // then flips the surviving unstake row's status_id to 'completed' IN PLACE. All three
+            // effects live on rows whose action_index < firstActionIndex, so the dataTables delete
+            // below can't touch them; the ledger rows have no block_index and can't be range-deleted.
+            // In the LEGACY attribution era the
             // maturity block mints NO actions row, so an orphaned range containing only such a
             // maturity leaves firstActionIndex null - this MUST run unconditionally (outside the
             // guard) or the replica keeps a phantom refund + stuck 'completed' unstake that the
@@ -677,39 +765,7 @@ class ClientRollback {
             // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
             // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
             // Runs BEFORE the dataTables delete.
-            try {
-                let completedStatusId = await this.db.getStatusId('completed');
-                let validStatusId     = await this.db.getStatusId('valid');
-                if(completedStatusId !== null && validStatusId !== null){
-                    let gasTick = gasTickSymbol();
-                    if(gasTick){
-                        // Capability maturity refund is paid in GAS, keyed by the unstake's action_index.
-                        await this.db.doQuery(
-                            "DELETE c FROM credits c " +
-                            "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
-                            "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
-                            "WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?",
-                            [gasTick, completedStatusId, block_index, block_index]);
-                    }
-                    // Contract maturity refund is paid in the unstake's own tick.
-                    await this.db.doQuery(
-                        "DELETE c FROM credits c " +
-                        "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
-                        "WHERE cu.status_id = ? AND cu.cooldown_end_block >= ? AND cu.block_index < ?",
-                        [completedStatusId, block_index, block_index]);
-                    // Reset the in-place 'completed' flip to 'valid' so the sweep re-matures the cooldown.
-                    await this.db.doQuery(
-                        "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                        [validStatusId, completedStatusId, block_index, block_index]);
-                    await this.db.doQuery(
-                        "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
-                        [validStatusId, completedStatusId, block_index, block_index]);
-                }
-            } catch(e){
-                // Schema-gap errors (missing table/column on older replicas) are safe to skip.
-                // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
-            }
+            await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
 
             // Reset an anchor batch's surviving archive-head parent (v1/v6,
             // ARCHIVE_HEAD_VERSIONS in state_hash.js) stamped 'invalid_archive' by an
@@ -776,6 +832,10 @@ class ClientRollback {
             // is a case-folding collation); an unresolvable author on either side is a NULL that
             // no equality matches, so it authenticates nothing rather than everything.
             //
+            // Encoding scope: the chunk must declare the head's own chunk count and body CRC, the
+            // identity the forward reassembly reads, so a republish of the same window in another
+            // encoding can never revive a head whose own completing chunk survives.
+            //
             // Runs BEFORE the dataTables delete, while both rows are still present. The three
             // version/stamp constants are imported from updated_rows.js so the forward carry and
             // this reverse reset cannot drift apart; the twin to change in lockstep is
@@ -789,6 +849,7 @@ class ClientRollback {
                         "JOIN attests c ON c.request_id = p.request_id " +
                         "  AND c.version = " + ATTEST_BATCH_CONTINUATION_VERSION + " " +
                         "  AND c.batch_chunk_index IS NOT NULL AND c.action_index >= ? " +
+                        "  AND c.batch_total_chunks = p.batch_total_chunks AND c.batch_crc32 = p.batch_crc32 " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         "JOIN actions ca ON ca.action_index = c.action_index AND ca.source_id = pa.source_id " +
                         "JOIN index_statuses vs ON vs.status = 'valid' " +
@@ -892,11 +953,11 @@ class ClientRollback {
 
             // validator_rewards MATERIALIZATION-block delete, mirror of
             // xchain-indexer/src/rollback/purge.js. The loop above scopes on block_index,
-            // which for a reward is its EARN block. The BTC-side anchor/archive
-            // derivation earns at the checkpoint's SNAPSHOT_BLOCK but writes the row while
-            // processing a later BTC block, stamped derive_block_index, so a reorg into that
-            // gap orphans the block that minted the reward while leaving its earn-block below
-            // the delete's scope. The replica must drop exactly the rows the source drops or
+            // which for a reward is its EARN block. A derived writer (the BTC-side
+            // anchor/archive derivation, the ROLLCALL close's rollcall_publish, a recovery
+            // restore) earns at an earlier block but writes the row while processing a later
+            // one, stamped derive_block_index, so a reorg into that gap orphans the block that
+            // minted the reward while leaving its earn-block below the delete's scope. The replica must drop exactly the rows the source drops or
             // its COLLECT rail reads a different SUM(validator_rewards). NULL (every same-block
             // writer) is never matched. Runs BEFORE the index-lookup deletes below, which
             // require no surviving row to reference an id they remove.
@@ -1040,6 +1101,30 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
 
+            // Re-NULL delegation stamps a ROLLCALL eviction in the orphaned range wrote, mirror of
+            // repairRollcallEvictions (xchain-indexer/src/db/rollback/purge.js). Runs UNCONDITIONALLY:
+            // an eviction over all-zero stakes mints no actions row, so firstActionIndex can be null.
+            // It must precede the rollcall_absences delete below, which removes its only join key.
+            if(this.activationDelay == null){
+                logger.warn('ClientRollback: rollcall eviction delegation repair skipped (no coin supplied)');
+            } else {
+                try {
+                    await this.db.doQuery(
+                        "UPDATE delegations d " +
+                        "JOIN rollcall_absences ra ON ra.source_id = d.source_id " +
+                        "SET d.deactivation_block = NULL " +
+                        "WHERE ra.evicted = 1 " +
+                        "  AND ra.close_block >= ? " +
+                        "  AND d.deactivation_block IS NOT NULL " +
+                        "  AND d.deactivation_block = ra.close_block + ?",
+                        [block_index, this.activationDelay]
+                    );
+                } catch(e){
+                    // Skip only a schema gap (a replica predating the ROLLCALL tables holds no eviction).
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
+            }
+
             // The three BTC-side ROLLCALL tables key their block scope on close_block,
             // not block_index, so like price_snapshots they fall outside the generic
             // blockTables loop and need their own delete mirroring the source indexer's.
@@ -1048,12 +1133,14 @@ class ClientRollback {
             // these stayed in it the replica would have skipped them silently on every
             // reorg and kept serving epoch verdicts and absences for orphaned blocks --
             // a replica diverging from its source with nothing reporting it.
-            try {
-                await this.db.doQuery("DELETE FROM rollcall_gates WHERE close_block >= ?", [block_index]);
-                await this.db.doQuery("DELETE FROM rollcall_absences WHERE close_block >= ?", [block_index]);
-                await this.db.doQuery("DELETE FROM rollcalls WHERE close_block >= ?", [block_index]);
-            } catch(e){
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+            // Each table has its own schema-gap guard: rollcall_gates ships in a later
+            // migration than the other two, so its absence must not skip their unwind.
+            for(const table of ['rollcall_gates', 'rollcall_absences', 'rollcalls']){
+                try {
+                    await this.db.doQuery("DELETE FROM " + table + " WHERE close_block >= ?", [block_index]);
+                } catch(e){
+                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                }
             }
 
             // oracle_prices is the per-action local mirror of PRICE v1 rows
@@ -1122,8 +1209,9 @@ class ClientRollback {
 
             // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
             // sync_meta AND merkle_epochs on reorg; the follower only mirrored
-            // sync_meta above. merkle_epochs is sync-owned, reaches followers only
-            // via the full-snapshot ride-along, and is applied INSERT IGNORE
+            // sync_meta above. merkle_epochs is sync-owned, reaches followers whole
+            // in full snapshots and in every indexer incremental catch-up
+            // (indexerFullDumpSet in snapshot_builder/table_sets.js), and is applied INSERT IGNORE
             // (ClientApplier.ignoreTables), so a reorg that re-roots a closed epoch
             // would leave the stale root in place forever: the corrected re-dump
             // collides on UNIQUE epoch and is silently skipped. Deleting the
@@ -1140,20 +1228,21 @@ class ClientRollback {
 
             // attest_validator_stats: running per-validator aggregate counters
             // (fulfilled/missed/slashed). This table is NOT block-streamed to
-            // replicas; it only arrives via full-snapshot ride-along, and the thin
+            // replicas; it arrives whole in full snapshots and in every indexer
+            // incremental catch-up (indexerFullDumpSet), and the thin
             // replica DB has none of the capability/governance machinery the source
             // uses to derive missed_count (the responsible-set capability snapshot),
             // so it cannot recompute these rows; reproducing that math here would
             // re-introduce the indexer-mirror drift the rollback guard exists to
             // catch. On reorg we therefore drop the rows whose most-recent touch is
             // in the orphaned range, so the replica never serves overcounted values
-            // and let the next full-snapshot ride-along restore correct counts
+            // and let the next incremental catch-up or full snapshot restore correct counts
             // from the (now reorg-safe) source. Contrast markets: its VALUES converge
             // via the full-dump UPSERT (ON DUPLICATE KEY UPDATE) on the next snapshot,
             // so only its two source ROW deletes need mirroring here (above).
-            // NOTE: between this DELETE and the next full snapshot, the replica
-            // serves no attest_validator_stats rows for the affected validators;
-            // this window is unbounded if full snapshots are infrequent. Acceptable
+            // NOTE: between this DELETE and the next indexer incremental catch-up,
+            // the replica serves no attest_validator_stats rows for the affected
+            // validators; a follower that stops catching up keeps the gap. Acceptable
             // trade-off: correctness is preferred over availability for this table.
             // PHASE-4 GATE: this drop is safe only while quality_score/slashed_count
             // are display aggregates with no consensus reader. Before Phase-4 lets

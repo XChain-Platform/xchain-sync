@@ -27,8 +27,7 @@
  *     applied block event rows, which already carry merged cooldown refunds).
  *   - getNetBalance renders the DECIMAL sum to a minimal-decimal string in SQL
  *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
- *     normalises both to the identical leaf value. xchain-sync has no mathjs
- *     dependency.
+ *     normalises both to the identical leaf value. This module needs no mathjs.
  *   - stakes_root IS recomputed here (BTC-only) from the ported _stakeWeightsSql +
  *     the frozen BTC capability config (consensus-constants.js), mirroring the
  *     indexer's gatherStakeEntries. Non-BTC chains commit the EMPTY_SMT_ROOT.
@@ -37,15 +36,34 @@
  *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
  *     drift guard in test/unit/rollback_coverage.test.js.
  *
- * DbNodeStore, MemoryNodeStore, PersistentSMT.update / buildFull / prove, the leaf
- * encoders, buildFullBalancesRoot, and computeBlockMerkleRoot are byte-identical to
- * the indexer; merkle.js itself is a verbatim copy. The golden vectors + the
- * persistent-vs-reference fuzz test lock the equality, and the twin cases in
- * test/unit/blockhash_conformance_twin.test.js pin the bytes.
+ * DbNodeStore, MemoryNodeStore and PersistentSMT.update / buildFull / prove are
+ * byte-identical to the indexer, and assembleStateRoot, extraSubRootColumn and
+ * reservedSubRootCandidates are identical to it in code (comments aside); merkle.js
+ * itself is a verbatim copy. The golden vectors + the persistent-vs-reference fuzz
+ * test lock the equality, and the twin cases in
+ * test/unit/blockhash_conformance_twin.test.js and its part
+ * 03_state_root_assembly_twin.test.js pin the code.
  *
- * TWO DECLARED DIVERGENCES, and they are the only ones. Each is root-neutral, each
- * is pinned by its own case in test/unit/blockhash_conformance_twin.test.js, and
- * each case fails on a move in either direction and points back here.
+ * ROOT-NEUTRAL SHAPE DIFFERENCES. Each is pinned by a case in that part which
+ * applies the difference to the indexer's code and then requires the rest to match:
+ *   - computeBlockMerkleRoot takes network/coin and hands them to getBlockLeafRows,
+ *     which applies the state_key collation flag-day there; the indexer applies it
+ *     earlier, in its getBlockHashes stash, so both hash the same rows.
+ *   - buildFullBalancesRoot builds its own PersistentSMT and runs the nonzero-net
+ *     balances SQL inline; the indexer passes the tree in (buildFullBalancesRootWith)
+ *     and runs the same SQL text through getNonzeroNetBalances.
+ *   - The leaf encoders _nz / _leafOrNull are the indexer's canonicalAmountOf /
+ *     leafOrNull (leaf_values.js) under other names.
+ *   - getNetBalance subtracts the same two DECIMAL(60,18) credit and debit sums in
+ *     SQL and renders the net through minimalDecimal, where the indexer
+ *     (db/state_commitment/ledger_reads.js) selects both sums and returns
+ *     bcstr(bcsub(cr, dr, 18)). The case pins both sums and both renders; the
+ *     e2e state_commitment_conformance suite proves the renders agree.
+ *
+ * TWO DECLARED DIVERGENCES in the twinned SMT code, and they are the only ones
+ * there. Each is root-neutral, each is pinned by its own case in
+ * test/unit/blockhash_conformance_twin.test.js, and each case fails on a move in
+ * either direction and points back here.
  *
  * DECLARED DIVERGENCE 1, the node cache: the indexer's PersistentSMT
  * carries a bounded read-through node cache (SMT_NODE_CACHE_MAX, _nodeCache,
@@ -89,6 +107,7 @@ const SUB = require('../consensus/gates/state_subtree_gate.js');
 const CST = require('../contract_state_subtree.js');
 const ESC = require('../escrow_leaf_subtree.js');
 const { minimalDecimal } = require('../db/balance_helpers.js');
+const { getLogger } = require('../observability');
 // The SQL text of the node rows and of the orphan walk's reads, byte twins of
 // the same two files in xchain-indexer so the statements stay lockstep with the
 // blocks below that issue them.
@@ -287,10 +306,11 @@ const EMPTY_CONSTANTS = (function(){
 })();
 
 // ---- Orphan-node observability (read-only; SPV spec §4.3) -------------------
-// TWIN PAIR: xchain-indexer/src/stateCommitment.js and xchain-sync/src/
-// stateCommitment.js each carry this comment + function; keep the whole block
-// BYTE-IDENTICAL, comments included (drift-guarded in both repos by
-// test/unit/blockhash-conformance-twin.test.js).
+// TWIN PAIR: xchain-indexer/src/state_commitment/persistent_smt.js and
+// xchain-sync/src/state_commitment/index.js each carry this comment + function;
+// keep the whole block BYTE-IDENTICAL, comments included (drift-guarded in both
+// repos by blockhash_conformance_twin.test.js, under test/unit/ in xchain-sync
+// and test/unit/consensus/ in xchain-indexer).
 //
 // Reports total vs reachable internal nodes in the content-addressed COW
 // state_tree_nodes store so unbounded growth (reorg orphans + per-block stake-
@@ -503,8 +523,9 @@ async function getNetBalance(db, address, tick){
 // someone remembered, with merkle.js's own twin-identity check still green.
 
 // `network`/`coin` drive the state_key collation flag-day
-// (state_key_collation_activation.js) inside getBlockLeafRows, mirroring
-// BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
+// (the state_key_collation_activation gate-registry row) inside
+// getBlockLeafRows, mirroring BlockHasher; omitted -> legacy folding collation
+// (pre-activation behavior).
 async function computeBlockMerkleRoot(db, blockIndex, network, coin){
     const rows = await db.getBlockLeafRows(blockIndex, undefined, network, coin);
     return M.toHex(M.blockMerkleRoot(M.blockMerkleLeaves(rows)));
@@ -645,21 +666,29 @@ async function buildStakesRoot(smt, chain, network, blockIndex, entries){
 }
 
 
-// ---- Follower orchestrator --------------------------------------------------
-// Compute + persist the per-block roots over the REPLICA, INSIDE the apply txn
-// (ClientApplier runs this after the row inserts + balance rebuild, before
-// commit). chain = COIN, network = NETWORK. touchedKeys is an array of
-// { address, tick } strings the applied block event touched (credits/debits/
-// escrows, cooldown refunds already merged by the source). On the activation
-// boundary block, and on the escrow-leaf ARMING block, the touched set is ignored
-// and the balances tree is fully initialized from pre-existing state.
-//
-// stakes_root is rebuilt fresh each block from the BTC capability stake set
-// (gatherStakeEntries; EMPTY on non-BTC), so the returned state_root is fully
-// verifiable; ClientSync compares balances_root + block_merkle_root + state_root.
-async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys, isActivationBlock){
-    const smt = new PersistentSMT(new DbNodeStore(db));
+// Read the prior row BEFORE the gate, because a MISSING one is a third
+// full-build trigger, matching the source twin's `!prior.length`. A follower
+// reaches this with no block-1 row after a snapshot bootstrap, a rollback that
+// took the row below this height, or a resume over a data gap. Threading from
+// EMPTY_ROOT_HEX there commits a balances_root covering only THIS block's
+// touched keys, which is the fork the indexer twin's own comment says not to
+// substitute; buildFullBalancesRoot derives the root from the whole current
+// net-balance set, so at this point in the apply it yields the root the
+// incremental thread would have produced. Self-healing instead of a false halt.
+// balances_root is NOT NULL in state_tree_roots, so the row test and the source's
+// row-count test select the same blocks.
+function lookupFollowerPriorRoot(db, chain, network, blockIndex){
+    return db.getStateRootsRow(chain, network, blockIndex - 1);
+}
 
+// XCHAIN_ESC locked-balance leaves for this block (Stage B), height-gated.
+// Applied AFTER the spendable leaves and driven by its OWN touched set: an
+// order match writes the escrows release row against the recipient
+// GET_ADDRESS while the leaf that moves is the LOCKER's, so the balance
+// touched set is the wrong input and reusing it would update the wrong key
+// and miss the right one on every match. The journal answers per locker.
+async function computeFollowerBalancesRoot(db, smt, chain, network, blockIndex, touchedKeys,
+        isActivationBlock){
     // When the escrow leaf is SHADOWING, the incremental branch also collects
     // this block's spendable-leaf updates so the shadow thread can replay the
     // identical spendable set on its own root (null on the full branch, which
@@ -680,58 +709,62 @@ async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys,
     // from source-vs-snapshot to source-vs-follower.
     const armingBlock = SUB.isEscrowLockedLeafActive(blockIndex, network, chain) &&
                         !SUB.isEscrowLockedLeafActive(blockIndex - 1, network, chain);
-    let shadowBalanceUpdates = null;
-    let balancesRoot;
-    // Read the prior row BEFORE the gate, because a MISSING one is a third
-    // full-build trigger, matching the source twin's `!prior.length`. A follower
-    // reaches this with no block-1 row after a snapshot bootstrap, a rollback that
-    // took the row below this height, or a resume over a data gap. Threading from
-    // EMPTY_ROOT_HEX there commits a balances_root covering only THIS block's
-    // touched keys, which is the fork the indexer twin's own comment says not to
-    // substitute; buildFullBalancesRoot derives the root from the whole current
-    // net-balance set, so at this point in the apply it yields the root the
-    // incremental thread would have produced. Self-healing instead of a false halt.
-    // balances_root is NOT NULL in state_tree_roots, so the row test and the source's
-    // row-count test select the same blocks.
-    const prior = isActivationBlock ? null : await db.getStateRootsRow(chain, network, blockIndex - 1);
+    const prior = isActivationBlock ? null :
+        await lookupFollowerPriorRoot(db, chain, network, blockIndex);
     const noPriorRoot = !(prior && prior.balances_root);
     if(isActivationBlock || armingBlock || noPriorRoot){
         if(!isActivationBlock && !armingBlock)
-            console.warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
+            getLogger().warn('stateCommitment: no prior state_tree_roots row for ' + chain + '/' + network +
                 ' block ' + (blockIndex - 1) + '; full-recomputing balances_root for block ' + blockIndex +
                 ' instead of threading from the empty root (snapshot-bootstrap or activation rolled below this height)');
-        balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
-    } else {
-        let root = prior.balances_root;
-        if(escShadow) shadowBalanceUpdates = [];
-        for(const entry of (touchedKeys || [])){
-            const address = entry.address, tick = entry.tick;
-            if(address == null || tick == null || tick === '') continue;
-            const balLeaf = _leafOrNull(await getNetBalance(db, address, tick));
-            const balKey  = M.balanceKey(chain, network, address, tick);
-            root = await smt.update(root, balKey, balLeaf);
-            if(shadowBalanceUpdates) shadowBalanceUpdates.push({ key: balKey, leaf: balLeaf });
-        }
-        // XCHAIN_ESC locked-balance leaves for this block (Stage B), height-gated.
-        // Applied AFTER the spendable leaves and driven by its OWN touched set: an
-        // order match writes the escrows release row against the recipient
-        // GET_ADDRESS while the leaf that moves is the LOCKER's, so the balance
-        // touched set is the wrong input and reusing it would update the wrong key
-        // and miss the right one on every match. The journal answers per locker.
-        if(SUB.isEscrowLockedLeafActive(blockIndex, network, chain)){
-            root = await ESC.applyEscrowLeaves(db, smt, root, chain, network, blockIndex);
-        }
-        balancesRoot = root;
+        const balancesRoot = await buildFullBalancesRoot(db, chain, network, blockIndex);
+        return { balancesRoot, shadowBalanceUpdates: null, escShadow };
     }
+    let root = prior.balances_root;
+    const shadowBalanceUpdates = escShadow ? [] : null;
+    for(const entry of (touchedKeys || [])){
+        const address = entry.address, tick = entry.tick;
+        if(address == null || tick == null || tick === '') continue;
+        const balLeaf = _leafOrNull(await getNetBalance(db, address, tick));
+        const balKey  = M.balanceKey(chain, network, address, tick);
+        root = await smt.update(root, balKey, balLeaf);
+        if(shadowBalanceUpdates) shadowBalanceUpdates.push({ key: balKey, leaf: balLeaf });
+    }
+    if(SUB.isEscrowLockedLeafActive(blockIndex, network, chain)){
+        root = await ESC.applyEscrowLeaves(db, smt, root, chain, network, blockIndex);
+    }
+    return { balancesRoot: root, shadowBalanceUpdates, escShadow };
+}
+
+async function computeFollowerStakesRoot(db, smt, chain, network, blockIndex){
+    const stakeEntries = await gatherStakeEntries(db, chain, network, blockIndex);
+    return await buildStakesRoot(smt, chain, network, blockIndex, stakeEntries);
+}
+
+// ---- Follower orchestrator --------------------------------------------------
+// Compute + persist the per-block roots over the REPLICA, INSIDE the apply txn
+// (ClientApplier runs this after the row inserts + balance rebuild, before
+// commit). chain = COIN, network = NETWORK. touchedKeys is an array of
+// { address, tick } strings the applied block event touched (credits/debits/
+// escrows, cooldown refunds already merged by the source). On the activation
+// boundary block, and on the escrow-leaf ARMING block, the touched set is ignored
+// and the balances tree is fully initialized from pre-existing state.
+//
+// stakes_root is rebuilt fresh each block from the BTC capability stake set
+// (gatherStakeEntries; EMPTY on non-BTC), so the returned state_root is fully
+// verifiable; ClientSync compares balances_root + block_merkle_root + state_root.
+async function computeFollowerRoots(db, chain, network, blockIndex, touchedKeys, isActivationBlock){
+    const smt = new PersistentSMT(new DbNodeStore(db));
+    const balances = await computeFollowerBalancesRoot(
+        db, smt, chain, network, blockIndex, touchedKeys, isActivationBlock);
+    const { balancesRoot, shadowBalanceUpdates, escShadow } = balances;
 
     // stakes_root: BTC-only; non-BTC commit the empty-SMT root. Rebuilt fresh from
     // the authoritative capability stake set (small, bounded by VALIDATOR_QUERY_LIMIT),
     // matching the indexer's gatherStakeEntries.
     let stakesRoot = EMPTY_ROOT_HEX;
-    if(chain === 'BTC'){
-        const stakeEntries = await gatherStakeEntries(db, chain, network, blockIndex);
-        stakesRoot = await buildStakesRoot(smt, chain, network, blockIndex, stakeEntries);
-    }
+    if(chain === 'BTC')
+        stakesRoot = await computeFollowerStakesRoot(db, smt, chain, network, blockIndex);
 
     const extraSubRoots   = SUB.gateSubRoots(await reservedSubRootCandidates(db, chain, network, blockIndex), blockIndex, network, chain);
     const stateRoot       = assembleStateRoot(balancesRoot, stakesRoot, extraSubRoots);

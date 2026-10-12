@@ -33,7 +33,7 @@ xchain-sync/
 
 ### Prerequisites
 
-- **Node.js 22** exactly. The platform pins Node 22 fleet-wide: the `mariadb` driver is ESM-only (Node 18 fails with `ERR_REQUIRE_ESM`), and newer majors are not validated against the stack. `engines.node` declares `>=22.0.0`; use 22.
+- **Node.js 22** exactly. The platform pins Node 22 fleet-wide: the `mariadb` driver is ESM-only (Node 18 fails with `ERR_REQUIRE_ESM`), and newer majors are not validated against the stack. `engines.node` declares `>=22.0.0 <23`; use 22.
 - **MariaDB** reachable from the sync host for anything beyond unit tests.
 - A running `xchain-hub` instance for hub auto-discovery (server mode) or a configured `SYNC_SOURCES` list (client mode). For local work, a regtest stack provides both.
 
@@ -108,6 +108,7 @@ CI is the smoke + unit gate. Before opening a PR:
 2. Update `CHANGELOG.md` with a terse entry for your change.
 3. Make sure `git status` is clean apart from intended changes (no `node_modules/`, no editor leftovers, no `.env`).
 4. Open the PR with a clear title and a description of what changed and why.
+5. Agree to the Contributor License Agreement when the CLA Assistant bot links it on your first PR. Its `license/cla` check must pass before merge, so a PR from a contributor who has not signed cannot be merged. One signature covers every XChain Platform repository.
 
 For non-security bugs, open an issue at <https://github.com/XChain-Platform/xchain-sync/issues/new>. For security bugs, see [`SECURITY.md`](./SECURITY.md).
 

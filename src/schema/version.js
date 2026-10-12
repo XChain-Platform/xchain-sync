@@ -15,13 +15,15 @@
  * XChain Sync - Snapshot Schema Version
  *
  * SCHEMA_VERSION carries an independent version per dbType ({ indexer, decoder }).
- * Bump only the key whose replicated DB had a DDL change (column added, dropped,
- * renamed, or type changed; index added, dropped, or changed; or a primary-key,
- * foreign-key, or constraint change) OR a wire-encoding change to its row values. Keeping
- * the two versions separate means a schema change to one DB does not force the
- * other dbType's validators to restart; only validators of the changed dbType
- * see a mismatch. Mismatched versions cause those validators to refuse the
- * snapshot and log a clear error rather than silently corrupting replica state.
+ * Bump only the key whose replicated DB had a DDL change that affects what rows a
+ * follower can store (a column, primary key, foreign key, unique index or constraint
+ * change) OR a wire-encoding change to its row values. A non-unique secondary-index-
+ * only migration changes query performance rather than replicated columns or payload
+ * shape, so it is recorded at MIGRATION_FRONTIER without a version bump. Keeping the
+ * two versions separate means a schema change to one DB does not force the other
+ * dbType's validators to restart; only validators of the changed dbType see a mismatch.
+ * Mismatched versions cause those validators to refuse the snapshot and log a clear
+ * error rather than silently corrupting replica state.
  * After bumping a key, that dbType's validators must be restarted (or will
  * restart automatically on the next bootstrap) so that fetchAndApplySchema
  * re-runs against the new schema.
@@ -164,7 +166,7 @@
  *       fails the block, and where it flows through, every leg lands on the implicit
  *       default and the follower answers leg order from nothing while its source
  *       answers from the wire. Nothing here enters a block-hash preimage: `destroys`
- *       and `sends` are DERIVED in src/tableLifecycle.js, a deterministic projection
+ *       and `sends` are DERIVED in src/table_lifecycle.js, a deterministic projection
  *       of already-hashed actions in no hash class of their own, rolled back by
  *       `action_index >= ?`, which is agnostic to the row's column set. The
  *       migration is mode=auto, so it self-heals fleet-wide on the forced restart.
@@ -194,32 +196,88 @@
  *       src/table_lifecycle/action_tables.js and rolled back by
  *       `action_index >= ?`. No row is written below LIST_META_ACTIVATION, and
  *       the migration is mode=auto. Decoder is unaffected and stays at 4.
+ *  15 - (indexer only) secondary indexes added by the 2026-10-06-resolved-block-idx
+ *       migration: (version, resolved_block) on `attests` and `xcalls`, and
+ *       resolved_block and callback_due_block on `polls`, so the per-block state-hash
+ *       collectors, the resolved-row sync reads and the reorg resets stop scanning
+ *       whole tables. A v14 follower can still store every streamed row; the bump
+ *       records the index change as this file's rule requires, and an aged follower
+ *       gains the same four indexes at startup from ensureReplicaBlockIndexes.
+ *       Nothing here enters a block-hash preimage. The migration is mode=auto.
+ *       Decoder is unaffected and stays at 4.
+ * Index-only frontier record (no version bump): the
+ *       2026-10-07-ledger-covering-index migration adds non-unique
+ *       (tick_id, action_index, amount) covering indexes to `credits`, `debits`
+ *       and `escrows`. It changes neither replicated columns nor payload shape,
+ *       so an older follower can still store every streamed row.
+ *  16 - (indexer only) the forward-dated 2026-10-08-token-bridge-fields
+ *       migration is the byte-identical re-key of the retired
+ *       2026-09-12-token-bridge-fields migration. It adds the ISSUE format 7 bridge
+ *       opt-in columns to the wire-replicated `issues` and `tokens` tables:
+ *       bridge_chains, min_depth and lock_bridge on both, plus bridged on tokens.
+ *       These shapes were first versioned at 11, so an installation that applied
+ *       the retired migration has no live schema change. An installation that
+ *       missed it can still identify as v15 without the columns, however; this bump
+ *       forces a schema refresh before it accepts those rows. The same frontier date
+ *       carries 2026-10-08-state-tree-roots-block-index-idx, a non-unique secondary
+ *       index on the follower-derived `state_tree_roots` table, so it is recorded
+ *       index-only. Decoder is unaffected and stays at 4.
+ *  17 - (indexer only) `bet_edits`, a new table (BET format 4 membership-list
+ *       edits) created by the 2026-10-09-bet-edits migration. It is stream:action
+ *       wire-replicated, so a v16 follower has no table to receive the streamed
+ *       rows and fails the block under ClientApplier's strict apply. It is DERIVED
+ *       in src/table_lifecycle/action_tables.js and rolled back by
+ *       `action_index >= ?`. The same frontier date carries
+ *       2026-10-09-remote-token-snapshots, which touches no wire-replicated table.
+ *       Decoder is unaffected and stays at 4.
+ *  18 - (indexer) and 5 - (decoder): BIGINT values past Number.MAX_SAFE_INTEGER
+ *       travel as their exact base-10 string instead of a rounded JSON Number
+ *       (src/util/wire_codec.js bigIntTypeCast, installed on the shared pool);
+ *       safe integers are still JSON Numbers, so no row below 2^53 changes on
+ *       the wire. The columns this reaches are the unsigned 64-bit ones the
+ *       protocol accepts up to 2^64-1: `expiration` on orders, swaps,
+ *       dispensers, their edit tables and coinpay_obligations, bet_feeds
+ *       `deadline`, `refund_window` and `expire_at`, tokens
+ *       `callback_block`, `mint_start_block` and `mint_stop_block`, and
+ *       decoder `dispensers.expiration`. The shared pool serves both dbTypes,
+ *       so both keys advance together. No DDL is involved and either side can
+ *       store either form; the bump is what pairs the two ends, because an
+ *       older follower reads its own rows back rounded and an older server
+ *       sends them rounded, so a mixed pair would disagree on exactly these
+ *       values with nothing to say why. Rows a follower already stored rounded
+ *       are not rewritten by this change; they are corrected by a re-snapshot.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
  * above, and `accounted` names the migration files bearing exactly that date
  * (dates are not unique, so the tail has to be enumerated or a same-day
- * migration would hide behind the cursor). test/unit/schema_version_gate.test.js
- * reads both, walks the sibling migration ledgers, and fails when a migration
- * past the frontier carries DDL against a wire-replicated table of that dbType
- * while the frontier stands still. Pure-DML backfills do not change what a
- * follower can store and are not flagged. Per the operator ruling of 2026-09-09
- * the answer to a red gate is a bump carried by the next fleet release (the
- * version decides what peers ACCEPT, so a drive-by edit strands the fleet),
- * never a frontier advance on its own.
+ * migration would hide behind the cursor). `indexOnly` identifies the accounted
+ * files that did not receive a version bump, so the gate also verifies their
+ * replicated DDL remains non-unique secondary-index-only.
+ * test/unit/schema_version_gate.test.js reads both, walks the sibling migration
+ * ledgers, and fails when a migration past the frontier carries DDL against a
+ * wire-replicated table of that dbType while the frontier stands still. Pure-DML
+ * backfills do not change what a follower can store and are not flagged. Per the
+ * operator ruling of 2026-09-09,
+ * payload-affecting DDL requires a bump carried by the next fleet release because
+ * the version decides what peers ACCEPT. A reviewed non-unique secondary-index-only
+ * migration can advance the frontier without a bump when an accounting comment names
+ * the migration and records that it changes neither replicated columns nor payload shape.
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 14, decoder: 4 };
+const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-01',
+        through: '2026-10-09',
         accounted: [
-            '2026-10-01-list-metas.sql',
-            '2026-10-01-list-transfers.sql',
-            '2026-10-01-response-mirror-batch-action-index.sql'
-        ]
+            // New stream:action table, versioned at 17.
+            '2026-10-09-bet-edits.sql',
+            // No wire-replicated table changes.
+            '2026-10-09-remote-token-snapshots.sql'
+        ],
+        indexOnly: []
     },
     decoder: {
         through: '2026-08-22',

@@ -243,3 +243,24 @@ describe('ClientSync security', function(){
         });
     });
 });
+
+describe('ClientSync security', function(){
+    registerHooks();
+
+    describe('handleReorg: cumulative rollback depth', function(){
+        it('HALTS when several shallow reorgs sum past MAX_ROLLBACK_DEPTH', async function(){
+            let ClientSync = loadClientSync();
+            let config = createConfig({ MAX_ROLLBACK_DEPTH: 5 });
+            let sync = new ClientSync('bitcoin', 'mainnet', db, applier, rollback, hashVerifier, config, util);
+            sync.lastAppliedBlock = 100;
+            sync.lastHashes = null;
+
+            await sync.handleReorg({ type: 'reorg', block_index: 98 }); // depth 3
+            await sync.handleReorg({ type: 'reorg', block_index: 96 }); // cumulative 5
+            assert.strictEqual(sync.isHalted(), false);
+            await sync.handleReorg({ type: 'reorg', block_index: 95 }); // cumulative 6
+            assert.strictEqual(sync.isHalted(), true);
+            assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
+        });
+    });
+});
