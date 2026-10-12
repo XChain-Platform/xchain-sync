@@ -108,16 +108,19 @@ describe('Integration: ClientRollback', function() {
             // Rollback to block 6 (removes blocks 6-10, keeping 1-5)
             await rollback.rollback(6);
 
-            // Verify balances recalculated
-            let balancesAfter = await replicaDb.doQuery("SELECT * FROM balances");
-            assert.ok(balancesAfter.length > 0);
-
-            // Each remaining block credits a distinct address 500, so this count
-            // stands in for an exact per-address balance check.
-            // Each remaining block had a credit of 500
-            // With unique addresses per block, each address should have 500
             let creditsRemaining = await testDb.getRowCount(replicaDb, 'credits');
             assert.strictEqual(creditsRemaining, 5);
+
+            // Seeding already rebuilt 10 balance rows, so only the rollback's own rebuild
+            // can bring them to the five surviving addresses of 500 each and drop the rest.
+            let balancesAfter = await replicaDb.doQuery("SELECT * FROM balances");
+            assert.strictEqual(balancesAfter.length, 5, 'one balance row per surviving credited address');
+            for (let row of balancesAfter)
+                assert.strictEqual(Number(row.amount), 500, 'stale balance amount ' + row.amount);
+            let orphaned = await replicaDb.doQuery(
+                "SELECT COUNT(*) AS n FROM balances b LEFT JOIN credits c " +
+                "ON c.address_id = b.address_id AND c.tick_id = b.tick_id WHERE c.address_id IS NULL");
+            assert.strictEqual(Number(orphaned[0].n), 0, 'balances kept rows for rolled-back credits');
         });
 
         it('excludes zero-balance entries', async function() {
@@ -126,6 +129,12 @@ describe('Integration: ClientRollback', function() {
                 creditAmount: '1000', debitAmount: '1000',
                 sourceAddr: 'same_addr', tickName: 'ZERO'
             });
+
+            // Seeding leaves balances empty, so plant a stale non-zero row that only the
+            // rollback's own rebuild can remove.
+            let pair = await replicaDb.doQuery("SELECT address_id, tick_id FROM credits LIMIT 1");
+            await replicaDb.doQuery("INSERT INTO balances (address_id, tick_id, amount) VALUES (?, ?, ?)",
+                [pair[0].address_id, pair[0].tick_id, '1000']);
 
             await rollback.rollback(3);
 

@@ -7,6 +7,7 @@ const {
     assert,
     sinon,
     makeDb,
+    fakeConn,
     silenceConsole,
 } = require('./support/helpers');
 
@@ -64,6 +65,30 @@ describe('Database halt methods', function () {
         assert.strictEqual(insertArgs[2], 'divergence');
         assert.strictEqual(insertArgs[3], '[]');
         assert.strictEqual(insertArgs[4], '[]');
+    });
+});
+
+// The halt row is the only sync-halt signal the bootstrap gate reads, so a failed
+// write must reject so the callers' CRITICAL catch fires; resolving reads as success.
+describe('Database halt writes propagate a persistence failure @regression', function () {
+    let db;
+    beforeEach(function () { silenceConsole(); db = makeDb(); });
+    afterEach(async function () { sinon.restore(); await db.close(); });
+
+    it('recordHalt: rejects when the sync_halt INSERT fails outside a transaction', async function () {
+        sinon.stub(db, 'getActiveHalt').resolves(null);
+        let conn = fakeConn();
+        conn.query.rejects(new Error('sync_halt insert: lock wait timeout'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(() => db.recordHalt('indexer', 700, 'divergence', [], []), /sync_halt insert/);
+        assert.ok(conn.release.calledOnce, 'the pooled connection is still released');
+    });
+
+    it('clearHalt: rejects when the sync_halt UPDATE fails outside a transaction', async function () {
+        let conn = fakeConn();
+        conn.query.rejects(new Error('sync_halt clear: server gone away'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        await assert.rejects(() => db.clearHalt('indexer'), /sync_halt clear/);
     });
 });
 

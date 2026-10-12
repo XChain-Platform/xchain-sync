@@ -113,6 +113,16 @@ const SOURCE_UNSTREAMED_TABLES = new Set([
     'merkle_reorgs',
 ]);
 
+// Replica-owned migration ledger. Each node's own migration runner records what it
+// applied here, so the source never streams it (full or incremental) and the
+// applier never applies a shipped copy nor clears the replica's rows. Disjoint from
+// both sets above: OPERATOR_LOCAL_TABLES pins its non-registry members, and
+// SOURCE_UNSTREAMED_TABLES is cleared on full-snapshot apply, which would erase the
+// replica's own ledger. The builder and ClientApplier both read this one Set.
+const REPLICA_LEDGER_TABLES = new Set([
+    'schema_migrations',
+]);
+
 // Priority ordering for tables that must come first (index/dedup, then core).
 // Any tables not in this list are included alphabetically after these.
 const PRIORITY_TABLES = [
@@ -290,9 +300,30 @@ function indexerFullDumpSet(){
     ]);
 }
 
+// Indexer 'snapshot'-class tables the incremental path deliberately omits. None has
+// a block_index or action_index cursor, so without this classification each one
+// reaches the action_index query, raises errno 1054 and is dropped as though the
+// source schema were older. Each rides the full snapshot only:
+//   - balances: derived aggregate; the follower rebuilds the touched rows from the
+//     credits/debits it applies (ClientApplier.rebuildBalancesTouchedBy).
+//   - state_tree_nodes: content-addressed SMT node store with no block or action
+//     key; the follower re-seeds its own tree (seedSnapshotRoots) after the apply.
+//   - push_generations: the source node's hub-push reorg fence counter, bumped in
+//     its own rollback; no replica reads it. Its registry entry pairs replication
+//     'snapshot' with replicaRollback 'local'; once that entry leaves the
+//     'snapshot' class, the incremental classification test asks for its removal.
+// Payload-neutral: these tables already contributed no rows to an incremental.
+const INDEXER_INCREMENTAL_SKIP = new Set([
+    'balances',
+    'state_tree_nodes',
+    'push_generations',
+]);
+
 module.exports = {
     OPERATOR_LOCAL_TABLES,
     SOURCE_UNSTREAMED_TABLES,
+    REPLICA_LEDGER_TABLES,
+    INDEXER_INCREMENTAL_SKIP,
     PRIORITY_TABLES,
     TRAILING_TABLES,
     INDEXER_INBAND_PAGED,

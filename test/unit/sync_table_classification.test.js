@@ -21,7 +21,9 @@
 //     on full-snapshot apply), or
 //   - SnapshotBuilder.SOURCE_UNSTREAMED_TABLES (never streamed, but still
 //     CLEARED on full-snapshot apply so previously-imported foreign copies
-//     heal).
+//     heal), or
+//   - SnapshotBuilder.REPLICA_LEDGER_TABLES (never streamed, never applied,
+//     and clear-PROTECTED: the replica's own migration ledger).
 //
 // merkle_reorgs fell through every set until 2026-07: full snapshots shipped
 // the source node's reorg audit trail to every bootstrapping replica while the
@@ -34,7 +36,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const lifecycle = require('../../src/table_lifecycle');
-const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES } = require('../../src/server/snapshot_builder');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, REPLICA_LEDGER_TABLES } = require('../../src/server/snapshot_builder');
 
 describe('sync-owned table classification (registry exhaustiveness)', function(){
     const sqlDir = path.join(__dirname, '../../src/sql');
@@ -50,6 +52,7 @@ describe('sync-owned table classification (registry exhaustiveness)', function()
                 lifecycleTables.has(table) ? 'tableLifecycle' : null,
                 OPERATOR_LOCAL_TABLES.has(table) ? 'OPERATOR_LOCAL_TABLES' : null,
                 SOURCE_UNSTREAMED_TABLES.has(table) ? 'SOURCE_UNSTREAMED_TABLES' : null,
+                REPLICA_LEDGER_TABLES.has(table) ? 'REPLICA_LEDGER_TABLES' : null,
             ].filter(Boolean);
             // A lifecycle entry may legitimately pair with OPERATOR_LOCAL_TABLES
             // (state_tree_roots: the entry itself documents the exclusion), so the

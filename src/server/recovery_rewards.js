@@ -70,7 +70,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
         let rows = await db.findRedrivenValidatorRewards(from, to, conn);
-        // round_qualifier closes the key, exactly as in derivedRewards.js: two distinct
+        // round_qualifier closes the key, exactly as in derived_rewards.js: two distinct
         // archive rewards can share the four older columns after a hub rebase reissues
         // MATCH_BATCH_SEQ, and on the four-column key the second overwrites the first here
         // and never reaches the replica. recovery_pending_rewards has no round_qualifier
@@ -88,7 +88,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // and must surface: both callers wrap this in the isSchemaGapError gate that
         // freezes the block cursor / aborts the snapshot stream, and swallowing here
         // makes those gates dead code and ships the block short its backdated rows.
-        // Mirrors derivedRewards.js on the same rail.
+        // Mirrors derived_rewards.js on the same rail.
         if(!isSchemaGapError(e)) throw e;
     }
 

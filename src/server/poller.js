@@ -1168,9 +1168,14 @@ class ServerPoller {
     }
 
     collectPayloadReferenceIds(payload){
+        return this.collectReferenceIds(payload.data);
+    }
+
+    // Pool every non-null `*_id` value across a { table: [rows] } map.
+    collectReferenceIds(tables){
         let refIds = new Set();
-        for(let t in payload.data){
-            let rows = payload.data[t];
+        for(let t in tables){
+            let rows = tables[t];
             if(!Array.isArray(rows)) continue;
             for(let row of rows){
                 for(let col in row){
@@ -1301,8 +1306,41 @@ class ServerPoller {
                 logger.error(util.format('updated_rows collection failed for block ' + block_index + ':', e));
                 if(!isSchemaGapError(e)) throw e;
             }
+            if(payload.updated_rows) await this.addUpdatedRowLookups(payload, conn);
         }
         return payload;
+    }
+
+    // An in-place stamp can intern its status (or another lookup value) in this block
+    // with only the updated row referencing it, so the payload.data scan above never
+    // sees that id and the follower stores a status_id it cannot resolve. Ship the
+    // lookup rows the updated rows reference in payload.data, merged by id, so the
+    // follower inserts them (INSERT IGNORE) before it upserts the updated rows.
+    async addUpdatedRowLookups(payload, conn){
+        let refIds = [...this.collectReferenceIds(payload.updated_rows)];
+        if(refIds.length === 0) return;
+        for(let table of this.indexTables){
+            // index_transactions is reached only by *_hash_id, never by the *_id scan.
+            if(table === 'index_transactions') continue;
+            let existing = payload.data[table] || [];
+            let shipped = new Set(existing.map(row => row.id));
+            let missing = refIds.filter(id => !shipped.has(id));
+            if(missing.length === 0) continue;
+            try {
+                let rows = await this.db.findRowsByIds(table, missing, conn);
+                if(!rows || rows.length === 0) continue;
+                for(let row of rows){
+                    if(shipped.has(row.id)) continue;
+                    shipped.add(row.id);
+                    existing.push(row);
+                }
+                payload.data[table] = existing;
+            } catch(e){
+                // Skip a genuine schema gap; re-throw any transient fault so the
+                // block is retried rather than broadcast incomplete.
+                if(!isSchemaGapError(e)) throw e;
+            }
+        }
     }
 
     // Emit a throttled [METRIC] line recording how many action-scoped round-trips a

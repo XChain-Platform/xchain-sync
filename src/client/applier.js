@@ -28,7 +28,7 @@ const { generatedColumns }   = require('../schema/generated_columns');
 const { computeFollowerRoots, seedSnapshotRoots } = require('../state_commitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('../consensus/gates/state_commitment_gate');
 const { coinTicker }      = require('../consensus-constants');
-const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, REPLICA_LEDGER_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
 const lifecycle           = require('../table_lifecycle');
 const util = require('node:util');
 const { getLogger } = require('../observability');
@@ -53,11 +53,9 @@ const ESCROW_TRIGGER_TABLES = new Set([
     'dispensers', 'dispenser_statuses', 'tokens'
 ]);
 
-// Replica-owned migration ledger: the replica's own runner records applied
-// migrations here, so a source copy is never applied and the full-snapshot clear
-// loop never deletes the replica's rows. Classified explicitly so the table is not
-// shipped by accident nor swallowed (errno 1054) by the incremental fall-through.
-const REPLICA_LEDGER_TABLES = new Set(['schema_migrations']);
+// REPLICA_LEDGER_TABLES (snapshot_builder/table_sets.js) is the replica-owned
+// migration ledger: a source copy that still arrives is never applied, and the
+// full-snapshot clear loop never deletes the replica's rows.
 
 function initializeCoreState(applier, db, util, chain, network) {
     applier.db = db;
@@ -363,10 +361,14 @@ class ClientApplier {
         if(e.errno !== 1146 && e.errno !== 1054) throw e;
     }
 
-    isClearableTable(table){
-        let tCheck = validation.validateIdentifier(table);
-        if(!tCheck.valid) logger.error('Skipping clear of invalid table: ' + table);
-        return tCheck.valid;
+    // Refuses the whole clear set before any DELETE runs (fail closed, as validateInsertTable).
+    // A skipped local-only table would keep its old rows inside a committed snapshot.
+    assertClearableTables(tables){
+        for(let table of tables){
+            let tCheck = validation.validateIdentifier(table);
+            if(!tCheck.valid)
+                throw new Error('Rejected table name in full-snapshot clear: ' + table + ' (' + tCheck.reason + '); rename or drop the table');
+        }
     }
 
     logLargeTableInsert(table, rows){
@@ -405,11 +407,10 @@ class ClientApplier {
             }
 
             let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            this.assertClearableTables(tables);
             // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
-            for(let i = tables.length - 1; i >= 0; i--){
-                if(!this.isClearableTable(tables[i])) continue;
+            for(let i = tables.length - 1; i >= 0; i--)
                 await this.db.deleteAllRows(tables[i]);
-            }
 
             for(let table of tables){
                 let rows = snapshotData.tables[table];

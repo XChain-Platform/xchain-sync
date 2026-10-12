@@ -109,6 +109,64 @@ describe('ClientSync rollback guard persistence', function(){
         assert.deepStrictEqual(sync.rollbackGuardState(), { peak: null, low: null });
         assert.strictEqual(errorStub.called, true);
     });
+
+    it('writes the guard state strictly so a swallowed query fault cannot pass as saved', async function(){
+        const db = makeDb(new Map());
+        const { sync } = makeSync(db);
+        sync.lastAppliedBlock = 100;
+
+        await sync.handleReorg({ type: 'reorg', block_index: 98 });
+
+        assert.deepStrictEqual(db.setSyncState.firstCall.args[2], { rethrow: true });
+    });
+
+    it('refuses the rollback and halts when the guard state write answers false', async function(){
+        const db = makeDb(new Map());
+        db.setSyncState.resolves(false);
+        const { sync, rollback } = makeSync(db);
+        sync.lastAppliedBlock = 100;
+
+        await sync.handleReorg({ type: 'reorg', block_index: 98 });
+
+        assert.strictEqual(rollback.rollback.called, false,
+            'a rollback must never commit while its streak is not durable');
+        assert.strictEqual(sync.getHaltInfo().reason, 'reorg-rollback-failed');
+        assert.strictEqual(sync.lastAppliedBlock, 100);
+    });
+
+    it('refuses the rollback and halts when the strict guard state write throws', async function(){
+        const db = makeDb(new Map());
+        db.setSyncState.rejects(new Error('sync_state upsert failed'));
+        const { sync, rollback } = makeSync(db);
+        sync.lastAppliedBlock = 100;
+
+        await sync.handleReorg({ type: 'reorg', block_index: 98 });
+
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(sync.getHaltInfo().reason, 'reorg-rollback-failed');
+        assert.strictEqual(sync.lastAppliedBlock, 100);
+    });
+});
+
+describe('Database.setSyncState strict write', function(){
+    const { makeDb: makeRealDb, fakeConn, silenceConsole } = require('../db.test/support/helpers');
+    let db;
+
+    beforeEach(function(){ silenceConsole(); db = makeRealDb(); });
+    afterEach(async function(){ sinon.restore(); await db.close(); });
+
+    it('throws an upsert fault under opts.rethrow and still releases the connection', async function(){
+        const conn = fakeConn();
+        conn.query.rejects(new Error('lock wait timeout'));
+        sinon.stub(db, 'getConnection').resolves(conn);
+        db._syncStateReady = true;
+
+        await assert.rejects(
+            () => db.setSyncState('rollback_guard:indexer', '{}', { rethrow: true }),
+            /lock wait timeout/
+        );
+        assert.ok(conn.release.calledOnce);
+    });
 });
 
 describe('ClientSync rollback guard reset boundaries', function(){

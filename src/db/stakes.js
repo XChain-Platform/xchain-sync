@@ -254,7 +254,9 @@ module.exports = {
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         let sw = this.stakeWeightsSql(valid_id, blockIndex, String(minStake));
-        let { rows } = await this.applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
+        let { rows, truncated } = await this.applyStakeWeightCap(sw, blockIndex, limit, coin, network, 'getStakeWeightsByCapability(' + capability + ')');
+        // Surface an overflow on the array, as the indexer twin does, for the quorum guard
+        if(truncated) rows.truncated = true;
         return rows;
     },
 
@@ -283,7 +285,9 @@ module.exports = {
         let valid_id = await this.getStatusId('valid', { rethrow: true });
         if(valid_id === null) return [];
         let query = buildStakeWeightsAsOfQuery(valid_id, snapshotBlock, minStake);
-        let { rows } = await this.applyStakeWeightCap(query, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
+        let { rows, truncated } = await this.applyStakeWeightCap(query, snapshotBlock, limit, coin, network, 'getStakeWeightsByCapabilityAsOf(' + capability + ')');
+        // Surface an overflow on the array so oraclePublishSetAt can refuse a truncated set
+        if(truncated) rows.truncated = true;
         return rows;
     },
 

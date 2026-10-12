@@ -36,7 +36,8 @@
  *     decoderBlockTables / decoderTxScopedTables for decoder), or
  *   - recomputed during rollback (RECOMPUTED), or
  *   - handled by bespoke logic (SPECIAL_CASE), or
- *   - listed in ROLLBACK_EXEMPT with a reason, or
+ *   - listed with a reason in ROLLBACK_EXEMPT (indexer tables, from the registry) or
+ *     DECODER_ROLLBACK_EXEMPT / SPECIAL_BUCKET_ROLLBACK_EXEMPT (decoder tables), or
  *   - an `index_` / append-only lookup (orphan rows are inert; re-sent INSERT IGNORE).
  *
  * Classify by understanding the table, not by silencing the test.
@@ -81,6 +82,13 @@ function replicatedTables(dbType){
 // them (src/client/rollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js, "Parity rests").
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
     dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
+};
+
+// Decoder tables left untouched on reorg, each with the decoder's own reason. The
+// lifecycle registry describes the indexer DB only, so an indexer exemption that
+// shares a decoder table's name never counts for the decoder.
+const DECODER_ROLLBACK_EXEMPT = {
+    events: 'no block_index and no monotonic cursor, so rollbackDecoder cannot delete it per block',
 };
 
 // Append-only / id-keyed dedup lookups whose orphan rows are inert (re-sent INSERT
@@ -217,7 +225,7 @@ describe('Rollback coverage guard @regression', function(){
         const covered = new Set([
             ...rollback.decoderBlockTables,
             ...rollback.decoderTxScopedTables,
-            ...Object.keys(ROLLBACK_EXEMPT),
+            ...Object.keys(DECODER_ROLLBACK_EXEMPT),
             ...Object.keys(SPECIAL_BUCKET_ROLLBACK_EXEMPT),
         ]);
         const uncovered = universe.filter(t => !covered.has(t) && !isLookupTable(t));
@@ -228,9 +236,17 @@ describe('Rollback coverage guard @regression', function(){
             uncovered.length
                 ? `These tables are replicated by ServerPoller (decoder) but not handled by ` +
                   `rollbackDecoder: ${uncovered.join(', ')}. Add to decoderBlockTables / ` +
-                  `decoderTxScopedTables, or ROLLBACK_EXEMPT with a reason.`
+                  `decoderTxScopedTables, or to DECODER_ROLLBACK_EXEMPT (SPECIAL_BUCKET_ROLLBACK_EXEMPT ` +
+                  `for stream:special) with a reason. Indexer ROLLBACK_EXEMPT entries do not count here.`
                 : undefined
         );
+
+        // Each decoder exemption names a replicated decoder table that rollbackDecoder skips.
+        const rolledBack = new Set([...rollback.decoderBlockTables, ...rollback.decoderTxScopedTables]);
+        for(const t of Object.keys(DECODER_ROLLBACK_EXEMPT)){
+            assert.ok(universe.includes(t), `DECODER_ROLLBACK_EXEMPT names ${t}, which the decoder does not replicate`);
+            assert.ok(!rolledBack.has(t), `DECODER_ROLLBACK_EXEMPT names ${t}, which rollbackDecoder deletes`);
+        }
     });
 
     it('every table the source indexer rolls back is mirrored by ClientRollback (cross-repo drift guard)', function(){
@@ -567,8 +583,10 @@ describe('Rollback coverage guard @regression', function(){
             icons:   /DELETE FROM icons WHERE (?:token_id > \? AND )?token_id NOT IN \(SELECT id FROM tokens\)/,
             // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
             // side that has no ticker); without them the sweep deletes live markets.
-            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND (?:tick1_id > \? AND )?tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND (?:tick2_id > \? AND )?tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
-            pubkeys: /DELETE FROM pubkeys WHERE (?:address_id > \? AND )?address_id NOT IN \(SELECT id FROM index_addresses\)/,
+            // The `> ?` surviving-MAX(id) bound is required on both sides: without it a
+            // replica with a lookup hole below MAX(id) deletes rows the source keeps.
+            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND tick1_id > \? AND tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND tick2_id > \? AND tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
+            pubkeys: /DELETE FROM pubkeys WHERE address_id > \? AND address_id NOT IN \(SELECT id FROM index_addresses\)/,
         };
         const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
         assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
