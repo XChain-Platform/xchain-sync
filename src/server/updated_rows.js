@@ -79,6 +79,11 @@
  *     on action_index, so it misses the edit. Found via the
  *     ticks carrying a valid `issues` row in this window, since `issues` is
  *     action-scoped and pins the edit to a block.
+ *   - status_id promotion on a surviving COINPay order_matches row ('pending_coinpay'
+ *     -> 'valid') by the later COINPAY that settles it. Found via the 'fulfilled'
+ *     coinpay_statuses row that COINPAY writes, which is action-scoped. Carried, not
+ *     re-derived on the replica: matches settled before the source's forward-only
+ *     promotion fix stay 'pending_coinpay' there, and a local promote would differ.
  *
  * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
  * source's own authoritative gate value lands on the replica. The follower ALSO
@@ -256,8 +261,10 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     Chunking spans blocks by design, so the head's action_index is below the window and
     //     the action-scoped stream carries the completing chunk row but not the head's flipped
     //     status: every replica kept the head's PRE-FLIP verdict (still 'valid'), served a batch
-    //     the source had condemned, and nothing detected it because the class is unhashed
-    //     (stateHash.js reads attests at version = 0 only, so this divergence never halts).
+    //     the source had condemned, and nothing detected it: no state_hash class covered the
+    //     head stamp then. It is now the flag-day gated attest_batch_head class
+    //     (stateHash.ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION), so once that gate arms on a
+    //     network a missing carry halts the follower instead of diverging silently.
     //
     //     Keyed on the COMPLETING CHUNK's block_index, which attests rows always carry
     //     (NOT NULL, indexed, written by createAttestationBatchAction) - unlike the anchor
@@ -274,6 +281,8 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     and (key, author) has been the batch's identity since the rail shipped. An
     //     unresolvable author on either side is a NULL that no equality matches, so it
     //     authenticates nothing rather than everything (fail closed), matching authoredBy.
+    //     Encoding scope too: the continuation must declare the head's own chunk count and
+    //     body CRC, since only a chunk that matches the head's geometry can stamp it.
     //
     //     Aliases are ah/ac (head, chunk) rather than class 5's p/c: the anchor class's
     //     regression guard is a file-wide regex over this source that forbids the literal
@@ -287,8 +296,8 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     //     action_index, exactly as the SLASH class does.
     //
     //     UN-GATED for class 5's reason: shipping the row is not a hash preimage, and the
-    //     carry must be live before any future state-hash twin of this class arms, or a
-    //     follower halts on a head row it was never sent.
+    //     carry must be live before the attest_batch_head state-hash class arms on a network,
+    //     or a follower halts on a head row it was never sent.
     try {
         let attestHeadRows = await db.findFailedAttestBatchHeads(
             ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION, ATTEST_BATCH_COMPLETION_STAMP, from, to, conn);
@@ -296,6 +305,21 @@ async function collectAttestBatchHeadRows(db, from, to, conn, acc){
     } catch(e){
         if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
         // Table/columns may not exist on older source schemas (pre-batch-rail builds); skip.
+    }
+}
+
+async function collectCoinpayMatchRows(db, from, to, conn, acc){
+    // 8. COINPay match promotion. A native-coin match is written 'pending_coinpay' and
+    //    the COINPAY that pays it, usually in a later block, promotes the match row to
+    //    'valid' in place, so the action-scoped stream never re-sends it. Keyed on the
+    //    'fulfilled' coinpay_statuses row that COINPAY writes under its own action, and
+    //    carries the source's current row rather than re-deriving it on the replica.
+    try {
+        let matchRows = await db.findCoinpaySettledMatches(from, to, conn);
+        add(acc, 'order_matches', matchRows);
+    } catch(e){
+        if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e;
+        // Tables may not exist on older source schemas (pre-COINPay builds); skip.
     }
 }
 
@@ -323,6 +347,7 @@ async function collectUpdatedRows(db, fromBlock, toBlock, activationDelay, conn)
     await collectAttestBatchHeadRows(db, from, to, conn, acc);
     await collectTokenSupplyRows(db, from, to, conn, acc);
     await collectTokenEditRows(db, from, to, conn, acc);
+    await collectCoinpayMatchRows(db, from, to, conn, acc);
     let out = {};
     for(let table in acc){
         let arr = Array.from(acc[table].values());

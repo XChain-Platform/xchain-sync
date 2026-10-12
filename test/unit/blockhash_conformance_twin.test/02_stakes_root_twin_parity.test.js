@@ -23,14 +23,15 @@
  * the follower's state_root and halt it, so this is a consensus guard.
  *
  * No DB required: both sides build on their own MemoryNodeStore. Skips when the
- * xchain-indexer sibling is absent and fails where XCHAIN_REQUIRE_SIBLINGS=1.
+ * xchain-indexer sibling is absent or is a lane symlink into a live main checkout,
+ * and fails in either case where XCHAIN_REQUIRE_SIBLINGS=1.
  */
 
 'use strict';
 
 const assert = require('assert');
-const fs     = require('fs');
 const path   = require('path');
+const { siblingCheckout, skipOrFail } = require('../../helpers/sibling_checkout.js');
 
 const SYNC = require('../../../src/state_commitment/index.js');
 const M    = require('../../../src/merkle.js');
@@ -90,12 +91,9 @@ describe('buildStakesRoot twin root parity: xchain-sync == xchain-indexer @regre
     let IDX_STAKES, IDX_SMT;
 
     before(function(){
-        if(!fs.existsSync(INDEXER_STAKES)){
-            if(process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
-                throw new Error('stakes_root twin parity requires the xchain-indexer sibling ' +
-                    '(XCHAIN_REQUIRE_SIBLINGS=1) but it was not found at ' + INDEXER_STAKES);
-            this.skip();
-        }
+        // Refuse an absent sibling and a lane symlink into a live main checkout alike.
+        const verdict = siblingCheckout(__dirname, INDEXER_STAKES);
+        if(!skipOrFail(this, verdict, 'the buildStakesRoot twin root parity guard')) return;
         IDX_STAKES = require(INDEXER_STAKES);
         IDX_SMT    = require(INDEXER_SMT);
     });

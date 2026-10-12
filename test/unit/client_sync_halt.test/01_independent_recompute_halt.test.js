@@ -122,7 +122,7 @@ describe('ClientSync: independent recompute halt @regression', function(){
         assert.strictEqual(sync.lastAppliedBlock, vectors.block_index);
     });
 
-    it('a recompute DB error is logged but does NOT halt (no self-inflicted fork on infra faults)', async function(){
+    it('a recompute DB error is logged, does NOT halt, and holds the tip for redelivery', async function(){
         // Model the production reader: doQuery swallows the error into [], doQueryStrict throws.
         // A preimage gathered fail-soft would hash the empty rows and halt on a false divergence.
         db.doQuery = sinon.stub().resolves([]);
@@ -130,6 +130,6 @@ describe('ClientSync: independent recompute halt @regression', function(){
         const event = { block_index: vectors.block_index, block_time: 123, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' };
         await sync.applyBlockEvent(event);
         assert.strictEqual(sync.isHalted(), false, 'an infra error must not halt the validator');
-        assert.strictEqual(sync.lastAppliedBlock, vectors.block_index, 'block still advances on a recompute error');
+        assert.strictEqual(sync.lastAppliedBlock, null, 'an unverified block never advances the tip');
     });
 });

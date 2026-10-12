@@ -16,30 +16,12 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const { collectUpdatedRows } = require('../../src/server/updated_rows');
 const ClientApplier = require('../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 const ClientRollback = require('../../src/client/rollback');
 const Utility = require('../../src/util');
-const { withDbMixins } = require('../helpers/db_mixins.js');
-
 // A doQuery stub that branches on a substring of the SQL so each in-place class
 // can be given canned rows independently. Records every (sql, args) pair.
-function fakeDb(routes){
-    let calls = [];
-    return withDbMixins({
-        calls,
-        dbType: 'indexer',
-        doQuery: sinon.stub().callsFake(async (sql, args) => {
-            calls.push({ sql, args });
-            for(let r of routes || []){
-                if(sql.indexOf(r.match) !== -1) return r.rows;
-            }
-            return [];
-        }),
-        beginTransaction: sinon.stub().resolves(),
-        commitTransaction: sinon.stub().resolves(),
-        rollbackTransaction: sinon.stub().resolves(),
-        getBlockHashRow: sinon.stub().resolves(null)
-    });
-}
+const { fakeDb } = require('./updated_rows.test/helpers/fake_db.js');
 
 describe('updatedRows.collectUpdatedRows', function(){
 
@@ -53,10 +35,10 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.strictEqual(hitDeactivation, false);
         // The slash + delegation-rotation + request_status + poll-finalize + cooldown-status
         // + bet-status + anchor_invalid + attest-batch-head + tokens-supply + tokens-edit
-        // classes still run, none of which depend on the activation delay (4 slash
-        // + 2 rotation + 2 request + 1 poll + 2 cooldown-status + 2 bet-status + 1 anchor
-        // + 1 attest batch head + 1 tokens supply + 1 tokens edit = 17).
-        assert.strictEqual(db.calls.length, 17);
+        // + COINPay-match classes still run, none of which depend on the activation delay
+        // (4 slash + 2 rotation + 2 request + 1 poll + 2 cooldown-status + 2 bet-status
+        // + 1 anchor + 1 attest batch head + 1 tokens supply + 1 tokens edit + 1 COINPay = 18).
+        assert.strictEqual(db.calls.length, 18);
         // And the cooldown status flip is keyed by cooldown_end_block, not the delay.
         let hitCooldown = db.calls.some(c => c.sql.indexOf('cooldown_end_block') !== -1);
         assert.strictEqual(hitCooldown, true);
@@ -246,10 +228,15 @@ describe('updatedRows.collectUpdatedRows', function(){
         assert.ok(hq.sql.indexOf('ah.version = 5') !== -1);
         assert.ok(hq.sql.indexOf('ac.version = 6') !== -1);
         assert.ok(hq.sql.indexOf('ah.batch_chunk_index = 0') !== -1);
+        // Only a real chunk row completes a batch; the rollback reset requires the same predicate.
+        assert.ok(hq.sql.indexOf('ac.batch_chunk_index IS NOT NULL') !== -1);
         // Only a VALID continuation completes a batch, and both rows must share an author:
         // a batch key is public, so an unscoped join lets anyone's junk chunk pick the head.
         assert.ok(hq.sql.indexOf("acs.status = 'valid'") !== -1);
         assert.ok(hq.sql.indexOf('aca.source_id = aha.source_id') !== -1);
+        // The reverse reset's encoding scope: the chunk shares the head's chunk count and CRC.
+        assert.ok(hq.sql.indexOf('ac.batch_total_chunks = ah.batch_total_chunks') !== -1);
+        assert.ok(hq.sql.indexOf('ac.batch_crc32 = ah.batch_crc32') !== -1);
         // Full row, so the follower's upsert refreshes status_id in place.
         assert.ok(hq.sql.indexOf('SELECT ah.*') === 0);
     });
@@ -338,6 +325,7 @@ describe('ClientApplier in-place updated-rows apply', function(){
 
     it('applyBlock UPSERTs payload.updated_rows for surviving rows', async function(){
         let payload = {
+            schema_version: SCHEMA_VERSION.indexer,
             block_index: 9,
             data: { blocks: [{ block_index: 9 }] },
             updated_rows: { stakes: [{ action_index: 4, deactivation_block: 80 }] }

@@ -15,11 +15,11 @@
  *
  * Static drift-lock for the consensus block-hash CONFORMANCE PAIR.
  *
- * xchain-sync/src/BlockHasher.js computeBlockHashes() is a hand-ported twin of
+ * xchain-sync/src/client/block_hasher.js computeBlockHashes() is a hand-ported twin of
  * xchain-indexer/src/db/actions.js getBlockHashes(): same consensus SELECTs, same
  * special-address canonicalization, same chaining/version fold, hashed through
  * the same getDataHash/jsonStringify pair. Unlike the whole-file twins locked
- * in rollback-coverage.test.js (stateHash.js, merkle.js, ...), the two live
+ * in rollback_coverage.test.js (stateHash.js, merkle.js, ...), the two live
  * inside DIFFERENT host structures (a db/actions.js mixin method vs a class here), so
  * whole-file byte-identity cannot apply. This test extracts the
  * consensus-bearing pieces from BOTH repos' sources and asserts them equal
@@ -94,7 +94,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         const vIndexer = pair.indexer.match(/const BLOCK_HASH_VERSION = (\d+)/);
         assert.ok(vSync && vIndexer, 'BLOCK_HASH_VERSION constant missing on one side');
         assert.strictEqual(vSync[1], vIndexer[1],
-            'BLOCK_HASH_VERSION drifted between xchain-sync/src/BlockHasher.js and ' +
+            'BLOCK_HASH_VERSION drifted between xchain-sync/src/client/block_hasher.js and ' +
             'xchain-indexer/src/db/shared.js; a version bump is a consensus break and MUST land on both sides');
     });
 
@@ -196,7 +196,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         if(!pair) return;
         for(const sig of [/jsonStringify\(obj\)\{/, /getDataHash\(data\)\{/]){
             assert.strictEqual(
-                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/utility.js')),
+                normalize(extractFunction(pair.sync, sig, 'xchain-sync/src/util/index.js')),
                 normalize(extractFunction(pair.indexer, sig, 'xchain-indexer/src/utility.js')),
                 sig + ' drifted between xchain-sync and xchain-indexer utility.js; it serializes every ' +
                 'consensus hash preimage and MUST stay identical (bigint coercion included)');
@@ -222,7 +222,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         assert.strictEqual(
             extractTwinBlock(pair.sync, 'xchain-sync/src/state_commitment/index.js'),
             extractTwinBlock(pair.indexer, 'xchain-indexer/src/state_commitment/persistent_smt.js'),
-            'reportOrphanStats block drifted between xchain-sync stateCommitment.js and xchain-indexer persistent_smt.js; ' +
+            'reportOrphanStats block drifted between xchain-sync state_commitment/index.js and xchain-indexer persistent_smt.js; ' +
             'the header comment declares it a keep-BYTE-IDENTICAL twin (comments included)');
     });
 });
@@ -231,7 +231,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     //
     // The follower header calls the SMT engine byte-identical to the indexer's,
     // and until these cases nothing checked it: the whole-file loop in
-    // rollback-coverage.test.js never listed stateCommitment.js, and the case
+    // rollback_coverage.test.js never listed stateCommitment.js, and the case
     // above pins only reportOrphanStats. The engine HAD drifted - the indexer
     // grew a read-through node cache the follower has not - and the stale claim
     // is why nobody had to look. Both halves are pinned now: what is still
@@ -305,7 +305,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
                 'cache was removed the engines are byte-identical again: port the change and ' +
                 'rewrite the DECLARED DIVERGENCE paragraph in xchain-sync/src/state_commitment/index.js');
             assert.ok(!syncEngine.includes(marker),
-                'xchain-sync stateCommitment.js now has ' + marker + '. If the cache was ' +
+                'xchain-sync state_commitment/index.js now has ' + marker + '. If the cache was ' +
                 'deliberately ported, rewrite the DECLARED DIVERGENCE paragraph in that file ' +
                 'and replace this case with a full byte comparison of the engine block');
         }

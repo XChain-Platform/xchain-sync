@@ -53,197 +53,117 @@ const ESCROW_TRIGGER_TABLES = new Set([
     'dispensers', 'dispenser_statuses', 'tokens'
 ]);
 
+// Replica-owned migration ledger: the replica's own runner records applied
+// migrations here, so a source copy is never applied and the full-snapshot clear
+// loop never deletes the replica's rows. Classified explicitly so the table is not
+// shipped by accident nor swallowed (errno 1054) by the incremental fall-through.
+const REPLICA_LEDGER_TABLES = new Set(['schema_migrations']);
+
+function initializeCoreState(applier, db, util, chain, network) {
+    applier.db = db;
+    applier.util = util;
+    // Keep chain and network nullable so callers without commitment context
+    // leave the state-commitment path disabled.
+    applier.chain = chain || null;
+    // Normalize the chain to the ticker form shared by activation lookups and
+    // state_tree_roots rows, matching the source indexer's configured coin.
+    applier.coinTicker = coinTicker(chain) || null;
+    applier.network = network || null;
+    // Reset computed roots until applyBlock produces a commitment-enabled result.
+    applier._lastComputedRoots = null;
+}
+
+function initializeIgnoreTables(applier) {
+    // Index and dedup tables use INSERT IGNORE because rows may already exist.
+    applier.ignoreTables = new Set([
+        // The lifecycle registry supplies every lookup that streams in each block.
+        ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
+        // Pubkeys can recur in incremental snapshots and per-block payloads.
+        'pubkeys',
+        // Events are a full-dumped append-only log, so repeat IDs are idempotent.
+        'events',
+        // Sync metadata streams live and through snapshots with a unique block index.
+        'sync_meta',
+        // Merkle epochs are full-dumped and carry a unique epoch.
+        'merkle_epochs',
+        // Reward windows can overlap the live and incremental snapshot channels.
+        'validator_rewards',
+        // Rollcall rows can overlap the bootstrap dump and close-block stream.
+        'rollcalls',
+        'rollcall_absences',
+        'rollcall_gates'
+    ]);
+}
+
+function initializeIdKeyedIgnoreTables(applier) {
+    // Limit strict collision checks to tables deduplicated by numeric primary ID,
+    // excluding tables with surrogate IDs and separate natural-key uniqueness where
+    // a warning on the natural key represents expected re-delivery.
+    applier.idKeyedIgnoreTables = new Set([
+        // Keep streamed lookups visible to repair when a natural value holds the wrong ID.
+        ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
+        'pubkeys',
+        'rollcalls',
+        'rollcall_absences',
+        'rollcall_gates'
+    ]);
+}
+
+function initializeRepairNaturalKeyColumns(applier) {
+    // Map lookup tables to natural columns so from-zero repair reconciles a carried
+    // ID with its value instead of letting INSERT IGNORE preserve the same natural
+    // value under a different local ID.
+    applier.repairNaturalKeyColumns = new Map([
+        ['index_statuses', ['status']]
+    ]);
+}
+
+function initializeUpsertFullDumpTables(applier) {
+    // Upsert mutable full-dump aggregates through their unique natural keys so
+    // current source values replace stale rows after re-delivery.
+    applier.upsertFullDumpTables = new Set([
+        'markets',
+        'attest_validator_stats'
+    ]);
+}
+
+function initializeLocalSurrogateIdTables(applier) {
+    // Map source rows whose numeric IDs are local-only to natural keys, dropping
+    // each carried ID and replacing the matching natural row in one transaction
+    // to avoid either a primary-key collision or a duplicate block.
+    applier.localSurrogateIdTables = new Map([
+        // Keep blocks keyed by block_index because no relation targets blocks.id,
+        // letting each replica allocate its own ID after rollback or re-application.
+        ['blocks', 'block_index']
+    ]);
+}
+
+function initializeLocalSurrogateIdOnlyTables(applier) {
+    // Mark tables whose local IDs must be stripped before insertion, relying on
+    // an existing unique natural key (through the upsert or IGNORE path) instead
+    // of the single-column delete path above.
+    applier.localSurrogateIdOnlyTables = new Set([
+        // Keep attest validator stats keyed by validator and provider while every
+        // replica assigns its own surrogate sequence; source reorg recomputation
+        // may allocate the same numeric ID to a different surviving row.
+        'attest_validator_stats',
+        // Keep sync_meta keyed by its unique block_index (first write wins, as on
+        // the source). The live stream omits id, so a catch-up row carrying the
+        // source id can hit another block's local id and be silently IGNOREd.
+        'sync_meta'
+    ]);
+}
+
 class ClientApplier {
 
     constructor(db, util, chain, network) {
-        this.db   = db;
-        this.util = util;
-        // chain (COIN) + network are needed to key the light-client state_tree_roots
-        // rows and the SMT balance/escrow keys (SPV spec sec.4). null on callers that
-        // predate the feature; the state-commitment path is then simply skipped.
-        this.chain   = chain || null;
-        // Canonical TICKER form of `chain` for the per-chain '<TICKER>:<network>'
-        // activation lookups and the state_tree_roots chain column, matching what the
-        // SOURCE indexer writes (config['COIN']). Passing the full name made
-        // isStateCommitmentActive resolve to "off" on every production chain, so the
-        // follower silently never computed roots or ran the commitment check.
-        this.coinTicker = coinTicker(chain) || null;
-        this.network = network || null;
-        // Roots the most recent applyBlock computed over the replica, for ClientSync's
-        // VERIFY_STATE_COMMITMENT comparison; null when the block predates the flag-day.
-        this._lastComputedRoots = null;
-
-        // Index/dedup tables use INSERT IGNORE (rows may already exist).
-        // pubkeys (decoder DB) is included: incremental snapshots and per-block
-        // payloads can re-send the same address's pubkey row across multiple
-        // blocks, and the PK on address_id would otherwise collide.
-        this.ignoreTables = new Set([
-            // The index_* lookup set is derived from the table-lifecycle registry
-            // (replication: 'stream:index') rather than hand-listed: the index bucket
-            // is re-sent every block by design and the lookups are NOT rolled back
-            // (replicaRollback: 'lookup'), so a new stream:index registry entry missing
-            // here would collide on its PK on the next referencing block and stall the
-            // apply transaction. Deriving it means a one-line registry add is picked up
-            // on both the stream side (ServerPoller/TOPOLOGY.indexer) and the apply side
-            // automatically, with no second source of truth to drift.
-            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
-            'pubkeys',
-            // events is an append-only operational log that incremental snapshots
-            // re-dump in full (it has no block_index/action_index cursor to scope by).
-            // Its AUTO_INCREMENT id PK collides on already-applied rows on every
-            // catch-up; without INSERT IGNORE the whole catch-up transaction fails
-            // with "Duplicate entry for PRIMARY". IGNORE makes the re-dump idempotent.
-            'events',
-            // sync_meta (transparency log) has a UNIQUE index on block_index. It is
-            // now streamed live per block AND carried by snapshots; INSERT IGNORE
-            // makes a row already present (bootstrap snapshot, or a catch-up/live
-            // overlap) a no-op, mirroring the server's recordBlock INSERT IGNORE.
-            'sync_meta',
-            // merkle_epochs is append-only (epoch UNIQUE); INSERT IGNORE makes its
-            // full-dump re-send on an incremental catch-up idempotent.
-            'merkle_epochs',
-            // validator_rewards has a UNIQUE key (source_id, signing_pubkey_id,
-            // reward_type, round_reference, round_qualifier). The recovery-redriven collector
-            // (src/server/recovery_rewards.js) can re-inject a backdated survivor row via BOTH the
-            // live per-block and incremental-snapshot channels when their windows overlap;
-            // INSERT IGNORE makes that re-injection idempotent. Safe for the normal path
-            // (each row streams once in its earn-block; mirrors createValidatorReward's
-            // own INSERT IGNORE on the source).
-            'validator_rewards',
-            // rollcalls / rollcall_absences ride the bootstrap full dump AND stream by
-            // close_block, so an overlapping window re-delivers a row already applied.
-            // Each is pinned at close and never re-derived, so the re-delivery is
-            // identical and IGNORE is a no-op; a plain INSERT would abort the apply
-            // transaction on the duplicate PK. Same reasoning as validator_rewards above.
-            'rollcalls',
-            'rollcall_absences',
-            // Same close_block scoping and the same pinned-at-close reasoning; the
-            // source writes it with ON DUPLICATE KEY UPDATE, so a re-delivery is identical.
-            'rollcall_gates'
-        ]);
-
-        // Tables whose own numeric PRIMARY KEY IS the sole re-send idempotency key: a
-        // re-delivered row is only ever expected to collide on THAT id, never on any
-        // other unique key the table carries. validator_rewards, merkle_epochs and
-        // sync_meta are deliberately excluded: each has a surrogate AUTO_INCREMENT `id`
-        // that plays no part in de-duplication, so their legitimate re-send collides on
-        // a SEPARATE natural-key unique index instead (reward_unique / epoch / block_index)
-        // and any warning there is the expected case, not a fault.
-        //
-        // a from-zero lookup repair (ClientSync.syncLookupTablesPaged) exists
-        // precisely because a short index_* table needs its missing rows FORCED back in,
-        // and INSERT IGNORE gives that repair no signal when a row it must land instead
-        // collides on a DIFFERENT key (e.g. index_statuses' UNIQUE `status`) - a sign the
-        // replica already holds a WRONG row at some other id for that same natural value.
-        // IGNORE silently keeps the wrong row and the true one never lands; the repair
-        // reports the identical short count on every following pass with nothing in the
-        // journal to explain why (observed on a production RDOGE replica: a from-zero
-        // pass closed one of two missing index_statuses rows and stayed short by one,
-        // hourly, forever). See the SHOW WARNINGS check below.
-        this.idKeyedIgnoreTables = new Set([
-            ...lifecycle.tablesWhere(t => t.replication === 'stream:index'),
-            'pubkeys',
-            'rollcalls',
-            'rollcall_absences',
-            'rollcall_gates'
-        ]);
-
-        // Repair-only identities for replicated lookup tables whose natural value must
-        // agree with the source at the source's carried id. These tables are normally
-        // INSERT IGNORE because every block may re-send them, but that cannot repair an
-        // id mapping changed by first-seen AUTO_INCREMENT order: PRIMARY collisions look
-        // benign even when the row at that id has a different value, while natural-key
-        // collisions silently keep the same value at the wrong id. Upsert-only replicated
-        // tables therefore need ID-stable migrations; this map is the bounded recovery
-        // path for an already-unstable replica during a from-zero lookup repair.
-        this.repairNaturalKeyColumns = new Map([
-            ['index_statuses', ['status']]
-        ]);
-
-        // Mutable aggregates that the indexer full-dump re-sends with their CURRENT
-        // value (markets = OHLCV; attest_validator_stats = running counters). On a
-        // non-empty replica a plain INSERT collides on their UNIQUE key (ER_DUP_ENTRY,
-        // which aborts the catch-up transaction) and INSERT IGNORE would keep the
-        // STALE row, so they must UPSERT to overwrite with the source values.
-        this.upsertFullDumpTables = new Set([
-            'markets',
-            'attest_validator_stats'
-        ]);
-
-        // Tables whose PRIMARY KEY is a purely LOCAL AUTO_INCREMENT surrogate that the
-        // replica must NOT inherit from the source, mapped to the natural key that
-        // actually identifies the row. Replicating such an id verbatim forces an
-        // agreement the protocol explicitly does not require: BlockHasher hashes the
-        // resolved canonical strings "rather than raw AUTO_INCREMENT lookup ids (which
-        // diverge across nodes after a reorg); it is id-independent". Once a rollback
-        // has deleted rows and let re-application renumber them, the replica's sequence
-        // is permanently offset from the source's, and every later apply collides on
-        // the same PK forever (ER_DUP_ENTRY 1062), aborting the whole transaction and
-        // freezing the replica while it still reports halted:false. That was observed
-        // on a production litecoin/mainnet replica as ~1,400 identical failures on
-        // `Duplicate entry '27681' for key 'PRIMARY'`.
-        //
-        // Neither existing escape hatch fits `blocks`. INSERT IGNORE would SKIP the
-        // block, leaving the replica silently short a consensus-relevant row with no
-        // divergence signal; ON DUPLICATE KEY UPDATE would OVERWRITE whichever unrelated
-        // block already occupies that id. The correct treatment is to drop the source's
-        // id and let the replica assign its own, deleting any existing row for the same
-        // natural key first so the re-send stays idempotent. A scoped DELETE (not a
-        // UNIQUE constraint) is what this needs, because `blocks.block_index` carries a
-        // plain INDEX only, so ON DUPLICATE KEY has nothing to fire on and a bare INSERT
-        // of an already-present block would silently duplicate it. Same DELETE+INSERT
-        // in-one-transaction shape as applyDispensersReplace below.
-        //
-        // Nothing joins `blocks.id`: the source's own createBlock INSERTs without it,
-        // the other *_hash_id columns point into index_transactions, and the client
-        // cursor is the highest block_index (db getLastBlock), never an id.
-        this.localSurrogateIdTables = new Map([
-            ['blocks', 'block_index']
-        ]);
-
-        // Same class as localSurrogateIdTables above, minus the DELETE: tables whose
-        // `id` is a node-local AUTO_INCREMENT surrogate the replica must not inherit,
-        // but which already carry a REAL unique natural key and already ride
-        // upsertFullDumpTables, so the existing ON DUPLICATE KEY UPDATE identifies the
-        // row and nothing has to be cleared first.
-        //
-        // attest_validator_stats gained `id ... AUTO_INCREMENT PRIMARY KEY` in indexer
-        // migration 2026-08-19-attest-validator-stats-surrogate-id, which states the id
-        // is node-local ("NOT consensus-visible ... Nothing reads or signs over the id")
-        // and that the source reassigns ids wholesale on reorg
-        // (Rollback.recomputeAttestationValidatorStats). The replica mints its own
-        // instead: sync runs no migrations, so an aged replica takes the column through
-        // db.addMissingColumns + autoIncrementKeyAction, which lets the engine backfill
-        // the sequence in LOCAL row order. The two id spaces then disagree, and because
-        // the table is full-dumped with SELECT * and upserted over every carried column,
-        // the applier would emit `id` = VALUES(`id`) against the replica's PRIMARY KEY:
-        // on a source id another surviving replica row already holds that is ER_DUP_ENTRY
-        // (1062), outside ClientSync.healSchemaIfStale's {1146, 1054} heal set, so the
-        // apply transaction aborts and re-fails on every retry. Exactly the production
-        // wedge `blocks.id` was stripped for.
-        //
-        // It cannot use localSurrogateIdTables: that map's value is a SINGLE natural-key
-        // column driving DELETE ... WHERE <key> IN (...), and this table's natural key is
-        // the COMPOSITE UNIQUE (validator_pubkey, provider_id). Deleting by
-        // validator_pubkey alone would drop that validator's rows for every OTHER
-        // provider, and since insertRows runs per batch a later batch's DELETE could
-        // remove rows an earlier one just inserted: a recoverable wedge traded for silent
-        // data loss.
-        //
-        // `markets` is deliberately NOT here even though it shares the id-PK + upsert
-        // shape. Its unique natural key uq_markets_pair arrives from indexer migration
-        // 2026-07-15-markets-dedup-unique-pair, and secondary indexes are NOT propagated
-        // to replicas (db.ensureReplicaSecondaryIndexes carries a hand-listed few), so an
-        // aged replica may hold markets with NO unique key at all. Stripping the id there
-        // would leave the re-dump with nothing to collide on and append duplicate rows
-        // silently. attest_validator_stats has no such gap: validator_pubkey_provider has
-        // been in its CREATE TABLE since the table was introduced and no migration adds
-        // it, so every replica that has the table has the key. Keeping the source id means
-        // a replica whose markets ids have skewed from the source's can hit that same 1062;
-        // ClientSync.noteUpsertDuplicateKey turns a repeat of it into a durable halt.
-        this.localSurrogateIdOnlyTables = new Set([
-            'attest_validator_stats'
-        ]);
+        initializeCoreState(this, db, util, chain, network);
+        initializeIgnoreTables(this);
+        initializeIdKeyedIgnoreTables(this);
+        initializeRepairNaturalKeyColumns(this);
+        initializeUpsertFullDumpTables(this);
+        initializeLocalSurrogateIdTables(this);
+        initializeLocalSurrogateIdOnlyTables(this);
     }
 
     /**
@@ -257,91 +177,44 @@ class ClientApplier {
      *                         { table: [rows] } map) and any updated_rows
      */
     async applyBlock(payload){
-        // Clear any prior block's computed roots up front: on an early return
-        // (malformed payload or an already-applied duplicate) ClientSync must NOT
-        // compare stale roots against this event. A null here means "not recomputed
-        // this apply" and the state-commitment check is skipped, never treated as a
-        // divergence (a duplicate block was already verified when first applied).
+        // Clear computed roots before every attempt so early returns cannot expose
+        // roots from an earlier block to ClientSync.
         this._lastComputedRoots = null;
-        // block_index is null-checked (not truthiness-checked): the genesis block is
-        // a legitimate block_index 0 (ServerPoller emits Number(0)), and ClientSync
-        // documents block 0 as the one valid from-empty apply target. `!0` would
-        // silently drop it before any transaction opened.
+        // A null check keeps the genesis block_index 0 valid.
         if(!payload || !payload.data || payload.block_index == null) return;
 
-        // Schema-version gate: reject live block payloads with a mismatched schema
-        // version the same way snapshot applies do, so a server-side schema bump
-        // fails closed on live blocks rather than silently accepting rows whose
-        // encoding or column set the local replica cannot correctly apply.
-        // Gated on schema_version != null so old payloads (pre-5250) pass through.
-        let dbType = (this.db && this.db.dbType) || 'indexer';
-        if(payload.schema_version != null && payload.schema_version !== SCHEMA_VERSION[dbType]){
-            throw new Error('Schema version mismatch: server=' + payload.schema_version +
-                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
-        }
-
-        // rethrow, not the fail-soft default: this guard runs before beginTransaction, where
-        // doQuery turns a query error into [], so a transient fault would read as "block not
-        // applied yet" and re-run insertRows for a block already in the replica - credits,
-        // debits and escrows take a plain INSERT (they are in neither ignoreTables nor
-        // upsertFullDumpTables), and rebuildBalancesTouchedBy would then run over the
-        // duplicated rows. Let the error propagate: applyBlockEvent's catch logs it and
-        // leaves lastAppliedBlock unadvanced, so gap detection re-attempts the block.
+        this.assertBlockSchemaVersion(payload);
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             logger.info('Block ' + payload.block_index + ' already exists, skipping');
             return;
         }
 
+        await this.applyBlockTransaction(payload);
+    }
+
+    // Fail closed like the snapshot and page gates: every current server stamps the
+    // field, so a block without it comes from a server on an older wire format.
+    assertBlockSchemaVersion(payload){
+        let dbType = (this.db && this.db.dbType) || 'indexer';
+        if(payload.schema_version == null){
+            throw new Error('Schema version missing on live block ' + payload.block_index +
+                ': client=' + SCHEMA_VERSION[dbType] + '; the server predates versioned block payloads, upgrade it');
+        }
+        if(payload.schema_version !== SCHEMA_VERSION[dbType]){
+            throw new Error('Schema version mismatch: server=' + payload.schema_version +
+                ' client=' + SCHEMA_VERSION[dbType] + '; restart the validator after upgrading the server');
+        }
+    }
+
+    async applyBlockTransaction(payload){
         await this.db.beginTransaction();
         try {
             let data = payload.data;
-            for(let table in data){
-                let rows = data[table];
-                if(!rows || rows.length === 0) continue;
-                await this.insertRows(table, rows);
-            }
-            // Rebuild balances if this payload touched credits/debits.
-            // ServerPoller's per-block payload can't scope balances via the
-            // action-scoped JOIN (the balances table has no action_index
-            // column), so the only way the replica's balances table can stay
-            // consistent with credits/debits during live sync is to recompute
-            // it from the (now-updated) credit/debit data, scoped to the ids
-            // the new rows touched where possible. Indexer-shaped DBs only;
-            // decoder has no balances/credits/debits tables.
+            await this.insertBlockRows(data);
             let dbType = (this.db && this.db.dbType) || 'indexer';
             if(dbType === 'indexer'){
-                // Apply in-place mutations to SURVIVING rows (deactivation_block,
-                // SLASH amounts, request_status) the action-scoped insert loop above
-                // can't reach (they live on rows created by an earlier block). Without
-                // this UPSERT every forward in-place mutation is silently dropped.
-                if(payload.updated_rows)
-                    await this.applyUpdatedRows(payload.updated_rows);
-                // Mirror the anchor-reward winner collapse: the source DELETEd the
-                // loser validator_rewards rows this block's reconcile-log rows pre-image
-                // (rows from EARLIER blocks the action-scoped delete never reaches).
-                if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
-                    await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
-                // Re-derive tokens.escrow_action_index when this block moved any
-                // offer/status (the gate is replica-derived, not wire-carried).
-                await this.maybeRederiveEscrow(data);
-                if(data.credits || data.debits)
-                    await this.rebuildBalancesTouchedBy(data.credits, data.debits);
-                // Light-client state commitment (SPV spec sec.4-5): recompute + persist
-                // the per-block SMT roots over the replica INSIDE this txn (atomic with
-                // the data apply, so block B+1's incremental update always finds B's
-                // balances_root). The touched (address,tick) set comes from the applied
-                // event rows (credits/debits/escrows; cooldown refunds already merged by
-                // the source), mirroring the indexer's ledger-choke-point set. ClientSync
-                // reads _lastComputedRoots after commit and HALTs on divergence.
-                if(isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
-                    let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
-                    let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
-                    this._lastComputedRoots = await computeFollowerRoots(
-                        this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
-                } else {
-                    this._lastComputedRoots = null;
-                }
+                await this.applyIndexerBlockState(payload, data);
             } else {
                 this._lastComputedRoots = null;
             }
@@ -351,6 +224,36 @@ class ClientApplier {
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
+    }
+
+    async insertBlockRows(data){
+        for(let table in data){
+            let rows = data[table];
+            if(!rows || rows.length === 0) continue;
+            await this.insertRows(table, rows);
+        }
+    }
+
+    async applyIndexerBlockState(payload, data){
+        if(payload.updated_rows)
+            await this.applyUpdatedRows(payload.updated_rows);
+        if(data.anchor_reward_reconcile_log && data.anchor_reward_reconcile_log.length)
+            await this.mirrorAnchorRewardReconcile('d.block_index = ?', [payload.block_index]);
+        await this.maybeRederiveEscrow(data);
+        if(data.credits || data.debits)
+            await this.rebuildBalancesTouchedBy(data.credits, data.debits);
+        await this.updateBlockStateCommitment(payload, data);
+    }
+
+    async updateBlockStateCommitment(payload, data){
+        if(!isStateCommitmentActive(payload.block_index, this.network, this.coinTicker)){
+            this._lastComputedRoots = null;
+            return;
+        }
+        let isActivation = isStateCommitmentActivationBlock(payload.block_index, this.network, this.coinTicker);
+        let touchedKeys  = isActivation ? [] : await this.collectSmtTouchedKeys(data);
+        this._lastComputedRoots = await computeFollowerRoots(
+            this.db, this.coinTicker, this.network, payload.block_index, touchedKeys, isActivation);
     }
 
     // Collect the distinct (keyField, tick_id) ids touched by freshly applied
@@ -439,11 +342,44 @@ class ClientApplier {
         }
     }
 
-    // Apply a full snapshot (used for initial bootstrap)
-    // snapshotData: parsed JSON object with { schema_version, block_height, tables: { tableName: [rows...] } }
-    //
-    // On schema_version mismatch the validator must be restarted after the server is upgraded so
-    // that fetchAndApplySchema re-runs against the new DDL before any rows are applied.
+    // Names of the local snapshot-eligible tables; operator-local tables are excluded.
+    localSnapshotTableNames(schemaRows){
+        return (schemaRows || [])
+            .map(r => r.table_name || r.TABLE_NAME)
+            .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t) && !REPLICA_LEDGER_TABLES.has(t));
+    }
+
+    // Payload tables minus node-local ones; a source still shipping one is ignored.
+    payloadSnapshotTableNames(snapshotData){
+        return Object.keys(snapshotData.tables).filter(t => {
+            if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t) && !REPLICA_LEDGER_TABLES.has(t)) return true;
+            logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
+            return false;
+        });
+    }
+
+    // Tolerates only a missing table or column (1146/1054); any other error propagates.
+    ignoreSchemaGap(e){
+        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+    }
+
+    isClearableTable(table){
+        let tCheck = validation.validateIdentifier(table);
+        if(!tCheck.valid) logger.error('Skipping clear of invalid table: ' + table);
+        return tCheck.valid;
+    }
+
+    logLargeTableInsert(table, rows){
+        if(rows.length > 100)
+            logger.info('  ' + table + ': ' + rows.length + ' rows');
+    }
+
+    // Seeds the light-client SMT at the snapshot tip on indexer replicas past the flag day.
+    shouldSeedSnapshotRoots(snapshotData, dbType){
+        return dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker);
+    }
+
+    // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
@@ -458,60 +394,20 @@ class ClientApplier {
 
         await this.db.beginTransaction();
         try {
-            // Clear the FULL local snapshot-eligible table set, not just the tables
-            // named in the payload: streamFullSnapshot omits any table with zero
-            // source rows, so a table emptied on the source but still populated on
-            // this replica would otherwise survive a re-bootstrap (the oversized-
-            // incremental fallback applies a full snapshot over a NON-empty replica),
-            // and verifyTableCounts only reports remote>local, so the stale rows
-            // would never surface. schema_version equality with the source was
-            // enforced above, so the local table set mirrors the source's.
-            // Enumeration failure must abort the apply: a missing table/column
-            // (1146/1054) is the only schema-gap failure worth tolerating, and
-            // information_schema has no such failure mode, so realistic failures
-            // here are transient/operational (connection drop, lock-wait,
-            // permissions). Those MUST propagate so the surrounding catch rolls
-            // the transaction back and the bootstrap is retried; committing with
-            // an un-enumerated table set leaves tables emptied on the source
-            // still populated locally, invisible to verifyTableCounts. Mirrors
-            // the narrow catch at the escrow-gate rederive below.
+            // The full local table set is cleared, not just the payload's: tables empty on the
+            // source are omitted from the payload. Enumeration failures abort the apply.
             let localTables = [];
             try {
-                let schemaRows = await this.db.findStreamableTableNames();
-                localTables = (schemaRows || [])
-                    .map(r => r.table_name || r.TABLE_NAME)
-                    .filter(t => t && !OPERATOR_LOCAL_TABLES.has(t));
+                localTables = this.localSnapshotTableNames(await this.db.findStreamableTableNames());
             } catch(e){
                 logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                this.ignoreSchemaGap(e);
             }
 
-            // Node-local tables (OPERATOR_LOCAL_TABLES and SOURCE_UNSTREAMED_TABLES)
-            // never ride snapshots; if an older source still ships one (e.g.
-            // mempool_transactions or merkle_reorgs before their exclusions), drop it
-            // here rather than importing another node's local state. Note the two sets
-            // differ on the clear loop above: SOURCE_UNSTREAMED_TABLES stays in
-            // localTables so a previously-imported foreign copy is purged by this very
-            // apply, while OPERATOR_LOCAL_TABLES is clear-protected.
-            let payloadTables = Object.keys(snapshotData.tables).filter(t => {
-                if(!OPERATOR_LOCAL_TABLES.has(t) && !SOURCE_UNSTREAMED_TABLES.has(t)) return true;
-                logger.info('Ignoring node-local table shipped in full snapshot: ' + t);
-                return false;
-            });
-
-            // Clear all snapshot tables first (reverse dependency order: child rows
-            // before parents; orderSnapshotTables mirrors the builder's stream order).
-            // DELETE rather than TRUNCATE: MariaDB rejects TRUNCATE on any table referenced
-            // by a foreign key, even when the referencing table is empty. The decoder DB
-            // declares such a FK (pubkeys.address_id → index_addresses.id), so TRUNCATE
-            // would crash the bootstrap; DELETE honours FK constraints row-by-row.
-            let tables = orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
+            let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
             for(let i = tables.length - 1; i >= 0; i--){
-                let tCheck = validation.validateIdentifier(tables[i]);
-                if(!tCheck.valid){
-                    logger.error('Skipping clear of invalid table: ' + tables[i]);
-                    continue;
-                }
+                if(!this.isClearableTable(tables[i])) continue;
                 await this.db.deleteAllRows(tables[i]);
             }
 
@@ -519,40 +415,17 @@ class ClientApplier {
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
                 await this.insertRows(table, rows);
-                if(rows.length > 100)
-                    logger.info('  ' + table + ': ' + rows.length + ' rows');
+                this.logLargeTableInsert(table, rows);
             }
 
-            // Scoped clear of state_tree_roots at/above the snapshot height. This table
-            // is 'follower-derived' (OPERATOR_LOCAL_TABLES), so the clear loop above is
-            // clear-protected and leaves it untouched, while its backing state_tree_nodes
-            // store (replication 'snapshot') was wiped and re-imported wholesale. On a
-            // full-snapshot apply over a NON-empty replica (the oversized-incremental
-            // recovery fallback), pre-existing root rows at heights ABOVE the snapshot
-            // height survive as future-dated, orphaned-fork roots the follower would serve
-            // as authoritative SPV commitments until a live block upserts over each height.
-            // Delete block_index >= snapshot height (seedSnapshotRoots re-inserts the row
-            // at the height right below), mirroring the predicate ClientRollback already
-            // applies to this same table (blockTables, DELETE WHERE block_index >= N).
-            // Run unconditionally, NOT gated on dbType/isStateCommitmentActive: the orphan
-            // roots must go even when state commitment is inactive on this node. Swallow
-            // only schema gaps (1146 table missing on decoder / older schemas, 1054 missing
-            // column); any other error must propagate so the outer catch rolls the txn back.
-            // Bind this.coinTicker, NOT this.chain: the rows carry the TICKER (every writer
-            // in stateCommitment.js is called with this.coinTicker, and SyncService passes
-            // the hub's full lowercase coin name into the constructor), so the full name
-            // matches zero rows and the cleanup silently no-ops on every production chain.
+            // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
             try {
                 await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
             } catch(e){
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                this.ignoreSchemaGap(e);
             }
 
-            // Seed the light-client SMT at the snapshot tip so the first live block
-            // (block_height+1) finds a prior balances_root (SPV spec sec.4.3). Full
-            // build over the replicated state; block_merkle_root is NULL (state-at-
-            // height, not the tip block's content rows). Indexer + post-flag-day only.
-            if(dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
+            if(this.shouldSeedSnapshotRoots(snapshotData, dbType))
                 await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
             await this.db.commitTransaction();
@@ -636,6 +509,7 @@ class ClientApplier {
         for(let table in tables){
             let rows = tables[table];
             if(!rows || rows.length === 0) continue;
+            if(REPLICA_LEDGER_TABLES.has(table)) continue;
             let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
             if(opts && opts.strictIgnoreCheck && repairKeyColumns)
                 await this.reconcileLookupRows(table, rows, repairKeyColumns);
@@ -668,9 +542,7 @@ class ClientApplier {
         }
     }
 
-    async insertRows(table, rows, opts){
-        if(!rows || rows.length === 0) return;
-
+    validateInsertTable(table){
         // The table name is spliced into every statement below rather than bound as a
         // parameter, so refuse anything that is not a plain identifier before it can
         // reach the database.
@@ -683,11 +555,10 @@ class ClientApplier {
             // back and the block is retried or the client halts.
             throw new Error('Rejected table name in insertRows: ' + table + ' (' + tableCheck.reason + ')');
         }
+    }
 
-        let useIgnore = this.ignoreTables.has(table);
-        let useUpsert = this.upsertFullDumpTables.has(table);
-        let columns   = Object.keys(rows[0]);
-
+    prepareInsertColumns(table, rows){
+        let columns = Object.keys(rows[0]);
         // Generated columns are the DATABASE's to compute. The source reads its rows
         // with SELECT *, so one rides the wire like any other column, and naming it in
         // the INSERT is errno 1906: harmless on a permissive server, a hard error under
@@ -701,47 +572,46 @@ class ClientApplier {
         }
 
         // Drop the source's local surrogate id and let the replica keep its own. No
-        // DELETE: this class already upserts on a real unique natural key, so the
-        // existing ON DUPLICATE KEY UPDATE identifies the row. Writing the id here is
-        // what would rewrite the replica's PRIMARY KEY onto a number another surviving
-        // row holds (ER_DUP_ENTRY 1062). See localSurrogateIdOnlyTables.
+        // DELETE: the class has a real unique natural key, so ON DUPLICATE KEY UPDATE
+        // or INSERT IGNORE identifies the row. A carried id can land on a PRIMARY KEY
+        // another row holds (ER_DUP_ENTRY 1062 on upsert, a silent drop under IGNORE).
+        // See localSurrogateIdOnlyTables.
         if(this.localSurrogateIdOnlyTables.has(table) && columns.includes('id')){
             columns = columns.filter(c => c !== 'id');
             if(columns.length === 0)
                 throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
         }
+        return columns;
+    }
 
+    prepareNaturalKeyRows(table, rows, columns){
         // Drop the source's local surrogate id and clear any row already holding the
         // same natural key, so a re-sent row replaces rather than collides. See
         // localSurrogateIdTables for why this table cannot use IGNORE or UPSERT.
         let naturalKey = this.localSurrogateIdTables.get(table);
-        if(naturalKey && columns.includes('id')){
-            let keyCheck = validation.validateIdentifier(naturalKey);
-            if(!keyCheck.valid)
-                throw new Error('Rejected natural key in insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
+        if(!naturalKey || !columns.includes('id')) return { columns, naturalKey: null, keyValues: [] };
 
-            columns = columns.filter(c => c !== 'id');
-            if(columns.length === 0)
-                throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
+        let keyCheck = validation.validateIdentifier(naturalKey);
+        if(!keyCheck.valid)
+            throw new Error('Rejected natural key in insertRows: ' + naturalKey + ' (' + keyCheck.reason + ')');
 
-            // Fail closed on a row that cannot be identified: inserting it would append a
-            // duplicate the DELETE could never scope to (block_index is not UNIQUE).
-            let keyValues = [];
-            for(let row of rows){
-                let v = row[naturalKey];
-                if(v === undefined || v === null)
-                    throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
-                if(!keyValues.includes(v)) keyValues.push(v);
-            }
+        columns = columns.filter(c => c !== 'id');
+        if(columns.length === 0)
+            throw new Error('Refusing to insert into ' + table + ': the row carries only the stripped surrogate id');
 
-            // Chunked to keep the IN list bounded on a large catch-up window.
-            let deleteBatch = 500;
-            for(let i = 0; i < keyValues.length; i += deleteBatch){
-                let slice = keyValues.slice(i, i + deleteBatch);
-                await this.db.deleteRowsByKeyValues(table, naturalKey, slice);
-            }
+        // Fail closed on a row that cannot be identified: inserting it would append a
+        // duplicate the DELETE could never scope to (block_index is not UNIQUE).
+        let keyValues = [];
+        for(let row of rows){
+            let v = row[naturalKey];
+            if(v === undefined || v === null)
+                throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
+            if(!keyValues.includes(v)) keyValues.push(v);
         }
+        return { columns, naturalKey, keyValues };
+    }
 
+    validateInsertColumns(columns){
         // Column names are spliced in the same way, so each one gets the same check.
         for(let col of columns){
             let colCheck = validation.validateIdentifier(col);
@@ -751,97 +621,142 @@ class ClientApplier {
                 throw new Error('Rejected column name in insertRows: ' + col + ' (' + colCheck.reason + ')');
             }
         }
+    }
+
+    prepareTableRows(table, rows){
+        this.validateInsertTable(table);
+        let useIgnore = this.ignoreTables.has(table);
+        let useUpsert = this.upsertFullDumpTables.has(table);
+        let prepared = this.prepareNaturalKeyRows(table, rows, this.prepareInsertColumns(table, rows));
+        return { ...prepared, useIgnore, useUpsert };
+    }
+
+    prepareInsertBatch(rows, columns, start, batchSize){
+        let batch = rows.slice(start, start + batchSize);
+        let args = [];
+        for(let row of batch){
+            for(let col of columns){
+                // decodeValue restores base64 binary sentinels back to Buffers
+                // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
+                // encoding); non-binary values pass through unchanged.
+                args.push(decodeValue(row[col] !== undefined ? row[col] : null));
+            }
+        }
+        return { batch, args };
+    }
+
+    insertRowBatch(table, columns, batch, args, useIgnore, useUpsert){
+        return this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+    }
+
+    assertNoEventTruncation(warnings){
+        // events rows >64KB silently truncate on a still-TEXT (pre-migration)
+        // replica when INSERT IGNORE is used: the id collision guard skips the row
+        // on re-send, so the truncated copy is never healed. Detect this by reading
+        // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
+        // valid on the same connection the INSERT just ran on; we are inside a
+        // beginTransaction so this.db.transactionConnection is the live connection).
+        // Throw (halt the apply transaction) on any 1265 truncation warning so
+        // operators see the exact row rather than a silently corrupt events log.
+        for(let w of (warnings || [])){
+            let code = Number(w.Code || w.code || 0);
+            if(code === 1265){
+                throw new Error('events row truncated (errno 1265) during INSERT IGNORE: ' +
+                    'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
+                    'Warning: ' + (w.Message || w.message || ''));
+            }
+        }
+    }
+
+    shouldCheckStrictIgnoreWarnings(table, opts){
+        // gated on opts.strictIgnoreCheck (set only by ClientSync's
+        // from-zero lookup repair, ClientApplier.applyIncrementalSnapshot's
+        // caller) rather than running on every ordinary per-block apply: this is
+        // an extra SHOW WARNINGS round-trip per batch, and the hot streaming path
+        // re-sends these tables' rows constantly by design (that is the whole
+        // point of ignoreTables), so it must stay cheap there. A REPAIR pass is
+        // different - ClientSync only pages a table from-zero because the
+        // completeness check already measured it short, so every row in that page
+        // is expected to be either already-correct or genuinely missing, never a
+        // silent conflict.
+        //
+        // For this class of table the row's own id/PRIMARY KEY is the ENTIRE
+        // re-send contract - a benign re-delivery can only ever warn "Duplicate
+        // entry '<id>' for key 'PRIMARY'". Any other warning (a collision on a
+        // DIFFERENT unique key, e.g. index_statuses' `status`, or a non-duplicate
+        // error like a truncated/NULL column) means IGNORE just silently dropped
+        // a row the repair needed to land, with the replica left short and no
+        // signal anywhere that it happened. Fail loud instead, so the repair's
+        // caller (ClientSync.maybeVerifyCompleteness) sees exactly which
+        // table/row collided rather than reporting the same short count forever.
+
+        // Keep warning classification scoped to repair passes.
+        return opts && opts.strictIgnoreCheck && this.idKeyedIgnoreTables.has(table);
+    }
+
+    assertNoStrictIgnoreConflicts(table, suspect){
+        // A natural-key collision on this class has two causes and only one of
+        // them needs a human. A STALE GENERATION is the healable one: the source
+        // re-interned its lookup rows (the ids are node-local AUTO_INCREMENT
+        // surrogates assigned in first-seen order and the table is never rolled
+        // back), so the replica holds the natural value at an id the source no
+        // longer has. Retiring that dead row and landing the source's converges
+        // the table. A GENUINE conflict is the other: the id the local row holds
+        // is one the source ALSO serves, so retiring it would destroy a live row.
+        for(let w of suspect){
+            let code = Number(w.Code || w.code || 0);
+            let message = w.Message || w.message || '';
+            throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
+                '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
+                'PRIMARY-key duplicate only; the local row holding this one\'s natural key is ' +
+                'still in the source\'s own row set, so it cannot be retired automatically and ' +
+                'needs a human to reconcile it.');
+        }
+    }
+
+    async insertRows(table, rows, opts){
+        if(!rows || rows.length === 0) return;
+        let prepared = this.prepareTableRows(table, rows);
+
+        // Chunked to keep the IN list bounded on a large catch-up window.
+        let deleteBatch = 500;
+        for(let i = 0; i < prepared.keyValues.length; i += deleteBatch){
+            let slice = prepared.keyValues.slice(i, i + deleteBatch);
+            await this.db.deleteRowsByKeyValues(table, prepared.naturalKey, slice);
+        }
+        this.validateInsertColumns(prepared.columns);
 
         // Mutable-aggregate full-dump tables (useUpsert) overwrite their existing row so
         // a re-dump on a non-empty replica refreshes (not skips) stale values.
         // Batch inserts in groups of 100 for efficiency
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
-            let batch = rows.slice(i, i + batchSize);
-            let args = [];
-
-            for(let row of batch){
-                for(let col of columns){
-                    // decodeValue restores base64 binary sentinels back to Buffers
-                    // before insert (the inverse of SnapshotBuilder/BlockBroadcaster
-                    // encoding); non-binary values pass through unchanged.
-                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
-                }
-            }
+            let { batch, args } = this.prepareInsertBatch(rows, prepared.columns, i, batchSize);
 
             try {
-                await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+                await this.insertRowBatch(table, prepared.columns, batch, args,
+                    prepared.useIgnore, prepared.useUpsert);
             } catch(e){
                 // Name the upsert table on the error so ClientSync can tell a repeating
                 // full-dump duplicate key apart from any other apply failure.
-                if(useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
+                if(prepared.useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
                 throw e;
             }
 
-            // events rows >64KB silently truncate on a still-TEXT (pre-migration)
-            // replica when INSERT IGNORE is used: the id collision guard skips the row
-            // on re-send, so the truncated copy is never healed. Detect this by reading
-            // SHOW WARNINGS immediately after (SHOW WARNINGS is session-scoped and is
-            // valid on the same connection the INSERT just ran on; we are inside a
-            // beginTransaction so this.db.transactionConnection is the live connection).
-            // Throw (halt the apply transaction) on any 1265 truncation warning so
-            // operators see the exact row rather than a silently corrupt events log.
             if(table === 'events'){
                 let warnings = await this.db.doQuery('SHOW WARNINGS');
-                for(let w of (warnings || [])){
-                    let code = Number(w.Code || w.code || 0);
-                    if(code === 1265){
-                        throw new Error('events row truncated (errno 1265) during INSERT IGNORE: ' +
-                            'replica column is still TEXT (64KB); run the MEDIUMTEXT migration. ' +
-                            'Warning: ' + (w.Message || w.message || ''));
-                    }
-                }
-            } else if(opts && opts.strictIgnoreCheck && this.idKeyedIgnoreTables.has(table)){
-                // gated on opts.strictIgnoreCheck (set only by ClientSync's
-                // from-zero lookup repair, ClientApplier.applyIncrementalSnapshot's
-                // caller) rather than running on every ordinary per-block apply: this is
-                // an extra SHOW WARNINGS round-trip per batch, and the hot streaming path
-                // re-sends these tables' rows constantly by design (that is the whole
-                // point of ignoreTables), so it must stay cheap there. A REPAIR pass is
-                // different - ClientSync only pages a table from-zero because the
-                // completeness check already measured it short, so every row in that page
-                // is expected to be either already-correct or genuinely missing, never a
-                // silent conflict.
-                //
-                // For this class of table the row's own id/PRIMARY KEY is the ENTIRE
-                // re-send contract - a benign re-delivery can only ever warn "Duplicate
-                // entry '<id>' for key 'PRIMARY'". Any other warning (a collision on a
-                // DIFFERENT unique key, e.g. index_statuses' `status`, or a non-duplicate
-                // error like a truncated/NULL column) means IGNORE just silently dropped
-                // a row the repair needed to land, with the replica left short and no
-                // signal anywhere that it happened. Fail loud instead, so the repair's
-                // caller (ClientSync.maybeVerifyCompleteness) sees exactly which
-                // table/row collided rather than reporting the same short count forever.
+                this.assertNoEventTruncation(warnings);
+            } else if(this.shouldCheckStrictIgnoreWarnings(table, opts)){
                 let suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
 
-                // A natural-key collision on this class has two causes and only one of
-                // them needs a human. A STALE GENERATION is the healable one: the source
-                // re-interned its lookup rows (the ids are node-local AUTO_INCREMENT
-                // surrogates assigned in first-seen order and the table is never rolled
-                // back), so the replica holds the natural value at an id the source no
-                // longer has. Retiring that dead row and landing the source's converges
-                // the table. A GENUINE conflict is the other: the id the local row holds
-                // is one the source ALSO serves, so retiring it would destroy a live row.
                 if(suspect.length){
                     let retired = await this.retireStaleNaturalKeyRows(table, batch, rows, suspect);
                     if(retired.length){
-                        await this.db.insertRowValues(table, columns, batch.length, args, useIgnore, useUpsert);
+                        await this.insertRowBatch(table, prepared.columns, batch, args,
+                            prepared.useIgnore, prepared.useUpsert);
                         suspect = this.suspectIgnoreWarnings(await this.db.doQuery('SHOW WARNINGS'));
                     }
-                    for(let w of suspect){
-                        let code = Number(w.Code || w.code || 0);
-                        let message = w.Message || w.message || '';
-                        throw new Error('INSERT IGNORE silently dropped a row applying to `' + table +
-                            '` (errno ' + code + '): ' + message + '. This table\'s re-send contract is a ' +
-                            'PRIMARY-key duplicate only; the local row holding this one\'s natural key is ' +
-                            'still in the source\'s own row set, so it cannot be retired automatically and ' +
-                            'needs a human to reconcile it.');
-                    }
+                    this.assertNoStrictIgnoreConflicts(table, suspect);
                 }
             }
         }
@@ -1065,16 +980,12 @@ class ClientApplier {
             }
         }
         // A plain INSERT with the ON DUPLICATE KEY UPDATE suffix: every carried column
-        // is written on both insert and update.
+        // is written on both insert and update. Batches decode binary sentinels through
+        // the same prepareInsertBatch insertRows uses, so the two paths cannot drift.
         let batchSize = 100;
         for(let i = 0; i < rows.length; i += batchSize){
-            let batch = rows.slice(i, i + batchSize);
-            let args = [];
-            for(let row of batch){
-                for(let col of columns)
-                    args.push(decodeValue(row[col] !== undefined ? row[col] : null));
-            }
-            await this.db.insertRowValues(table, columns, batch.length, args, false, true);
+            let { batch, args } = this.prepareInsertBatch(rows, columns, i, batchSize);
+            await this.insertRowBatch(table, columns, batch, args, false, true);
         }
     }
 

@@ -54,7 +54,8 @@ async function getContractLeafRows(db, block_index, conn, stateKeyCollate, queri
     // state_key collation is flag-day gated, mirroring BlockHasher and the
     // indexer's getBlockHashes: legacy folding (utf8_general_ci) below the
     // activation height, COLLATE utf8_bin pinned at/after it
-    // (see state_key_collation_activation.js).
+    // (see the state_key_collation_activation row in
+    // consensus/gate_registry/shared_rows_4.js).
     contracts.state = await db.doQueryStrict(queries.statePrefix + stateKeyCollate + queries.stateSuffix + stateKeyCollate + queries.stateOrder,
                                              [block_index], conn);
     contracts.executions = await db.doQueryStrict(queries.executions, [block_index], conn);
@@ -79,8 +80,8 @@ module.exports = {
     // test is the drift guard. !!!
     //
     // `network`/`coin` drive the state_key collation flag-day
-    // (state_key_collation_activation.js), mirroring BlockHasher; omitted ->
-    // legacy folding collation (pre-activation behavior).
+    // (the state_key_collation_activation gate-registry row), mirroring
+    // BlockHasher; omitted -> legacy folding collation (pre-activation behavior).
     //
     // Every SELECT below is doQueryStrict, never doQuery (M-17). These rows ARE the
     // block_merkle_root leaf set, so a swallowed non-transactional error returning []

@@ -80,4 +80,19 @@ describe('replica secondary-index ensure list', function(){
         assert.strictEqual(row.indexName, 'block_index');
         assert.strictEqual(row.columns, 'block_index');
     });
+
+    it('carries the resolved_block and callback_due_block indexes the per-block reads need', function(){
+        // The state-hash request_status and poll_finalize collectors, findResolvedRequestRows,
+        // findFinalizedPollRows and the reorg resets select on these columns every block. The
+        // names and columns match the indexer migration 2026-10-06-resolved-block-idx.sql, so a
+        // replica bootstrapped from a source that already holds them skips the ALTER by name.
+        const rows = ensureIndexList().map(r => r.table + '.' + r.indexName + ' (' + r.columns + ')');
+        for(const want of [
+            'attests.version_resolved (version, resolved_block)',
+            'xcalls.version_resolved (version, resolved_block)',
+            'polls.resolved_block (resolved_block)',
+            'polls.callback_due_block (callback_due_block)',
+        ])
+            assert.ok(rows.includes(want), want + ' is missing from the ensure list; an aged replica scans the whole table on every block');
+    });
 });

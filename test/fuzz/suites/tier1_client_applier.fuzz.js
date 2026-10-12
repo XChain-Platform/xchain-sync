@@ -61,6 +61,10 @@ async function runAndLog(fn, input) {
     }
 }
 
+// Give sync_meta rows a block_index too: the applier strips their node-local id and
+// refuses a row left with no columns, so a bare { id } fixture row would throw.
+const BLOCK_INDEX_KEYED_TABLES = ['blocks', 'sync_meta'];
+
 // snapshotTablesObject (helpers/generators/payloads.js) fills every table,
 // including blocks, with genericDataRow()'s random column names, which essentially
 // never happen to name the column block_index. ClientApplier.insertRows requires
@@ -69,17 +73,16 @@ async function runAndLog(fn, input) {
 // Patching it in here keeps the fix inside this suite rather than reshaping the
 // shared generator for every other suite that uses it.
 function withBlockNaturalKeys(snapshot) {
-    if (!snapshot || !snapshot.tables || !snapshot.tables.blocks) return snapshot;
-    return {
-        ...snapshot,
-        tables: {
-            ...snapshot.tables,
-            blocks: snapshot.tables.blocks.map((row, index) => ({
-                ...row,
-                block_index: row.block_index == null ? index : row.block_index,
-            })),
-        },
-    };
+    if (!snapshot || !snapshot.tables) return snapshot;
+    let tables = { ...snapshot.tables };
+    for (let name of BLOCK_INDEX_KEYED_TABLES) {
+        if (!tables[name]) continue;
+        tables[name] = tables[name].map((row, index) => ({
+            ...row,
+            block_index: row.block_index == null ? index : row.block_index,
+        }));
+    }
+    return { ...snapshot, tables };
 }
 
 // FK edges documented independently of the ordering algorithm: pubkeys.address_id ->

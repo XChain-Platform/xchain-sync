@@ -23,7 +23,7 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 - **Dual mode**: server mode serves data from authoritative indexer and decoder databases; client mode replicates both into local MariaDB instances
 - **Multi-chain single instance**: discovers all installed chains/networks via the hub and serves them from one process on one port
 - **Hub auto-discovery**: calls xchain-hub `getallconfigs` at startup; re-polls every 5 minutes to detect newly installed chains
-- **Dual DB type support**: syncs both the indexer DB (full ledger) and decoder DB (8 of 9 tables; `TransparencyLog` and `mempool_transactions` excluded by design) behind a `/:dbType/` path segment
+- **Dual DB type support**: syncs both the indexer DB (full ledger) and decoder DB (8 of 10 tables; `mempool_transactions` and `dispenser_extension_undo` excluded by design) behind a `/:dbType/` path segment
 - **Schema auto-replication**: client fetches DDL from the server before data, creating tables in the replica with DDL whitelisted to `CREATE TABLE` only
 - **Full snapshot export**: compressed, streamed JSON database dumps for bootstrapping new validators
 - **Incremental snapshots**: delta exports since any block height for catch-up after downtime

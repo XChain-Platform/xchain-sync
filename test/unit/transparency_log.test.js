@@ -86,19 +86,23 @@ describe('TransparencyLog', function(){
     afterEach(restoreSinon);
 
     describe('getRecordedHash', function(){
-        it('returns the durable recorded ledger_hash for a height', async function(){
-            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta WHERE block_index=\?/), [100])
-                .resolves([{ ledger_hash: 'lh-100' }]);
-            assert.strictEqual(await log.getRecordedHash(100), 'lh-100');
+        it('returns the durable recorded block identity (ledger|actions|contract) for a height', async function(){
+            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash, actions_hash, contract_hash FROM sync_meta WHERE block_index=\?/), [100])
+                .resolves([{ ledger_hash: 'lh-100', actions_hash: 'ah-100', contract_hash: 'ch-100' }]);
+            assert.strictEqual(await log.getRecordedHash(100), 'lh-100|ah-100|ch-100');
+            // NULL actions and contract hashes render as empty parts, as the live source row does.
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta WHERE block_index=\?/), [101])
+                .resolves([{ ledger_hash: 'lh-101', actions_hash: null, contract_hash: null }]);
+            assert.strictEqual(await log.getRecordedHash(101), 'lh-101||');
         });
 
         it('returns null when the block was never recorded', async function(){
-            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta/), [999]).resolves([]);
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta WHERE block_index=\?/), [999]).resolves([]);
             assert.strictEqual(await log.getRecordedHash(999), null);
         });
 
         it('returns null when the recorded ledger_hash is NULL', async function(){
-            db.doQuery.withArgs(sinon.match(/SELECT ledger_hash FROM sync_meta/), [7]).resolves([{ ledger_hash: null }]);
+            db.doQuery.withArgs(sinon.match(/FROM sync_meta WHERE block_index=\?/), [7]).resolves([{ ledger_hash: null, actions_hash: 'a', contract_hash: 'c' }]);
             assert.strictEqual(await log.getRecordedHash(7), null);
         });
     });

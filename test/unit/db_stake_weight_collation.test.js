@@ -17,7 +17,7 @@
 // the same emission sites.
 //
 // The gate module's own semantics are covered once, by the indexer's suite,
-// against the same bytes (rollback-coverage.test.js locks the twin identical).
+// against the same bytes (rollback_coverage.test.js locks the twin identical).
 // What is sync-specific and covered HERE: that this repo's caller threads the
 // gate, that a null coin/network stays inert as it does for the source cap, and
 // that the fail-closed startup assertion halts on drift and passes on a correct
@@ -88,7 +88,7 @@ describe('sync: stake-weight ordering collation gate', function () {
     afterEach(restoreSinon);
 
     // The follower's copy of the map is the same bytes as the source's (twin guard in
-    // rollback-coverage.test.js). Pinned here too so a one-sided edit in this repo,
+    // rollback_coverage.test.js). Pinned here too so a one-sided edit in this repo,
     // which is exactly the fork the gate exists to prevent, fails in this repo's suite.
     it('the gate map is armed at genesis on mainnet and at the v0.21.3 heights on testnet', function () {
         assert.deepStrictEqual(swc.STAKE_WEIGHT_COLLATION_ACTIVATION, {

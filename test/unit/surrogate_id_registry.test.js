@@ -16,7 +16,7 @@ const ClientApplier = require('../../src/client/applier');
 const Utility       = require('../../src/util');
 
 // The indexer schema, resolved the way the other cross-repo guards here do
-// (see generatedColumns.test.js). Absent by default in a standalone checkout;
+// (see generated_columns.test.js). Absent by default in a standalone checkout;
 // XCHAIN_REQUIRE_SIBLINGS=1 turns green-by-skip into a failure, and
 // xchain-indexer is declared in .ci-siblings so the push gate ships it.
 const INDEXER_SQL = process.env.XCHAIN_INDEXER_SQL_PATH
@@ -103,6 +103,14 @@ describe('ClientApplier surrogate-id registry matches the indexer DDL @regressio
         assert.ok(applier.localSurrogateIdOnlyTables.has('attest_validator_stats'));
         assert.ok(!applier.localSurrogateIdTables.has('attest_validator_stats'),
             'a single-column DELETE would drop that validator rows for every other provider');
+    });
+
+    it('keeps sync_meta in the strip-only class and on the IGNORE path, not the DELETE class', function(){
+        // Its id is node-local (live rows omit it); the UNIQUE block_index is the real key.
+        assert.ok(applier.localSurrogateIdOnlyTables.has('sync_meta'));
+        assert.ok(applier.ignoreTables.has('sync_meta'), 'sync_meta must stay first-write-wins');
+        assert.ok(!applier.localSurrogateIdTables.has('sync_meta'),
+            'the DELETE class would make transparency-log leaves last-write-wins');
     });
 
     it('every allow-listed table carries a reason, so the list cannot grow silently', function(){

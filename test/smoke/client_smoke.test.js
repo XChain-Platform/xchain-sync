@@ -18,6 +18,7 @@ const WebSocket = require('ws');
 const Utility  = require('../../src/util');
 const { splitSqlStatements } = require('../../src/db/sql_util');
 const ClientApplier   = require('../../src/client/applier');
+const { SCHEMA_VERSION } = require('../../src/schema/version');
 const ClientRollback  = require('../../src/client/rollback');
 const ClientSync      = require('../../src/client/sync');
 const HashVerifier    = require('../../src/client/hash_verifier');
@@ -201,6 +202,7 @@ describe('Smoke: Client Mode', function() {
 
         // Build a minimal block payload
         let payload = {
+            schema_version: SCHEMA_VERSION.indexer,
             block_index: 99,
             data: {
                 blocks: [{ block_index: 99, block_time: 1700000099 }],

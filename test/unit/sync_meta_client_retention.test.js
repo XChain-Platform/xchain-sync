@@ -203,3 +203,39 @@ describe('sync_meta count parity while the client window is armed', function(){
         }
     });
 });
+
+describe('sync_meta retention reorg floor at the construction sites', function(){
+    registerRetentionHooks();
+
+    it('getTransparencyLog floors the window at the chain reorg reach', function(){
+        service = new SyncService(baseConfig({ SYNC_META_RETENTION_BLOCKS: 50 }));
+        service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
+        service.databases.set('litecoin:testnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
+        assert.strictEqual(service.getTransparencyLog('bitcoin', 'mainnet').retentionFloor, 256);
+        assert.strictEqual(service.getTransparencyLog('litecoin', 'testnet').retentionFloor, 5022);
+        assert.strictEqual(service.getTransparencyLog('bitcoin', 'mainnet').retentionBlocks, 50,
+            'the configured window is kept as set; the floor is applied at prune time');
+    });
+
+    it('warns once per chain when the configured window is below the floor', function(){
+        const { getLogger } = require('../../src/observability');
+        const warn = sinon.stub(getLogger(), 'warn');
+        service = new SyncService(baseConfig({ SYNC_META_RETENTION_BLOCKS: 50 }));
+        service.databases.set('bitcoin:mainnet:indexer', { db: {}, config: {}, dbType: 'indexer' });
+        service.getTransparencyLog('bitcoin', 'mainnet');
+        service.getTransparencyLog('bitcoin', 'mainnet');
+        const floorWarnings = warn.getCalls().filter(c => /below the reorg floor 256/.test(String(c.args[0])));
+        assert.strictEqual(floorWarnings.length, 1);
+    });
+
+    it('the client sweep builds its log with the floor for that chain', async function(){
+        clock = sinon.useFakeTimers();
+        const prune = sinon.stub(TransparencyLog.prototype, 'pruneSyncMeta').resolves({});
+        service = new SyncService(baseConfig({ SYNC_META_RETENTION_BLOCKS: 50 }));
+        service.databases.set('litecoin:testnet:indexer',
+            { db: {}, config: { coin: 'litecoin', network: 'testnet' }, dbType: 'indexer' });
+        service.startSyncMetaRetention();
+        await clock.tickAsync(60000);
+        assert.strictEqual(prune.getCall(0).thisValue.retentionFloor, 5022);
+    });
+});

@@ -28,7 +28,9 @@
  * streamed: a table added to live sync automatically joins the check, and a
  * table removed from it automatically leaves.
  *
- * Scope note: this is deliberately the *per-block streamed* set. Tables that
+ * Decoder coverage is 8 of 10 schema tables, not every table:
+ * mempool_transactions and dispenser_extension_undo stay local. Scope note:
+ * this is deliberately the *per-block streamed* set. Tables that
  * converge through other channels (a full/incremental snapshot ride-along, or
  * no xchain-sync channel at all) are intentionally excluded, because their
  * counts legitimately diverge between nodes and comparing them would raise
@@ -36,15 +38,19 @@
  *   - attest_validator_stats          running aggregate, full-snapshot only
  *   - markets                         derived OHLCV, full-snapshot only
  *   - mempool_transactions            non-deterministic across nodes
- *   - dispensers (decoder)            mutated by five decoder writes that ride no per-block
- *                                     stream: the soft-expire UPDATE of expired_block_index,
- *                                     the format-2 edit's expiration extend with same-block
- *                                     un-expire (extendOpenDispenserExpirationBySource), the
- *                                     reorg un-expire UPDATE and reorg DELETE by tx_index
+ *   - dispensers (decoder)            mutated in place by decoder writes that ride no per-block
+ *                                     stream: the soft-expire UPDATE of expired_block_index
+ *                                     (deleteOpenDispensers), the format-2 edit's expiration
+ *                                     extend with same-block un-expire
+ *                                     (extendOpenDispenserExpirationBySource), the reorg
+ *                                     rewind of expiration and expired_block_index through
+ *                                     dispenser_extension_undo (restoreDispenserExtensions),
+ *                                     the reorg un-expire UPDATE and reorg DELETE by tx_index
  *                                     (deleteBlockRows), and the deferred hard purge
- *                                     (purgeExpiredDispensers). The expiration extend leaves
- *                                     no block marker on the row, so any channel replacing
- *                                     the full-table reconcile must carry all five. It IS in the
+ *                                     (purgeExpiredDispensers). The extend and the reorg
+ *                                     rewind leave no block marker on the row, so any channel
+ *                                     replacing the full-table reconcile must carry every
+ *                                     write in this list. It IS in the
  *                                     decoder `special` bucket so it joins the /status
  *                                     completeness count, but that count is a post-replace
  *                                     equality sanity check, never a drift detector: a
@@ -56,7 +62,17 @@
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
- *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS.
+ *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS, plus one armed by
+ *                                     every reorg rollback for the next status tick or catch-up.
+ *   - dispenser_extension_undo       decoder-local reorg journal: the pre-image of each row a
+ *                                     format-2 expiration extend touched, written and consumed
+ *                                     on the decoder's own block transaction (restored by
+ *                                     restoreDispenserExtensions then deleted by block on
+ *                                     reorg, pruned below the safe height).
+ *                                     The replica rolls dispensers back through the full-table
+ *                                     reconcile, never through this journal, so it is neither
+ *                                     streamed, counted nor content-checked, and it must stay
+ *                                     out of every channel like mempool_transactions.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
  *     cross_chain_matches,            processing, and pushed or retracted by the hub out
  *     oracle_prices,                  of band with block apply (its price and dex reorg
@@ -73,7 +89,7 @@
  *                                     without it (its checkpoint and match sources throw,
  *                                     and it asserts the hub DB at startup) rather than
  *                                     serving stale local rows. The set is every
- *                                     tableLifecycle entry with replication 'hub-mirror';
+ *                                     table_lifecycle.js entry with replication 'hub-mirror';
  *                                     that registry is the authority and this column is a
  *                                     reading aid.
  *   - icons                           replication 'local': never leaves the node, on any
@@ -112,7 +128,7 @@ const TOPOLOGY = {
         // dispensers is deliberately NOT per-block-streamed: per-block replication
         // captures only rows *inserted* in a block (via the tx_index->block_index
         // join), but the decoder also mutates dispensers in place and deletes them
-        // (the full list of five writes is in the header's dispensers entry).
+        // (the full list of writes is in the header's dispensers entry).
         // None of them rides the block stream, so streaming inserts alone would
         // let a follower's dispensers count drift away from the source. dispensers
         // is instead listed in `special` below, where it converges through the
@@ -130,7 +146,7 @@ const TOPOLOGY = {
         // completeness check (getReplicatedTables) without being streamed per block:
         // it converges via full snapshot + the periodic re-dump/replace reconcile,
         // which is the ONLY thing keeping it in parity (the header's dispensers entry
-        // lists the five writes that reconcile must capture). The count is a post-replace
+        // lists the writes that reconcile must capture). The count is a post-replace
         // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
         // the replica ahead (ClientSync.verifyTableCounts flags remote > local only)
         // and a soft-expire UPDATE leaves counts equal, so neither can ever fire, and

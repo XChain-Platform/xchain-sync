@@ -132,5 +132,16 @@ describe('Advisory table-content parity', function(){
             assert.notStrictEqual(hasherFor({}).contentDigest('sends', ROWS),
                                   hasherFor({}).contentDigest('issues', ROWS));
         });
+
+        it('a later COINPAY promotion of order_matches.status_id does not diverge, other columns do', function(){
+            // A source one block ahead holds 'valid' where the follower still holds 'pending_coinpay'.
+            let pending = [{ action_index: 7, give_amount: '5', settlement_type: 'coinpay', status_id: 3 }];
+            let promoted = [Object.assign({}, pending[0], { status_id: 4 })];
+            assert.strictEqual(hasherFor({}).contentDigest('order_matches', pending),
+                               hasherFor({}).contentDigest('order_matches', promoted));
+            let forged = [Object.assign({}, pending[0], { give_amount: '6' })];
+            assert.notStrictEqual(hasherFor({}).contentDigest('order_matches', pending),
+                                  hasherFor({}).contentDigest('order_matches', forged));
+        });
     });
 });

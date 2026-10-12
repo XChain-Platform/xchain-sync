@@ -20,9 +20,11 @@
 // Pure-DML backfills are NOT flagged: they change rows, not the shape a follower
 // needs. DDL against a table this dbType never ships is not flagged either.
 //
-// Per the operator ruling of 2026-09-09 a red gate is answered by a bump carried
-// on the next fleet release, never by advancing the frontier alone: the version
-// decides what peers ACCEPT, so a drive-by edit strands the fleet.
+// Per the operator ruling of 2026-09-09 a red gate for payload-affecting DDL is
+// answered by a bump carried on the next fleet release: the version decides what
+// peers ACCEPT, so a drive-by edit strands the fleet. A reviewed secondary-index-
+// only migration can instead advance the frontier with an index-only accounting
+// comment because it changes neither replicated columns nor payload shape.
 
 'use strict';
 
@@ -86,6 +88,32 @@ function ddlTables(sqlText){
     return tables;
 }
 
+function isNonUniqueSecondaryIndex(statement, tables){
+    if(tables.length !== 1) return false;
+    const table = tables[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const createIndex = new RegExp('^\\s*CREATE\\s+INDEX(?:\\s+IF\\s+NOT\\s+EXISTS)?'
+        + '\\s+`?\\w+`?\\s+ON\\s+`?' + table + '`?\\s+\\([^;]+\\)\\s*$', 'i');
+    const alterTable = new RegExp('^\\s*ALTER\\s+TABLE\\s+`?' + table + '`?\\s+'
+        + 'ADD\\s+(?:INDEX|KEY)(?:\\s+IF\\s+NOT\\s+EXISTS)?'
+        + '\\s+`?\\w+`?\\s*\\([^;]+\\)\\s*$', 'i');
+    return createIndex.test(statement) || alterTable.test(statement);
+}
+
+function unsafeIndexOnlyTables(sqlText, wire){
+    const body = sqlText
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/^\s*--.*$/gm, ' ')
+        .replace(/--[^\n]*/g, ' ');
+    const unsafe = new Set();
+    for(const statement of body.split(';').map(s => s.trim()).filter(Boolean)){
+        const tables = [...ddlTables(statement)].filter(t => wire.has(t)).sort();
+        if(tables.length && !isNonUniqueSecondaryIndex(statement, tables)){
+            for(const table of tables) unsafe.add(table);
+        }
+    }
+    return [...unsafe].sort();
+}
+
 // Every migration past the frontier that changes the shape of a wire-replicated
 // table. `accounted` covers the same-day tail, because the frontier cursor is a date
 // and dates are not unique. A filename with no parseable date is reported too: the
@@ -95,9 +123,13 @@ function unaccountedReplicatedDdl(dir, frontier, wire){
     for(const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()){
         const date = (file.match(/^(\d{4}-\d{2}-\d{2})-/) || [])[1];
         if(date && date < frontier.through) continue;
-        if(date && date === frontier.through && frontier.accounted.includes(file)) continue;
-        const hits = [...ddlTables(fs.readFileSync(path.join(dir, file), 'utf8'))]
-            .filter(t => wire.has(t)).sort();
+        const sqlText = fs.readFileSync(path.join(dir, file), 'utf8');
+        const isAccounted = date && date === frontier.through && frontier.accounted.includes(file);
+        const isIndexOnly = isAccounted && (frontier.indexOnly || []).includes(file);
+        if(isAccounted && !isIndexOnly) continue;
+        const hits = isIndexOnly
+            ? unsafeIndexOnlyTables(sqlText, wire)
+            : [...ddlTables(sqlText)].filter(t => wire.has(t)).sort();
         if(hits.length) findings.push({ file, tables: hits, undated: !date });
     }
     return findings;
@@ -205,6 +237,50 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
 
 describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
 
+    describe('the gate detects what it claims to detect', function(){
+
+        let dir;
+        const frontier = {
+            through: '2026-09-12',
+            accounted: ['2026-09-12-sends-covering-index.sql'],
+            indexOnly: ['2026-09-12-sends-covering-index.sql']
+        };
+        const wire = new Set(['sends', 'attests']);
+
+        function write(sql){
+            fs.writeFileSync(path.join(dir, '2026-09-12-sends-covering-index.sql'), sql);
+        }
+
+        beforeEach(function(){
+            dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xchain-sync-migration-gate-'));
+        });
+
+        afterEach(function(){
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
+        it('does not flag an index-only migration explicitly recorded at an advanced frontier', function(){
+            write('ALTER TABLE sends ADD INDEX IF NOT EXISTS sends_covering (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
+        });
+
+        it('flags payload-affecting DDL substituted into an index-only migration', function(){
+            write('ALTER TABLE sends ADD COLUMN payload_shape_changed INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
+                file: '2026-09-12-sends-covering-index.sql', tables: ['sends'], undated: false
+            }]);
+        });
+
+        it('flags a unique index substituted into an index-only migration', function(){
+            write('CREATE UNIQUE INDEX sends_covering ON sends (action_index, block_index);\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.tables),
+                [['sends']]);
+        });
+    });
+});
+
+describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
+
     describe('the sibling migration ledgers are level with SCHEMA_VERSION', function(){
 
         for(const dbType of Object.keys(MIGRATION_DIRS)){
@@ -225,11 +301,12 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
                         + ' bump:\n'
                         + findings.map(f => '  ' + f.file + ' -> ' + f.tables.join(', ')
                             + (f.undated ? '  [filename carries no date]' : '')).join('\n')
-                        + '\nBump SCHEMA_VERSION.' + dbType + ' in src/schema/version.js with a history'
-                        + ' entry naming what a follower on the previous version cannot store, move the'
-                        + ' frontier to the newest migration date, and land it with the next fleet'
-                        + ' release: the version decides what peers ACCEPT, so a follower must refuse'
-                        + ' the snapshot rather than apply rows into a schema that cannot hold them.'
+                        + '\nIf the DDL changes replicated columns or payload shape, bump SCHEMA_VERSION.'
+                        + dbType + ' in src/schema/version.js with a history entry naming what a follower'
+                        + ' on the previous version cannot store, move the frontier to the newest'
+                        + ' migration date, and land it with the next fleet release. If it adds only'
+                        + ' non-unique secondary indexes, leave the version unchanged and move the'
+                        + ' frontier with an index-only accounting comment naming the migration.'
                     : '');
             });
         }

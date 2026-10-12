@@ -53,6 +53,59 @@ describe('pinnedValidators @regression', function(){
     });
 });
 
+// The service passes the hub's full name ('bitcoin'), while the documented env name
+// and every baked-in key use the ticker, so a full-name lookup must still find them.
+describe('pinnedValidators: the hub\'s full coin name @regression', function(){
+    afterEach(function(){ delete process.env[ENVKEY]; });
+
+    it('resolves the ticker-form env override under the hub\'s full coin name', function(){
+        const set = [{ pubkey: 'aa'.repeat(32), weight: '100', source: 'S1' }];
+        process.env[ENVKEY] = JSON.stringify(set);
+        assert.deepStrictEqual(pinned.getPinnedValidators('bitcoin', 'regtest'), set);
+        assert.deepStrictEqual(pinned.getPinnedValidators('BTC', 'regtest'), set);
+    });
+
+    it('still resolves a full-name env override, and the ticker form wins when both are set', function(){
+        const FULLKEY = 'CHECKPOINT_VALIDATORS_BITCOIN_REGTEST';
+        const full   = [{ pubkey: 'bb'.repeat(32), weight: '100', source: 'F1' }];
+        const ticker = [{ pubkey: 'cc'.repeat(32), weight: '100', source: 'T1' }];
+        try {
+            process.env[FULLKEY] = JSON.stringify(full);
+            assert.deepStrictEqual(pinned.getPinnedValidators('bitcoin', 'regtest'), full);
+            process.env[ENVKEY] = JSON.stringify(ticker);
+            assert.deepStrictEqual(pinned.getPinnedValidators('bitcoin', 'regtest'), ticker);
+        } finally {
+            delete process.env[FULLKEY];
+        }
+    });
+
+    it('is INERT under the full coin names too', function(){
+        for(const chain of ['bitcoin', 'litecoin', 'dogecoin']){
+            for(const net of ['mainnet', 'testnet', 'regtest']){
+                assert.strictEqual(pinned.getPinnedValidators(chain, net), null, chain + ':' + net);
+            }
+        }
+    });
+});
+
+describe('pinnedValidators: the hub\'s full coin name, seed checkpoint @regression', function(){
+    const FULLKEY = 'CHECKPOINT_SEED_BITCOIN_REGTEST';
+    afterEach(function(){ delete process.env[SKEY]; delete process.env[FULLKEY]; });
+
+    it('resolves the ticker-form env seed under the hub\'s full coin name', function(){
+        process.env[SKEY] = JSON.stringify(goodSeed);
+        assert.deepStrictEqual(pinned.getPinnedCheckpoint('bitcoin', 'regtest'), goodSeed);
+    });
+
+    it('still resolves a full-name env seed, and the ticker form wins when both are set', function(){
+        const fullSeed = Object.assign({}, goodSeed, { block_index: 2000 });
+        process.env[FULLKEY] = JSON.stringify(fullSeed);
+        assert.deepStrictEqual(pinned.getPinnedCheckpoint('bitcoin', 'regtest'), fullSeed);
+        process.env[SKEY] = JSON.stringify(goodSeed);
+        assert.deepStrictEqual(pinned.getPinnedCheckpoint('bitcoin', 'regtest'), goodSeed);
+    });
+});
+
 describe('pinnedValidators: rotation seed checkpoint @regression', function(){
     const SEEDKEY = 'CHECKPOINT_SEED_BTC_REGTEST';
     afterEach(function(){ delete process.env[SEEDKEY]; });
@@ -139,6 +192,23 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
         assertRefuses({ [VKEY]: JSON.stringify([]) }, 'is an empty array');
         assertRefuses({ [VKEY]: JSON.stringify([{ pubkey: 'aa', weight: 100, source: 'S1' }]) }, 'string `weight`');
         assertRefuses({ [VKEY]: JSON.stringify([{ pubkey: 'aa', weight: '100' }]) }, 'string `source`');
+    });
+
+    // Each of these is well typed but can never verify, so it must be named at startup
+    // instead of starting and halting later on a quorum failure that blames the source.
+    it('refuses a typed validator override the checkpoint verifier always rejects', function(){
+        const entry = (o) => JSON.stringify([Object.assign({}, goodSet[0], o)]);
+        assertRefuses({ [VKEY]: entry({ pubkey: 'aa' }) }, '64-hex');
+        assertRefuses({ [VKEY]: entry({ pubkey: 'zz'.repeat(32) }) }, '64-hex');
+        assertRefuses({ [VKEY]: entry({ source: '  ' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: 'lots' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '-5' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '0x10' }) }, 'unusable stake field');
+        assertRefuses({ [VKEY]: entry({ weight: '0' }) }, 'zero total stake');
+        const mixed = goodSet.concat([{ pubkey: 'bb'.repeat(32), weight: '', source: 'S2' }]);
+        assertRefuses({ [VKEY]: JSON.stringify(mixed) }, 'entry 1 has an unusable stake field');
+        pinned.assertPinnedEnvOverrides({ [VKEY]: JSON.stringify(goodSet.concat(
+            [{ pubkey: 'BB'.repeat(32), weight: '0', source: 'S2' }])) });
     });
 });
 

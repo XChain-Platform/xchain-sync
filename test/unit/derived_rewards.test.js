@@ -62,6 +62,22 @@ describe('collectDerivedAnchorRewards', function(){
         assert.strictEqual(captured, fakeConn);
     });
 
+    // The ROLLCALL close earns 'rollcall_publish' at the epoch height and stamps the close
+    // block as derive_block_index, so this channel is its only live path to a follower. An
+    // anchor-only reward_type filter would drop it silently (validator_rewards is unhashed).
+    it('carries a rollcall_publish row and never filters the selector on reward_type', async function(){
+        let captured = null;
+        let rollcall = row({ reward_type: 'rollcall_publish', round_reference: 961400,
+                             block_index: 961400, derive_block_index: 961450 });
+        let db = { doQuery: async (sql) => { captured = sql; return [rollcall]; } };
+        let out = await collectDerivedAnchorRewards(db, 961450, 961450);
+        assert.doesNotMatch(captured, /reward_type/,
+            'every writer that stamps derive_block_index rides this channel, whatever its reward_type');
+        assert.strictEqual(out.length, 1);
+        assert.strictEqual(out[0].reward_type, 'rollcall_publish');
+        assert.strictEqual(out[0].block_index, 961400, 'block_index stays the epoch (earn) height');
+    });
+
     it('maps rows through and dedups by the validator_rewards UNIQUE identity', async function(){
         let db = { doQuery: async () => [ row(), row(), row({ signing_pubkey_id: 3 }) ] };
         let out = await collectDerivedAnchorRewards(db, 961700, 961700);

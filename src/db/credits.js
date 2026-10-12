@@ -17,6 +17,12 @@
  * land in the block where the cooldown MATURES, which is not the block that
  * created the unstake, so a block-scoped read of the unstake never reaches them.
  *
+ * Every finder joins the row to its unstake on the unstake's own action_index, so
+ * it matches only LEGACY-attributed maturities. Once the indexer's
+ * UNSTAKE_COOLDOWN_COMPLETION_ACTION is active, the refund and release sit under a
+ * synthetic UNSTAKE action at the maturity block and the finders return nothing for
+ * them (server/cooldown_credits.js explains the split).
+ *
  * A Database mixin: every method below is installed on Database.prototype by
  * db/index.js, so `this` is the Database instance and call sites are unchanged.
  *

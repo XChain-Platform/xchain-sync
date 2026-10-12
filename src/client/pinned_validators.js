@@ -34,6 +34,11 @@
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
  *
+ * The service names a chain by the hub's full name ('bitcoin'), so the getters fold
+ * it onto the ticker every map key uses. An env name may spell the chain either way
+ * (CHECKPOINT_VALIDATORS_BTC_MAINNET or CHECKPOINT_VALIDATORS_BITCOIN_MAINNET); the
+ * ticker form is canonical and wins when both are set.
+ *
  * ABSENT is not INVALID. An unset override is inert: no trust root exists, so
  * ClientSync.verifyCheckpointQuorum skips the step, which is what the config.js
  * VERIFY_CHECKPOINT_QUORUM contract means by "skipped, never bypassed". An override
@@ -66,7 +71,24 @@
 'use strict';
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
+const { coinTicker } = require('../consensus-constants');
+const swq = require('../consensus/stake_weighted_quorum');
 const logger = getLogger();
+const HEX64 = /^[0-9a-fA-F]{64}$/;
+
+// Fold a ticker or full coin name onto the uppercase ticker the pin maps are keyed by.
+function tickerOf(chain) {
+    return String(coinTicker(String(chain))).toUpperCase();
+}
+
+// Env names to try for (chain, network): the ticker form first, then the caller's own
+// spelling when it differs, so the full-name form operators already set keeps resolving.
+function envNames(keyFn, chain, network) {
+    const names = [keyFn(tickerOf(chain), network)];
+    const raw = keyFn(chain, network);
+    if (raw !== names[0]) names.push(raw);
+    return names;
+}
 
 /**
  * Baked-in pinned validator sets, keyed "chain:network". All real keys ship null
@@ -97,22 +119,37 @@ function envKey(chain, network) {
     return 'CHECKPOINT_VALIDATORS_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied set into { set, error }: `set` when the
-// value is usable, `error` naming WHY it is not. The reason is what separates an
-// absent override from an explicitly supplied invalid one, which the getters cannot
-// express in their null and assertPinnedEnvOverrides refuses to start on.
+// Why entry i of an env-supplied set can never verify, or null when it can. The stake
+// fields are judged by the quorum module itself (swq.totalStake throws on a blank source
+// and on a missing, nonnumeric or negative weight), so this cannot drift from it.
+function entryError(v, i) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return 'entry ' + i + ' is not an object';
+    for (const f of ['pubkey', 'weight', 'source']) {
+        if (typeof v[f] !== 'string') return 'entry ' + i + ' has no string `' + f + '`';
+    }
+    if (!HEX64.test(v.pubkey)) return 'entry ' + i + ' `pubkey` is not a 64-hex Ed25519 public key';
+    try { swq.totalStake([v]); } catch (e) { return 'entry ' + i + ' has an unusable stake field (' + e.message + ')'; }
+    return null;
+}
+
+// Parse and validate an env-supplied set into { set, error }: `set` when the value is
+// usable, `error` naming WHY it is not. It refuses what the checkpoint verifier always
+// rejects (a bad pubkey, stake field or zero total stake), so a typo is named at startup
+// rather than surfacing later as a quorum halt that blames the source. The reason is what
+// separates an absent override from an explicitly supplied invalid one, which the getters
+// cannot express in their null and assertPinnedEnvOverrides refuses to start on.
 function parseValidatorSetEnv(raw) {
     let arr;
     try { arr = JSON.parse(raw); } catch (e) { return { set: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!Array.isArray(arr)) return { set: null, error: 'is not a JSON array' };
     if (arr.length === 0) return { set: null, error: 'is an empty array (an empty set verifies nothing)' };
     for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (!v || typeof v !== 'object' || Array.isArray(v)) return { set: null, error: 'entry ' + i + ' is not an object' };
-        for (const f of ['pubkey', 'weight', 'source']) {
-            if (typeof v[f] !== 'string') return { set: null, error: 'entry ' + i + ' has no string `' + f + '`' };
-        }
+        const error = entryError(arr[i], i);
+        if (error) return { set: null, error };
     }
+    let total;
+    try { total = swq.totalStake(arr); } catch (e) { return { set: null, error: 'has an unusable stake set (' + e.message + ')' }; }
+    if (total.lte(0)) return { set: null, error: 'has zero total stake (the stake-weighted quorum can never be met)' };
     return { set: arr, error: null };
 }
 
@@ -120,19 +157,23 @@ function parseValidatorSetEnv(raw) {
 // unusable. Never throws: this is on the per-verify read path, and startup already
 // refused an invalid explicit value.
 function fromEnv(chain, network) {
-    const raw = envConfig.envValueByName(envKey(chain, network));
-    if (!raw) return null;
-    const { set, error } = parseValidatorSetEnv(raw);
-    if (error) {
-        logger.warn('[pinnedValidators] ' + envKey(chain, network) + ' override ' + error + '; no env trust root for this key');
-        return null;
+    for (const name of envNames(envKey, chain, network)) {
+        const raw = envConfig.envValueByName(name);
+        if (!raw) continue;
+        const { set, error } = parseValidatorSetEnv(raw);
+        if (error) {
+            logger.warn('[pinnedValidators] ' + name + ' override ' + error + '; no env trust root for this key');
+            return null;
+        }
+        return set;
     }
-    return set;
+    return null;
 }
 
 /**
  * The pinned validator set for (chain, network): an env override if present and
- * well-formed, else the baked-in entry, else null. Lookup is case-insensitive.
+ * well-formed, else the baked-in entry, else null. Lookup is case-insensitive and
+ * accepts the ticker or the full coin name.
  * @param {string} chain
  * @param {string} network
  * @returns {Array<{pubkey:string, weight:string, source:string}> | null}
@@ -141,7 +182,7 @@ function getPinnedValidators(chain, network) {
     if (chain == null || network == null) return null;
     const env = fromEnv(chain, network);
     if (env) return env;
-    const entry = PINNED[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
+    const entry = PINNED[tickerOf(chain) + ':' + String(network).toLowerCase()];
     return entry || null;
 }
 
@@ -194,19 +235,23 @@ function parseSeedEnv(raw) {
 // Resolve the env-supplied seed for (chain, network), or null when it is absent or
 // unusable. Never throws, for the same reason fromEnv does not.
 function seedFromEnv(chain, network) {
-    const raw = envConfig.envValueByName(seedEnvKey(chain, network));
-    if (!raw) return null;
-    const { seed, error } = parseSeedEnv(raw);
-    if (error) {
-        logger.warn('[pinnedValidators] ' + seedEnvKey(chain, network) + ' override ' + error + '; no env seed for this key');
-        return null;
+    for (const name of envNames(seedEnvKey, chain, network)) {
+        const raw = envConfig.envValueByName(name);
+        if (!raw) continue;
+        const { seed, error } = parseSeedEnv(raw);
+        if (error) {
+            logger.warn('[pinnedValidators] ' + name + ' override ' + error + '; no env seed for this key');
+            return null;
+        }
+        return seed;
     }
-    return seed;
+    return null;
 }
 
 /**
  * The pinned SEED checkpoint for (chain, network): an env override if present and
- * well-formed, else the baked-in entry, else null. Lookup is case-insensitive.
+ * well-formed, else the baked-in entry, else null. Lookup is case-insensitive and
+ * accepts the ticker or the full coin name.
  * @param {string} chain
  * @param {string} network
  * @returns {object | null}
@@ -215,7 +260,7 @@ function getPinnedCheckpoint(chain, network) {
     if (chain == null || network == null) return null;
     const env = seedFromEnv(chain, network);
     if (env) return env;
-    const entry = PINNED_CHECKPOINTS[String(chain).toUpperCase() + ':' + String(network).toLowerCase()];
+    const entry = PINNED_CHECKPOINTS[tickerOf(chain) + ':' + String(network).toLowerCase()];
     return entry || null;
 }
 

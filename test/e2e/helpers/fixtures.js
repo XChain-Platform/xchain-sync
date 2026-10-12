@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const BlockHasher = require('../../../src/client/block_hasher');
 const Utility = require('../../../src/util');
 const { rebuildBalances } = require('../../../src/db/balance_helpers');
-const { activationDelayBlocks, gasTickSymbol } = require('../../../src/consensus-constants');
+const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../../../src/consensus-constants');
 
 const _util = new Utility();
 
@@ -374,8 +374,9 @@ async function computeAndStoreStateHash(db, blockIndex, opts = {}) {
     let network = opts.network || 'mainnet';
     let delay   = activationDelayBlocks(chain);
     let hasher  = new BlockHasher(db, _util);
+    // Pass the ticker as the coin, like the follower: the per-chain activation keys are '<TICKER>:<network>'.
     let stateHash = await hasher.computeStateHash(
-        blockIndex, (delay === undefined) ? null : delay, gasTickSymbol(), network, chain);
+        blockIndex, (delay === undefined) ? null : delay, gasTickSymbol(), network, coinTicker(chain));
     let res = await db.doQuery(
         "INSERT INTO index_transactions (hash) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
         [stateHash]);

@@ -13,7 +13,7 @@
  ********************************************************************
  * test/unit/generated_columns.test.js
  *
- * Drift guard for src/generatedColumns.js. The applier carries a FROZEN map of
+ * Drift guard for src/schema/generated_columns.js. The applier carries a FROZEN map of
  * database-generated columns rather than probing information_schema, because its
  * insert path is hot and its query sequence is pinned by other unit tests. That trade
  * is only safe with this guard: the map is derived here from the indexer's own DDL and
