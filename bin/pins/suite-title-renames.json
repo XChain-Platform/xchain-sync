@@ -30,5 +30,6 @@
   "test/unit/client_sync_io.test/09_run_incremental_catch_up.test.js": "test/unit/client_sync_io.test/catch_up/09_run_incremental_catch_up.test.js",
   "test/unit/client_sync_io.test/10_incremental_catch_up_coalescing.test.js": "test/unit/client_sync_io.test/catch_up/10_incremental_catch_up_coalescing.test.js",
   "test/unit/client_sync_io.test/12_verify_against_source.test.js": "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js",
-  "test/unit/client_sync_io.test/13_verify_decoder_completeness_catch.test.js": "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js"
+  "test/unit/client_sync_io.test/13_verify_decoder_completeness_catch.test.js": "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js",
+  "ClientSync rollback guard persistence treats a rollback guard read failure as an empty streak": "ClientSync rollback guard persistence reports a rollback guard read failure as unreadable and keeps the streak empty"
 }

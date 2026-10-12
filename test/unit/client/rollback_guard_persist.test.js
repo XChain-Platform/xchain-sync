@@ -99,12 +99,12 @@ describe('ClientSync rollback guard persistence', function(){
         assert.strictEqual(second.sync.getHaltInfo().mismatches[0].depth, 6);
     });
 
-    it('treats a rollback guard read failure as an empty streak', async function(){
+    it('reports a rollback guard read failure as unreadable and keeps the streak empty', async function(){
         const db = makeDb(new Map());
         db.getSyncState.rejects(new Error('sync_state unavailable'));
         const { sync } = makeSync(db);
 
-        await sync.loadRollbackGuardState();
+        assert.strictEqual(await sync.loadRollbackGuardState(), 'unreadable');
 
         assert.deepStrictEqual(sync.rollbackGuardState(), { peak: null, low: null });
         assert.strictEqual(errorStub.called, true);
