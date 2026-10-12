@@ -76,6 +76,20 @@ describe('indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @
         }
         assert.strictEqual(db.findRowsFromActionIndex.callCount, 0);
     });
+
+    it('keeps push_generations node-local and outside every snapshot bucket', async function(){
+        assert.strictEqual(lifecycle.entry('push_generations').replication, 'local');
+        assert.ok(OPERATOR_LOCAL_TABLES.has('push_generations'));
+        assert.ok(!snapshotTables.includes('push_generations'));
+        for(const bucket of [indexerBlockScopedSet(), indexerFullDumpSet(), INDEXER_INCREMENTAL_SKIP])
+            assert.ok(!bucket.has('push_generations'));
+
+        const builder = new SnapshotBuilder(new Utility());
+        const db = { findStreamableTableNames: sinon.stub().resolves([
+            { table_name: 'blocks' }, { table_name: 'push_generations' },
+        ]) };
+        assert.deepStrictEqual(await builder.getOrderedTables(db), ['blocks']);
+    });
 });
 
 describe('replica-owned migration ledger classification', function(){
