@@ -45,8 +45,13 @@ function registerCoverageCases(){
     for(const dbType of ['indexer', 'decoder']){
         it('every replicated ' + dbType + ' table is either covered or declared excluded', function(){
             let replicated = replicatedTables.getReplicatedTables(dbType);
-            let covered    = new Set(replicatedTables.contentParityPlan(dbType).map(p => p.table));
+            const plan     = replicatedTables.contentParityPlan(dbType);
+            let covered    = new Set(plan.map(p => p.table));
             let excluded   = replicatedTables.contentParityExclusions(dbType);
+
+            for(const step of plan)
+                assert.deepStrictEqual(step.excludedColumns,
+                    lifecycle.contentParityExcludedColumns(step.table));
 
             let orphans = replicated.filter(t => !covered.has(t) && excluded[t] === undefined);
             assert.deepStrictEqual(orphans, [],
