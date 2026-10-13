@@ -1,5 +1,5 @@
 {
-  "armed_map_fingerprint": "d3fc1382b018caf11311115c687ae3dd90c849d787a7b5ffbe8b53a5b2d52010",
+  "armed_map_fingerprint": "513b2caa16aa16085178e53684f91d21e36f37329b409c1abb25b4dcb39853c8",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
@@ -12,6 +12,8 @@
     "cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION": "813f95010af2ab02a8d76a1ab03feb8fe4c0542e6251f34a2530737c312234b9",
     "equivocation_header.ENGINE_TAGS": "94a875df3994d065a749bfb02dc3cde78500fe965c4cd0a7f767b7b5e9501401",
     "equivocation_header.EQUIV_HEADER_ACTIVATION": "b64d8f1cbe12e895958c6fb75ae01b793a75112ed7789d8d483ce2affd49ea35",
+    "snapshot_reorg_buffer.CANONICAL_REORG_BUFFER": "e7f6c011776e8db7cd330b54174fd76f7d0216b612387a5ffcfb81e6f0919683",
+    "snapshot_reorg_buffer.SNAPSHOT_BURIAL_ACTIVATION": "3854d764b1962fb814248b9e46530d3128e066277ab25d406f43ba265128b9f9",
     "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION": "d0f6f385a0509a7bee3945d35cc314410dfe63eafda95eb10d613595c7a9f4fa",
     "stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION": "7bc2f002584168c30d6b893e7bb5a94f712502ec2f881813a9783db6da3abf72",
     "stake_weight_collation_activation.STAKE_WEIGHT_ORDERING_COLUMNS": "a03eef553097aaf0cc4f6e67725f81cafcea478c98641931504c3eb9ace75386",
@@ -44,7 +46,7 @@
     "swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION": "d9105d53199963f94287f25b3d87d1e625b77d56ac8baab6d6ee64029b0fae74",
     "train_activation.TRAIN_ACTIVATION": "1f7b8f196149e0bf068bfc430c6355a65788333e1eb2952c52462f0aa3526a6e"
   },
-  "armed_map_rows": 41,
+  "armed_map_rows": 43,
   "carrier_logic_digest": "c59f34aaefb77b35a70a949709e300add72c516ecda5482d316d307aea9bb818",
   "vendoredCoins": {
     "src/coins/BTC.js": "182baf5173e3846b94a5edc1ae15913a54fb266addfc45a3cf9a013bd9ec16c6",
