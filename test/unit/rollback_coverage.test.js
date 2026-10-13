@@ -690,7 +690,10 @@ describe('Rollback coverage guard @regression', function(){
                 `${c.where} issued the markets delete without binding the swept pair ids (got ${JSON.stringify(del.params)})`);
             graded++;
         }
-        assert.ok(graded > 0, 'no xchain-indexer market-pair sweep issued the full IDX-2 statement set through the recording db stub: ' + failures.join('; '));
+        // Every name-matched candidate must issue the full statement set: one complete sweep
+        // must not mask an incomplete sibling that the indexer could run instead.
+        assert.deepStrictEqual(failures, [], 'xchain-indexer market-pair sweep candidate(s) did not issue the full IDX-2 statement set through the recording db stub: ' + failures.join('; '));
+        assert.ok(graded > 0, 'no xchain-indexer market-pair sweep was graded through the recording db stub');
     });
 
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
