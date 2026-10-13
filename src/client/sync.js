@@ -528,6 +528,7 @@ class ClientSync {
         // post-commit verification gates, carried so a retry of that height still runs
         // the commitment comparison (see applyBlockEvent). null = nothing outstanding.
         this._unverifiedRoots = null; // { blockIndex, roots }
+        this._postCommitPending = null; // committed block awaiting re-verification
 
         // Throttle stamp for the periodic replica-completeness sweep against the
         // primary source (see maybeVerifyCompleteness). 0 = never swept, so the
@@ -818,7 +819,7 @@ class ClientSync {
     }
 
     async synchronizeStoredReplica(){
-        this.lastAppliedBlock = await this.db.getLastBlock();
+        this.lastAppliedBlock = await this.retryPostCommitVerification(await this.db.getLastBlock());
         if(this.lastAppliedBlock === null){
             // A configured truncation depth selects recent-height bootstrap.
             if(this._truncatedDepth >= 1){
@@ -3724,6 +3725,49 @@ class ClientSync {
         return was;
     }
 
+    postCommitVerifyKey(){ return 'post_commit_verify_pending:' + this.dbType; }
+
+    // Durable marker for a block that is committed but whose post-commit verification
+    // threw. Best effort: the in-memory hold applies even when sync_state is unwritable.
+    async markPostCommitUnverified(blockIndex){
+        this._postCommitPending = blockIndex;
+        try {
+            if(this.db && typeof this.db.setSyncState === 'function')
+                await this.db.setSyncState(this.postCommitVerifyKey(), String(blockIndex));
+        } catch(e){
+            getLogger().error(util.format('post-commit verify marker write failed at block %s:', blockIndex, e));
+        }
+    }
+
+    // Drop the marker once the block passes verification, or once a reorg removes it.
+    async clearPostCommitMarker(upToBlock){
+        if(this._postCommitPending === null || this._postCommitPending === undefined) return;
+        if(upToBlock !== undefined && this._postCommitPending !== upToBlock) return;
+        this._postCommitPending = null;
+        try {
+            if(!this.db) return;
+            if(typeof this.db.deleteSyncState === 'function') await this.db.deleteSyncState(this.postCommitVerifyKey());
+            else if(typeof this.db.setSyncState === 'function') await this.db.setSyncState(this.postCommitVerifyKey(), '');
+        } catch(e){
+            getLogger().error(util.format('post-commit verify marker clear failed:', e));
+        }
+    }
+
+    // Restart-safe restore: a stored tip that is the marked, never-verified block is
+    // rewound one block so catch-up redelivers it and the duplicate skip re-verifies it.
+    async retryPostCommitVerification(tip){
+        if(tip === null || !this.db || typeof this.db.getSyncState !== 'function') return tip;
+        let raw;
+        try { raw = await this.db.getSyncState(this.postCommitVerifyKey()); }
+        catch(e){ getLogger().error(util.format('post-commit verify marker read failed:', e)); return tip; }
+        let n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+        if(!Number.isInteger(n)) return tip;
+        if(n > tip){ this._postCommitPending = n; await this.clearPostCommitMarker(); return tip; }   // block gone (reorg): nothing to verify
+        this._postCommitPending = n;
+        getLogger().warn('Block ' + n + ' was committed but never verified; re-verifying it on restart');
+        return n - 1;
+    }
+
     carryUnverifiedRoots(event){
         // Preserve computed roots across retryable verification errors without
         // treating snapshot roots as a live block's commitments.
@@ -3817,8 +3861,10 @@ class ClientSync {
         }
         // Check train activation before writing any part of the block.
         if(await this.checkTrainActivation(event.block_index)) return;
+        let committed = false;
         try {
             await this.withApplyLock(() => this.applier.applyBlock(event));
+            committed = true;
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true, holdTip: true });
@@ -3857,6 +3903,7 @@ class ClientSync {
                 }
             }
             this.finishAppliedBlock(event);
+            await this.clearPostCommitMarker(event.block_index);
             this.clearAppliedBlockWork();
             if(this.checkpointQuorumIsDue()){
                 this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
@@ -3864,6 +3911,8 @@ class ClientSync {
             }
         } catch(e){
             getLogger().error(util.format('Error applying block %s:', event.block_index, e));
+            // A committed block whose verification threw is held and re-verified, not advanced.
+            if(committed && !this._halted) await this.markPostCommitUnverified(event.block_index);
             // Heal schema gaps and let later status events drive catch-up.
             await this.healSchemaIfStale(e);
         }
@@ -4277,6 +4326,8 @@ class ClientSync {
         // for the next status tick or catch-up rather than waiting out the interval.
         if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
         this.lastAppliedBlock = event.block_index - 1;
+        if(this._postCommitPending != null && this._postCommitPending >= event.block_index)
+            await this.clearPostCommitMarker();
         // Reload the new tip's hashes, genesis block 0 included (the head-duplicate fork check reads them).
         if(this.lastAppliedBlock >= 0)
             this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);

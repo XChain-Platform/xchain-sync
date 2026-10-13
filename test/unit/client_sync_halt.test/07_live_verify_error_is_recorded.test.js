@@ -68,7 +68,8 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
 
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.lastAppliedBlock, null, 'an unverified state_hash never advances the tip');
-        assert.strictEqual(db.syncState.size, 0);
+        assert.strictEqual(db.syncState.has('unverified_recompute_count:indexer'), false, 'no recompute counter');
+        assert.strictEqual(db.syncState.get('post_commit_verify_pending:indexer'), '200', 'the held block is marked');
     });
 
     it('a clean recompute records nothing', async function(){
