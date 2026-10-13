@@ -868,7 +868,7 @@ class ClientSync {
         // Durable client guards load before the resume branch can apply more blocks.
         await this.loadBootstrapBase();
         await this.loadVerifiedCheckpointBlock();
-        await this.loadRollbackGuardState();
+        if(await this.holdForRollbackGuardState() === 'stop') return;
         await this.synchronizeStoredReplica();
         this.ensureLiveFollowTip();
         await this.prepareLiveFollow();
@@ -3621,16 +3621,19 @@ class ClientSync {
                 ' could not be persisted; refusing to roll back');
     }
 
+    // Resolves to 'ok', 'unreadable' (the read threw) or 'invalid' (a saved row that
+    // does not parse to a coherent streak). Neither failure may fall back to an empty
+    // streak: that would let a restart forget rollback depth already spent.
     async loadRollbackGuardState(){
-        if(!this.db || typeof this.db.getSyncState !== 'function') return;
+        if(!this.db || typeof this.db.getSyncState !== 'function') return 'ok';
         let raw;
         try {
             raw = await this.db.getSyncState(this.rollbackGuardStateKey());
         } catch(e){
-            getLogger().error(util.format('rollback guard state read failed; starting a new streak:', e));
-            return;
+            getLogger().error(util.format('rollback guard state read failed:', e));
+            return 'unreadable';
         }
-        if(raw === null || raw === undefined) return;
+        if(raw === null || raw === undefined) return 'ok';
         try {
             const state = JSON.parse(raw);
             if(!Number.isSafeInteger(state.peak) || !Number.isSafeInteger(state.low) ||
@@ -3639,8 +3642,45 @@ class ClientSync {
             this.rollbackGuard.peak = state.peak;
             this.rollbackGuard.low = state.low;
         } catch(e){
-            getLogger().error(util.format('rollback guard state is invalid; starting a new streak:', e));
+            getLogger().error(util.format('rollback guard state is invalid:', e));
+            return 'invalid';
         }
+        return 'ok';
+    }
+
+    haltOnRollbackGuardState(reason){
+        this._halted = { blockIndex: -1, reason, mismatches: [], sources: [], at: null };
+    }
+
+    // Holds startup in a synthetic halt until the guard state reads: an unreadable
+    // table retries with backoff and resumes on its own, an invalid saved row waits
+    // for an operator clear (which deletes the row).
+    async holdForRollbackGuardState(){
+        const scope = this.chain + '/' + this.network + '/' + this.dbType;
+        let delay = 5000;
+        while(this.running){
+            const status = await this.loadRollbackGuardState();
+            if(status === 'ok' || status === undefined){
+                if(this._halted && /^rollback-guard-state-/.test(this._halted.reason)) this._halted = null;
+                return 'continue';
+            }
+            if(status === 'unreadable'){
+                if(!this._halted){
+                    getLogger().error('rollback guard state unreadable for ' + scope +
+                        '; staying HALTED (fail-closed) and retrying until it can be read');
+                    this.haltOnRollbackGuardState('rollback-guard-state-unreadable');
+                }
+                await this.util.sleep(delay);
+                delay = Math.min(delay * 2, 60000);
+                continue;
+            }
+            getLogger().error('rollback guard state is invalid for ' + scope +
+                '; HALTED until an operator clears it');
+            this.haltOnRollbackGuardState('rollback-guard-state-invalid');
+            while(this.running && this._halted && this._halted.reason === 'rollback-guard-state-invalid')
+                await this.util.sleep(5000);
+        }
+        return 'stop';
     }
 
     async resetRollbackGuardState(){
@@ -3665,6 +3705,14 @@ class ClientSync {
             getLogger().info('halt-state-check-failed state cleared for ' + this.chain + '/' + this.network +
                 '/' + this.dbType + '; sync_halt left untouched (it was never successfully read)');
             return wasSynthetic;
+        }
+        if(this._halted && this._halted.reason === 'rollback-guard-state-invalid'){
+            const invalid = this._halted;
+            await this.resetRollbackGuardState();
+            this._halted = null;
+            getLogger().info('rollback-guard-state-invalid halt cleared for ' + this.chain + '/' + this.network +
+                '/' + this.dbType + '; the saved row was deleted');
+            return invalid;
         }
         try { await this.db.clearHalt(this.dbType); } catch(e){ getLogger().error(util.format('clearHalt persistence failed:', e)); }
         const was = this._halted;
