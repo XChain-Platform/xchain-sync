@@ -174,7 +174,7 @@ describe('ClientSync: a truncated signer set never attests a rotation step @regr
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
         const set = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         set.truncated = true;
-        stakeByHeight[90] = set;
+        stakeByHeight[84] = set;
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
