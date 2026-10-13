@@ -100,6 +100,11 @@ const OPERATOR_LOCAL_TABLES = new Set([
 // existed is healed on its next full-snapshot apply (OPERATOR_LOCAL_TABLES is
 // clear-protected, which would freeze those foreign rows forever).
 //
+// DERIVED from the tableLifecycle registry: every entry whose `replication` mode
+// is 'source-only' is unstreamed and clearable, so a new source-only entry joins
+// this Set without a hand edit. merkle_reorgs has no registry entry, so it is
+// appended by name and is the only permitted non-registry member.
+//
 // merkle_reorgs: node-local transparency-log reorg audit (server-side/indexer-only
 // per its schema header; written by TransparencyLog.pruneFrom, new_root backfilled
 // by commitEpoch). No cursor column, no replica reader, not in getReplicatedTables.
@@ -110,6 +115,7 @@ const OPERATOR_LOCAL_TABLES = new Set([
 // (test/unit/sync_table_classification.test.js) keeps the next sync-owned table from
 // falling through the same way.
 const SOURCE_UNSTREAMED_TABLES = new Set([
+    ...tableLifecycle.tablesWhere(t => t.replication === 'source-only'),
     'merkle_reorgs',
 ]);
 
