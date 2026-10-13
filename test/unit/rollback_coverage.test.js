@@ -649,7 +649,7 @@ describe('Rollback coverage guard @regression', function(){
             get(_t, prop){
                 if(prop === 'then' || typeof prop === 'symbol') return undefined;
                 return (...args) => {
-                    if(!/^(?:query|execute|exec|run|all|get|select)$/i.test(prop)) return Promise.resolve([]);
+                    if(!/^(?:query|doQuery|execute|exec|run|all|get|select)$/i.test(prop)) return Promise.resolve([]);
                     const q = args[0];
                     issued.push({ sql: (q && typeof q === 'object' && q.sql) ? q.sql : String(q), params: Array.isArray(args[1]) ? args[1] : (q && q.values) || [] });
                     return Promise.resolve([]);
@@ -679,9 +679,13 @@ describe('Rollback coverage guard @regression', function(){
             const db = makeDb(issued);
             const self = Object.create(c.owner);
             self.db = db;
+            self.indexerDb = db;
             for(const k of ['affectedMarketPairs', 'marketPairs', 'pairs']) self[k] = pairs;
             // No try/catch: a sweep that cannot run against the stub must fail loudly, not pass unexercised.
-            await c.fn.call(self, db, pairs, { affectedMarketPairs: pairs, db });
+            // The method form reads its db from this.indexerDb and takes (markets); a bare
+            // statement helper takes (db, markets). Call each in the shape it declares.
+            if(c.fn.length <= 1) await c.fn.call(self, pairs);
+            else await c.fn.call(self, db, pairs, { affectedMarketPairs: pairs, db });
             const norm = normSql(issued.map((i) => i.sql).join('\n'));
             const missing = IDX2_OPS.filter((op) => !op.re.test(norm)).map((op) => op.name);
             if(missing.length){ failures.push(`${c.where} issued ${issued.length} statement(s) but is missing: ${missing.join(', ')}`); continue; }
