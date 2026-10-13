@@ -201,9 +201,10 @@ const OPERATIONAL_LOG_TABLES = Object.freeze(['events']);
 //
 // Coverage is the per-block replicated set minus the two exclusion classes the
 // registry declares (src/table_lifecycle.js CONTENT_PARITY_*): the operator
-// carve-outs (markets, decoder dispensers) and the in-place mutated tables,
-// which the enforced state_hash already commits and which have no stable window
-// content. The operational logs above are out too, as the count check leaves
+// carve-outs (markets, decoder dispensers). The in-place mutated (state_hash)
+// tables stay IN the plan; only their in-place edited columns leave the preimage,
+// through excludedColumns (CONTENT_PARITY_IN_PLACE_COLUMNS), so their append-only
+// columns are still window-checked. The operational logs above are out too, as the count check leaves
 // them out. Derived from the same topology the stream and the row counts use, so
 // a table added to replication joins this check with no second list to update.
 //
@@ -220,10 +221,8 @@ const OPERATIONAL_LOG_TABLES = Object.freeze(['events']);
 function contentParityPlan(dbType){
     let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
     let t = getTopology(type);
-    let mutable = new Set(lifecycle.contentParityMutableTables());
     let plan = [];
     let add = (table, bound) => {
-        if(mutable.has(table)) return;                                   // committed by state_hash instead
         if(lifecycle.contentParityCarveOut(table, type) !== null) return; // operator ruling
         if(OPERATIONAL_LOG_TABLES.includes(table)) return;               // ids diverge by construction
         if(plan.some(p => p.table === table)) return;                    // topology buckets can overlap
@@ -247,12 +246,10 @@ function contentParityPlan(dbType){
 // the defect  was raised for.
 function contentParityExclusions(dbType){
     let type = (dbType === 'decoder') ? 'decoder' : 'indexer';
-    let mutable = new Set(lifecycle.contentParityMutableTables());
     let out = {};
     for(let table of getReplicatedTables(type)){
         let carve = lifecycle.contentParityCarveOut(table, type);
         if(carve !== null) out[table] = 'operator-carve-out: ' + carve;
-        else if(mutable.has(table)) out[table] = 'in-place mutated; committed by the enforced state_hash class instead';
         else if(OPERATIONAL_LOG_TABLES.includes(table))
             out[table] = 'operational log: independently generated ids applied with INSERT IGNORE; neither count nor id-windowed content can converge';
     }

@@ -90,23 +90,27 @@ function registerExclusionCases(){
     });
 
     it('the second exclusion class is exactly the state_hash (in-place mutated) tables', function(){
-        // These are excluded because an in-place edit in a later block moves content
-        // inside an already-published window. The enforced state_hash commits those
-        // edits, but only the columns each section reads; the coverage contract in
-        // src/table_lifecycle.js names what that leaves to advisory checks or to
-        // nothing. This is a table-level guard only. Derived from the hash declarations,
-        // so a new mutation class cannot join one without the other.
-        let mutable  = new Set(lifecycle.contentParityMutableTables());
-        let excluded = replicatedTables.contentParityExclusions('indexer');
-        let carved   = new Set(lifecycle.CONTENT_PARITY_CARVE_OUTS.map(c => c.table));
-        for(let table of Object.keys(excluded)){
-            if(carved.has(table)) continue;
-            assert.ok(mutable.has(table),
-                table + ' is excluded from content parity but declares no state_hash class; ' +
-                'an uncommitted table must not be silently dropped');
+        // An in-place edit in a later block moves those columns inside an already-published
+        // window, so they leave the preimage (CONTENT_PARITY_IN_PLACE_COLUMNS); the rest of
+        // the row is append-only and stays window-checked. Derived from the hash
+        // declarations, so a new mutation class cannot join one without the other.
+        let plan     = replicatedTables.contentParityPlan('indexer');
+        let planned  = new Set(plan.map(p => p.table));
+        for(let table of lifecycle.contentParityMutableTables()){
+            assert.ok(planned.has(table), table + ' declares a state_hash class but is skipped whole by content parity');
+            let step = plan.find(p => p.table === table);
+            for(let column of (lifecycle.CONTENT_PARITY_IN_PLACE_COLUMNS[table] || []))
+                assert.ok(step.excludedColumns.includes(column), table + '.' + column + ' is edited in place but not excluded');
         }
         for(let table of ['stakes', 'bets', 'tokens', 'credits'])
-            assert.ok(excluded[table], table + ' mutates in place and must ride state_hash, not the window checksum');
+            assert.ok(planned.has(table), table + ' must be in the content-parity plan');
+        // The exclusion map now holds only the carve-outs and operational logs.
+        let excluded = replicatedTables.contentParityExclusions('indexer');
+        let carved   = new Set(lifecycle.CONTENT_PARITY_CARVE_OUTS.map(c => c.table));
+        for(let table of Object.keys(excluded))
+            assert.ok(carved.has(table) || replicatedTables.OPERATIONAL_LOG_TABLES.includes(table),
+                table + ' is excluded from content parity with no declared reason');
+        assert.ok(!excluded['stakes']);
     });
 }
 
