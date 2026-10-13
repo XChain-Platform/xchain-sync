@@ -354,6 +354,19 @@
       "ClientSync syncLookupTablesPaged stops if has_more is true but the cursor cannot advance (no infinite spin)",
       "ClientSync syncLookupTablesPaged throws on a schema-version mismatch (fail closed)"
     ],
+    "1bcbb6c5871f0c75": [
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
+      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
+      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
+      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
+      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
+      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
+      "source-unstreamed table derivation allows no member without a source-only registry entry except merkle_reorgs",
+      "source-unstreamed table derivation derives the set from source-only registry entries, apart from the operator-local set"
+    ],
     "1cc46b5d9b0c38cc": [
       "SyncService discoverChains datetime retype wiring client mode calls ensureDatetimeColumns once per chain, after verifySyncTables and before ensureReplicatedColumns, with includeFollowerDerived: true",
       "SyncService discoverChains datetime retype wiring server mode calls ensureDatetimeColumns once per chain, after verifySyncTables, with includeFollowerDerived: false"
@@ -3706,17 +3719,6 @@
       "Integration: startup DATETIME retype on real MariaDB matches the column metadata created by fresh sync SQL",
       "Integration: startup DATETIME retype on real MariaDB preserves wall-clock values while retyping all three aged columns"
     ],
-    "cc2bac61522ac4df": [
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
-      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
-      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
-      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
-      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
-      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse"
-    ],
     "cc4bedee547c1506": [
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 101 available",
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 200 available",
@@ -4551,7 +4553,7 @@
   "scripts": {
     "test": {
       "fileCount": 371,
-      "titleCount": 2949,
+      "titleCount": 2951,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4865,7 +4867,7 @@
         "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js": "81aeefdb52ea39d2",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
         "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
-        "test/unit/snapshot_source_classification.test.js": "cc2bac61522ac4df",
+        "test/unit/snapshot_source_classification.test.js": "1bcbb6c5871f0c75",
         "test/unit/sql_datetime_ddl_state_tree_roots.test.js": "d1f0d0aeec5914a9",
         "test/unit/sql_datetime_ddl_transparency_log.test.js": "df77321eda7793e8",
         "test/unit/sql_util.test.js": "40158d38b88066f8",
