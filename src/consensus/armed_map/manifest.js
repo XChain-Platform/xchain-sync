@@ -42,6 +42,8 @@ const EXPECTED_KEYS = Object.freeze([
     'cooldown_maturity_escrow_reversal_activation.COOLDOWN_MATURITY_ESCROW_REVERSAL_ACTIVATION',
     'equivocation_header.ENGINE_TAGS',
     'equivocation_header.EQUIV_HEADER_ACTIVATION',
+    'snapshot_reorg_buffer.CANONICAL_REORG_BUFFER',
+    'snapshot_reorg_buffer.SNAPSHOT_BURIAL_ACTIVATION',
     'stake_weight_collation_activation.STAKE_WEIGHT_COLLATION',
     'stake_weight_collation_activation.STAKE_WEIGHT_COLLATION_ACTIVATION',
     'stake_weight_collation_activation.STAKE_WEIGHT_ORDERING_COLUMNS',
