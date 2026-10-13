@@ -10,3 +10,6 @@ reports/mutation/*.json
 reports/mutation/.stryker-incremental.json
 .stryker-tmp/
 .DS_Store
+
+# Scratch files from tests and lanes
+tmp/
