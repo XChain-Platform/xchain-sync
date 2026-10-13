@@ -3762,7 +3762,7 @@ class ClientSync {
         catch(e){ getLogger().error(util.format('post-commit verify marker read failed:', e)); return tip; }
         let n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
         if(!Number.isInteger(n)) return tip;
-        if(n > tip){ this._postCommitPending = n; await this.clearPostCommitMarker(); return tip; }   // block gone (reorg): nothing to verify
+        if(n !== tip){ this._postCommitPending = n; await this.clearPostCommitMarker(); return tip; }   // block gone (reorg) or already buried by later committed blocks: stale, never replay
         this._postCommitPending = n;
         getLogger().warn('Block ' + n + ' was committed but never verified; re-verifying it on restart');
         return n - 1;

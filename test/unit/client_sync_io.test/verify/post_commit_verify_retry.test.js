@@ -92,6 +92,14 @@ describe('ClientSync: post-commit verification retry @regression', function(){
         assert.ok(!db.state.get(KEY), 'stale marker cleared');
     });
 
+    it('restart: a stale marker below the stored tip is dropped and the tip is kept', async function(){
+        const { sync, db } = build(200);
+        db.state.set(KEY, '150');
+        assert.strictEqual(await sync.retryPostCommitVerification(200), 200);
+        assert.ok(!db.state.get(KEY), 'stale marker cleared');
+        assert.ok(!sync._postCommitPending, 'no pending hold');
+    });
+
     it('reorg: a live reorg to the marked height clears the marker', async function(){
         const { sync, db } = build();
         sync.blockHasher.computeStateHash = sinon.stub().rejects(new Error('transient'));
