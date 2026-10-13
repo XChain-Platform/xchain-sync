@@ -617,12 +617,13 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const IDX2_OPS = [
-            // COALESCE(...,0) on every side: the probe compares a `markets` pair id, where a
-            // tickerless side is 0, against orders/order_matches, which store NULL for it.
+            // Index-friendly sides, (col=? OR (col IS NULL AND ?=0)): the probe compares a `markets`
+            // pair id, where a tickerless side is 0, against orders/order_matches, which store
+            // NULL for it, without wrapping the indexed column.
             { name: 'surviving-orders probe (both orientations)',
-              re: /SELECT 1 FROM orders (?:o )?WHERE \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM orders (?:o )?WHERE \(\((?:o\.)?give_tick_id=\? OR \((?:o\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:o\.)?get_tick_id=\? OR \((?:o\.)?get_tick_id IS NULL AND \?=0\)\)\) OR \(\((?:o\.)?give_tick_id=\? OR \((?:o\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:o\.)?get_tick_id=\? OR \((?:o\.)?get_tick_id IS NULL AND \?=0\)\)\) LIMIT 1/ },
             { name: 'surviving-matches probe (both orientations)',
-              re: /SELECT 1 FROM order_matches (?:om )?WHERE \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM order_matches (?:om )?WHERE \(\((?:om\.)?give_tick_id=\? OR \((?:om\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:om\.)?get_tick_id=\? OR \((?:om\.)?get_tick_id IS NULL AND \?=0\)\)\) OR \(\((?:om\.)?give_tick_id=\? OR \((?:om\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:om\.)?get_tick_id=\? OR \((?:om\.)?get_tick_id IS NULL AND \?=0\)\)\) LIMIT 1/ },
             { name: 'two-orientation markets delete',
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];
