@@ -167,4 +167,38 @@ describe('source-unstreamed table derivation', function(){
             && !lifecycle.tablesWhere(t => t.replication === 'source-only').includes(table));
         assert.deepStrictEqual(unregistered, []);
     });
+
+    it('clears an unstreamed table only where the replica has it and never inserts a shipped copy', async function(){
+        const { SCHEMA_VERSION } = require('../../src/schema/version');
+        const ClientApplier = require('../../src/client/applier');
+        const apply = async localTables => {
+            const db = {
+                dbType: 'indexer',
+                beginTransaction: sinon.stub().resolves(),
+                commitTransaction: sinon.stub().resolves(),
+                rollbackTransaction: sinon.stub().resolves(),
+                deleteStateTreeRootsFromBlock: sinon.stub().resolves(),
+                deleteAllRows: sinon.stub().resolves(),
+                findStreamableTableNames: sinon.stub().resolves(localTables.map(table_name => ({ table_name }))),
+            };
+            const applier = new ClientApplier(db, new Utility());
+            applier.insertRows = sinon.stub().resolves();
+            await applier.applyFullSnapshot({
+                schema_version: SCHEMA_VERSION.indexer, block_height: 10,
+                tables: { blocks: [{ x: 1 }], merkle_reorgs: [{ x: 1 }] },
+            });
+            return {
+                cleared: db.deleteAllRows.args.map(a => a[0]),
+                inserted: applier.insertRows.args.map(a => a[0]),
+            };
+        };
+
+        const without = await apply(['blocks']);
+        assert.deepStrictEqual(without.cleared, ['blocks']);
+        assert.deepStrictEqual(without.inserted, ['blocks']);
+
+        const withTable = await apply(['blocks', 'merkle_reorgs']);
+        assert.deepStrictEqual([...withTable.cleared].sort(), ['blocks', 'merkle_reorgs']);
+        assert.deepStrictEqual(withTable.inserted, ['blocks']);
+    });
 });

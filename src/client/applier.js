@@ -406,13 +406,17 @@ class ClientApplier {
                 this.ignoreSchemaGap(e);
             }
 
-            let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            let payloadTables = this.payloadSnapshotTableNames(snapshotData);
+            let tables = orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
             this.assertClearableTables(tables);
             // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
             for(let i = tables.length - 1; i >= 0; i--)
                 await this.db.deleteAllRows(tables[i]);
 
+            // Only payload names kept above are inserted; an unstreamed table is cleared, never filled.
+            let insertable = new Set(payloadTables);
             for(let table of tables){
+                if(!insertable.has(table)) continue;
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
                 await this.insertRows(table, rows);

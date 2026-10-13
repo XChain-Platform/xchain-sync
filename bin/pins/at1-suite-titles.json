@@ -365,6 +365,7 @@
       "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
       "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
       "source-unstreamed table derivation allows no member without a source-only registry entry except merkle_reorgs",
+      "source-unstreamed table derivation clears an unstreamed table only where the replica has it and never inserts a shipped copy",
       "source-unstreamed table derivation derives the set from source-only registry entries, apart from the operator-local set"
     ],
     "1cc46b5d9b0c38cc": [
