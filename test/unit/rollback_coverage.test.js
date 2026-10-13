@@ -639,24 +639,31 @@ describe('Rollback coverage guard @regression', function(){
 
         // Indexer half: the source builds its probe from template helpers, so its text no
         // longer holds the statement. Run the orphaned market-pair sweep against a recording
-        // db stub and grade the SQL it actually issues. Every query returns no rows, so each
-        // probe finds no survivor and the sweep proceeds to the delete.
-        const issued = [];
-        const record = (sql) => { issued.push(typeof sql === 'object' && sql !== null && sql.sql ? sql.sql : sql); return Promise.resolve([]); };
-        const recordingDb = new Proxy({}, {
+        // db stub and grade the SQL that ONE sweep issues. Every query returns no rows, so each
+        // probe finds no survivor and the sweep proceeds to the delete. The sweep is picked by a
+        // narrow name (orphaned/sweep + market + pair), each candidate is graded on its own
+        // statements (never pooled with another function's), and a candidate that throws fails
+        // the guard instead of being skipped.
+        const pairs = [{ tick1_id: 11, tick2_id: 22 }, { tick1_id: 0, tick2_id: 33 }];
+        const makeDb = (issued) => new Proxy({}, {
             get(_t, prop){
-                if(prop === 'then') return undefined;
-                if(typeof prop === 'symbol') return undefined;
-                return (...args) => (/query|exec|select|run|all|get/i.test(prop) ? record(args[0]) : Promise.resolve([]));
+                if(prop === 'then' || typeof prop === 'symbol') return undefined;
+                return (...args) => {
+                    if(!/^(?:query|execute|exec|run|all|get|select)$/i.test(prop)) return Promise.resolve([]);
+                    const q = args[0];
+                    issued.push({ sql: (q && typeof q === 'object' && q.sql) ? q.sql : String(q), params: Array.isArray(args[1]) ? args[1] : (q && q.values) || [] });
+                    return Promise.resolve([]);
+                };
             },
         });
-        const pairs = [{ tick1_id: 11, tick2_id: 22 }, { tick1_id: 0, tick2_id: 33 }];
+        const SWEEP_NAME = /^(?=.*(?:orphan|sweep))(?=.*market)(?=.*pair)/i;
         const rbDir = pathMod.dirname(indexerPath);
         const candidates = [];
         const addFns = (owner, where) => {
             for(const name of Object.getOwnPropertyNames(owner)){
-                if(!/market|pair|sweep|orphan/i.test(name)) continue;
-                if(typeof owner[name] === 'function') candidates.push({ where, name, fn: owner[name], owner });
+                if(!SWEEP_NAME.test(name)) continue;
+                const d = Object.getOwnPropertyDescriptor(owner, name);
+                if(d && typeof d.value === 'function') candidates.push({ where: where + '.' + name, fn: d.value, owner });
             }
         };
         for(const f of fs.readdirSync(rbDir).filter((n) => n.endsWith('.js'))){
@@ -664,15 +671,26 @@ describe('Rollback coverage guard @regression', function(){
             if(mod && (typeof mod === 'object' || typeof mod === 'function')) addFns(mod, f);
             if(typeof mod === 'function' && mod.prototype) addFns(mod.prototype, f + '#prototype');
         }
-        assert.ok(candidates.length > 0, 'xchain-indexer src/rollback/ exposes no market-pair sweep function to grade (looked for names matching /market|pair|sweep|orphan/)');
+        assert.ok(candidates.length > 0, 'xchain-indexer src/rollback/ exposes no orphaned market-pair sweep to grade (looked for a function name containing orphan|sweep, market and pair)');
+        const failures = [];
+        let graded = 0;
         for(const c of candidates){
+            const issued = [];
+            const db = makeDb(issued);
             const self = Object.create(c.owner);
-            self.db = recordingDb;
+            self.db = db;
             for(const k of ['affectedMarketPairs', 'marketPairs', 'pairs']) self[k] = pairs;
-            try { await c.fn.call(self, recordingDb, pairs, { affectedMarketPairs: pairs, db: recordingDb }); } catch(e){ /* a candidate that is not the sweep may reject its stub inputs */ }
+            // No try/catch: a sweep that cannot run against the stub must fail loudly, not pass unexercised.
+            await c.fn.call(self, db, pairs, { affectedMarketPairs: pairs, db });
+            const norm = normSql(issued.map((i) => i.sql).join('\n'));
+            const missing = IDX2_OPS.filter((op) => !op.re.test(norm)).map((op) => op.name);
+            if(missing.length){ failures.push(`${c.where} issued ${issued.length} statement(s) but is missing: ${missing.join(', ')}`); continue; }
+            const del = issued.find((i) => /DELETE FROM markets/.test(normSql(i.sql)));
+            assert.ok(del.params.map(Number).includes(11) && del.params.map(Number).includes(22),
+                `${c.where} issued the markets delete without binding the swept pair ids (got ${JSON.stringify(del.params)})`);
+            graded++;
         }
-        assert.ok(issued.length > 0, 'the xchain-indexer market-pair sweep issued no SQL against the recording db stub');
-        gradeOps('xchain-indexer market-pair sweep (SQL issued through a recording db stub)', normSql(issued.join('\n')));
+        assert.ok(graded > 0, 'no xchain-indexer market-pair sweep issued the full IDX-2 statement set through the recording db stub: ' + failures.join('; '));
     });
 
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
