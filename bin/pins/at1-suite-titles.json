@@ -327,6 +327,20 @@
       "SyncService getHubConfigAgeSeconds returns null when the hub has never answered",
       "SyncService getHubConfigAgeSeconds returns whole seconds since the last successful fetch"
     ],
+    "166f6e439bdf0fe2": [
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
+      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
+      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
+      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
+      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
+      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
+      "source-unstreamed table derivation allows no member without a source-only registry entry except merkle_reorgs",
+      "source-unstreamed table derivation clears an unstreamed table only where the replica has it and never inserts a shipped copy",
+      "source-unstreamed table derivation derives the set from source-only registry entries, apart from the operator-local set"
+    ],
     "166fa60da55ff1a9": [
       "ClientApplier surrogate-id registry matches the indexer DDL @regression every allow-listed table carries a reason, so the list cannot grow silently",
       "ClientApplier surrogate-id registry matches the indexer DDL @regression keeps attest_validator_stats in the strip-only class, not the DELETE class",
@@ -347,26 +361,29 @@
     "16b6025bc75d7d05": [
       "SyncService waitForHub timeout exits the process after MAX_HUB_WAIT_MS with no hub"
     ],
+    "17cfe24244b89e9a": [
+      "consensus-primitive conformance: activation predicate vectors @regression every group this repo runs is a non-empty list",
+      "consensus-primitive conformance: byte-identity to canonical source @regression equivocation_header.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/ file set equals xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/ holds the vendored parts",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/core.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/regtest_env.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_1.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_2.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_3.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_4.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_5.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression snapshot_reorg_buffer.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: byte-identity to canonical source @regression stake_weighted_quorum.js is byte-identical to xchain-documentation/protocol/reference-impl",
+      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder ENGINE_TAGS matches the canonical map"
+    ],
     "19b6bdb857cf7156": [
       "ClientSync syncLookupTablesPaged catch-up: starts from the replica MAX(id) so only NEW rows are fetched",
       "ClientSync syncLookupTablesPaged decoder: pages pubkeys by its surrogate id cursor",
       "ClientSync syncLookupTablesPaged pages one table by id cursor until has_more=false, applying each non-empty page",
       "ClientSync syncLookupTablesPaged stops if has_more is true but the cursor cannot advance (no infinite spin)",
       "ClientSync syncLookupTablesPaged throws on a schema-version mismatch (fail closed)"
-    ],
-    "1bcbb6c5871f0c75": [
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
-      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
-      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
-      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
-      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
-      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
-      "source-unstreamed table derivation allows no member without a source-only registry entry except merkle_reorgs",
-      "source-unstreamed table derivation clears an unstreamed table only where the replica has it and never inserts a shipped copy",
-      "source-unstreamed table derivation derives the set from source-only registry entries, apart from the operator-local set"
     ],
     "1cc46b5d9b0c38cc": [
       "SyncService discoverChains datetime retype wiring client mode calls ensureDatetimeColumns once per chain, after verifySyncTables and before ensureReplicatedColumns, with includeFollowerDerived: true",
@@ -1933,75 +1950,6 @@
       "TransparencyLog recordBlock does not commit an epoch for block 0",
       "TransparencyLog recordBlock swallows a commitEpoch error so recordBlock still resolves"
     ],
-    "70021706c3ccbe4f": [
-      "consensus-primitive conformance: activation predicate vectors @regression every group this repo runs is a non-empty list",
-      "consensus-primitive conformance: activation predicate vectors @regression isEquivHeaderActive: a NaN snapshot block fails closed",
-      "consensus-primitive conformance: activation predicate vectors @regression isEquivHeaderActive: an unknown network fails closed",
-      "consensus-primitive conformance: activation predicate vectors @regression isEquivHeaderActive: mainnet activates at the flag day",
-      "consensus-primitive conformance: activation predicate vectors @regression isEquivHeaderActive: mainnet is inactive one block below the flag day",
-      "consensus-primitive conformance: activation predicate vectors @regression isEquivHeaderActive: regtest is active from genesis",
-      "consensus-primitive conformance: activation predicate vectors @regression isStakeWeightedQuorumActive: a NaN snapshot block fails closed",
-      "consensus-primitive conformance: activation predicate vectors @regression isStakeWeightedQuorumActive: an unknown network fails closed",
-      "consensus-primitive conformance: activation predicate vectors @regression isStakeWeightedQuorumActive: mainnet activates at the flag day",
-      "consensus-primitive conformance: activation predicate vectors @regression isStakeWeightedQuorumActive: mainnet is inactive one block below the flag day",
-      "consensus-primitive conformance: activation predicate vectors @regression isStakeWeightedQuorumActive: testnet is active from genesis",
-      "consensus-primitive conformance: byte-identity to canonical source @regression equivocation_header.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/ file set equals xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/ holds the vendored parts",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/core.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/regtest_env.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_1.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_2.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_3.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_4.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression gate_registry/shared_rows_5.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: byte-identity to canonical source @regression stake_weighted_quorum.js is byte-identical to xchain-documentation/protocol/reference-impl",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder ENGINE_TAGS matches the canonical map",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: BRIDGE: transfer_id is the round id, the finalizing view is the view, and the pipe-separated transfer canonical survives the || boundary",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: LIST_SHARE: snapshot_id is the round id, snapshot_block is content field 2, and the shared-list canonical survives the || boundary",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: POLICY: snapshot_id is the round id, and a policy snapshot under its own tag never collides with a transfer at the same view",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: PRICE batch: a different split at the same anchor is a DIFFERENT key, not equivocation",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: PRICE batch: composite anchor|first|last round id survives verbatim",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: ROLLCALL: regtest epoch 0 is a real epoch, not a falsy skip",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: ROLLCALL: the epoch height is the round id, view is always 0",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: basic, pipe-containing content preserved",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: empty content still carries the full header and boundary",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder buildEquivCanonical: pipe-heavy checkpoint round and content",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder equivKey: LIST_SHARE: snapshot_id is the round id",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder equivKey: a pipe-containing round id is preserved verbatim",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder equivKey: basic",
-      "consensus-primitive conformance: canonical vectors @regression equivocation_header builder equivPrefix: basic",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold a TRUNCATED snapshot fails closed even when the un-truncated set would be quorate (stake-eviction / silent-drift guard)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold a duplicate signer pubkey is counted once",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold a missing weight fails closed: it must not shrink S and lower the 2/3 bar",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold a nonnumeric weight fails closed (bcnum would silently zero it)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold a null weight fails closed for the same reason",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold all three equal sources pass (90 > 60)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold all-zero weights: S is not positive, nothing is quorate even with every source signing",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold an explicit zero weight is still legitimate and does not fail closed",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold an unknown signer pubkey is ignored, not counted",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold blank source fails closed even though it would otherwise pass",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold decimal weights: fractional stake math is exact (4.5 > 3.0)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold empty signer set fails (0 > 0 is false)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold negative weight fails closed even when the remaining positive stake alone would pass",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold negative weight fails closed: a corrupt row cannot buy quorum for an otherwise-passing signer",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold negative weight fails closed: an EMPTY signer set must not finalize against negative S (0 > 2*S regression)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold pubkey match is case-insensitive",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold single source meets the threshold (3S > 2S)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold source dedup: two keys of one source count that source once (insufficient)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold three of four equal sources pass (>2/3)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold two of four equal sources fail",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold two of three equal sources fail the strict 2/3 boundary (60 > 60 is false)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.meetsStakeThreshold weighted: one heavy source alone exceeds 2/3 of total (300 > 240)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake a TRUNCATED snapshot throws (dropped sources make the sum meaningless)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake a blank source throws (a collapsed bucket is meaningless)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake a missing weight throws (zeroing it would silently lower S)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake a negative weight throws (S over a corrupt snapshot is meaningless)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake a nonnumeric weight throws (bcnum would silently zero it)",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake an explicit zero weight is legitimate and sums normally",
-      "consensus-primitive conformance: canonical vectors @regression stake_weighted_quorum.totalStake sums weight over distinct sources (first weight per source wins)"
-    ],
     "71dbe5f3ab51e1b0": [
       "ServerPoller updateStatus calls broadcaster.updateStatus with correct shape",
       "ServerPoller updateStatus handles null lastPolledBlock",
@@ -2115,6 +2063,16 @@
       "merkle: SPV light-client primitives @regression version + frozen constants EMPTY_0 / EMPTY[h] recurrence is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants leaf/node domain separation is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants scheme versions match the golden"
+    ],
+    "7817ea7850dbada8": [
+      "ClientSync: post-commit verification retry @regression mismatch: a redelivery that now mismatches halts and does not advance",
+      "ClientSync: post-commit verification retry @regression redeliver: a redelivery re-verifies, advances and clears the marker",
+      "ClientSync: post-commit verification retry @regression reorg: a live reorg to the marked height clears the marker",
+      "ClientSync: post-commit verification retry @regression reorg: a marker above the rolled-back tip is dropped, not restored",
+      "ClientSync: post-commit verification retry @regression restart: a clean store with no marker keeps its tip",
+      "ClientSync: post-commit verification retry @regression restart: a stale marker below the stored tip is dropped and the tip is kept",
+      "ClientSync: post-commit verification retry @regression restart: a stored tip equal to the marked block is rewound for re-verification",
+      "ClientSync: post-commit verification retry @regression unverified: a throwing verification holds the tip and marks sync_state"
     ],
     "788443e1a0a8e472": [
       "list sharing lifecycle registry twin keeps list_snapshots hub-mirrored and rollback-exempt",
@@ -2938,6 +2896,15 @@
       "Integration: Client Bootstrap incremental catch-up applies only new blocks",
       "Integration: Client Bootstrap startup catch-up (start) resumes a pre-populated replica without re-inserting applied rows"
     ],
+    "a1f27ad98d35a6a3": [
+      "health/carrier_logic: the published carrier logic digest /health carries the digest as its own field beside v2 and version 2, with no _v2 alias",
+      "health/carrier_logic: the published carrier logic digest equals the pin module digest of the committed pin, with no second formula in effect",
+      "health/carrier_logic: the published carrier logic digest is memoised per process",
+      "health/carrier_logic: the published carrier logic digest never requires the pin module or the tokenizer, so a src-only image can load it",
+      "health/carrier_logic: the published carrier logic digest publishes the literal UNREADABLE when the pin is absent, never a hex and never a throw",
+      "health/carrier_logic: the published carrier logic digest reads the pin two directories up from src/health, so a copy with the pin publishes the hex",
+      "health/carrier_logic: the published carrier logic digest records the gated stateHash carrier repin and keeps its indexer twin aligned"
+    ],
     "a2343508ab4cdd95": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression MAINNET IS UNARMED for every slot, at every height (the launch guard)",
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression all three testnet chains arm contract_state_root from GENESIS",
@@ -3371,14 +3338,6 @@
       "ServerPoller CI suite selection keeps CI lifecycle detection out of the production poller module",
       "ServerPoller CI suite selection selects the safety suites explicitly in the CI script"
     ],
-    "bc76b5fff0359653": [
-      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
-      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
-      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
-      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
-      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
-      "armed map v2: manifest completeness over src/ the shim scan finds all fifteen shim and carrier files and all 41 rows"
-    ],
     "bce5f38ce4fa01fe": [
       "SyncService state-tree orphan metric passes the coin ticker @regression reads the ticker-keyed roots, so a fully reachable store reports zero orphans"
     ],
@@ -3409,6 +3368,14 @@
       "ClientSync: strict cross-source gate survives catch-up (M-22) a strict cross-source timeout records the block and retains its pending hash",
       "ClientSync: strict cross-source gate survives catch-up (M-22) catch-up proceeds normally once no strict block is pending",
       "ClientSync: strict cross-source gate survives catch-up (M-22) incrementalCatchUp refuses to run single-source while a strict block is pending"
+    ],
+    "be8349064e8f7983": [
+      "armed map v2: manifest completeness over src/ every row resolves to the registry value, with no refusal",
+      "armed map v2: manifest completeness over src/ keys are unique and every one is in the key grammar",
+      "armed map v2: manifest completeness over src/ sync has no ProtocolChanges table, so it owes no protocol_changes.changes rows",
+      "armed map v2: manifest completeness over src/ the registry and manifest carry exactly the expected keys",
+      "armed map v2: manifest completeness over src/ the shim keys equal the independent expected-key census",
+      "armed map v2: manifest completeness over src/ the shim scan finds all sixteen shim and carrier files and all 43 rows"
     ],
     "be9bdba4e50a9357": [
       "Integration: Full Lifecycle bootstrap \u2192 live sync \u2192 reorg \u2192 recovery completes full lifecycle correctly"
@@ -3486,14 +3453,6 @@
       "stake weight collation activation row twin carries the row in the local registry",
       "stake weight collation activation row twin extractRow detects a drifted height",
       "stake weight collation activation row twin is byte-identical to the xchain-indexer canonical row"
-    ],
-    "c54a906a079d6748": [
-      "health/carrier_logic: the published carrier logic digest /health carries the digest as its own field beside v2 and version 2, with no _v2 alias",
-      "health/carrier_logic: the published carrier logic digest equals the pin module digest of the committed pin, with no second formula in effect",
-      "health/carrier_logic: the published carrier logic digest is memoised per process",
-      "health/carrier_logic: the published carrier logic digest never requires the pin module or the tokenizer, so a src-only image can load it",
-      "health/carrier_logic: the published carrier logic digest publishes the literal UNREADABLE when the pin is absent, never a hex and never a throw",
-      "health/carrier_logic: the published carrier logic digest reads the pin two directories up from src/health, so a copy with the pin publishes the hex"
     ],
     "c54bb56b0f6fae1f": [
       "state_hash: replication-integrity recompute conformance @regression RED: a missing backdated credit (dropped apply) changes the state_hash",
@@ -4398,6 +4357,11 @@
     "f9be87c45e7f293b": [
       "E2E: Disconnect/Resume Parity 10.3 Torn bootstrap state re-bootstrapping over a torn replica converges byte-identically"
     ],
+    "fa858c545e51d96c": [
+      "ClientSync.attestRotationStep: signer-set lookup is buried @regression clamps the buried height at zero near genesis",
+      "ClientSync.attestRotationStep: signer-set lookup is buried @regression looks the set up at the buried height, not the declared one",
+      "ClientSync.attestRotationStep: signer-set lookup is buried @regression still gates on the declared height being attested by the trust root"
+    ],
     "fb1e3a01b1150f54": [
       "decoderLinkBroken is false when the previous hash equals the tip",
       "decoderLinkBroken is false when the previous hash is unknown",
@@ -4553,8 +4517,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 371,
-      "titleCount": 2951,
+      "fileCount": 373,
+      "titleCount": 2912,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4621,6 +4585,7 @@
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
         "test/unit/client/archive_reset_predicate.test.js": "a54f9a2821a10c99",
+        "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
@@ -4708,6 +4673,7 @@
         "test/unit/client_sync_io.test/verify/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
         "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "6e98846a4e3b9709",
         "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
+        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "7817ea7850dbada8",
         "test/unit/client_sync_schema_apply.test.js": "b6ab840e3149d748",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
         "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
@@ -4721,7 +4687,7 @@
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
-        "test/unit/consensus/armed_map/completeness.test.js": "bc76b5fff0359653",
+        "test/unit/consensus/armed_map/completeness.test.js": "be8349064e8f7983",
         "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
@@ -4730,7 +4696,7 @@
         "test/unit/consensus/stake_weight_collation_twin.test.js": "c4195dde3aa9c82f",
         "test/unit/consensus/state_hash_fold_twin.test.js": "6bf91ada4d7570c1",
         "test/unit/consensus_pin_boot.test.js": "03d0b8b6f4107f85",
-        "test/unit/consensus_primitive_conformance.test.js": "70021706c3ccbe4f",
+        "test/unit/consensus_primitive_conformance.test.js": "17cfe24244b89e9a",
         "test/unit/contract_state_subtree.test.js": "8340f62c3bf4e723",
         "test/unit/contract_state_subtree.test/contract_state_root_arming_boundary.test.js": "1e2917ef8e99fd7f",
         "test/unit/contract_state_subtree.test/contract_state_root_frozen_row.test.js": "3498ab5bdacfbd7d",
@@ -4787,7 +4753,7 @@
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/get_block_leaf_rows_canonical.test.js": "7bd37c7fd3de6737",
         "test/unit/hash_verifier.test.js": "072602400b206ab1",
-        "test/unit/health/carrier_logic.test.js": "c54a906a079d6748",
+        "test/unit/health/carrier_logic.test.js": "a1f27ad98d35a6a3",
         "test/unit/health_halt_verdict.test.js": "b692b313f677d5c4",
         "test/unit/hub_client.test.js": "68687be53be6c143",
         "test/unit/hub_client.test/01_get_indexer_configs.test.js": "7594e07757fb9953",
@@ -4868,7 +4834,7 @@
         "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js": "81aeefdb52ea39d2",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
         "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
-        "test/unit/snapshot_source_classification.test.js": "1bcbb6c5871f0c75",
+        "test/unit/snapshot_source_classification.test.js": "166f6e439bdf0fe2",
         "test/unit/sql_datetime_ddl_state_tree_roots.test.js": "d1f0d0aeec5914a9",
         "test/unit/sql_datetime_ddl_transparency_log.test.js": "df77321eda7793e8",
         "test/unit/sql_util.test.js": "40158d38b88066f8",
@@ -5211,8 +5177,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 103,
-      "titleCount": 803,
+      "fileCount": 105,
+      "titleCount": 762,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5222,6 +5188,7 @@
         "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
+        "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
@@ -5245,12 +5212,13 @@
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
         "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
+        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "7817ea7850dbada8",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
         "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
         "test/unit/coins_conformance.test.js": "2442df610ebb6911",
-        "test/unit/consensus_primitive_conformance.test.js": "70021706c3ccbe4f",
+        "test/unit/consensus_primitive_conformance.test.js": "17cfe24244b89e9a",
         "test/unit/contract_state_subtree.test.js": "8340f62c3bf4e723",
         "test/unit/contract_state_subtree.test/contract_state_root_arming_boundary.test.js": "1e2917ef8e99fd7f",
         "test/unit/contract_state_subtree.test/contract_state_root_frozen_row.test.js": "3498ab5bdacfbd7d",
