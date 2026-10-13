@@ -611,7 +611,7 @@ describe('Rollback coverage guard @regression', function(){
     // orders, the survival probe over order_matches, and the two-orientation delete. The
     // source aliases its probe tables (o. / om.) and the replica does not, so the alias
     // is optional in the regex; everything else must match text-for-text.
-    it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
+    it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', async function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
@@ -627,15 +627,73 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'two-orientation markets delete',
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];
-        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
-            const norm = readSourceText(p)
-                .replace(/[`"']/g, ' ')
-                .replace(/\s+\+\s+/g, ' ')
-                .replace(/\s+/g, ' ');
+        const normSql = (t) => String(t).replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const gradeOps = (label, norm) => {
             for(const op of IDX2_OPS){
                 assert.ok(op.re.test(norm), `${label} is missing the IDX-2 ${op.name}; source and replica must both drop a market whose pair kept no surviving order/match, or the replica serves a stale zeroed OHLCV row no snapshot can remove`);
             }
+        };
+        // Replica half: its statements are literal strings in src/client/rollback.js, so the
+        // source text is the contract there.
+        gradeOps('xchain-sync src/client/rollback.js (replica)', normSql(fs.readFileSync(syncPath, 'utf8')));
+
+        // Indexer half: the source builds its probe from template helpers, so its text no
+        // longer holds the statement. Run the orphaned market-pair sweep against a recording
+        // db stub and grade the SQL that ONE sweep issues. Every query returns no rows, so each
+        // probe finds no survivor and the sweep proceeds to the delete. The sweep is picked by a
+        // narrow name (orphaned/sweep + market + pair), each candidate is graded on its own
+        // statements (never pooled with another function's), and a candidate that throws fails
+        // the guard instead of being skipped.
+        const pairs = [{ tick1_id: 11, tick2_id: 22 }, { tick1_id: 0, tick2_id: 33 }];
+        const makeDb = (issued) => new Proxy({}, {
+            get(_t, prop){
+                if(prop === 'then' || typeof prop === 'symbol') return undefined;
+                return (...args) => {
+                    if(!/^(?:query|execute|exec|run|all|get|select)$/i.test(prop)) return Promise.resolve([]);
+                    const q = args[0];
+                    issued.push({ sql: (q && typeof q === 'object' && q.sql) ? q.sql : String(q), params: Array.isArray(args[1]) ? args[1] : (q && q.values) || [] });
+                    return Promise.resolve([]);
+                };
+            },
+        });
+        const SWEEP_NAME = /^(?=.*(?:orphan|sweep))(?=.*market)(?=.*pair)/i;
+        const rbDir = pathMod.dirname(indexerPath);
+        const candidates = [];
+        const addFns = (owner, where) => {
+            for(const name of Object.getOwnPropertyNames(owner)){
+                if(!SWEEP_NAME.test(name)) continue;
+                const d = Object.getOwnPropertyDescriptor(owner, name);
+                if(d && typeof d.value === 'function') candidates.push({ where: where + '.' + name, fn: d.value, owner });
+            }
+        };
+        for(const f of fs.readdirSync(rbDir).filter((n) => n.endsWith('.js'))){
+            const mod = require(pathMod.join(rbDir, f));
+            if(mod && (typeof mod === 'object' || typeof mod === 'function')) addFns(mod, f);
+            if(typeof mod === 'function' && mod.prototype) addFns(mod.prototype, f + '#prototype');
         }
+        assert.ok(candidates.length > 0, 'xchain-indexer src/rollback/ exposes no orphaned market-pair sweep to grade (looked for a function name containing orphan|sweep, market and pair)');
+        const failures = [];
+        let graded = 0;
+        for(const c of candidates){
+            const issued = [];
+            const db = makeDb(issued);
+            const self = Object.create(c.owner);
+            self.db = db;
+            for(const k of ['affectedMarketPairs', 'marketPairs', 'pairs']) self[k] = pairs;
+            // No try/catch: a sweep that cannot run against the stub must fail loudly, not pass unexercised.
+            await c.fn.call(self, db, pairs, { affectedMarketPairs: pairs, db });
+            const norm = normSql(issued.map((i) => i.sql).join('\n'));
+            const missing = IDX2_OPS.filter((op) => !op.re.test(norm)).map((op) => op.name);
+            if(missing.length){ failures.push(`${c.where} issued ${issued.length} statement(s) but is missing: ${missing.join(', ')}`); continue; }
+            const del = issued.find((i) => /DELETE FROM markets/.test(normSql(i.sql)));
+            assert.ok(del.params.map(Number).includes(11) && del.params.map(Number).includes(22),
+                `${c.where} issued the markets delete without binding the swept pair ids (got ${JSON.stringify(del.params)})`);
+            graded++;
+        }
+        // Every name-matched candidate must issue the full statement set: one complete sweep
+        // must not mask an incomplete sibling that the indexer could run instead.
+        assert.deepStrictEqual(failures, [], 'xchain-indexer market-pair sweep candidate(s) did not issue the full IDX-2 statement set through the recording db stub: ' + failures.join('; '));
+        assert.ok(graded > 0, 'no xchain-indexer market-pair sweep was graded through the recording db stub');
     });
 
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete
