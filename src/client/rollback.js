@@ -1048,20 +1048,24 @@ class ClientRollback {
             // surviving orders/order_matches row references either orientation - the same
             // predicate the source applies.
             try {
-                // COALESCE on both probes: the pair ids come from `markets`, where a side
-                // with no ticker is 0, while orders/order_matches store NULL for it. A bare
-                // compare never found a survivor for such a pair, so the delete below took
-                // a live market out of the replica on every reorg that touched one.
+                // Index-friendly probe: the pair ids come from `markets`, where a side with no
+                // ticker is 0, while orders/order_matches store NULL for it. Each side is
+                // (col=? OR (col IS NULL AND ?=0)) rather than COALESCE(col,0)=?, which wraps
+                // the indexed column and forces a scan. A bare compare never found a survivor
+                // for a tickerless pair, so the delete below took a live market out of the
+                // replica on every reorg that touched one.
                 for(let pair of affectedMarketPairs){
+                    const a = pair.tick1_id, b = pair.tick2_id;
+                    const probeParams = [a, a, b, b, b, b, a, a];
                     let survives = await this.db.doQuery(
-                        "SELECT 1 FROM orders WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
-                        "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
-                        [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                        "SELECT 1 FROM orders WHERE " +
+                        "((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) " +
+                        "OR ((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) LIMIT 1", probeParams);
                     if(!survives || survives.length === 0){
                         survives = await this.db.doQuery(
-                            "SELECT 1 FROM order_matches WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
-                            "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
-                            [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                            "SELECT 1 FROM order_matches WHERE " +
+                            "((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) " +
+                            "OR ((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) LIMIT 1", probeParams);
                     }
                     if(!survives || survives.length === 0){
                         await this.db.doQuery(
