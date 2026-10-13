@@ -54,6 +54,11 @@
       "sync boot consensus-pin verification skips on the (currently null) mainnet pin",
       "sync boot consensus-pin verification the pin check runs before the express app is built"
     ],
+    "0599390bc2b2bb5e": [
+      "ClientSync indexer continuity with a null tip hash row handleBlock does not apply a gapped block over the missing range",
+      "ClientSync indexer continuity with a null tip hash row lets the contiguous block through without a catch-up",
+      "ClientSync indexer continuity with a null tip hash row routes a gapped block to catch-up from the height after the tip"
+    ],
     "06bf2b9ac933792b": [
       "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
       "armed map v2: falsification on temp trees a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red",
@@ -65,6 +70,19 @@
       "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
       "armed map v2: falsification on temp trees pins all six shared row files to the indexer canonical byte digests",
       "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
+    ],
+    "072602400b206ab1": [
+      "HashVerifier compareBlockHashes detects all three fields mismatched",
+      "HashVerifier compareBlockHashes detects single field mismatch",
+      "HashVerifier compareBlockHashes returns match when all hashes are identical",
+      "HashVerifier compareBlockHashes treats null vs null as match",
+      "HashVerifier compareBlockHashes treats null vs string as mismatch",
+      "HashVerifier verifyChainContinuity returns invalid for a block gap when prevHashes is null",
+      "HashVerifier verifyChainContinuity returns invalid for block gap",
+      "HashVerifier verifyChainContinuity returns invalid for duplicate block",
+      "HashVerifier verifyChainContinuity returns valid for sequential block",
+      "HashVerifier verifyChainContinuity returns valid when prevBlockIndex is null (bootstrap)",
+      "HashVerifier verifyChainContinuity returns valid when prevHashes is null"
     ],
     "07811aa22e123504": [
       "bin/markets-id-parity fetch reads markets at the tip and pages every ticker",
@@ -258,6 +276,9 @@
       "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
       "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
       "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression"
+    ],
+    "11f6611c5cc74a17": [
+      "ServerPoller buildBlockPayload lookups referenced only by updated rows ships a status interned by an in-place head stamp that no payload.data row references @regression"
     ],
     "131a5029f8784043": [
       "Boundary: HubClient Port Parsing getIndexerConfigs integration uses db_port from hub config"
@@ -592,12 +613,6 @@
       "coin-registry conformance (vendored copy) @regression pin == consensusHash over the vendored files LTC/testnet vendored pin matches the vendored consensusHash",
       "coin-registry conformance (vendored copy) @regression pin == consensusHash over the vendored files verifyConsensusPin passes for every network on the vendored bundle"
     ],
-    "260e3715335f7f75": [
-      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 0 (first block at zero)",
-      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 1 (first block)",
-      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 999 (any block after bootstrap)",
-      "Boundary: Hash Continuity Check null prevHashes valid: prevBlockIndex=5, prevHashes=null \u2192 skips check"
-    ],
     "268ca1551b13a2db": [
       "Boundary: HubClient Port Parsing getIndexerConfigs integration defaults to 3306 when neither port field present"
     ],
@@ -634,15 +649,6 @@
       "DATETIME column inventory accounts for every TIMESTAMP column in the sync SQL files",
       "DATETIME column inventory matches a temporal declaration in each table definition",
       "DATETIME column inventory uses DATETIME definitions without TIMESTAMP type tokens"
-    ],
-    "28fe9ca32ff6f937": [
-      "state-root assembly twins: buildFullBalancesRoot @regression differs only by the inlined ledger read (declared)",
-      "state-root assembly twins: computeBlockMerkleRoot @regression differs only by the collation arguments (declared)",
-      "state-root assembly twins: getNetBalance @regression pins the two renders the leaf value goes through",
-      "state-root assembly twins: getNetBalance @regression runs the same credit and debit sums on both sides (declared render difference)",
-      "state-root assembly twins: identical functions @regression assembleStateRoot and extraSubRootColumn are identical to indexer state_root.js",
-      "state-root assembly twins: identical functions @regression reservedSubRootCandidates is identical to indexer state_commitment/index.js",
-      "state-root assembly twins: leaf encoders @regression differ only by name (declared)"
     ],
     "29c7591a9edf1c0f": [
       "consensus gate registry has exactly the manifest row count",
@@ -828,16 +834,6 @@
       "Database schema self-heal: one startup completes columns then key rebuilds is idle on the second and third startup",
       "Database schema self-heal: one startup completes columns then key rebuilds keeps the stale keys when the column ADD is refused, and says so",
       "Database schema self-heal: one startup completes columns then key rebuilds never defers the work to a next startup"
-    ],
-    "33e77ef127a6e70a": [
-      "ClientSync rollback guard persistence halts when a split rollback exceeds the limit across a restart",
-      "ClientSync rollback guard persistence refuses the rollback and halts when the guard state write answers false",
-      "ClientSync rollback guard persistence refuses the rollback and halts when the strict guard state write throws",
-      "ClientSync rollback guard persistence treats a rollback guard read failure as an empty streak",
-      "ClientSync rollback guard persistence writes the guard state strictly so a swallowed query fault cannot pass as saved",
-      "ClientSync rollback guard reset boundaries resets the guard after a full snapshot is applied",
-      "ClientSync rollback guard reset boundaries resets the guard when an operator clears a max-depth halt",
-      "Database.setSyncState strict write throws an upsert fault under opts.rethrow and still releases the connection"
     ],
     "347de06fd7b53919": [
       "Advisory table-content parity computeTableContentChecksums a failed table listing degrades to probing, not to an empty result",
@@ -1081,6 +1077,16 @@
       "ClientSync.reconcileDispensers attempt stamp and request requests the whole table with no page-size parameter and stamps the success",
       "ClientSync.reconcileDispensers attempt stamp and request stamps the attempt but not the success when the re-dump fails",
       "ClientSync.shouldReconcileDispensers ignores the tick-only fallbacks still treats a replica with no successful reconcile as the first resume"
+    ],
+    "425919c4ab56cb8d": [
+      "state-root assembly twins: buildFullBalancesRoot @regression differs only by the inlined ledger read (declared)",
+      "state-root assembly twins: computeBlockMerkleRoot @regression differs only by the collation arguments (declared)",
+      "state-root assembly twins: getNetBalance @regression pins the two renders the leaf value goes through",
+      "state-root assembly twins: getNetBalance @regression runs the same credit and debit sums on both sides (declared render difference)",
+      "state-root assembly twins: identical functions @regression assembleStateRoot and extraSubRootColumn are identical to indexer state_root.js",
+      "state-root assembly twins: identical functions @regression reservedSubRootCandidates is identical to indexer state_commitment/index.js",
+      "state-root assembly twins: identical functions @regression shadowSubRoots is identical to indexer state_commitment/index.js",
+      "state-root assembly twins: leaf encoders @regression differ only by name (declared)"
     ],
     "436350992c034c95": [
       "Utility getDataHash handles BigInt fields",
@@ -1660,6 +1666,20 @@
       "ClientSync: misc branch coverage verifyRecompute: returns null for decoder dbType",
       "ClientSync: misc branch coverage verifyTableCounts: treats NaN local count as 0"
     ],
+    "5cf9fde8844c1229": [
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws a TypeError raised inside the cooldown-maturity class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the BET status flip class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the COINPay match promotion class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the DELEGATE key rotation class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the SLASH debit join class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the attest batch-head verdict class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the cooldown-maturity status flip class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the deactivation_block stamp class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the invalid_archive stamp class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the poll finalization class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression re-throws an errno-less error from the request_status flip class",
+      "updatedRows.collectUpdatedRows errno-less errors @regression still skips a schema gap (errno 1146 or 1054) in the cooldown-maturity class"
+    ],
     "5d10b0ffea8843e3": [
       "ClientSync isSourceHeightStale reports stale once the window elapses with no new event",
       "ClientSync isSourceHeightStale returns false immediately after an event",
@@ -1730,6 +1750,11 @@
       "sync_meta retention reorg floor at the construction sites getTransparencyLog floors the window at the chain reorg reach",
       "sync_meta retention reorg floor at the construction sites the client sweep builds its log with the floor for that chain",
       "sync_meta retention reorg floor at the construction sites warns once per chain when the configured window is below the floor"
+    ],
+    "651dfe957395acec": [
+      "ServerPoller buildBlockPayload lookups referenced only by updated rows adds no lookup rows when the block has no updated rows",
+      "ServerPoller buildBlockPayload lookups referenced only by updated rows pools *_id values from any table map",
+      "ServerPoller buildBlockPayload lookups referenced only by updated rows ships a status interned by an in-place head stamp that no payload.data row references @regression"
     ],
     "654c349590fc25ab": [
       "SnapshotBuilder streamDispensers rejects instead of shipping an empty dump when the source read fails @regression",
@@ -2568,6 +2593,14 @@
       "Boundary: Config Parsing VERIFY_HASHES case insensitivity \"false\" disables",
       "Boundary: Config Parsing VERIFY_HASHES case insensitivity unset defaults to true"
     ],
+    "8dc78d9edd499139": [
+      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 0 (first block at zero)",
+      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 1 (first block)",
+      "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 999 (any block after bootstrap)",
+      "Boundary: Hash Continuity Check null prevHashes invalid: prevBlockIndex=5, prevHashes=null, block 5 repeats the tip",
+      "Boundary: Hash Continuity Check null prevHashes invalid: prevBlockIndex=5, prevHashes=null, block 9 is still a gap",
+      "Boundary: Hash Continuity Check null prevHashes valid: prevBlockIndex=5, prevHashes=null \u2192 skips check"
+    ],
     "8dd046e550af23cc": [
       "BlockBroadcaster addSubscription adds ws to subscribers set",
       "BlockBroadcaster addSubscription does not send status if none available",
@@ -2599,6 +2632,12 @@
     "8ea1c406c845cec1": [
       "Integration: TestDatabase.getBlockScopedRows reads the lifecycle key scopes a close_block-keyed table (rollcalls) by close_block, not block_index",
       "Integration: TestDatabase.getBlockScopedRows reads the lifecycle key still scopes an ordinary block_index-keyed table (transactions) by block_index"
+    ],
+    "8ea2d584f9c04d39": [
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query"
     ],
     "8ea565bba684d9a4": [
       "sync: stake-weight ordering collation gate a chain below its collation height emits no COLLATE",
@@ -2786,6 +2825,12 @@
       "Integration: ServerPoller buildBlockPayload action-scoped probe agrees with the real fetch on which tables are empty",
       "Integration: ServerPoller buildBlockPayload action-scoped probe cuts the per-table round-trips to the tables that actually have rows"
     ],
+    "9a91daca806b15ff": [
+      "ClientSync.reconcileDispensers (schema-gap heal) leaves the schema alone on a non-schema replace fault and on a schema_version mismatch",
+      "ClientSync.reconcileDispensers (schema-gap heal) re-applies the source schema when the replace fails on a missing column (errno 1054)",
+      "ClientSync.reconcileDispensers (schema-gap heal) re-applies the source schema when the replace fails on a missing table (errno 1146)",
+      "ClientSync.reconcileDispensers (schema-gap heal) still returns false when the schema heal itself throws"
+    ],
     "9b652f1a15749f6a": [
       "07 Rollback Performance data integrity after deep rollback",
       "07 Rollback Performance rollback 1 block",
@@ -2808,6 +2853,13 @@
       "Advisory table-content parity content digest the generated contract_state.state_key_bin column is excluded",
       "Advisory table-content parity content digest the node-local contract_emissions.id column is excluded, so it cannot false-alarm",
       "Advisory table-content parity content digest the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm"
+    ],
+    "9cfd853f2e4d2fa3": [
+      "ClientSync rollback guard startup hold caps the retry backoff at 60 seconds",
+      "ClientSync rollback guard startup hold does not apply any block while the state stays unreadable",
+      "ClientSync rollback guard startup hold halts on an invalid saved row until an operator clear deletes it",
+      "ClientSync rollback guard startup hold holds in a synthetic halt with doubling backoff while the state is unreadable, then resumes",
+      "ClientSync rollback guard startup hold returns stop when the sync is stopped during an invalid-row halt"
     ],
     "9d92b7054e6d2dc8": [
       "updatedRows.collectUpdatedRows carries COINPay-settled order_matches rows keyed by the window of the fulfilled status",
@@ -2854,6 +2906,16 @@
       "BlockBroadcaster security getIp: TRUST_PROXY=true keys on the address the trusted proxy appended, not the client-supplied leading entry",
       "BlockBroadcaster security getIp: TRUST_PROXY=true trims whitespace around the appended address",
       "BlockBroadcaster security getIp: TRUST_PROXY=true uses x-forwarded-for when TRUST_PROXY is true"
+    ],
+    "a04e314cf3df2081": [
+      "ClientSync rollback guard persistence halts when a split rollback exceeds the limit across a restart",
+      "ClientSync rollback guard persistence refuses the rollback and halts when the guard state write answers false",
+      "ClientSync rollback guard persistence refuses the rollback and halts when the strict guard state write throws",
+      "ClientSync rollback guard persistence reports a rollback guard read failure as unreadable and keeps the streak empty",
+      "ClientSync rollback guard persistence writes the guard state strictly so a swallowed query fault cannot pass as saved",
+      "ClientSync rollback guard reset boundaries resets the guard after a full snapshot is applied",
+      "ClientSync rollback guard reset boundaries resets the guard when an operator clears a max-depth halt",
+      "Database.setSyncState strict write throws an upsert fault under opts.rethrow and still releases the connection"
     ],
     "a1c61939d5e79b8d": [
       "Integration: Client Bootstrap full bootstrap from snapshot preserves exact data values (no type coercion)",
@@ -2975,6 +3037,11 @@
     "aa7784c72b063358": [
       "Integration: scoped balance rebuilds balances ClientApplier.applyBlock drives the scoped rebuild end-to-end"
     ],
+    "aa9ac5216302721b": [
+      "ClientRollback dangling index-reference sweep bound bounds the pubkeys and markets sweeps by the surviving lookup MAX(id) @regression",
+      "ClientRollback dangling index-reference sweep bound reads each MAX(id) after the index lookup delete it bounds",
+      "ClientRollback dangling index-reference sweep bound treats an empty lookup table as a 0 bound"
+    ],
     "ab66d18ef5798490": [
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships each row once when both channels return the same synthetic-action row @regression",
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships the synthetic-action credit and release once when the matured join is empty @regression"
@@ -3081,21 +3148,6 @@
       "Database.getStakeWeightsByCapabilityAsOf (#4927) passes minStake through to the HAVING floor as a string",
       "Database.getStakeWeightsByCapabilityAsOf (#4927) placeholder count equals the bound-arg count (arg-order drift guard)",
       "Database.getStakeWeightsByCapabilityAsOf (#4927) returns [] when the valid status id cannot be resolved (no query run)"
-    ],
-    "b2c127c405cfa5f5": [
-      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error",
-      "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
-      "ClientApplier applyFullSnapshot clears a source-empty local table absent from the payload (re-bootstrap staleness)",
-      "ClientApplier applyFullSnapshot clears tables in reverse order and inserts in forward order",
-      "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
-      "ClientApplier applyFullSnapshot fails closed on an invalid table name (rejects rather than silently dropping its rows)",
-      "ClientApplier applyFullSnapshot ignores node-local tables (mempool_transactions) shipped by an older source",
-      "ClientApplier applyFullSnapshot rolls back on error",
-      "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression",
-      "ClientApplier applyFullSnapshot skips null snapshot",
-      "ClientApplier applyFullSnapshot skips snapshot without tables",
-      "ClientApplier applyFullSnapshot throws on a schema-version mismatch before opening a transaction",
-      "ClientApplier applyFullSnapshot tolerates a genuine schema-gap error (1146) on local table enumeration"
     ],
     "b2eb6ba6aa6d5bb2": [
       "ClientRollback rollbackDecoder aborts (fail-closed) on a transient error in a tx-scoped delete (item 1848)",
@@ -3289,6 +3341,17 @@
     ],
     "b92e0d472730652e": [
       "SyncService getClientSync returns the live sync or null"
+    ],
+    "b946ccc26dcddcd5": [
+      "ClientSync: a pinned seed on a chain that cannot follow rotation halts @regression DOGE with a pinned seed halts on a checkpoint the pinned set does not sign, as with no seed",
+      "ClientSync: a pinned seed on a chain that cannot follow rotation halts @regression LTC with a pinned seed halts on a checkpoint the pinned set does not sign, as with no seed",
+      "ClientSync: a signed block_merkle_root needs a local value to match @regression reads a null local block_merkle_root as missing, never as a match",
+      "ClientSync: a signed block_merkle_root needs a local value to match @regression still halts on a state_root divergence when the local block_merkle_root is null",
+      "ClientSync: a truncated signer set never attests a rotation step @regression oraclePublishSetAt carries the truncated flag only when the database set is flagged",
+      "ClientSync: a truncated signer set never attests a rotation step @regression the stake-weight getters flag a set that hit the legacy row cap",
+      "ClientSync: a truncated signer set never attests a rotation step @regression waits, without verifying or halting, when the as-of oracle_publish set is truncated",
+      "ClientSync: checkpoint anchor ignores roots below the commitment flag day @regression a rotation step below the flag day waits before its signer set is computed",
+      "ClientSync: checkpoint anchor ignores roots below the commitment flag day @regression does not anchor a genuine pre-flag-day checkpoint that carries attached roots"
     ],
     "ba95e284dc4b4796": [
       "ServerPoller CI suite selection keeps CI lifecycle detection out of the production poller module",
@@ -3643,6 +3706,17 @@
       "Integration: startup DATETIME retype on real MariaDB matches the column metadata created by fresh sync SQL",
       "Integration: startup DATETIME retype on real MariaDB preserves wall-clock values while retyping all three aged columns"
     ],
+    "cc2bac61522ac4df": [
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
+      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
+      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
+      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
+      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
+      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse"
+    ],
     "cc4bedee547c1506": [
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 101 available",
       "Boundary: Poll Loop Limit (100 blocks) caps at 100 blocks when 200 available",
@@ -3788,21 +3862,6 @@
     "d491968d8d9a3eed": [
       "SyncService startClientSyncForChain creates a ClientSync once and is idempotent on the same key",
       "SyncService startClientSyncForChain exits the process when the background ClientSync crashes"
-    ],
-    "d54620a13360f8b5": [
-      "Database halt methods recordHalt: inserts new halt when existing block_index differs",
-      "Database halt methods recordHalt: returns null (not a throw) when the post-insert read throws",
-      "Database halt methods recordHalt: still INSERTs when the idempotency pre-check read throws (durability first)",
-      "Database halt methods recordHalt: uses default \"divergence\" when reason is null, defaults mismatches/sources to []",
-      "Database.replicateSchema() calls addMissingColumns for already-existing tables",
-      "Database.replicateSchema() creates a missing table and calls ensureReplicatedColumns",
-      "Database.replicateSchema() handles CREATE TABLE throw (deferred) and executes retry block",
-      "Database.replicateSchema() handles TABLE_NAME (uppercase) keys from information_schema rows",
-      "Database.replicateSchema() retry block: skips invalid table name",
-      "Database.replicateSchema() skips DDL that fails validateDdl (invalid DDL)",
-      "Database.replicateSchema() skips invalid table name (validateIdentifier fail)",
-      "Database.replicateSchema() skips table when SHOW CREATE TABLE returns empty rows",
-      "Database.replicateSchema() skips table when SHOW CREATE TABLE row has no Create Table key"
     ],
     "d5b6be232cd7b57f": [
       "ClientRollback rollback aborts (fail-closed) on a transient error in the contract_emissions delete",
@@ -3972,6 +4031,23 @@
       "armed map v2: canonical value serialisation twin discipline is byte-identical to the xchain-indexer canonicaliser",
       "armed map v2: canonical value serialisation twin discipline requires nothing but crypto, so the same bytes serve both repos"
     ],
+    "e1643e28d43b19a7": [
+      "Database halt methods recordHalt: inserts new halt when existing block_index differs",
+      "Database halt methods recordHalt: returns null (not a throw) when the post-insert read throws",
+      "Database halt methods recordHalt: still INSERTs when the idempotency pre-check read throws (durability first)",
+      "Database halt methods recordHalt: uses default \"divergence\" when reason is null, defaults mismatches/sources to []",
+      "Database halt writes propagate a persistence failure @regression clearHalt: rejects when the sync_halt UPDATE fails outside a transaction",
+      "Database halt writes propagate a persistence failure @regression recordHalt: rejects when the sync_halt INSERT fails outside a transaction",
+      "Database.replicateSchema() calls addMissingColumns for already-existing tables",
+      "Database.replicateSchema() creates a missing table and calls ensureReplicatedColumns",
+      "Database.replicateSchema() handles CREATE TABLE throw (deferred) and executes retry block",
+      "Database.replicateSchema() handles TABLE_NAME (uppercase) keys from information_schema rows",
+      "Database.replicateSchema() retry block: skips invalid table name",
+      "Database.replicateSchema() skips DDL that fails validateDdl (invalid DDL)",
+      "Database.replicateSchema() skips invalid table name (validateIdentifier fail)",
+      "Database.replicateSchema() skips table when SHOW CREATE TABLE returns empty rows",
+      "Database.replicateSchema() skips table when SHOW CREATE TABLE row has no Create Table key"
+    ],
     "e187211525c8a3de": [
       "ClientSync: bootstrap size wall a 429 is reported with the wait the source advertised",
       "ClientSync: bootstrap size wall a generic transport failure still rotates and retries (no over-halting)",
@@ -4098,6 +4174,10 @@
       "stateCommitment: DbNodeStore.putMany SQL shape @regression duplicate hashes inside one batch are left to INSERT IGNORE, not pre-filtered away",
       "stateCommitment: DbNodeStore.putMany SQL shape @regression writes one multi-row INSERT IGNORE with three bound params per row"
     ],
+    "e9252cc69db1496e": [
+      "Database halt writes propagate a persistence failure @regression clearHalt: rejects when the sync_halt UPDATE fails outside a transaction",
+      "Database halt writes propagate a persistence failure @regression recordHalt: rejects when the sync_halt INSERT fails outside a transaction"
+    ],
     "e962afbc1dd6ade5": [
       "ClientSync handleEvent runs the completeness sweep against the source that sent the status tick @regression"
     ],
@@ -4184,18 +4264,6 @@
       "ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression stays quiet when recompute is enabled",
       "ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression warns UNSAFE at construction when explicitly disabled"
     ],
-    "ef4deb6bc7390bd3": [
-      "HashVerifier compareBlockHashes detects all three fields mismatched",
-      "HashVerifier compareBlockHashes detects single field mismatch",
-      "HashVerifier compareBlockHashes returns match when all hashes are identical",
-      "HashVerifier compareBlockHashes treats null vs null as match",
-      "HashVerifier compareBlockHashes treats null vs string as mismatch",
-      "HashVerifier verifyChainContinuity returns invalid for block gap",
-      "HashVerifier verifyChainContinuity returns invalid for duplicate block",
-      "HashVerifier verifyChainContinuity returns valid for sequential block",
-      "HashVerifier verifyChainContinuity returns valid when prevBlockIndex is null (bootstrap)",
-      "HashVerifier verifyChainContinuity returns valid when prevHashes is null"
-    ],
     "f1150c948244069d": [
       "Integration: REST API GET /schema/:dbType/:chain/:network returns table DDLs"
     ],
@@ -4254,6 +4322,23 @@
       "Integration: the follower at an armed height, and a reorg across it leaves both activation maps exactly as it found them",
       "Integration: the follower at an armed height, and a reorg across it reports version 2 at the armed height and 1 immediately below it"
     ],
+    "f4fb6fa90ff8d987": [
+      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error",
+      "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
+      "ClientApplier applyFullSnapshot clears a source-empty local table absent from the payload (re-bootstrap staleness)",
+      "ClientApplier applyFullSnapshot clears tables in reverse order and inserts in forward order",
+      "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
+      "ClientApplier applyFullSnapshot fails closed on an invalid table name (rejects rather than silently dropping its rows)",
+      "ClientApplier applyFullSnapshot ignores node-local tables (mempool_transactions) shipped by an older source",
+      "ClientApplier applyFullSnapshot refuses a local-only table with an invalid name before any clear, and commits nothing",
+      "ClientApplier applyFullSnapshot refuses an invalid payload table name that carries zero rows",
+      "ClientApplier applyFullSnapshot rolls back on error",
+      "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression",
+      "ClientApplier applyFullSnapshot skips null snapshot",
+      "ClientApplier applyFullSnapshot skips snapshot without tables",
+      "ClientApplier applyFullSnapshot throws on a schema-version mismatch before opening a transaction",
+      "ClientApplier applyFullSnapshot tolerates a genuine schema-gap error (1146) on local table enumeration"
+    ],
     "f5621b6227dcbcd6": [
       "consensus anchor fold registry rows arms both regtest entries from the shared venue variable",
       "consensus anchor fold registry rows carries both activation rows",
@@ -4284,6 +4369,9 @@
       "API rate-limit proxy trust security trustProxyHops disables forwarded-header trust when TRUST_PROXY is off",
       "API rate-limit proxy trust security trustProxyHops never returns true, which express-rate-limit rejects as permissive",
       "API rate-limit proxy trust security trustProxyHops returns exactly one hop when TRUST_PROXY is on"
+    ],
+    "f84d3023c6126a01": [
+      "ClientRollback dangling index-reference sweep bound bounds the pubkeys and markets sweeps by the surviving lookup MAX(id) @regression"
     ],
     "f8d4abc3b990d5dd": [
       "ClientSync decoder lookup-hole repair @regression does not repair a shortfall in a non-lookup table",
@@ -4462,8 +4550,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 363,
-      "titleCount": 2889,
+      "fileCount": 371,
+      "titleCount": 2949,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4486,7 +4574,7 @@
         "test/unit/blockhash_conformance_twin.test.js": "c0bcb57647f83af0",
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
-        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "28fe9ca32ff6f937",
+        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
         "test/unit/boundaries/batch_insert.test.js": "ec173aca8005e2db",
         "test/unit/boundaries/block_index.test.js": "3c56690bfa37c105",
         "test/unit/boundaries/circuit_breaker.test.js": "f5bb2b28cc7a8e95",
@@ -4504,7 +4592,7 @@
         "test/unit/boundaries/config_parsing.test/07_minimum_ports.test.js": "ee146bc59823585e",
         "test/unit/boundaries/config_parsing.test/08_client_reconcile_knobs.test.js": "fed97320edefe20f",
         "test/unit/boundaries/hash_continuity.test.js": "89e9efacb235cbcc",
-        "test/unit/boundaries/hash_continuity.test/02_null_inputs.test.js": "260e3715335f7f75",
+        "test/unit/boundaries/hash_continuity.test/02_null_inputs.test.js": "8dc78d9edd499139",
         "test/unit/boundaries/hash_continuity.test/03_hash_comparison.test.js": "e596ac816b0afb6a",
         "test/unit/boundaries/hub_port_parsing.test.js": "4a469c197a0ff6e1",
         "test/unit/boundaries/hub_port_parsing.test/02_parse_fallbacks.test.js": "8a46065377e9bb6d",
@@ -4533,10 +4621,11 @@
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
-        "test/unit/client/rollback_guard_persist.test.js": "33e77ef127a6e70a",
+        "test/unit/client/rollback_guard_persist.test.js": "a04e314cf3df2081",
+        "test/unit/client/rollback_guard_startup_halt.test.js": "9cfd853f2e4d2fa3",
         "test/unit/client/rollback_maturity_escrow_release.test.js": "6a3241c076e978ef",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
-        "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "b2c127c405cfa5f5",
+        "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "f4fb6fa90ff8d987",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
         "test/unit/client_applier.test/03_insert_rows.test.js": "4ee97831bb1bf547",
         "test/unit/client_applier.test/04_apply_dispensers_replace.test.js": "932531f1175e9a43",
@@ -4554,10 +4643,12 @@
         "test/unit/client_rollback.test/07_token_refold.test.js": "236af0666c8eb85d",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
+        "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "aa9ac5216302721b",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",
         "test/unit/client_sync.test/20_reconcile_dispensers_schema_version_gate.test.js": "4cffa6e7132ef017",
+        "test/unit/client_sync.test/21_reconcile_dispensers_schema_gap_heal.test.js": "9a91daca806b15ff",
         "test/unit/client_sync.test/catch_up/12_run_incremental_catch_up_schema_self_heal.test.js": "da75e2ebbb09f1cf",
         "test/unit/client_sync.test/catch_up/19_run_incremental_catch_up_upsert_duplicate_key_halt.test.js": "610ddbb5ed3ccd77",
         "test/unit/client_sync.test/completeness/05_bootstrap_failure_gating_empty_replica_defect.test.js": "c19f60997c7483e1",
@@ -4569,6 +4660,7 @@
         "test/unit/client_sync.test/events/09_handle_block.test.js": "ce122cc4912e82c8",
         "test/unit/client_sync.test/events/10_apply_block_event.test.js": "99d874997e2b72e1",
         "test/unit/client_sync.test/events/13_handle_reorg.test.js": "964a9e8a96d5896d",
+        "test/unit/client_sync.test/events/14_indexer_gap_with_null_tip_hashes.test.js": "0599390bc2b2bb5e",
         "test/unit/client_sync.test/lifecycle/01_warn_trust_posture.test.js": "9f32bf1a82b5f6ab",
         "test/unit/client_sync.test/lifecycle/02_is_source_height_stale.test.js": "5d10b0ffea8843e3",
         "test/unit/client_sync.test/lifecycle/03_log_gap_throttling.test.js": "c01052b400b95da9",
@@ -4579,6 +4671,7 @@
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
         "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
+        "test/unit/client_sync_checkpoint_quorum.test/03_checkpoint_quorum_signed_root_gates.test.js": "b946ccc26dcddcd5",
         "test/unit/client_sync_dispenser_reconcile_after_reorg.test.js": "2b28d2ad3e43acb2",
         "test/unit/client_sync_dispenser_reconcile_tick.test.js": "422bb0e33ab3603c",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
@@ -4652,7 +4745,7 @@
         "test/unit/db.test/03_database_verify_sync_tables.test.js": "db839ea0e9db1207",
         "test/unit/db.test/04_database_add_missing_columns_edge_branches.test.js": "2b8574874fbaf660",
         "test/unit/db.test/05_database_get_emission_rows_for_block.test.js": "c8f08c761facce4a",
-        "test/unit/db.test/06_database_halt_methods.test.js": "d54620a13360f8b5",
+        "test/unit/db.test/06_database_halt_methods.test.js": "e1643e28d43b19a7",
         "test/unit/db.test/07_database_replicate_schema.test.js": "98e33e68315706b4",
         "test/unit/db.test/08_database_ensure_replica_secondary_indexes_votes_append_only_migration.test.js": "93be970735a5f782",
         "test/unit/db.test/09_database_ensure_replica_secondary_indexes_validator_rewards_reward_unique_qualifier_key.test.js": "4149fd390fa625eb",
@@ -4690,7 +4783,7 @@
         "test/unit/follower_missing_prior_root.test.js": "e76d24fca4e63da9",
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/get_block_leaf_rows_canonical.test.js": "7bd37c7fd3de6737",
-        "test/unit/hash_verifier.test.js": "ef4deb6bc7390bd3",
+        "test/unit/hash_verifier.test.js": "072602400b206ab1",
         "test/unit/health/carrier_logic.test.js": "c54a906a079d6748",
         "test/unit/health_halt_verdict.test.js": "b692b313f677d5c4",
         "test/unit/hub_client.test.js": "68687be53be6c143",
@@ -4753,6 +4846,7 @@
         "test/unit/server_poller.test/13_burst_state_hash_follower_halt.test.js": "2a4f7a67a8cf446a",
         "test/unit/server_poller.test/14_unrecognized_coin_activation_delay.test.js": "6d0c8ebeb93fdc48",
         "test/unit/server_poller.test/15_ledger_neutral_reorg_identity.test.js": "9720670ea76e54f9",
+        "test/unit/server_poller.test/16_updated_rows_lookup_reference.test.js": "651dfe957395acec",
         "test/unit/server_poller_action_scoped_probe.test.js": "d7ac1268f904a175",
         "test/unit/shutdown.test.js": "e4081567250aec28",
         "test/unit/sibling_coverage.test.js": "d8d1e52267ea606f",
@@ -4771,6 +4865,7 @@
         "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js": "81aeefdb52ea39d2",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
         "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
+        "test/unit/snapshot_source_classification.test.js": "cc2bac61522ac4df",
         "test/unit/sql_datetime_ddl_state_tree_roots.test.js": "d1f0d0aeec5914a9",
         "test/unit/sql_datetime_ddl_transparency_log.test.js": "df77321eda7793e8",
         "test/unit/sql_util.test.js": "40158d38b88066f8",
@@ -4824,6 +4919,7 @@
         "test/unit/updated_rows.test.js": "1f93748ddf32c5f3",
         "test/unit/updated_rows.test/01_coinpay_match_class.test.js": "9d92b7054e6d2dc8",
         "test/unit/updated_rows.test/02_binary_wire_sentinel.test.js": "ae5babf68b91a59d",
+        "test/unit/updated_rows.test/03_errno_less_errors.test.js": "5cf9fde8844c1229",
         "test/unit/utf8mb4_replica_widen.test.js": "9e46fbfae5839c05",
         "test/unit/utility.test.js": "436350992c034c95",
         "test/unit/validation.test.js": "8abfcb4541ad0c52",
@@ -5112,24 +5208,26 @@
       }
     },
     "test:regression": {
-      "fileCount": 97,
-      "titleCount": 773,
+      "fileCount": 103,
+      "titleCount": 803,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
         "test/unit/blockhash_conformance_twin.test.js": "c0bcb57647f83af0",
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
-        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "28fe9ca32ff6f937",
+        "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
+        "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "f84d3023c6126a01",
         "test/unit/client_sync.test/events/06_handle_event.test.js": "e962afbc1dd6ade5",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
         "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
+        "test/unit/client_sync_checkpoint_quorum.test/03_checkpoint_quorum_signed_root_gates.test.js": "b946ccc26dcddcd5",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
         "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "83270a69eb7e38bb",
         "test/unit/client_sync_halt.test/02_bulk_range_boundary_recompute.test.js": "2de09f9ac8510fc7",
@@ -5159,6 +5257,7 @@
         "test/unit/contract_state_subtree.test/contract_state_root_strict_read_faults.test.js": "151ff98884592964",
         "test/unit/contract_state_subtree.test/contract_state_root_strict_reads.test.js": "6d955dc4007ee59e",
         "test/unit/cooldown_credits.test.js": "f37fb6a4cfaf4ea4",
+        "test/unit/db.test/06_database_halt_methods.test.js": "e9252cc69db1496e",
         "test/unit/db_replica_status.test.js": "43cffa3fce90993d",
         "test/unit/db_stake_weights_as_of.test.js": "13f9b36dc6dc41be",
         "test/unit/db_swq_source_cap.test.js": "910a4f5c866b3b8b",
@@ -5191,10 +5290,12 @@
         "test/unit/server_poller.test/12_reorg_window_seed_snapshot.test.js": "13c2f94637234733",
         "test/unit/server_poller.test/13_burst_state_hash_follower_halt.test.js": "2a4f7a67a8cf446a",
         "test/unit/server_poller.test/15_ledger_neutral_reorg_identity.test.js": "9720670ea76e54f9",
+        "test/unit/server_poller.test/16_updated_rows_lookup_reference.test.js": "11f6611c5cc74a17",
         "test/unit/snapshot_builder.test/04_stream_dispensers.test.js": "654c349590fc25ab",
         "test/unit/snapshot_builder.test/06_branch_coverage.test.js": "b4f0d893b0d9c977",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
         "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
+        "test/unit/snapshot_source_classification.test.js": "8ea2d584f9c04d39",
         "test/unit/stakes_validator_set_parity.test.js": "e89c73ba3a32ab98",
         "test/unit/state_commitment.test.js": "e34cac5673dfa0d1",
         "test/unit/state_commitment_batched_node_writes.test.js": "cf99cbc50f631839",
@@ -5211,7 +5312,8 @@
         "test/unit/stream_scope_columns.test.js": "0c3480e683309fb5",
         "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_service.test/14_state_tree_metric_coin_ticker.test.js": "bce5f38ce4fa01fe",
-        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66"
+        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",
+        "test/unit/updated_rows.test/03_errno_less_errors.test.js": "5cf9fde8844c1229"
       }
     },
     "test:security": {
