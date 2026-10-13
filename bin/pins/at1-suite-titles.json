@@ -3121,6 +3121,12 @@
       "ClientRollback rollbackDecoder skips tx-scoped deletes when no transactions are in range",
       "ClientRollback rollbackDecoder swallows a missing tx-scoped table error (schema gap) and still completes"
     ],
+    "b30837ef82c83a69": [
+      "Integration: unsigned BIGINT replication on real MariaDB keeps every unsafe digit through JSON and ClientApplier.insertRows",
+      "Integration: unsigned BIGINT replication on real MariaDB reads unsafe source expirations exactly while preserving safe integers as numbers",
+      "Integration: unsigned BIGINT replication on real MariaDB stores and reads the exact values on the replica",
+      "Integration: unsigned BIGINT replication on real MariaDB uses bigIntAsNumber with the exact BIGINT type cast on both pools"
+    ],
     "b315a3a62a3a38ed": [
       "ClientSync.verifyRecompute passes the coin ticker to the collation gate @regression keeps the legacy folding collation one block below the activation height",
       "ClientSync.verifyRecompute passes the coin ticker to the collation gate @regression pins COLLATE utf8_bin at the BTC:mainnet activation height for a \"bitcoin\" replica"
@@ -5102,8 +5108,8 @@
       }
     },
     "test:integration": {
-      "fileCount": 37,
-      "titleCount": 127,
+      "fileCount": 38,
+      "titleCount": 131,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5141,12 +5147,13 @@
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
         "test/integration/tokens.test/owner_edit_refresh.test.js": "ce6599d5bc434589",
         "test/integration/tokens.test/supply_recompute.test.js": "5229b20ad602f73b",
-        "test/integration/transparency_log.test.js": "971aa02f9a73a797"
+        "test/integration/transparency_log.test.js": "971aa02f9a73a797",
+        "test/integration/u64_bigint_round_trip_real.test.js": "b30837ef82c83a69"
       }
     },
     "test:integration:ci": {
-      "fileCount": 33,
-      "titleCount": 117,
+      "fileCount": 34,
+      "titleCount": 121,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5180,7 +5187,8 @@
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
         "test/integration/tokens.test/owner_edit_refresh.test.js": "ce6599d5bc434589",
         "test/integration/tokens.test/supply_recompute.test.js": "5229b20ad602f73b",
-        "test/integration/transparency_log.test.js": "971aa02f9a73a797"
+        "test/integration/transparency_log.test.js": "971aa02f9a73a797",
+        "test/integration/u64_bigint_round_trip_real.test.js": "b30837ef82c83a69"
       }
     },
     "test:integration:parity": {
