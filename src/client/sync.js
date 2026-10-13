@@ -33,6 +33,7 @@ const fs          = require('fs');
 const path        = require('path');
 const validation  = require('../util/validation');
 const trainActivation = require('../consensus/gates/train_gate');
+const { buriedSnapshotBlock } = require('../consensus/snapshot_reorg_buffer');
 const BlockHasher = require('./block_hasher');
 const RollbackGuard = require('./rollback_guard');
 const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
@@ -4271,7 +4272,9 @@ class ClientSync {
         // trust it only once that height is attested by the current trust root.
         if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
             return { verdict: 'wait', reason: 'signer set at snapshot ' + next.snapshot_block + ' not yet attested' };
-        let vset = await this.oraclePublishSetAt(next.snapshot_block);
+        // The wire carries the raw height; the signer buried it once when it resolved its set.
+        let lookupBlock = buriedSnapshotBlock(next.snapshot_block, this.network);
+        let vset = await this.oraclePublishSetAt(lookupBlock);
         // A set past the stake-weight cap under-counts S: never attest on it, but a cap
         // overflow is not proof of divergence, so wait rather than halt.
         if(vset.truncated === true)
