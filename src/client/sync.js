@@ -3660,7 +3660,7 @@ class ClientSync {
         let delay = 5000;
         while(this.running){
             const status = await this.loadRollbackGuardState();
-            if(status === 'ok'){
+            if(status === 'ok' || status === undefined){
                 if(this._halted && /^rollback-guard-state-/.test(this._halted.reason)) this._halted = null;
                 return 'continue';
             }
