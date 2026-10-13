@@ -37,6 +37,7 @@ const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js'
 
 const swq   = require('../../src/consensus/stake_weighted_quorum.js');
 const equiv = require('../../src/consensus/equivocation_header.js');
+const srb   = require('../../src/consensus/snapshot_reorg_buffer.js');
 
 const LOCAL_DIR = path.join(__dirname, '../../src');
 // Resolve the canonical xchain-documentation repo. Prefer an explicit path: GitHub CI
@@ -136,7 +137,7 @@ function decodeSnapshotBlock(v){
 }
 
 // The activation boundaries run through THIS repo's carriers and so its own gate registry,
-// which byte identity never reaches; no snapshot_reorg_buffer.js here, so no burial group.
+// which byte identity alone never reaches.
 describe('consensus-primitive conformance: activation predicate vectors @regression', function(){
     before(function(){
         if(!skipOrFail(this, VEC_VERDICT, 'the activation predicate test-vector guard')) return;
@@ -149,7 +150,7 @@ describe('consensus-primitive conformance: activation predicate vectors @regress
     const groups = activationVec || {};
 
     it('every group this repo runs is a non-empty list', function(){
-        for(const g of ['isStakeWeightedQuorumActive', 'isEquivHeaderActive'])
+        for(const g of ['isStakeWeightedQuorumActive', 'isEquivHeaderActive', 'snapshotBurial'])
             assert.ok(Array.isArray(groups[g]) && groups[g].length > 0, g + ' is missing or empty');
     });
     (groups.isStakeWeightedQuorumActive || []).forEach(function(c){
@@ -162,6 +163,13 @@ describe('consensus-primitive conformance: activation predicate vectors @regress
             assert.strictEqual(equiv.isEquivHeaderActive(decodeSnapshotBlock(c.snapshotBlock), c.network), c.expected);
         });
     });
+    (groups.snapshotBurial || []).forEach(function(c){
+        it('snapshotBurial: ' + c.name, function(){
+            const sb = decodeSnapshotBlock(c.snapshotBlock);
+            assert.strictEqual(srb.isSnapshotBurialActive(sb, c.network), c.active);
+            assert.strictEqual(srb.buriedSnapshotBlock(sb, c.network), decodeSnapshotBlock(c.buriedSnapshotBlock));
+        });
+    });
 });
 
 describe('consensus-primitive conformance: byte-identity to canonical source @regression', function(){
@@ -169,10 +177,10 @@ describe('consensus-primitive conformance: byte-identity to canonical source @re
         skipOrFail(this, CANON_VERDICT, 'the canonical consensus reference-impl byte-identity guard');
     });
 
-    // The two carriers sit under consensus/ on both sides since W5 (the same tail in
+    // The three carriers sit under consensus/ on both sides since W5 (the same tail in
     // every repo), so the compare is a raw byte compare of src/consensus/<f> against
     // protocol/reference-impl/consensus/<f>.
-    ['stake_weighted_quorum.js', 'equivocation_header.js'].forEach(function(f){
+    ['stake_weighted_quorum.js', 'equivocation_header.js', 'snapshot_reorg_buffer.js'].forEach(function(f){
         it(f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
             const local = fs.readFileSync(path.join(LOCAL_DIR, 'consensus', f), 'utf8');
             const canon = fs.readFileSync(path.join(CANON_DIR, 'consensus', f), 'utf8');

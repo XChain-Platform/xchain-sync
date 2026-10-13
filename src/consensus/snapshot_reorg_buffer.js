@@ -1,0 +1,139 @@
+/*********************************************************************
+ *
+ * Copyright © 2025–2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC – https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md.
+ *
+ **********************************************************************
+ *
+ * XChain Platform: Capability-snapshot reorg buffer
+ *
+ * A hub NEVER resolves a validator set at the height it was handed. Every
+ * CapabilitySnapshot lookup subtracts CANONICAL_REORG_BUFFER first
+ * (xchain-hub/src/validators/capability_snapshot.js `buriedBlockIndex`), because
+ * stake state at the tip is not reorg-safe: a shallow BTC reorg can rewrite the
+ * stake set of the last few blocks, so a set locked AT the tip can serve a
+ * pre-reorg validator set for up to the snapshot cache TTL.
+ *
+ * The wire, however, carries the RAW height. The checkpoint a hub signs declares
+ * `snapshot_block: <raw>` (StateCheckpointEngine), the mirrored
+ * `capability_snapshots` rows are written under the same raw block, and an
+ * attestation request's `block_index` is likewise raw. That is deliberate: the
+ * convention is that the wire names the height a caller asked about and EVERY
+ * consumer buries it exactly once, locally.
+ *
+ * The defect this module closes is that the hub was the only party doing so. Three
+ * verifier families outside xchain-hub re-derived the set from on-chain state at
+ * the DECLARED height and therefore resolved a different set than the signer
+ * whenever a validator's stake activated or deactivated inside the buried window
+ * (H - CANONICAL_REORG_BUFFER, H]:
+ *
+ *   - xchain-indexer/src/actions/attest/  (ATTEST v1 responsible-set + capability gate)
+ *   - xchain-indexer/bin/recovery.js      (archive `_verifyStakes` / `verifyCompleteness`)
+ *   - xchain-sdk/src/protocol/light_client/validator_set_follow.js
+ *                                         (SPV `followForward` signer-set proof)
+ *
+ * A deactivation inside that window made an honest archive unrecoverable
+ * ("has no on-chain stake at block N (fabricated set?)"); an activation inside it
+ * dropped a qualifying source; on the attestation path the same gap rejected
+ * deterministic responses or stalled rounds. Proposal A (operator ruling,
+ * 2026-08-11): teach every verifier to bury by this one shared constant and leave
+ * the on-wire shape, and the hub-MIRRORED reads in xchain-indexer/src/db/ that
+ * are self-consistent with the declared label, untouched.
+ *
+ * WHY THIS IS FLAG-DAY GATED. Burying changes ACCEPTANCE: bytes an un-upgraded
+ * verifier rejects are accepted by an upgraded one and vice versa, so a partial
+ * rollout FORKS acceptance instead of fixing it. It also changes how already
+ * signed and anchored historical artifacts read. Both the coordinated activation
+ * height and the disposition of pre-flag-day artifacts are operator decisions, and
+ * every network is now armed at genesis: regtest and testnet have no quorum-signed
+ * history to preserve, and mainnet was ruled on 2026-09-09 on the same evidence
+ * (0 validators, 0 stakes, 0 quorum-signed artifacts measured 2026-09-09). Below
+ * the gate every consumer behaves byte-for-byte as it did before this module existed.
+ *
+ * PLANE. The gate is keyed on the BTC-anchored declared snapshot_block, the same
+ * plane (and the same call site) as `equivocation_header.isEquivHeaderActive`, NOT
+ * on a local chain height. attest/attest_response_verify.js evaluates it against
+ * the request's own block_index exactly as it already evaluates the EQUIV gate
+ * there; see the attest_admission_activation registry row for why the two planes
+ * differ and why the difference must not be "corrected" without its own flag-day.
+ *
+ * The canonical source of record is
+ * xchain-indexer/src/consensus/snapshot_reorg_buffer.js; it is vendored
+ * BYTE-IDENTICALLY into xchain-hub, xchain-sdk and
+ * xchain-documentation/protocol/reference-impl/consensus/snapshot_reorg_buffer.js.
+ * Edit the indexer copy only and re-run reconcile-twins.sh to re-vendor every
+ * other copy; never edit a vendored copy. The cross-service conformance suite
+ * (consensus_primitive_conformance.test.js) runs in every one of those repos and
+ * asserts byte-identity of the local copy to the xchain-documentation copy, so
+ * an unmirrored edit fails CI everywhere.
+ *
+ ********************************************************************/
+
+'use strict';
+
+const { get, copy, activeAt } = require('./gate_registry');
+
+// The reorg-depth buffer every party in a federation must resolve capability
+// snapshots at. 6 = the BTC confirmation depth the platform already treats as
+// buried (XCHAIN_CONFIRMATIONS_BTC). CONSENSUS-CRITICAL: the hub subtracts this
+// before every snapshot lookup and refuses to boot on mainnet/testnet when a local
+// override diverges (CapabilitySnapshot.resolveReorgBuffer), so a verifier that
+// buries by a different depth resolves a different set than the signer.
+const CANONICAL_REORG_BUFFER = copy('snapshot_reorg_buffer.CANONICAL_REORG_BUFFER');
+
+// Per-network activation height (LOCAL COPY of the canonical map maintained
+// upstream, kept equal by the cross-service regression suite). Keyed on the
+// BTC-anchored declared snapshot_block.
+//
+// ARMED at genesis on mainnet, testnet and regtest per the gate table: every
+// network resolves through the buried height from block 0. Arming changes
+// acceptance itself, so a one-sided or partially-rolled-out arm would fork the
+// fleet rather than fix it; the gate table records the per-network ruling and
+// the evidence for arming each network at genesis instead of a later height.
+const SNAPSHOT_BURIAL_ACTIVATION = copy('snapshot_reorg_buffer.SNAPSHOT_BURIAL_ACTIVATION');
+
+// Whether a verifier must bury the declared snapshot_block before re-deriving the
+// validator set for it, on `network`.
+//
+// Fails CLOSED on anything it cannot evaluate (unparseable height, unknown or
+// un-ratified network): closed means "resolve at the declared height", which is
+// what the deployed fleet does today, so a node that cannot evaluate the gate
+// stays with the majority instead of unilaterally resolving a set nobody else will.
+function isSnapshotBurialActive(snapshotBlock, network){
+    // Reject the empty-ish values BEFORE parseInt/Number, which map null, '' and
+    // false to a perfectly finite 0. On a genesis-on network (threshold 0) that 0
+    // reads as ACTIVE, so a missing height would silently bury instead of failing
+    // closed as this function promises.
+    if(snapshotBlock === null || snapshotBlock === undefined || snapshotBlock === '' || typeof snapshotBlock === 'boolean')
+        return false;
+    let sb = Number(snapshotBlock);
+    if(!Number.isFinite(sb)) return false;
+    let threshold = SNAPSHOT_BURIAL_ACTIVATION[network];
+    if(threshold === null || threshold === undefined) return false;
+    return sb >= threshold;
+}
+
+// The height a verifier must actually resolve the validator set at for a snapshot
+// DECLARED at `snapshotBlock` on `network`: max(0, declared - CANONICAL_REORG_BUFFER)
+// at/above the flag-day.
+//
+// Below the flag-day, or for any input the gate cannot evaluate, the declared value
+// is returned VERBATIM (same reference, not coerced), so a pre-flag-day caller sees
+// byte-identical behaviour to passing the declared height straight through, including
+// the null/undefined/NaN sentinels each call site already handles its own way.
+function buriedSnapshotBlock(snapshotBlock, network){
+    if(!isSnapshotBurialActive(snapshotBlock, network)) return snapshotBlock;
+    return Math.max(0, Math.floor(Number(snapshotBlock)) - CANONICAL_REORG_BUFFER);
+}
+
+module.exports = {
+    CANONICAL_REORG_BUFFER,
+    SNAPSHOT_BURIAL_ACTIVATION,
+    isSnapshotBurialActive,
+    buriedSnapshotBlock,
+};
