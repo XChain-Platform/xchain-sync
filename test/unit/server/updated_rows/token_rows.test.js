@@ -11,6 +11,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
+const Database = require('../../../../src/db');
 const {
     collectTokenSupplyRows,
     collectTokenEditRows
@@ -110,13 +111,13 @@ for(const [name, collect] of COLLECTORS){
     });
 }
 
-describe('findEditedTokens mixin', function(){
+describe('Database.findEditedTokens', function(){
     it('runs the valid-issues tokens query with [from, to] and conn third', async function(){
         const calls = [];
-        const fake = Object.assign({
+        const fake = {
             async doQuery(...args){ calls.push(args); return []; }
-        }, require('../../../../src/db/token_edit_rows.js'));
-        await fake.findEditedTokens(10, 20, CONN);
+        };
+        await Database.prototype.findEditedTokens.call(fake, 10, 20, CONN);
         assert.strictEqual(calls.length, 1);
         const [sql, params, conn] = calls[0];
         assert.ok(/FROM `tokens`/.test(sql));
