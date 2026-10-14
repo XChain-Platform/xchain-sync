@@ -43,7 +43,6 @@ function makeSync(configOverrides, dbOverrides, identity){
 }
 
 let sync, db, applier;
-
 function setupSmallBranchTest(){
     sinon.stub(console, 'log');
     sinon.stub(console, 'error');
@@ -59,10 +58,8 @@ function makeCommitSync(){
     sinon.stub(made.sync, 'haltOnDivergence').resolves();
     return made;
 }
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-it('handleBlock (decoder): logs gap and triggers catch-up when blockIndex > lastApplied+1', async function(){
+function smallBranchGroup1(){
+    it('handleBlock (decoder): logs gap and triggers catch-up when blockIndex > lastApplied+1', async function(){
         ({ sync, db, applier } = makeSync({}, { dbType: 'decoder' }));
         sync.lastAppliedBlock = 10;
         sync.lastHashes = { block_hash: 'h10' };
@@ -113,13 +110,9 @@ it('handleBlock (decoder): logs gap and triggers catch-up when blockIndex > last
 
         clock.restore();
     });
-});
+}
 
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
+function smallBranchGroup2(){
     it('handleBlock: HALT_ON_DIVERGENCE=true calls haltOnDivergence on hash mismatch', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
@@ -162,13 +155,9 @@ describe('ClientSync: small branches', function(){
 
         assert.deepStrictEqual(sync.lastHashes, { block_hash: 'bh5' });
     });
-});
+}
 
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
+function smallBranchGroup3(){
     it('handleReorg: exceeds MAX_ROLLBACK_DEPTH → HALTS and does NOT rollback', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }));
@@ -201,12 +190,9 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.getHaltInfo().reason, 'max-rollback-depth-exceeded');
         assert.strictEqual(db.recordHalt.firstCall.args[0], 'decoder');
     });
-});
+}
 
-describe('ClientSync: litecoin testnet reorg depth', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
+function litecoinReorgGroup1(){
     it('rolls back a 134-block litecoin testnet reorg under the network default', async function(){
         let rb;
         ({ sync, rb } = makeSync(
@@ -221,17 +207,15 @@ describe('ClientSync: litecoin testnet reorg depth', function(){
         assert.strictEqual(rb.rollback.calledOnceWith(867), true);
         assert.strictEqual(sync.isHalted(), false);
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
 
     // Stress-sweep 2026-07-08: a reorg ABOVE the tip must be a no-op, never a cursor
     // advance. depth = tip - block_index + 1 goes <= 0 above the tip, so it never trips
     // MAX_ROLLBACK_DEPTH; the old code then ran a no-op rollback and set
     // lastAppliedBlock = block_index - 1, inflating the tip past real data and wedging
     // the replica (every later canonical block is then dropped by handleBlock).
+}
+
+function smallBranchReorgTail(){
     it('handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync());
@@ -243,12 +227,6 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.isHalted(), false, 'an above-tip reorg is a no-op, not a halt');
         assert.strictEqual(sync.lastAppliedBlock, 100, 'the cursor must NOT advance past applied data');
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
 
     it('handleReorg: a legitimate below-tip reorg still rolls back and moves the cursor', async function(){
         let rb;
@@ -261,13 +239,151 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.lastAppliedBlock, 94, 'cursor moves to block_index - 1 after a real rollback');
     });
+}
+
+function commitmentRootsGroup1(){
+    it('HALTS with state-commitment-missing when the source omits balances_root', async function(){
+        let { sync } = makeCommitSync();
+
+        await sync.applyBlockEvent({
+            type: 'block', block_index: 101,
+            balances_root: null, block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
+        });
+
+        assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld balances_root must halt');
+        assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-missing');
+        assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['balances_root']);
+        assert.strictEqual(sync.lastAppliedBlock, 100, 'a halted block must not advance the tip');
+    });
+
+    it('HALTS when only block_merkle_root is withheld (a correct balances_root is not a pass)', async function(){
+        let { sync } = makeCommitSync();
+
+        await sync.applyBlockEvent({
+            type: 'block', block_index: 101,
+            balances_root: 'b'.repeat(64), block_merkle_root: null, state_root: 's'.repeat(64)
+        });
+
+        assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld block_merkle_root must halt');
+        assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['block_merkle_root']);
+    });
+
+    it('does NOT halt on a null state_root: ServerPoller nulls it for catch-up-burst blocks', async function(){
+        let { sync } = makeCommitSync();
+
+        await sync.applyBlockEvent({
+            type: 'block', block_index: 101,
+            balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: null
+        });
+
+        assert.strictEqual(sync.haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
+        assert.strictEqual(sync.lastAppliedBlock, 101, 'the block still applies');
+    });
+
+    it('does NOT halt when the replica itself says the commitment is not active', async function(){
+        let { sync, applier } = makeCommitSync();
+        applier._lastComputedRoots = null;   // pre-flag-day, or a skipped/duplicate apply
+
+        await sync.applyBlockEvent({
+            type: 'block', block_index: 101,
+            balances_root: null, block_merkle_root: null, state_root: null
+        });
+
+        assert.strictEqual(sync.haltOnDivergence.called, false, 'pre-flag-day nulls stay a skip');
+        assert.strictEqual(sync.lastAppliedBlock, 101);
+    });
+}
+
+function commitmentRootsGroup2(){
+    it('still halts with state-commitment-divergence on a root MISMATCH', async function(){
+        let { sync } = makeCommitSync();
+
+        await sync.applyBlockEvent({
+            type: 'block', block_index: 101,
+            balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
+        });
+
+        assert.ok(sync.haltOnDivergence.calledOnce);
+        assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+    });
+
+    // A post-commit verification ERROR must not launder the commitment gate.
+    // applyBlock commits before the gates run, so a throw from the state-hash read
+    // leaves the block committed with lastAppliedBlock unadvanced. The redelivery
+    // gap detection then triggers takes applyBlock's duplicate early return, which
+    // clears _lastComputedRoots, and the commitment comparison is gated on those
+    // roots: without the carried stash the retry advances the tip with divergent
+    // roots never compared. Database presence is not proof of verification.
+    it('a state-hash read failure then redelivery still compares the commitment roots', async function(){
+        let { sync, applier } = makeCommitSync();
+        sync.config['VERIFY_STATE_HASH'] = true;
+        let readStub = sinon.stub(sync.blockHasher, 'computeStateHash')
+            .rejects(new Error('replica read failed'));
+
+        // DIVERGENT balances_root: the comparison, once it runs, must halt.
+        let event = { type: 'block', block_index: 101, state_hash: 'sh'.repeat(32),
+            balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) };
+
+        await sync.applyBlockEvent(event);
+        assert.strictEqual(sync.haltOnDivergence.called, false,
+            'the swallowed read error itself does not halt');
+        assert.strictEqual(sync.lastAppliedBlock, 100, 'and does not advance the tip');
+
+        // The redelivery: applyBlock early-returns on the duplicate, leaving null roots.
+        applier._lastComputedRoots = null;
+        readStub.resolves(event.state_hash);   // the transient read has recovered
+
+        await sync.applyBlockEvent(event);
+
+        assert.ok(sync.haltOnDivergence.calledOnce,
+            'the retry must run the commitment comparison it skipped the first time');
+        assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
+        assert.strictEqual(sync.lastAppliedBlock, 100,
+            'an unverified block must never advance the tip');
+    });
+}
+
+function commitmentRootsGroup3(){
+    it('clears the carried roots once every gate passes, so a later duplicate stays a skip', async function(){
+        // Negative control for the test above: the stash must not outlive a clean
+        // apply, or an honest duplicate of an already-verified block would be
+        // re-compared against roots the gate has no business re-checking.
+        let { sync, applier } = makeCommitSync();
+
+        await sync.applyBlockEvent({ type: 'block', block_index: 101,
+            balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
+        assert.strictEqual(sync.lastAppliedBlock, 101, 'the clean block applied');
+        assert.strictEqual(sync._unverifiedRoots, null, 'the stash is cleared once verified');
+
+        applier._lastComputedRoots = null;
+        await sync.applyBlockEvent({ type: 'block', block_index: 101,
+            balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
+        assert.strictEqual(sync.haltOnDivergence.called, false,
+            'a duplicate of an already-verified block is still a skip, not a divergence');
+    });
+}
+
+describe('ClientSync: small branches', function(){
+    beforeEach(setupSmallBranchTest);
+    afterEach(function(){ sinon.restore(); });
+
+    smallBranchGroup1();
+    smallBranchGroup2();
+    smallBranchGroup3();
+});
+
+describe('ClientSync: litecoin testnet reorg depth', function(){
+    beforeEach(setupSmallBranchTest);
+    afterEach(function(){ sinon.restore(); });
+
+    litecoinReorgGroup1();
 });
 
 describe('ClientSync: small branches', function(){
     beforeEach(setupSmallBranchTest);
     afterEach(function(){ sinon.restore(); });
 
-
+    smallBranchReorgTail();
     // uuid:4b95ddef. The apply-time state-commitment check is the only control that
     // writes a sync_halt marker for a replica/source root divergence. Gating it on the
     // WIRE carrying balances_root lets a source with no state_tree_roots row at an
@@ -277,150 +393,8 @@ describe('ClientSync: small branches', function(){
     // clears it at applyBlock entry, so a non-null value plus a null wire root is a
     // locally-decidable contract violation, not "nothing to check".
     describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-it('HALTS with state-commitment-missing when the source omits balances_root', async function(){
-            let { sync } = makeCommitSync();
-
-            await sync.applyBlockEvent({
-                type: 'block', block_index: 101,
-                balances_root: null, block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
-            });
-
-            assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld balances_root must halt');
-            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-missing');
-            assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['balances_root']);
-            assert.strictEqual(sync.lastAppliedBlock, 100, 'a halted block must not advance the tip');
-        });
-
-        it('HALTS when only block_merkle_root is withheld (a correct balances_root is not a pass)', async function(){
-            let { sync } = makeCommitSync();
-
-            await sync.applyBlockEvent({
-                type: 'block', block_index: 101,
-                balances_root: 'b'.repeat(64), block_merkle_root: null, state_root: 's'.repeat(64)
-            });
-
-            assert.ok(sync.haltOnDivergence.calledOnce, 'a withheld block_merkle_root must halt');
-            assert.deepStrictEqual(sync.haltOnDivergence.firstCall.args[1].map(m => m.field), ['block_merkle_root']);
-        });
-
-        it('does NOT halt on a null state_root: ServerPoller nulls it for catch-up-burst blocks', async function(){
-            let { sync } = makeCommitSync();
-
-            await sync.applyBlockEvent({
-                type: 'block', block_index: 101,
-                balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: null
-            });
-
-            assert.strictEqual(sync.haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
-            assert.strictEqual(sync.lastAppliedBlock, 101, 'the block still applies');
-        });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
-
-        it('does NOT halt when the replica itself says the commitment is not active', async function(){
-            let { sync, applier } = makeCommitSync();
-            applier._lastComputedRoots = null;   // pre-flag-day, or a skipped/duplicate apply
-
-            await sync.applyBlockEvent({
-                type: 'block', block_index: 101,
-                balances_root: null, block_merkle_root: null, state_root: null
-            });
-
-            assert.strictEqual(sync.haltOnDivergence.called, false, 'pre-flag-day nulls stay a skip');
-            assert.strictEqual(sync.lastAppliedBlock, 101);
-        });
-
-        it('still halts with state-commitment-divergence on a root MISMATCH', async function(){
-            let { sync } = makeCommitSync();
-
-            await sync.applyBlockEvent({
-                type: 'block', block_index: 101,
-                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64)
-            });
-
-            assert.ok(sync.haltOnDivergence.calledOnce);
-            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
-        });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
-
-        // A post-commit verification ERROR must not launder the commitment gate.
-        // applyBlock commits before the gates run, so a throw from the state-hash read
-        // leaves the block committed with lastAppliedBlock unadvanced. The redelivery
-        // gap detection then triggers takes applyBlock's duplicate early return, which
-        // clears _lastComputedRoots, and the commitment comparison is gated on those
-        // roots: without the carried stash the retry advances the tip with divergent
-        // roots never compared. Database presence is not proof of verification.
-        it('a state-hash read failure then redelivery still compares the commitment roots', async function(){
-            let { sync, applier } = makeCommitSync();
-            sync.config['VERIFY_STATE_HASH'] = true;
-            let readStub = sinon.stub(sync.blockHasher, 'computeStateHash')
-                .rejects(new Error('replica read failed'));
-
-            // DIVERGENT balances_root: the comparison, once it runs, must halt.
-            let event = { type: 'block', block_index: 101, state_hash: 'sh'.repeat(32),
-                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) };
-
-            await sync.applyBlockEvent(event);
-            assert.strictEqual(sync.haltOnDivergence.called, false,
-                'the swallowed read error itself does not halt');
-            assert.strictEqual(sync.lastAppliedBlock, 100, 'and does not advance the tip');
-
-            // The redelivery: applyBlock early-returns on the duplicate, leaving null roots.
-            applier._lastComputedRoots = null;
-            readStub.resolves(event.state_hash);   // the transient read has recovered
-
-            await sync.applyBlockEvent(event);
-
-            assert.ok(sync.haltOnDivergence.calledOnce,
-                'the retry must run the commitment comparison it skipped the first time');
-            assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
-            assert.strictEqual(sync.lastAppliedBlock, 100,
-                'an unverified block must never advance the tip');
-        });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
-
-        it('clears the carried roots once every gate passes, so a later duplicate stays a skip', async function(){
-            // Negative control for the test above: the stash must not outlive a clean
-            // apply, or an honest duplicate of an already-verified block would be
-            // re-compared against roots the gate has no business re-checking.
-            let { sync, applier } = makeCommitSync();
-
-            await sync.applyBlockEvent({ type: 'block', block_index: 101,
-                balances_root: 'b'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
-            assert.strictEqual(sync.lastAppliedBlock, 101, 'the clean block applied');
-            assert.strictEqual(sync._unverifiedRoots, null, 'the stash is cleared once verified');
-
-            applier._lastComputedRoots = null;
-            await sync.applyBlockEvent({ type: 'block', block_index: 101,
-                balances_root: 'f'.repeat(64), block_merkle_root: 'm'.repeat(64), state_root: 's'.repeat(64) });
-            assert.strictEqual(sync.haltOnDivergence.called, false,
-                'a duplicate of an already-verified block is still a skip, not a divergence');
-        });
+        commitmentRootsGroup1();
+        commitmentRootsGroup2();
+        commitmentRootsGroup3();
     });
 });
