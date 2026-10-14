@@ -42,13 +42,16 @@ function makeSync(getSyncState){
     return { sync, db };
 }
 
-describe('ClientSync rollback guard startup hold', function(){
+function stubConsole(){
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
     });
-
     afterEach(function(){ sinon.restore(); });
+}
+
+describe('ClientSync rollback guard startup hold', function(){
+    stubConsole();
 
     it('holds in a synthetic halt with doubling backoff while the state is unreadable, then resumes', async function(){
         const read = sinon.stub();
@@ -95,6 +98,10 @@ describe('ClientSync rollback guard startup hold', function(){
 
         assert.strictEqual(sync.synchronizeStoredReplica.called, false);
     });
+});
+
+describe('ClientSync rollback guard startup hold', function(){
+    stubConsole();
 
     it('halts on an invalid saved row until an operator clear deletes it', async function(){
         let row = '{"peak":5,"low":9}';
