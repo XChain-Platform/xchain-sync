@@ -134,6 +134,7 @@ const MIXIN_FILES = [
     './tables.js',
     './validator_rewards.js',
     './credits.js',
+    './token_edit_rows.js',
     './index_lookups.js',
     './state_checkpoints.js',
     './merkle_epochs.js',
