@@ -42,6 +42,12 @@ function createMockDb(){
     };
 }
 
+function quietConsole(){
+    sinon.stub(console, 'log');
+    sinon.stub(console, 'error');
+    sinon.stub(console, 'warn');
+}
+
 describe('ClientSync: a live recompute error is recorded durably @regression', function(){
     let sync, db, applier, config;
 
@@ -54,12 +60,7 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
         sync = new ClientSync('bitcoin', 'mainnet', db, applier, { rollback: sinon.stub().resolves() }, new HashVerifier(), config, util);
     }
 
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-        sinon.stub(console, 'warn');
-        build({});
-    });
+    beforeEach(function(){ quietConsole(); build({}); });
     afterEach(function(){ sinon.restore(); });
 
     it('a state_hash read error still holds the tip and records nothing', async function(){

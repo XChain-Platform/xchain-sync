@@ -101,6 +101,43 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         }
     });
 });
+function assertLeafRowsMatchBlockHasher(){
+    const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
+    const bhSrc = fs.readFileSync(syncFile('src/client/block_hasher.js'), 'utf8');
+    const leafSql = sqlLiterals(stripComments(extractFunction(dbSrc,
+        /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')));
+    const hashSql = sqlLiterals(stripComments(extractFunction(bhSrc,
+        /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js')));
+    assert.ok(leafSql.length >= 12,
+        'expected the 12 gathering fragments in getBlockLeafRows (the contract_state query is ' +
+        'spliced into three by the stateKeyCollate flag-day concatenation), found ' + leafSql.length +
+        '; if the gathering set changed, mirror it in BlockHasher and update this count');
+    assert.strictEqual(hashSql.length, leafSql.length + 1,
+        'computeBlockHashes must carry exactly the getBlockLeafRows fragments plus the trailing ' +
+        'previous-block-hash chaining query; counts are ' + hashSql.length + ' vs ' + leafSql.length +
+        ', so a query was added or removed on one side and the recomputed roots have diverged');
+    for(let i = 0; i < leafSql.length; i++){
+        assert.strictEqual(leafSql[i], hashSql[i],
+            'consensus SQL #' + (i + 1) + ' drifted between db.getBlockLeafRows and ' +
+            'BlockHasher.computeBlockHashes; these SELECTs are block_merkle_root preimage inputs ' +
+            'and MUST stay byte-identical (modulo whitespace)');
+    }
+    assert.ok(/FROM blocks b/.test(hashSql[hashSql.length - 1]),
+        'the extra computeBlockHashes literal must be the previous-block-hash chaining query; ' +
+        'if it is a gathering SELECT instead, getBlockLeafRows is missing one');
+    // The third copy of the canonicalization loops: getBlockLeafRows takes its ledger
+    // from getLedgerLeafRows, which must canonicalize after the SQL sort and never reorder.
+    assertCanonicalizedBeforeHash(
+        extractFunction(dbSrc, /async function getLedgerLeafRows\(db, block_index, conn, queries\)\{/, 'db/actions.js'),
+        'db.getLedgerLeafRows', 'ledger.escrows = await db.doQueryStrict(', 'return ledger;');
+    const leafFn = stripComments(extractFunction(dbSrc,
+        /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')).replace(/\s+/g, ' ');
+    assert.strictEqual(leafFn.split('let ledger = await getLedgerLeafRows(this, block_index, conn, {').length - 1, 1,
+        'db.getBlockLeafRows must take its ledger rows from getLedgerLeafRows exactly once');
+    assert.doesNotMatch(leafFn, /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
+        'db.getBlockLeafRows reassigns or reorders a canonicalized ledger row set before returning it');
+}
+
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
     // THIRD copy of the same gathering set, and the one nothing pinned. The indexer
     // needs no third copy (its getBlockLeafRows replays the getBlockHashes stash), but
@@ -115,42 +152,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
     // green exactly where the gap it closes lives. computeBlockHashes carries one
     // EXTRA trailing literal, the previous-block-hash chaining query, which has no
     // counterpart in the leaf-row gathering; everything before it must match pairwise.
-    it('getBlockLeafRows gathers the same consensus SQL as BlockHasher, in order', function(){
-        const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
-        const bhSrc = fs.readFileSync(syncFile('src/client/block_hasher.js'), 'utf8');
-        const leafSql = sqlLiterals(stripComments(extractFunction(dbSrc,
-            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')));
-        const hashSql = sqlLiterals(stripComments(extractFunction(bhSrc,
-            /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js')));
-        assert.ok(leafSql.length >= 12,
-            'expected the 12 gathering fragments in getBlockLeafRows (the contract_state query is ' +
-            'spliced into three by the stateKeyCollate flag-day concatenation), found ' + leafSql.length +
-            '; if the gathering set changed, mirror it in BlockHasher and update this count');
-        assert.strictEqual(hashSql.length, leafSql.length + 1,
-            'computeBlockHashes must carry exactly the getBlockLeafRows fragments plus the trailing ' +
-            'previous-block-hash chaining query; counts are ' + hashSql.length + ' vs ' + leafSql.length +
-            ', so a query was added or removed on one side and the recomputed roots have diverged');
-        for(let i = 0; i < leafSql.length; i++){
-            assert.strictEqual(leafSql[i], hashSql[i],
-                'consensus SQL #' + (i + 1) + ' drifted between db.getBlockLeafRows and ' +
-                'BlockHasher.computeBlockHashes; these SELECTs are block_merkle_root preimage inputs ' +
-                'and MUST stay byte-identical (modulo whitespace)');
-        }
-        assert.ok(/FROM blocks b/.test(hashSql[hashSql.length - 1]),
-            'the extra computeBlockHashes literal must be the previous-block-hash chaining query; ' +
-            'if it is a gathering SELECT instead, getBlockLeafRows is missing one');
-        // The third copy of the canonicalization loops: getBlockLeafRows takes its ledger
-        // from getLedgerLeafRows, which must canonicalize after the SQL sort and never reorder.
-        assertCanonicalizedBeforeHash(
-            extractFunction(dbSrc, /async function getLedgerLeafRows\(db, block_index, conn, queries\)\{/, 'db/actions.js'),
-            'db.getLedgerLeafRows', 'ledger.escrows = await db.doQueryStrict(', 'return ledger;');
-        const leafFn = stripComments(extractFunction(dbSrc,
-            /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js')).replace(/\s+/g, ' ');
-        assert.strictEqual(leafFn.split('let ledger = await getLedgerLeafRows(this, block_index, conn, {').length - 1, 1,
-            'db.getBlockLeafRows must take its ledger rows from getLedgerLeafRows exactly once');
-        assert.doesNotMatch(leafFn, /ledger\.(credits|debits|escrows)\s*(=(?!=)|\.(sort|reverse|splice|map|filter)\()/,
-            'db.getBlockLeafRows reassigns or reorders a canonicalized ledger row set before returning it');
-    });
+    it('getBlockLeafRows gathers the same consensus SQL as BlockHasher, in order', assertLeafRowsMatchBlockHasher);
 
     it('special-address canonicalization covers credits, debits and escrows on both sides', function(){
         const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
