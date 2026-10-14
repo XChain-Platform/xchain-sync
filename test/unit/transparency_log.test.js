@@ -21,14 +21,13 @@ function setUpLog(){
     log = new TransparencyLog(db);
 }
 
-function restoreSinon(){
-    sinon.restore();
+function useLog(){
+    beforeEach(setUpLog);
+    afterEach(() => sinon.restore());
 }
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('recordBlock', function(){
         it('calls doQuery with INSERT IGNORE and correct params', async function(){
@@ -81,9 +80,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('getRecordedHash', function(){
         it('returns the durable recorded block identity (ledger|actions|contract) for a height', async function(){
@@ -132,6 +129,11 @@ describe('TransparencyLog', function(){
         });
     });
 
+});
+
+describe('TransparencyLog', function(){
+    useLog();
+
     describe('recommitEpoch', function(){
         it('deletes the existing epoch row then re-commits it', async function(){
             let commit = sinon.stub(log, 'commitEpoch').resolves();
@@ -145,9 +147,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('commitEpoch early returns', function(){
         it('returns early when the epoch is already committed', async function(){
@@ -168,9 +168,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('getProof', function(){
         function epochRows(blocks){
@@ -226,9 +224,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('getLatestRoot', function(){
         it('returns the most recent committed epoch row', async function(){
@@ -280,9 +276,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('getPage', function(){
 
@@ -334,9 +328,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('pruneFrom', function(){
 
@@ -375,9 +367,7 @@ describe('TransparencyLog', function(){
 });
 
 describe('TransparencyLog', function(){
-
-    beforeEach(setUpLog);
-    afterEach(restoreSinon);
+    useLog();
 
     describe('commitEpoch reorg-marker backfill', function(){
         it('backfills a pending reorg marker new_root when the epoch re-commits', async function(){
