@@ -116,6 +116,10 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
         assert.strictEqual(health.carrierLogicDigest(), health.carrierLogicDigest());
     });
 
+});
+
+describe('health/carrier_logic: the published carrier logic digest', function () {
+
     it('reads the pin two directories up from src/health, so a copy with the pin publishes the hex', function () {
         assert.strictEqual(freshCopy(true).carrierLogicDigest(), logicPin.digest(logicPin.readPin(ROOT)));
     });
