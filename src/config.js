@@ -467,6 +467,15 @@ function addSourceQuorumConfig(config){
     config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
 }
 
+function addRangeVerificationConfig(config){
+    // Blocks recomputed per window when a replica verifies the committed blocks above
+    // its durable last-verified block (a catch-up range, or the unverified tail at
+    // startup or after a halt clear). The verified marker is written after each window
+    // and the event loop is yielded, so a 100k-block range holds one block's preimage
+    // in memory at a time and a restart resumes from the last finished window.
+    config['VERIFY_RANGE_BATCH'] = parseIntMin1(process.env.VERIFY_RANGE_BATCH, 500);
+}
+
 function addReplicaVerificationConfig(config){
     // VERIFY_STATE_HASH: apply-time recompute of the per-block state_hash (the
     // in-place mutations + backdated refund credits the three consensus hashes
@@ -700,6 +709,7 @@ function getConfig(){
     addClientDatabaseConfig(config);
     addWebSocketAndAccessConfig(config);
     addSourceQuorumConfig(config);
+    addRangeVerificationConfig(config);
     addReplicaVerificationConfig(config);
     addParityConfig(config);
     addCheckpointConfig(config);

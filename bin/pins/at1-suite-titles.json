@@ -131,6 +131,13 @@
       "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
       "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
     ],
+    "0828824e678890c4": [
+      "ClientSync: catch-up verifies every block of the range @regression a clean range verifies and leaves the replica identical to the origin",
+      "ClientSync: catch-up verifies every block of the range @regression catch-up changed_row at an interior block halts",
+      "ClientSync: catch-up verifies every block of the range @regression catch-up extra_row at an interior block halts",
+      "ClientSync: catch-up verifies every block of the range @regression catch-up hashed_tx_index at an interior block halts",
+      "ClientSync: catch-up verifies every block of the range @regression catch-up missing_row at an interior block halts"
+    ],
     "08cfd623d53406ec": [
       "Boundary: Transparency Log Pagination page parameter page=\"abc\": defaults to 0",
       "Boundary: Transparency Log Pagination page parameter page=-100: clamped to 0",
@@ -276,6 +283,12 @@
       "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
       "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
       "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression"
+    ],
+    "11cdb042e2531ec3": [
+      "ClientSync: a halt write that fails is retried until durable @regression a clear abandons the pending write, so it cannot bring the halt back",
+      "ClientSync: a halt write that fails is retried until durable @regression retries on a timer and reports durable once the write lands",
+      "ClientSync: stop() drains in-flight work @regression SyncService closes pools only after every client drain settles",
+      "ClientSync: stop() drains in-flight work @regression the stop promise settles only after the in-flight apply and its verification"
     ],
     "11f6611c5cc74a17": [
       "ServerPoller buildBlockPayload lookups referenced only by updated rows ships a status interned by an in-place head stamp that no payload.data row references @regression"
@@ -557,6 +570,20 @@
     "22f878636d1e21f6": [
       "ClientSync security connectWebSocket: maxPayload passes maxPayload to WebSocket constructor"
     ],
+    "235d1488d9a1d9fe": [
+      "ClientSync: a reorg lowers the marker before deleting rows @regression a marker already below the rollback height is left alone",
+      "ClientSync: a reorg lowers the marker before deleting rows @regression a marker write that fails stops the rollback, and the reorg halts",
+      "ClientSync: a reorg lowers the marker before deleting rows @regression the marker is lowered durably before the rollback runs",
+      "ClientSync: first start without a marker @regression an earlier build's pending-block key widens the first walk and is dropped after it",
+      "ClientSync: first start without a marker @regression an unreadable marker holds the replica rather than reading as absent",
+      "ClientSync: first start without a marker @regression no marker: only the stored tip block recomputes, and the marker is recorded",
+      "ClientSync: post-commit verification retry @regression mismatch: a redelivery that now mismatches halts and does not advance",
+      "ClientSync: post-commit verification retry @regression redeliver: a redelivery re-verifies and advances the tip and the marker",
+      "ClientSync: post-commit verification retry @regression unverified: a throwing verification holds the tip and the marker",
+      "ClientSync: restart re-verifies the blocks above the marker @regression a block above the marker that fails its hash halts at startup and no catch-up runs",
+      "ClientSync: restart re-verifies the blocks above the marker @regression a marker equal to the stored tip recomputes nothing",
+      "ClientSync: restart re-verifies the blocks above the marker @regression a stored tip above the marker recomputes before catch-up, then resumes"
+    ],
     "2361ea9f8690084d": [
       "collectMatured errno-less errors @regression credits: re-throws an errno-less error from the capability leg",
       "collectMatured errno-less errors @regression credits: re-throws an errno-less error from the contract leg",
@@ -677,6 +704,16 @@
       "Boundary: WebSocket Limits backpressure (item 5410: drop only genuinely stalled peers) arms but does not trip the stall window on the first non-draining send",
       "Boundary: WebSocket Limits backpressure (item 5410: drop only genuinely stalled peers) does NOT drop a stalled-then-recovered peer (drain resets the window)",
       "Boundary: WebSocket Limits backpressure (item 5410: drop only genuinely stalled peers) skips closed WebSocket"
+    ],
+    "29ed2397ccac467d": [
+      "ClientSync bootstrapFromHeight VERIFY_RECOMPUTE: recomputes the window from the first block above the join and HALTS on the first mismatch",
+      "ClientSync bootstrapFromHeight clamps base to 0 when depth exceeds the tip",
+      "ClientSync bootstrapFromHeight re-pages lookups AFTER applying the block window (closes the T1<T2 FK gap)",
+      "ClientSync bootstrapFromHeight retry wrapper THROWS on exhaustion",
+      "ClientSync bootstrapFromHeight retry wrapper retries with backoff then succeeds",
+      "ClientSync bootstrapFromHeight retry wrapper throws (never live-follows empty) when no sources configured",
+      "ClientSync bootstrapFromHeight seeds [base..tip] from one incremental snapshot and records the join block",
+      "ClientSync bootstrapFromHeight throws when the source tip is unavailable (so the retry wrapper can restart)"
     ],
     "2a4f7a67a8cf446a": [
       "ServerPoller: catch-up burst state_hash reaches a follower @regression a follower applying the burst skips the check below the tip and halts on a seeded tip-state mismatch",
@@ -1181,6 +1218,11 @@
       "BlockBroadcaster getStatus freshness expiry leaves an UNDATED status alone rather than demoting on a guess",
       "BlockBroadcaster getStatus freshness expiry returns a freshly measured status unchanged"
     ],
+    "461b8e1671e225cb": [
+      "ClientSync: unverified ranges after a kill or a halt clear @regression clearHalt then restart: halts again or converges",
+      "ClientSync: unverified ranges after a kill or a halt clear @regression clearHalt then the next new block: halts again or converges",
+      "ClientSync: unverified ranges after a kill or a halt clear @regression disconnected reorg, kill before the range is verified, restart: halts or converges"
+    ],
     "4647d4059a28745e": [
       "ClientApplier applyIncrementalSnapshot inserts rows without truncation",
       "ClientApplier applyIncrementalSnapshot mirrors the anchor-reward winner collapses the catch-up window carried (reconcile-log rows at/above since_block)",
@@ -1201,6 +1243,12 @@
     ],
     "48fecddfd5831993": [
       "E2E: Disconnect/Resume Parity 10.4 Divergence halt enforcement halts durably on recompute divergence; live AND catch-up refuse to advance; clearHalt resumes"
+    ],
+    "49ea30376fb5a42a": [
+      "ClientSync: resume re-verifies every unverified block @regression halt persistence fails on a bad block, restart: still halts",
+      "ClientSync: resume re-verifies every unverified block @regression kill after a bad block commits, before its recompute, restart: still halts",
+      "ClientSync: resume re-verifies every unverified block @regression transient recompute error on a bad block, restart: still halts",
+      "ClientSync: resume re-verifies every unverified block @regression transient recompute error on a bad block, then the next live block: still halts"
     ],
     "4a469c197a0ff6e1": [
       "Boundary: HubClient Port Parsing parsePort static method defaults to 3306 when both are absent",
@@ -1260,6 +1308,19 @@
       "train_activation readManifestTrainActivation reads a well-formed block into a normalised record",
       "train_activation resolveRuleSet returns null when the clock is unusable or the network is unnamed",
       "train_activation resolveRuleSet returns the greatest entry at or below the height on that network"
+    ],
+    "4c2d5cca714752fa": [
+      "ClientSync: halt copy read faults and the start-up hold @regression a copy on an empty replica blocks the bootstrap, and start() idles on it",
+      "ClientSync: halt copy read faults and the start-up hold @regression a copy that cannot be read holds the client as halt-state-check-failed, before any catch-up",
+      "ClientSync: halt copy read faults and the start-up hold @regression a delete that fails soft on clear is followed by an empty overwrite",
+      "ClientSync: halt copy read faults and the start-up hold @regression a malformed copy holds the client, and a clear drops it",
+      "ClientSync: halt_pending copies are per dbType @regression D. a copy written by another dbType is never restored",
+      "ClientSync: the halt_pending copy across restarts @regression A. an unreadable copy must not read as \"no halt\" (fail-soft getSyncState returns null on a read fault)",
+      "ClientSync: the halt_pending copy across restarts @regression B. a copy whose delete fails on clear must not re-halt the replica after the operator cleared it",
+      "ClientSync: the halt_pending copy across restarts @regression C. a re-seed (empty replica, bootstrap) must either honour the copy before bootstrapping or drop it",
+      "ClientSync: the marker advances under a reorg every 300 recomputes, window 500 @regression each walk the reorg abandons still raises the durable marker",
+      "ClientSync: the verified-tip walk under steady reorgs @regression E. a walk still finishes when a reorg lands every 300 recomputes (batch 500)",
+      "ClientSync: the verified-tip walk under steady reorgs @regression F. control: the same reorg rate with batch 100 finishes"
     ],
     "4c7a6b9fa31958b9": [
       "SnapshotBuilder branch coverage getOrderedTables drops operator-local tables and tolerates the uppercase TABLE_NAME variant",
@@ -1471,16 +1532,6 @@
       "updatedRows accumulator creates a table entry on the first add",
       "updatedRows accumulator does not mutate an input row",
       "updatedRows accumulator merges repeated adds without duplicating an action index"
-    ],
-    "549430c7ecacfc94": [
-      "ClientSync bootstrapFromHeight VERIFY_RECOMPUTE: recomputes the terminal block and HALTS on mismatch",
-      "ClientSync bootstrapFromHeight clamps base to 0 when depth exceeds the tip",
-      "ClientSync bootstrapFromHeight re-pages lookups AFTER applying the block window (closes the T1<T2 FK gap)",
-      "ClientSync bootstrapFromHeight retry wrapper THROWS on exhaustion",
-      "ClientSync bootstrapFromHeight retry wrapper retries with backoff then succeeds",
-      "ClientSync bootstrapFromHeight retry wrapper throws (never live-follows empty) when no sources configured",
-      "ClientSync bootstrapFromHeight seeds [base..tip] from one incremental snapshot and records the join block",
-      "ClientSync bootstrapFromHeight throws when the source tip is unavailable (so the retry wrapper can restart)"
     ],
     "5560ded00c05d876": [
       "armed map v2: fingerprint module and publication both /health bodies carry v2, version 2 and the carrier logic digest, and no _v2 alias",
@@ -2046,16 +2097,6 @@
       "merkle: SPV light-client primitives @regression version + frozen constants EMPTY_0 / EMPTY[h] recurrence is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants leaf/node domain separation is frozen",
       "merkle: SPV light-client primitives @regression version + frozen constants scheme versions match the golden"
-    ],
-    "7817ea7850dbada8": [
-      "ClientSync: post-commit verification retry @regression mismatch: a redelivery that now mismatches halts and does not advance",
-      "ClientSync: post-commit verification retry @regression redeliver: a redelivery re-verifies, advances and clears the marker",
-      "ClientSync: post-commit verification retry @regression reorg: a live reorg to the marked height clears the marker",
-      "ClientSync: post-commit verification retry @regression reorg: a marker above the rolled-back tip is dropped, not restored",
-      "ClientSync: post-commit verification retry @regression restart: a clean store with no marker keeps its tip",
-      "ClientSync: post-commit verification retry @regression restart: a stale marker below the stored tip is dropped and the tip is kept",
-      "ClientSync: post-commit verification retry @regression restart: a stored tip equal to the marked block is rewound for re-verification",
-      "ClientSync: post-commit verification retry @regression unverified: a throwing verification holds the tip and marks sync_state"
     ],
     "788443e1a0a8e472": [
       "list sharing lifecycle registry twin keeps list_snapshots hub-mirrored and rollback-exempt",
@@ -2888,6 +2929,14 @@
       "health/carrier_logic: the published carrier logic digest reads the pin two directories up from src/health, so a copy with the pin publishes the hex",
       "health/carrier_logic: the published carrier logic digest records the gated stateHash carrier repin and keeps its indexer twin aligned"
     ],
+    "a1fcf08c6be479e8": [
+      "ClientSync: verified-tip walk in windows @regression a 25-block range in windows of 10 writes the marker after each window",
+      "ClientSync: verified-tip walk in windows @regression a block whose committed hash is unresolvable holds the replica without halting",
+      "ClientSync: verified-tip walk in windows @regression a mismatch in the second window halts there and leaves the marker on the block below",
+      "ClientSync: verified-tip walk in windows @regression a stop request ends the walk between windows, after the window's marker write",
+      "ClientSync: verified-tip walk in windows @regression concurrent callers share one walk",
+      "ClientSync: verified-tip walk in windows @regression is inert with VERIFY_RECOMPUTE off"
+    ],
     "a2343508ab4cdd95": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression MAINNET IS UNARMED for every slot, at every height (the launch guard)",
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression all three testnet chains arm contract_state_root from GENESIS",
@@ -3244,6 +3293,16 @@
       "SnapshotBuilder getOrderedTables excludes mempool_transactions (node-local, non-deterministic) like every other channel",
       "SnapshotBuilder getOrderedTables orders priority tables first, trailing tables last, middle alphabetically",
       "SnapshotBuilder getOrderedTables skips priority/trailing tables not in DB"
+    ],
+    "b43deddaec167ddb": [
+      "ClientSync: a halt copy in sync_state @regression a failed sync_halt write leaves a copy that a clear removes",
+      "ClientSync: a halt copy in sync_state @regression a restart restores the copied halt, writes sync_halt and drops the copy once it lands",
+      "ClientSync: a walk overlapping a row removal @regression a mismatch read while a removal is open is dropped, not halted on",
+      "ClientSync: a walk overlapping a row removal @regression a walk does not start while a removal is open, and runs once it closes",
+      "ClientSync: the walk re-runs the stored-tip state_hash check @regression a committed tip whose state_hash does not reproduce halts at startup, before catch-up",
+      "ClientSync: the walk re-runs the stored-tip state_hash check @regression a matching state_hash verifies the tip; blocks below the tip are not state-hashed",
+      "ClientSync: the walk re-runs the stored-tip state_hash check @regression a state_hash compute error holds without a halt or a marker write",
+      "ClientSync: the walk re-runs the stored-tip state_hash check @regression clearing a live state-hash halt does not vouch for the block: the next walk halts again"
     ],
     "b4f0d893b0d9c977": [
       "SnapshotBuilder branch coverage streamIncrementalSnapshot fails closed (rejects + rolls back) on a transient per-table read error during incremental @regression",
@@ -4087,6 +4146,11 @@
       "ClientSync: bootstrap size wall persists the halt so the restart lands idle rather than back at the wall",
       "ClientSync: bootstrap size wall the size wall has one definition, shared with the incremental fallback"
     ],
+    "e1de1484f5a1626d": [
+      "ClientSync: a reorg racing the verified-tip walk @regression the durable marker must never sit above rows a reorg deleted",
+      "ClientSync: a state-hash halt whose sync_halt write fails, then restart @regression a restart must not resume past a live state_hash divergence whose halt write was lost",
+      "ClientSync: bootstrapFromHeight walks every block of its window @regression a tampered interior block of the bootstrap window must halt or stay above the marker"
+    ],
     "e2dd3b784dd1d118": [
       "applyProtocolHaltFreshness calls getActiveHalt once with the dbType",
       "applyProtocolHaltFreshness leaves staleness and lag alone when no halt is active",
@@ -4585,8 +4649,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 373,
-      "titleCount": 2974,
+      "fileCount": 381,
+      "titleCount": 3022,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4730,7 +4794,7 @@
         "test/unit/client_sync_io.test/19_small_branches.test.js": "81b2dec027b5a63e",
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
         "test/unit/client_sync_io.test/bootstrap/01_bootstrap_size_wall.test.js": "e187211525c8a3de",
-        "test/unit/client_sync_io.test/bootstrap/02_bootstrap_from_height.test.js": "549430c7ecacfc94",
+        "test/unit/client_sync_io.test/bootstrap/02_bootstrap_from_height.test.js": "29ed2397ccac467d",
         "test/unit/client_sync_io.test/bootstrap/03_sync_lookup_tables_paged.test.js": "19b6bdb857cf7156",
         "test/unit/client_sync_io.test/catch_up/04_truncated_catch_up.test.js": "db43ccc2db666f97",
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
@@ -4741,12 +4805,20 @@
         "test/unit/client_sync_io.test/verify/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
         "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "6e98846a4e3b9709",
         "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
-        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "7817ea7850dbada8",
+        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "235d1488d9a1d9fe",
         "test/unit/client_sync_schema_apply.test.js": "b6ab840e3149d748",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
         "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
+        "test/unit/client_sync_verified_tip/catch_up_interior_recompute.test.js": "0828824e678890c4",
+        "test/unit/client_sync_verified_tip/crash_resume_reverifies.test.js": "49ea30376fb5a42a",
+        "test/unit/client_sync_verified_tip/halt_copy_and_steady_reorgs.test.js": "4c2d5cca714752fa",
+        "test/unit/client_sync_verified_tip/halt_persistence_and_drain.test.js": "11cdb042e2531ec3",
+        "test/unit/client_sync_verified_tip/range_windows.test.js": "a1fcf08c6be479e8",
+        "test/unit/client_sync_verified_tip/stored_tip_checks_and_removal_races.test.js": "b43deddaec167ddb",
+        "test/unit/client_sync_verified_tip/unverified_range_after_kill_or_clear.test.js": "461b8e1671e225cb",
+        "test/unit/client_sync_verified_tip/verifier_holes.test.js": "e1de1484f5a1626d",
         "test/unit/coin_ticker_activation.test.js": "de57542d908be190",
         "test/unit/coins_conformance.test.js": "2442df610ebb6911",
         "test/unit/config.test.js": "5af0bd1c2d576260",
@@ -5247,8 +5319,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 105,
-      "titleCount": 824,
+      "fileCount": 113,
+      "titleCount": 872,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5282,11 +5354,19 @@
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "5d1de29605d15857",
         "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
-        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "7817ea7850dbada8",
+        "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "235d1488d9a1d9fe",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
         "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
+        "test/unit/client_sync_verified_tip/catch_up_interior_recompute.test.js": "0828824e678890c4",
+        "test/unit/client_sync_verified_tip/crash_resume_reverifies.test.js": "49ea30376fb5a42a",
+        "test/unit/client_sync_verified_tip/halt_copy_and_steady_reorgs.test.js": "4c2d5cca714752fa",
+        "test/unit/client_sync_verified_tip/halt_persistence_and_drain.test.js": "11cdb042e2531ec3",
+        "test/unit/client_sync_verified_tip/range_windows.test.js": "a1fcf08c6be479e8",
+        "test/unit/client_sync_verified_tip/stored_tip_checks_and_removal_races.test.js": "b43deddaec167ddb",
+        "test/unit/client_sync_verified_tip/unverified_range_after_kill_or_clear.test.js": "461b8e1671e225cb",
+        "test/unit/client_sync_verified_tip/verifier_holes.test.js": "e1de1484f5a1626d",
         "test/unit/coins_conformance.test.js": "2442df610ebb6911",
         "test/unit/consensus_primitive_conformance.test.js": "b354a58502708ba2",
         "test/unit/contract_state_subtree.test.js": "8340f62c3bf4e723",

@@ -69,7 +69,7 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.lastAppliedBlock, null, 'an unverified state_hash never advances the tip');
         assert.strictEqual(db.syncState.has('unverified_recompute_count:indexer'), false, 'no recompute counter');
-        assert.strictEqual(db.syncState.get('post_commit_verify_pending:indexer'), '200', 'the held block is marked');
+        assert.strictEqual(db.syncState.has('verified_tip:indexer'), false, 'the held block is never marked verified');
     });
 
     it('a clean recompute records nothing', async function(){
@@ -78,7 +78,7 @@ describe('ClientSync: a live recompute error is recorded durably @regression', f
         await sync.applyBlockEvent({ block_index: 200, block_time: 1, ledger_hash: 'x', actions_hash: 'y', contract_hash: 'z' });
 
         assert.strictEqual(sync.lastAppliedBlock, 200);
-        assert.strictEqual(db.syncState.size, 0);
+        assert.deepStrictEqual([...db.syncState.entries()], [['verified_tip:indexer', '200']], 'only the verified marker');
     });
 
     it('a recompute error still holds the tip when the durable record cannot be written', async function(){

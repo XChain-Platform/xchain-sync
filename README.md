@@ -117,6 +117,22 @@ explicitly. Turning them off is DECLARED UNSAFE for any consensus-relevant repli
 infra-only only for a throwaway infrastructure mirror whose state nothing downstream
 trusts. Unset the variable for a full (verified) replica.
 
+Verified tip (client, indexer replicas with `VERIFY_RECOMPUTE` on): the replica keeps
+the highest block whose own rows reproduced its committed hashes in `sync_state`
+(`verified_tip:indexer`). Before it advances (at startup, on each catch-up pass, after a
+catch-up range or a from-height bootstrap window applies, and before a live block) it
+recomputes every committed block above that marker, plus the stored tip's `state_hash`
+when `VERIFY_STATE_HASH` is on, and halts on the first block that fails. The walk runs
+in windows of `VERIFY_RANGE_BATCH` blocks (default `500`), writing the marker after
+each window, so a long catch-up holds one block in memory at a time and a restart
+resumes from the last finished window. A replica with no marker (first start on this
+version) recomputes its stored tip block and records the marker from there; no schema
+change is involved, since `sync_state` is created on demand.
+
+```env
+# VERIFY_RANGE_BATCH=500
+```
+
 Start the service:
 
 ```bash

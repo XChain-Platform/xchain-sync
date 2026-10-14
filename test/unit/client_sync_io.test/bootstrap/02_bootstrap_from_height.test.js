@@ -204,19 +204,20 @@ describe('ClientSync bootstrapFromHeight', function(){
 
 
 
-    it('VERIFY_RECOMPUTE: recomputes the terminal block and HALTS on mismatch', async function(){
+    it('VERIFY_RECOMPUTE: recomputes the window from the first block above the join and HALTS on the first mismatch', async function(){
         ({ sync, db, applier } = makeSync({ VERIFY_RECOMPUTE: true }));
         sinon.stub(sync, 'fetchAndApplySchema').resolves();
         stubTransport({ tip: 1000000, base: 950000 });
+        db.getLastBlock.resolves(1000000);
         db.getBlockHashRow.resolves({ ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' });
         sinon.stub(sync, 'verifyRecompute').resolves([{ field: 'ledger_hash', computed: 'X', committed: 'lh' }]);
         let halt = sinon.stub(sync, 'haltOnDivergence').resolves();
 
         await sync.bootstrapFromHeight(50000);
 
-        assert.ok(sync.verifyRecompute.calledOnce, 'terminal block recomputed');
-        assert.strictEqual(sync.verifyRecompute.firstCall.args[0].block_index, 1000000);
-        assert.ok(halt.calledOnce, 'halts durably on a terminal mismatch');
+        assert.ok(sync.verifyRecompute.calledOnce, 'the walk stops at the first block that fails');
+        assert.strictEqual(sync.verifyRecompute.firstCall.args[0].block_index, 950001);
+        assert.ok(halt.calledOnce, 'halts durably on the mismatch');
     });
 
     it('retry wrapper throws (never live-follows empty) when no sources configured', async function(){

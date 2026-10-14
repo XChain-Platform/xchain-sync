@@ -36,6 +36,7 @@ function rollbackCtx(dbType){
         dbType, withApplyLock: (fn) => fn(),
         rollback: { rollback: sinon.stub().resolves() },
         db: { getBlockHashRow: sinon.stub().resolves({ block_hash: 'aa' }) },
+        beginRowRemoval: sinon.stub().resolves(), endRowRemoval: sinon.stub(),
     };
 }
 

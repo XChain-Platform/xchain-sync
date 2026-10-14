@@ -38,6 +38,8 @@ const BlockHasher = require('./block_hasher');
 const RollbackGuard = require('./rollback_guard');
 const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
+const verifiedTip = require('./verified_tip');
+const haltPersistence = require('./halt_persistence');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -204,14 +206,14 @@ function logDivergenceReason(client, blockIndex, mismatches){
         getLogger().error('integrity failure. HALTING (applying no further blocks). Operator must');
         getLogger().error('investigate replica state and clear before this validator can resume.');
     } else if(client._halted.reason === 'recompute-error'){
-        getLogger().error('block ' + blockIndex + ': the bulk-range boundary recompute ERRORED after');
+        getLogger().error('block ' + blockIndex + ': the bulk-range block recompute ERRORED after');
         getLogger().error('retries. This recompute is the only verification of the applied range');
         getLogger().error('(at the catch-up join it is what catches a reorg that crossed a');
         getLogger().error('disconnect), so the replica cannot prove its state. HALTING (applying');
         getLogger().error('no further blocks). Operator must fix the local fault (DB, schema) and');
         getLogger().error('clear before this validator can resume.');
     } else if(client._halted.reason === 'boundary-read-error'){
-        getLogger().error('block ' + blockIndex + ': the committed boundary hash could not be READ after');
+        getLogger().error('block ' + blockIndex + ': the committed block hash could not be READ after');
         getLogger().error('retries, so the bulk-range verification could not run at all. An unreadable');
         getLogger().error('hash is not an absent one: treating it as absent would skip the only check');
         getLogger().error('the applied range gets. HALTING (applying no further blocks). Operator must');
@@ -529,7 +531,15 @@ class ClientSync {
         // post-commit verification gates, carried so a retry of that height still runs
         // the commitment comparison (see applyBlockEvent). null = nothing outstanding.
         this._unverifiedRoots = null; // { blockIndex, roots }
-        this._postCommitPending = null; // committed block awaiting re-verification
+
+        // Highest block whose rows reproduced its committed hashes (see verified_tip.js):
+        // undefined until read from sync_state, null when no marker is stored.
+        this._verifiedTip = undefined;
+        this._tailVerify = null;          // the shared walk over blocks above the marker
+        this._stopping = false;           // stop() requested; long walks end between windows
+        this._inFlightWork = new Set();   // live applies the shutdown drain waits for
+        this._haltDurable = true;         // false while a halt's sync_halt write is pending
+        this._haltPersistTimer = null;
 
         // Throttle stamp for the periodic replica-completeness sweep against the
         // primary source (see maybeVerifyCompleteness). 0 = never swept, so the
@@ -820,7 +830,11 @@ class ClientSync {
     }
 
     async synchronizeStoredReplica(){
-        this.lastAppliedBlock = await this.retryPostCommitVerification(await this.db.getLastBlock());
+        this.lastAppliedBlock = await this.db.getLastBlock();
+        // A halt whose sync_halt write never landed comes back from its sync_state copy,
+        // before the empty-replica bootstrap as well: a sync_halt row blocks a re-seed at
+        // startup, and its copy blocks it the same way.
+        if(await this.restorePendingHalt()) return;
         if(this.lastAppliedBlock === null){
             // A configured truncation depth selects recent-height bootstrap.
             if(this._truncatedDepth >= 1){
@@ -835,6 +849,10 @@ class ClientSync {
         }
         // Resume applies the source schema before incremental rows reach the replica.
         await this.fetchAndApplySchema(this.sources[0]);
+        // Every committed block above the last verified one recomputes before any catch-up:
+        // the process may have stopped between a commit and its verification. A halt or a
+        // hold leaves the replica at its stored tip; live-follow then refuses to advance.
+        if(await this.verifyUnverifiedTail() !== 'ok') return;
         getLogger().info('Resuming from block ' + this.lastAppliedBlock);
         await this.incrementalCatchUp(this.lastAppliedBlock + 1);
     }
@@ -872,6 +890,13 @@ class ClientSync {
         await this.loadVerifiedCheckpointBlock();
         if(await this.holdForRollbackGuardState() === 'stop') return;
         await this.synchronizeStoredReplica();
+        // A halt restored before the bootstrap leaves the replica empty, and one whose copy
+        // could not be read is not yet known: idle on it as on a sync_halt row, and start
+        // over once an operator clears it.
+        if(this._halted && (this.lastAppliedBlock === null || this._halted.reason === 'halt-state-check-failed')){
+            if(await this.waitForStartupHalt() === 'restart') return this.start();
+            return;
+        }
         this.ensureLiveFollowTip();
         await this.prepareLiveFollow();
         this.beginLiveFollow();
@@ -881,8 +906,15 @@ class ClientSync {
         }
     }
 
+    // Stop following. Everything that halts intake happens before this returns; the
+    // returned promise settles once in-flight work (a live apply and its verification,
+    // a catch-up pass, a verified-tip walk) has finished, so the service drain closes
+    // the pools only after it. A drain cut short is still safe: the verified-tip marker
+    // has not risen past any block whose verification did not finish.
     stop(){
         this.running = false;
+        this._stopping = true;
+        this.cancelHaltPersistRetry();
         if(this._hbTimer){
             clearTimeout(this._hbTimer);
             this._hbTimer = null;
@@ -891,6 +923,19 @@ class ClientSync {
             try { ws.close(); } catch(e){}
         }
         this.wsConns = [];
+        return this.drainInFlightWork();
+    }
+
+    async drainInFlightWork(){
+        let work = [...this._inFlightWork, this._catchUpInFlight, this._tailVerify, this._applyLock];
+        await Promise.allSettled(work.filter(Boolean));
+    }
+
+    // Run one live apply under the drain's accounting.
+    async trackInFlight(promise){
+        this._inFlightWork.add(promise);
+        try { return await promise; }
+        finally { this._inFlightWork.delete(promise); }
     }
 
     // Schedule an applied-block heartbeat (debounced). Flushes immediately once at
@@ -1074,8 +1119,7 @@ class ClientSync {
             mismatches: failedTables || [], sources: [source],
             at: new Date().toISOString()
         };
-        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, failedTables, [source]); }
-        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist schema-apply halt (still halting in-memory):', e)); }
+        await this.persistHalt(this._halted);
         getLogger().error('================================================================');
         getLogger().error('SCHEMA APPLY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
         getLogger().error('after the multi-pass apply these tables still could not be created');
@@ -1130,8 +1174,7 @@ class ClientSync {
             mismatches: detail, sources: [source],
             at: new Date().toISOString()
         };
-        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
-        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist duplicate-key halt (still halting in-memory):', e)); }
+        await this.persistHalt(this._halted);
         getLogger().error('================================================================');
         getLogger().error('UPSERT DUPLICATE KEY HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
         getLogger().error('the ' + target.table + ' full-dump from ' + source + ' failed twice on duplicate entry ' +
@@ -1186,8 +1229,7 @@ class ClientSync {
             mismatches: detail, sources: [source],
             at: new Date().toISOString()
         };
-        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, detail, [source]); }
-        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist snapshot-too-large halt (still halting in-memory):', e)); }
+        await this.persistHalt(this._halted);
         getLogger().error('================================================================');
         getLogger().error('SNAPSHOT TOO LARGE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
         getLogger().error('the full-history snapshot from ' + source + ' exceeds SNAPSHOT_MAX_CONTENT (' +
@@ -1258,7 +1300,13 @@ class ClientSync {
         let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
 
         for(let round = 0; ; round++){
-            if(await this.bootstrapRotateSources()) return; // success: tip committed
+            if(await this.bootstrapRotateSources()){
+                // Design choice: a full snapshot is not walked block by block (it can hold
+                // the whole chain). The marker starts at its tip, which carries only the
+                // bootstrap's own check (the source quorum when several are configured).
+                await this.adoptVerifiedTip(this.lastAppliedBlock);
+                return;
+            }
             if(this._halted){
                 // A halt was recorded mid-bootstrap (schema-apply fault, or a full
                 // snapshot that cannot fit under SNAPSHOT_MAX_CONTENT). Retrying
@@ -1311,8 +1359,15 @@ class ClientSync {
     async bootstrapApplySnapshot(snapshotData){
         if(await this.checkTrainActivation(snapshotData.block_height)) return false;
         await this.withApplyLock(async () => {
-            await this.applier.applyFullSnapshot(snapshotData);
-            await this.resetRollbackGuardState();
+            // The full snapshot deletes every row before reinserting: a walk in flight
+            // discards whatever it read, and the marker is set at the tip afterwards.
+            await this.beginRowRemoval();
+            try {
+                await this.applier.applyFullSnapshot(snapshotData);
+                await this.resetRollbackGuardState();
+            } finally {
+                this.endRowRemoval();
+            }
         });
         this.lastAppliedBlock = snapshotData.block_height;
         await this.refreshTipHashes();
@@ -1476,6 +1531,9 @@ class ClientSync {
         // since_block is the exact bound served; base is the requested fallback.
         this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
         await this.persistBootstrapBase(this._bootstrapBase);
+        // The join block's hashes arrive verbatim (it has no predecessor here), so the
+        // marker sits on it before the window lands; every block above it is walked.
+        await this.adoptVerifiedTip(this._bootstrapBase, { strict: true });
         await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
         if(typeof snapshotData.block_height === 'number'){
             this.lastAppliedBlock = snapshotData.block_height;
@@ -1525,7 +1583,12 @@ class ClientSync {
         await this.syncLookupTablesPaged(source);
         await this.refreshTipHashes();
 
-        if(await this.verifyBootstrapTerminalBlock()) return true;
+        // A recompute-verifying indexer walks every block of the window above the join;
+        // any other client keeps the terminal-block check. A walk that holds leaves the
+        // marker where it stopped, so the next trigger resumes it before advancing.
+        if(this.tracksVerifiedTip()){
+            if(await this.verifyUnverifiedTail() === 'halted') return true;
+        } else if(await this.verifyBootstrapTerminalBlock()) return true;
         if(this.dbType === 'decoder'){
             await this.reconcileBootstrapDecoder(source);
         }
@@ -1825,12 +1888,10 @@ class ClientSync {
         // exposing a partially advanced replica.
         await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
 
-        // Clear duplicate-key attribution after a successful apply and advance the
-        // in-memory cursor only when the source supplies a numeric terminal height.
-        // This keeps diagnostics and live-event gap checks aligned with the database.
+        // Clear duplicate-key attribution after a successful apply. The in-memory cursor
+        // advances below, after the lookup re-page, and only when the source supplies a
+        // numeric terminal height, keeping live-event gap checks aligned with the database.
         this._upsertDupKeyTarget = null;
-        if(typeof snapshotData.block_height === 'number')
-            this.lastAppliedBlock = snapshotData.block_height;
 
         // Fill lookup rows created while the source prepared the block snapshot.
         // The first paging pass ends at high-water T1 while the snapshot may observe
@@ -1842,6 +1903,8 @@ class ClientSync {
         if(skipLookups){
             await this.syncLookupTablesPaged(source);
         }
+        if(typeof snapshotData.block_height === 'number')
+            this.lastAppliedBlock = snapshotData.block_height;
 
         // Keep the cached hashes at the applied height before live events read them.
         // Refresh only after the lookup re-page so every hash input referenced by the
@@ -1850,14 +1913,13 @@ class ClientSync {
         return false;
     }
 
+    // Verify a catch-up range after it applies. The range lands in one transaction with
+    // no per-block recompute, so every block of it recomputes here, from the join to the
+    // terminal. Returns true when the pass must stop (halted, or held unverified).
     async verifyIncrementalCatchUpRange(snapshotData, sinceBlock){
-        // Audit the local resume point because it folds the committed predecessor.
-        // The live path recomputes every block, while catch-up applies a whole range
-        // without a per-block recompute.
-
         // Derive the join from this replica's committed tip rather than trusting the
-        // source echo. Recomputing that boundary is what detects a range joined onto
-        // a locally orphaned predecessor after a disconnected reorg.
+        // source echo. Recomputing the join is what detects a range joined onto a
+        // locally orphaned predecessor after a disconnected reorg.
         let joinBlock = sinceBlock;
 
         // Reject a source that shifts the audited range boundary. Omitting the echo
@@ -1870,19 +1932,14 @@ class ClientSync {
             return true;
         }
 
-        // Recompute the join before considering the terminal block. Its chained
-        // hashes include the committed predecessor, so an orphan stitch cannot
-        // reproduce the stored boundary and triggers the durable halt contract.
-        if(await this.verifyRangeBoundary(joinBlock)) return true;
-
-        // Audit the terminal block when chained hashes cover more than the join.
-        // Its committed hashes fold the applied range through the chained metadata,
-        // detecting interior corruption that leaves the first block intact.
-        let terminalBlock = snapshotData.block_height;
-        if(typeof terminalBlock === 'number' && terminalBlock > joinBlock){
-            if(await this.verifyRangeBoundary(terminalBlock)) return true;
-        }
-        return false;
+        // Recompute every block from the last verified one through the applied terminal,
+        // in ascending order. A terminal recompute alone proves only that the committed
+        // hashes chain: each block's committed hashes fold the committed hash of the
+        // block below, so rows that disagree with their own committed hash inside the
+        // range would pass it. Recomputing each block against its own rows catches that,
+        // and the join recompute (it folds the committed predecessor) still catches an
+        // orphan stitch. Any failure records the durable halt.
+        return await this.verifyUnverifiedTail() !== 'ok';
     }
 
     async verifyIncrementalCatchUpDecoder(source){
@@ -1978,6 +2035,13 @@ class ClientSync {
             dbTip = await this.db.getLastBlock(null, { rethrow: true });
             sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
 
+            // Resume from the committed tip only once every block up to it is verified.
+            // A block committed and never verified (a recompute that errored, a process
+            // stopped mid-verification, a cleared halt) recomputes here first, so the
+            // range below cannot bury it.
+            if(dbTip === null) this.startVerifiedTipBelow(sinceBlock);
+            else if(await this.verifyUnverifiedTail() !== 'ok') return;
+
             // Preserve the server's inclusive since-bound by starting one block after
             // the committed tip. A null tip maps to block one through the zero seed.
             let { snapshotData, skipLookups } = await this.downloadIncrementalCatchUp(source, sinceBlock);
@@ -1988,8 +2052,8 @@ class ClientSync {
                     source, snapshotData, sinceBlock, dbTip, skipLookups)) return;
 
             // Gate consensus recomputation to indexers that explicitly enable it.
-            // Boundary verification can durably halt the replica, so its true result
-            // prevents all remaining work in this pass.
+            // Range verification can durably halt the replica or hold it unverified, so
+            // its true result prevents all remaining work in this pass.
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock)) return;
             }
@@ -3367,8 +3431,7 @@ class ClientSync {
     async haltOnDivergence(blockIndex, mismatches, sources, reason){
         if(this._halted) return; // already halted
         this._halted = buildDivergenceHalt(blockIndex, mismatches, sources, reason);
-        try { await this.db.recordHalt(this.dbType, blockIndex, this._halted.reason, mismatches, sources); }
-        catch(e){ getLogger().error(util.format('CRITICAL: failed to persist divergence halt (still halting in-memory):', e)); }
+        await this.persistHalt(this._halted);
         logDivergenceHalt(this, blockIndex, mismatches, sources);
         stopDivergenceApply(this);
     }
@@ -3383,9 +3446,9 @@ class ClientSync {
     // the chain (halts are reserved for genuine DATA divergence). Callers that
     // pass opts.holdTip (the live block path) get the error rethrown so the tip
     // stays put for redelivery, the same as a state_hash read error; the default
-    // returns null. Bulk-range callers (bootstrap terminal, catch-up join/terminal)
-    // pass opts.failClosed instead: there the recompute is the ONLY verification
-    // of the whole applied range (the join recompute is what catches a
+    // returns null. Bulk-range callers (bootstrap terminal, each block of a catch-up
+    // range or of the re-verified tail) pass opts.failClosed instead: there the
+    // recompute is the ONLY verification of the applied block (the join recompute is what catches a
     // disconnect-spanning reorg stitched onto an orphaned tip), so an error is
     // retried briefly and then THROWN for the caller to halt on.
     async verifyRecompute(event, committedOverride, opts = {}){
@@ -3435,47 +3498,39 @@ class ClientSync {
         return mismatches.length ? mismatches : null;
     }
 
-    // Fail-CLOSED recompute of one boundary block of a bulk-applied range
-    // (bootstrap terminal, catch-up join, catch-up terminal). Halts durably on a
-    // hash mismatch AND on a committed-hash READ error or a recompute error that
-    // survives the retries: unlike
-    // the live path, this recompute is the only verification of the applied
-    // range, so an unverifiable range must not be served. Returns true
-    // when it halted (caller must stop), false when the block verified or the
+    // Fail-CLOSED recompute of the bootstrapFromHeight terminal block. Returns true
+    // when it halted (caller must stop), false when the block verified or its
     // committed hash is not yet resolvable (NULL ledger_hash / missing row, the
-    // pre-existing skip the lookup re-page minimizes).
+    // skip the lookup re-page minimizes).
     async verifyRangeBoundary(blockIndex){
-        // Read the committed hash FAIL-CLOSED, on the same retry-then-halt terms as
-        // the recompute below. getBlockHashRow's default is fail-soft (doQuery
-        // collapses a non-transactional query error into [], then null), and null
-        // here means "not yet resolvable" -> return false -> the three callers (the
-        // bootstrapFromHeight terminal, and the join and terminal boundaries in
-        // runIncrementalCatchUp) read that as "range verified, continue". A transient
-        // DB fault would therefore skip the ONLY verification of a bulk-applied range,
-        // and the join check is what catches a disconnect-spanning reorg stitched onto
-        // an orphaned tip.
-        // { rethrow: true } separates a failed read from a genuinely absent row.
-        let committed;
-        let readAttempts = 3;
-        for(let attempt = 1; attempt <= readAttempts; attempt++){
-            try {
-                committed = await this.db.getBlockHashRow(blockIndex, null, { rethrow: true });
-                break;
-            } catch(e){
-                if(attempt < readAttempts){
-                    getLogger().error('Boundary hash read errored at block ' + blockIndex +
-                        ' (attempt ' + attempt + '/' + readAttempts + ', retrying): ' +
-                        ((e && e.message) ? e.message : e));
-                    await this.util.sleep(1000 * attempt);
-                    continue;
-                }
-                await this.haltOnDivergence(blockIndex,
-                    [{ field: 'boundary_hash_read_error', computed: null, committed: String((e && e.message) || e) }],
-                    this.sources.slice(0, 1), 'boundary-read-error');
-                return true;
-            }
+        return await this.recomputeCommittedBlock(blockIndex) === 'halted';
+    }
+
+    // Recompute one committed block and record the halt its result calls for. Returns
+    // 'ok', 'halted' (durable halt recorded), 'unresolved' (no row or NULL ledger_hash),
+    // or 'held' (the stored-tip state_hash could not be computed this time).
+    async recomputeCommittedBlock(blockIndex, opts){
+        let result = await this.evaluateCommittedBlock(blockIndex, opts);
+        if(result.verdict !== 'halt') return result.verdict;
+        await this.haltOnDivergence(blockIndex, result.mismatches, this.sources.slice(0, 1), result.reason);
+        return 'halted';
+    }
+
+    // Recompute one committed block against its own stored hashes without acting on the
+    // result: { verdict: 'ok' | 'unresolved' | 'held' | 'halt', reason, mismatches }.
+    // A committed-hash READ error or a recompute error that survives the retries is a
+    // 'halt' verdict, like a mismatch: for a bulk-applied block (bootstrap terminal,
+    // every block of a catch-up range or of a re-verified tail) this recompute is the
+    // only verification, so an unverifiable block must not be served. With
+    // opts.atTip, the block is the stored tip and its stored state_hash is checked too.
+    async evaluateCommittedBlock(blockIndex, opts = {}){
+        let read = await this.readCommittedHashRow(blockIndex);
+        if(read.error){
+            return { verdict: 'halt', reason: 'boundary-read-error',
+                mismatches: [{ field: 'boundary_hash_read_error', computed: null, committed: read.error }] };
         }
-        if(!(committed && committed.ledger_hash)) return false;
+        let committed = read.row;
+        if(!(committed && committed.ledger_hash)) return { verdict: 'unresolved' };
         let mismatches;
         try {
             mismatches = await this.verifyRecompute({ block_index: blockIndex }, {
@@ -3484,17 +3539,53 @@ class ClientSync {
                 contract_hash: committed.contract_hash
             }, { failClosed: true });
         } catch(e){
-            await this.haltOnDivergence(blockIndex,
-                [{ field: 'recompute_error', computed: null, committed: String((e && e.message) || e) }],
-                this.sources.slice(0, 1), 'recompute-error');
-            return true;
+            return { verdict: 'halt', reason: 'recompute-error',
+                mismatches: [{ field: 'recompute_error', computed: null, committed: String((e && e.message) || e) }] };
         }
-        if(mismatches){
-            await this.haltOnDivergence(blockIndex, mismatches,
-                this.sources.slice(0, 1), 'local-recompute-divergence');
-            return true;
+        if(mismatches) return { verdict: 'halt', reason: 'local-recompute-divergence', mismatches };
+        if(opts.atTip) return await this.evaluateStoredStateHash(blockIndex, committed.state_hash);
+        return { verdict: 'ok' };
+    }
+
+    // Read the committed hash row FAIL-CLOSED: { row } (null when absent) or { error }.
+    // getBlockHashRow's default is fail-soft (doQuery collapses a non-transactional
+    // query error into [], then null), and null here means "not yet resolvable". A
+    // transient DB fault read that way would skip the only verification of a
+    // bulk-applied block, and the join recompute is what catches a disconnect-spanning
+    // reorg stitched onto an orphaned tip. { rethrow: true } separates a failed read
+    // from a genuinely absent row; the read is retried before it counts as an error.
+    async readCommittedHashRow(blockIndex){
+        let readAttempts = 3;
+        for(let attempt = 1; ; attempt++){
+            try {
+                return { row: await this.db.getBlockHashRow(blockIndex, null, { rethrow: true }) };
+            } catch(e){
+                if(attempt >= readAttempts) return { error: String((e && e.message) || e) };
+                getLogger().error('Boundary hash read errored at block ' + blockIndex +
+                    ' (attempt ' + attempt + '/' + readAttempts + ', retrying): ' +
+                    ((e && e.message) ? e.message : e));
+                await this.util.sleep(1000 * attempt);
+            }
         }
-        return false;
+    }
+
+    // The stored-tip half of the live state_hash gate. The state_hash covers rows that
+    // later blocks mutate in place, so it is recomputable only while its block is the
+    // stored tip (see BlockHasher.computeStateHashPreimage); that is the block a live
+    // state-hash halt leaves on top. Skipped when VERIFY_STATE_HASH is off or the block
+    // carries no stored state_hash. A compute error is 'held' (no halt, no advance),
+    // as the live path holds its tip on one.
+    async evaluateStoredStateHash(blockIndex, stored){
+        if(this.dbType !== 'indexer' || this.config['VERIFY_STATE_HASH'] === false || stored == null)
+            return { verdict: 'ok' };
+        let mismatch;
+        try { mismatch = await this.stateHashMismatch({ block_index: blockIndex }, stored); }
+        catch(e){
+            getLogger().error(util.format('state_hash recompute errored at stored tip ' + blockIndex + ' of ' +
+                this.replicaLabel() + ' (holding, not halting):', e));
+            return { verdict: 'held' };
+        }
+        return mismatch ? { verdict: 'halt', reason: 'state-hash-divergence', mismatches: [mismatch] } : { verdict: 'ok' };
     }
 
     isHalted(){ return this._halted !== null; }
@@ -3693,8 +3784,17 @@ class ClientSync {
 
     // Operator clear: acknowledge an investigated divergence and allow resume.
     // Never automatic: a halted validator must not self-resume onto a contested
-    // chain. Caller is responsible for restarting the sync loop afterwards.
+    // chain. Clearing does not vouch for any block: the committed blocks above the
+    // verified-tip marker (the halted block among them, when it was committed) recompute
+    // before the next catch-up pass, live block or restart advances the replica, and the
+    // stored tip's state_hash is recomputed with them. A block whose rows fail their own
+    // hashes, or a stored tip whose state_hash does not reproduce, halts again and only a
+    // re-seed moves past it. A halt of another kind (no source quorum, train activation,
+    // a checkpoint, a state-commitment divergence) is the operator's ruling to clear.
     async clearHalt(){
+        // A halt write still being retried belongs to the halt being cleared.
+        this.cancelHaltPersistRetry();
+        this._haltDurable = true;
         // A synthetic 'halt-state-check-failed' state says the durable table could not be
         // READ, not that a divergence was adjudicated. Deleting sync_halt from here would
         // destroy a genuine uncleared divergence row this process never managed to see,
@@ -3717,6 +3817,7 @@ class ClientSync {
             return invalid;
         }
         try { await this.db.clearHalt(this.dbType); } catch(e){ getLogger().error(util.format('clearHalt persistence failed:', e)); }
+        await this.dropPendingHaltCopy();
         const was = this._halted;
         if(was && was.reason === 'max-rollback-depth-exceeded')
             await this.resetRollbackGuardState();
@@ -3724,49 +3825,6 @@ class ClientSync {
         getLogger().info('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
             (was ? ' (was halted at block ' + was.blockIndex + ')' : ''));
         return was;
-    }
-
-    postCommitVerifyKey(){ return 'post_commit_verify_pending:' + this.dbType; }
-
-    // Durable marker for a block that is committed but whose post-commit verification
-    // threw. Best effort: the in-memory hold applies even when sync_state is unwritable.
-    async markPostCommitUnverified(blockIndex){
-        this._postCommitPending = blockIndex;
-        try {
-            if(this.db && typeof this.db.setSyncState === 'function')
-                await this.db.setSyncState(this.postCommitVerifyKey(), String(blockIndex));
-        } catch(e){
-            getLogger().error(util.format('post-commit verify marker write failed at block %s:', blockIndex, e));
-        }
-    }
-
-    // Drop the marker once the block passes verification, or once a reorg removes it.
-    async clearPostCommitMarker(upToBlock){
-        if(this._postCommitPending === null || this._postCommitPending === undefined) return;
-        if(upToBlock !== undefined && this._postCommitPending !== upToBlock) return;
-        this._postCommitPending = null;
-        try {
-            if(!this.db) return;
-            if(typeof this.db.deleteSyncState === 'function') await this.db.deleteSyncState(this.postCommitVerifyKey());
-            else if(typeof this.db.setSyncState === 'function') await this.db.setSyncState(this.postCommitVerifyKey(), '');
-        } catch(e){
-            getLogger().error(util.format('post-commit verify marker clear failed:', e));
-        }
-    }
-
-    // Restart-safe restore: a stored tip that is the marked, never-verified block is
-    // rewound one block so catch-up redelivers it and the duplicate skip re-verifies it.
-    async retryPostCommitVerification(tip){
-        if(tip === null || !this.db || typeof this.db.getSyncState !== 'function') return tip;
-        let raw;
-        try { raw = await this.db.getSyncState(this.postCommitVerifyKey()); }
-        catch(e){ getLogger().error(util.format('post-commit verify marker read failed:', e)); return tip; }
-        let n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
-        if(!Number.isInteger(n)) return tip;
-        if(n !== tip){ this._postCommitPending = n; await this.clearPostCommitMarker(); return tip; }   // block gone (reorg) or already buried by later committed blocks: stale, never replay
-        this._postCommitPending = n;
-        getLogger().warn('Block ' + n + ' was committed but never verified; re-verifying it on restart');
-        return n - 1;
     }
 
     carryUnverifiedRoots(event){
@@ -3853,7 +3911,52 @@ class ClientSync {
             && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL'];
     }
 
-    async applyBlockEvent(event){
+    // Recompute a live indexer block's state_hash when the event carries one, and halt
+    // on a mismatch with the per-class digests logged. True when it halted. A read
+    // error throws, which holds the tip like any other post-commit verification error.
+    async haltOnLiveStateHashDivergence(event){
+        if(this.dbType !== 'indexer' || this.config['VERIFY_STATE_HASH'] === false || event.state_hash == null) return false;
+        let mismatch = await this.stateHashMismatch(event, event.state_hash);
+        if(!mismatch) return false;
+        await this.haltOnDivergence(event.block_index, [mismatch], this.sources.slice(0, 1), 'state-hash-divergence');
+        return true;
+    }
+
+    // Recompute the state_hash of event.block_index (which must be the stored tip) and
+    // compare it to `expected`: null on a match, else the mismatch with the per-class
+    // digests logged. A compute error throws.
+    async stateHashMismatch(event, expected){
+        let delay = activationDelayBlocks(this.chain);
+        let localState = await this.blockHasher.computeStateHash(
+            event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
+        if(localState === expected) return null;
+        let mismatch = { field: 'state_hash', a: expected, b: localState };
+        try {
+            let preimage = await this.blockHasher.computeStateHashPreimage(
+                event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
+            this.addStateHashClassDetails(mismatch, preimage);
+        } catch(e){
+            getLogger().error(util.format('state_hash local class detail failed at block ' + event.block_index + ':', e));
+        }
+        return mismatch;
+    }
+
+    // Apply one live block and verify it; the shutdown drain waits for the whole of it.
+    applyBlockEvent(event){
+        return this.trackInFlight(this.applyAndVerifyBlock(event));
+    }
+
+    // Refuse a live block while committed blocks below it are unverified, until the walk
+    // over them passes. In steady state the marker equals the tip and nothing is read.
+    async liveBlockBlockedByUnverifiedTail(event){
+        if(!this.tracksVerifiedTip() || this.verifiedThroughLastApplied()) return false;
+        if(await this.verifyUnverifiedTail() === 'ok') return false;
+        getLogger().error('Not applying block ' + (event && event.block_index) + ' to ' + this.replicaLabel() +
+            ': committed blocks below it are not verified' + (this._halted ? ' (halted)' : ' yet'));
+        return true;
+    }
+
+    async applyAndVerifyBlock(event){
         // Refuse new blocks while the client is halted on a consensus divergence.
         if(this._halted){
             getLogger().error('Refusing to apply block ' + (event && event.block_index) +
@@ -3862,10 +3965,10 @@ class ClientSync {
         }
         // Check train activation before writing any part of the block.
         if(await this.checkTrainActivation(event.block_index)) return;
-        let committed = false;
+        if(await this.liveBlockBlockedByUnverifiedTail(event)) return;
+        let generation = this.rowGeneration();
         try {
             await this.withApplyLock(() => this.applier.applyBlock(event));
-            committed = true;
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true, holdTip: true });
@@ -3874,23 +3977,7 @@ class ClientSync {
                     return;
                 }
             }
-            if(this.dbType === 'indexer' && this.config['VERIFY_STATE_HASH'] !== false && event.state_hash != null){
-                let delay = activationDelayBlocks(this.chain);
-                let localState = await this.blockHasher.computeStateHash(
-                    event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
-                if(localState !== event.state_hash){
-                    let mismatch = { field: 'state_hash', a: event.state_hash, b: localState };
-                    try {
-                        let preimage = await this.blockHasher.computeStateHashPreimage(
-                            event.block_index, (delay === undefined) ? null : delay, gasTickSymbol(), this.network, this.coinTicker);
-                        this.addStateHashClassDetails(mismatch, preimage);
-                    } catch(e){
-                        getLogger().error(util.format('state_hash local class detail failed at block ' + event.block_index + ':', e));
-                    }
-                    await this.haltOnDivergence(event.block_index, [mismatch], this.sources.slice(0, 1), 'state-hash-divergence');
-                    return;
-                }
-            }
+            if(await this.haltOnLiveStateHashDivergence(event)) return;
             if(this.dbType === 'indexer' && this.config['VERIFY_STATE_COMMITMENT'] !== false
                     && !this.isTruncated() && computedRoots){
                 let divergence = this.stateCommitmentDivergence(event, computedRoots);
@@ -3904,7 +3991,7 @@ class ClientSync {
                 }
             }
             this.finishAppliedBlock(event);
-            await this.clearPostCommitMarker(event.block_index);
+            if(this.tracksVerifiedTip()) await this.advanceVerifiedTip(event.block_index, generation);
             this.clearAppliedBlockWork();
             if(this.checkpointQuorumIsDue()){
                 this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
@@ -3912,8 +3999,9 @@ class ClientSync {
             }
         } catch(e){
             getLogger().error(util.format('Error applying block %s:', event.block_index, e));
-            // A committed block whose verification threw is held and re-verified, not advanced.
-            if(committed && !this._halted) await this.markPostCommitUnverified(event.block_index);
+            // A committed block whose verification threw is held, not advanced: the
+            // verified-tip marker stays below it, so a redelivery, the next catch-up pass
+            // or a restart recomputes it before anything builds on it.
             // Heal schema gaps and let later status events drive catch-up.
             await this.healSchemaIfStale(e);
         }
@@ -4319,18 +4407,24 @@ class ClientSync {
 
     async applyReorgRollback(event){
         await this.withApplyLock(async () => {
-            if(this.rollbackGuard){
-                this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
-                await this.persistRollbackGuardState();
+            // Lower the verified marker durably before any row goes: a marker left above
+            // the rollback would vouch for the replacement blocks. A failed write throws
+            // here, before the delete, and handleReorg halts on it.
+            await this.beginRowRemoval(event.block_index - 1);
+            try {
+                if(this.rollbackGuard){
+                    this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
+                    await this.persistRollbackGuardState();
+                }
+                await this.rollback.rollback(event.block_index);
+            } finally {
+                this.endRowRemoval();
             }
-            await this.rollback.rollback(event.block_index);
         });
         // The source rewrote dispensers off-stream for the orphaned blocks, so arm a reconcile
         // for the next status tick or catch-up rather than waiting out the interval.
         if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
         this.lastAppliedBlock = event.block_index - 1;
-        if(this._postCommitPending != null && this._postCommitPending >= event.block_index)
-            await this.clearPostCommitMarker();
         // Reload the new tip's hashes, genesis block 0 included (the head-duplicate fork check reads them).
         if(this.lastAppliedBlock >= 0)
             this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
@@ -4370,5 +4464,8 @@ class ClientSync {
 // distinguish permanent bootstrap exhaustion from transient sync errors. Hung on
 // the class rather than on module.exports so the file has ONE export shape.
 ClientSync.BootstrapExhaustedError = BootstrapExhaustedError;
+
+// The durable last-verified block and the durable halt write live in their own modules.
+Object.assign(ClientSync.prototype, verifiedTip, haltPersistence);
 
 module.exports = ClientSync;

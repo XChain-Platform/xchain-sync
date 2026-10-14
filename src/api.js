@@ -250,6 +250,8 @@ function buildHealthEntry(syncService, mode, db, coin, network, dbType){
         entry.halted      = halted;
         entry.halt_reason = (halted && clientState.haltInfo) ? clientState.haltInfo.reason : null;
         entry.halt_block  = (halted && clientState.haltInfo) ? clientState.haltInfo.blockIndex : null;
+        // false while the halt's sync_halt write has not landed (the client keeps retrying it).
+        entry.halt_durable = halted ? clientState.haltDurable !== false : null;
     }
     return entry;
 }
@@ -1197,8 +1199,11 @@ function createApp(syncService, cfg, app = express()){
     // Bearer-authenticated (SYNC_API_KEY) and ALWAYS fails closed: unlike the
     // replication endpoints, this route is rejected outright when no key is
     // configured (resuming a halted validator must never be reachable
-    // unauthenticated). Restart the service afterwards for a clean catch-up of
-    // any blocks missed during the halt.
+    // unauthenticated). Clearing vouches for no block: before the replica advances
+    // (next block, catch-up or restart) it recomputes every committed block above
+    // its last verified block and the stored tip's state_hash, so a block whose rows
+    // fail those halts again. Other halts (no source quorum, train activation, a
+    // checkpoint, a state-commitment divergence) do not recur on their own.
     app.post('/halt/clear/:dbType/:chain/:network', async (req, res) => {
         let apiKey = cfg['SYNC_API_KEY'];
         if(!apiKey || !safeEqual(req.headers['authorization'], 'Bearer ' + apiKey))
@@ -1216,7 +1221,9 @@ function createApp(syncService, cfg, app = express()){
 
         try {
             let was = await client.clearHalt();
-            res.json({ ok: true, cleared: true, was, note: 'Restart the sync service for a clean catch-up.' });
+            res.json({ ok: true, cleared: true, was, note: 'Committed blocks above the last verified block, and the ' +
+                'stored tip state_hash, are re-verified before the replica advances; a block that fails them halts ' +
+                'again and needs a re-seed. Other halt kinds are not re-checked.' });
         } catch(e){
             console.error('[API error] /halt/clear:', e);
             res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
