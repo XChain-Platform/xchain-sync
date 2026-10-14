@@ -134,16 +134,17 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         assert.strictEqual(lifecycle.blockKey('contract_state'), 'block_index');
         assert.strictEqual(lifecycle.blockKey('sync_meta'), 'block_index');
         assert.strictEqual(lifecycle.blockKey('not_a_table'), 'block_index');
-        // The two the class name lied about.
+        // The three the class name lied about.
         assert.strictEqual(lifecycle.blockKey('rollcalls'), 'close_block');
+        assert.strictEqual(lifecycle.blockKey('rollcall_gates'), 'close_block');
         assert.strictEqual(lifecycle.blockKey('rollcall_absences'), 'close_block');
     });
 });
 
 describe('streamScopeColumns: every streamed table owns the column it is scoped by @regression', function(){
 
-    it('reads the two close_block tables by close_block on every forward channel', function(){
-        // Source-text guard, in the tableContentParity.test.js style: these three
+    it('reads the close_block tables by close_block on every forward channel', function(){
+        // Source-text guard, in the table_content_parity.test.js style: these three
         // readers cannot be exercised without a live DB, and each one hard-coding
         // `block_index` is exactly how the tables shipped un-replicated.
         const read = (p) => fs.readFileSync(path.resolve(__dirname, '..', '..', p), 'utf8');
@@ -154,13 +155,14 @@ describe('streamScopeColumns: every streamed table owns the column it is scoped 
         const blockScoped = db.slice(db.indexOf('async getBlockScopedRows('), db.indexOf('streamTableRows('));
         assert.ok(/lifecycle\.blockKey\(table\)/.test(blockScoped),
                   'getBlockScopedRows must scope by the registry column; the literal block_index ' +
-                  'raised 1054 on rollcalls/rollcall_absences and ServerPoller swallowed it');
+                  'raised 1054 on the close_block tables (rollcalls, rollcall_gates, rollcall_absences) and ' +
+                  'ServerPoller swallowed it');
         assert.ok(!/WHERE block_index = \?/.test(blockScoped),
                   'getBlockScopedRows still carries the hard-coded block_index predicate');
 
         const window = db.slice(db.indexOf('async getContentWindowRows('), db.indexOf('async getMaxRowId('));
         assert.ok(/lifecycle\.blockKey\(table\)/.test(window),
-                  'the content-parity block window must use the registry scope column, or the two ' +
+                  'the content-parity block window must use the registry scope column, or the close_block ' +
                   'tables it cannot read stay reported as covered');
 
         // Only the INDEXER branch: the decoder topology is declared literally in

@@ -271,3 +271,73 @@ describe('ClientSync: served checkpoint binding to this replica @regression', fu
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
     });
 });
+
+// The canonical signs String(checkpoint_seq), so a served string or array seq keeps a genuine signature.
+function warnLines(){ return console.warn.getCalls().map(c => String(c.args[0] || '')); }
+
+describe('ClientSync: checkpoint seq read in its signed form @regression', function(){
+    registerHooks();
+
+    // Replay seq 3 behind the verified seq 4 with matching roots, so only the seq guard can refuse it.
+    async function replayRegressedSeq(served){
+        armStale();
+        const cp = signedCp(signer, { checkpoint_seq: 3 });
+        cp.checkpoint_seq = served;
+        rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
+        serve(cp);
+        await sync.verifyCheckpointQuorum();
+        assert.ok(warnLines().some(l => /seq regression/.test(l)), 'no regression warning for ' + JSON.stringify(served));
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, 100, 'the replay must not anchor');
+        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
+    }
+
+    it('skips a replayed checkpoint whose regressed seq is served as a string', async function(){
+        await replayRegressedSeq('3');
+    });
+
+    it('skips a replayed checkpoint whose regressed seq is served as an array', async function(){
+        await replayRegressedSeq([3]);
+    });
+
+    it('advances the seq high-water mark from a string seq that anchors', async function(){
+        const cp = signedCp(signer, { checkpoint_seq: 7 });
+        cp.checkpoint_seq = '7';
+        rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
+        serve(cp);
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 7);
+    });
+
+    it('records only seqs a federation signature can cover, and never lowers the mark', function(){
+        sync.recordVerifiedCheckpointSeq('7');
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 7);
+        for(const v of ['5', 5, 'abc', '08', '9.0', ' 9', '1e3', -1, 8.5, null, undefined, {}])
+            sync.recordVerifiedCheckpointSeq(v);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 7);
+        sync.recordVerifiedCheckpointSeq([12]);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 12);
+    });
+});
+
+describe('ClientSync: a past-tip checkpoint that fails the quorum is reported @regression', function(){
+    registerHooks('BTC', { CHECKPOINT_FRESHNESS_STRICT: false });
+
+    it('warns without halting in advisory mode', async function(){
+        armStale();
+        serve(signedCp(makeSigner(), { block_index: 2000, snapshot_block: 1994 }));
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync.isHalted(), false);
+        const line = warnLines().find(l => /FAILED the pinned quorum/.test(l));
+        assert.ok(line, 'no past-tip quorum warning was logged');
+        assert.ok(/Checkpoint-quorum anchor:/.test(line) && /block 2000/.test(line) && /seq 9/.test(line), line);
+    });
+
+    it('stays quiet for a quorum-valid checkpoint past the tip', async function(){
+        armStale();
+        serve(signedCp(signer, { block_index: 2000, snapshot_block: 1994 }));
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync.isHalted(), false);
+        assert.ok(!warnLines().some(l => /FAILED the pinned quorum/.test(l)));
+    });
+});

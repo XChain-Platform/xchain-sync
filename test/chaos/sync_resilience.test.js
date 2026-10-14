@@ -46,7 +46,12 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
-const { waitForClientDisconnect, waitForServerPollFailures } = require('../e2e/helpers/waitFor');
+const {
+    waitFor,
+    waitForClientDisconnect,
+    waitForClientEvents,
+    waitForServerPollFailures
+} = require('../e2e/helpers/waitFor');
 
 const {
     bootstrapDatabases,
@@ -127,9 +132,12 @@ async function recoverFromCompoundFailure() {
 
     // Phase 3: Recovery (source comes back, server restarts)
     await sourceFaults.dbUp();
-    // Hold the restored source briefly before restart (settle, not a gate:
-    // pool acquires back off and retry, and the recovery wait below gates).
-    await sleep(2000);
+    // Restart only once the restored source answers a read: server.start() reads
+    // the source tip and throws against a source that is still coming back.
+    const sourceDb = require('./helpers/chaos-setup').getSourceDb();
+    await waitFor(async () => {
+        try { await sourceDb.getLastBlock(); return true; } catch { return false; }
+    }, 30000);
 
     server = createServer(SERVER_PORT);
     await server.start();
@@ -142,12 +150,11 @@ async function recoverFromCompoundFailure() {
     }
 }
 
-// Lift the source latency, settle, then force paced polls over re-seeded blocks.
+// Lift the source latency, then force paced polls over re-seeded blocks.
 async function liftLatencyAndForcePolls() {
     await sourceFaults.reset();
-    // Settle after the toxic is lifted (not a gate: the polls below tolerate
-    // failure and the recovery wait decides).
-    await sleep(1000);
+    // No settle: server.poll() queues behind any in-flight slow cycle, the polls
+    // below tolerate failure, and the recovery wait after them decides.
 
     for (let i = 0; i < 10; i++) {
         try { await server.poll(); } catch { /* recovery in progress */ }
@@ -236,15 +243,18 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         const initialSync = await waitForSyncRecovery(30, 30000);
         expect(initialSync).to.be.above(-1, 'Initial sync should complete');
 
-        // Stop client WebSocket (simulate brief disconnect)
-        client.stop();
+        // Stop the client (simulate brief disconnect) and wait for the server to drop its socket.
+        await client.stop();
+        await waitFor(() => server.wss.clients.size === 0, 15000);
 
         // Seed more blocks while client is disconnected
         await seedSourceBlocks(31, 50);
         await server.poll();
-        // Let the 31-50 broadcast pass while no client is attached, so the gap
-        // is real (no observable: a broadcast to zero subscribers leaves no trace).
-        await sleep(1000);
+        // The awaited poll has broadcast 31-50 to zero subscribers, so the gap is
+        // real: the server cursor is at 50 while the replica still holds 30.
+        const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
+        expect(server.poller.lastPolledBlock).to.equal(50);
+        expect(await replicaDb.getLastBlock()).to.equal(30);
 
         // Don't do full bootstrap; just connect live sync
         // The client's replica already has blocks 1-30
@@ -262,7 +272,6 @@ describe('CE-SYNC-02: Block Gap Detection → Incremental Catch-Up', function ()
         console.log(`    CE-SYNC-02 gap healing time: ${recoveryMs}ms`);
 
         // Verify all 50 blocks present
-        const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
         const sourceDb  = require('./helpers/chaos-setup').getSourceDb();
 
         await assertBlockExists(replicaDb, 31);
@@ -286,8 +295,12 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
         const initialSync = await startSyncThroughBlock(20);
         expect(initialSync).to.be.above(-1);
 
-        // Latency on source DB reads means reorg detection will be slow too.
-        await sourceFaults.addLatency(1000);
+        // Latency on source DB reads means reorg detection will be slow too. 100ms, not
+        // 1s: a 1s toxic outlasts the fixture pool's 1s connect timeout, so no read
+        // completes and the reorg would only be seen after the latency is lifted.
+        await sourceFaults.addLatency(100);
+        // Baseline before the reorg, so the wait below counts only this reorg's event.
+        const seenReorgs = client.getEventsHandled('reorg');
 
         // Simulates a reorg by deleting blocks 18-20 from source.
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
@@ -295,15 +308,11 @@ describe('CE-SYNC-03: Reorg During Active Sync', function () {
 
         // Force server poll; will detect reorg (currentBlock=17 < lastPolled=20)
         try { await server.poll(); } catch { /* may fail under latency */ }
-        // Keep the reorg in flight under latency before re-seeding (exposure
-        // window, not a gate: the recovery wait and hash checks below decide).
-        await sleep(2000);
-
-        // Server broadcasts reorg event; client should rollback to block 17
+        // Server broadcasts reorg event; client should rollback to block 17.
+        // Re-seed only once the client has handled that reorg under latency, so the
+        // replacement blocks land on a rolled-back replica (slow under the read latency).
+        await waitForClientEvents(client, 'reorg', seenReorgs + 1, 60000);
         const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
-        // Give the reorg broadcast time to land before the replacement blocks
-        // appear (exposure window; the outcome is asserted after recovery).
-        await sleep(3000);
 
         // Different creditAmount so the assertions below can confirm this is
         // the re-seeded data, not the pre-reorg blocks.

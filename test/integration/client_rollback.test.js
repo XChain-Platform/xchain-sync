@@ -222,6 +222,12 @@ describe('Integration: ClientRollback', function() {
             let blocksAfterRollback = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blocksAfterRollback, 5);
 
+            // Check the rollback's own balance rebuild before re-seeding, which rebuilds balances itself.
+            let balancesAfterRollback = await replicaDb.doQuery("SELECT amount FROM balances");
+            assert.strictEqual(balancesAfterRollback.length, 5, 'one balance row per surviving block 1-5');
+            for (let row of balancesAfterRollback)
+                assert.strictEqual(Number(row.amount), 1000, 'stale balance amount ' + row.amount);
+
             // Re-seed blocks 6-8 with different data
             await fixtures.seedBlocks(replicaDb, 6, 8, { creditAmount: '9999' });
 
@@ -232,9 +238,15 @@ describe('Integration: ClientRollback', function() {
             let credits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index INNER JOIN transactions t ON t.tx_index = a.tx_index WHERE t.block_index >= 6"
             );
+            // Require one credit per re-seeded block 6-8, so an empty result cannot pass the loop.
+            assert.strictEqual(credits.length, 3, 'one re-synced credit per block 6-8');
             for (let row of credits) {
                 assert.strictEqual(row.amount, '9999');
             }
+
+            // Keep blocks 9-10 rolled back: five original credits plus the three replacements.
+            let creditsTotal = await testDb.getRowCount(replicaDb, 'credits');
+            assert.strictEqual(creditsTotal, 8, 'credits from rolled-back blocks 9-10 survived the re-sync');
         });
     });
 });

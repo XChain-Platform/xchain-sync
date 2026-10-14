@@ -173,6 +173,17 @@ function buildDivergenceHalt(blockIndex, mismatches, sources, reason){
     };
 }
 
+// Read a served checkpoint_seq as the integer the federation signed, or null when none can be.
+// canonicalCheckpoint signs String(seq), so 417, "417" and [417] carry the same signature
+// and must compare the same; a seq that is not a plain decimal can never carry a genuine one.
+function signedCheckpointSeq(value){
+    let text;
+    try { text = String(value); } catch(e){ return null; }
+    if(!/^(0|[1-9][0-9]*)$/.test(text)) return null;
+    let seq = Number(text);
+    return Number.isSafeInteger(seq) ? seq : null;
+}
+
 // Log the operator banner for a checkpoint-anchor halt reason; false for any other reason.
 function logCheckpointHaltReason(reason, blockIndex){
     if(reason === 'checkpoint-quorum-divergence'){
@@ -2076,6 +2087,7 @@ class ClientSync {
     //   'halted'     divergence halted the replica (caller must stop)
     //   'skew'       tip skew; no same-height comparison was possible
     //   'unreachable' transport fault reaching the source
+    //   'unverified' hashes agreed but the local recompute errored; not counted toward quorum
     //   'skip'       not applicable (decoder, or no local hash row)
     async verifyAgainstSource(source, blockHeight){
         if(this.dbType !== 'indexer') return 'skip';
@@ -2094,8 +2106,17 @@ class ClientSync {
                 return 'halted';
             }
             if(this.config['VERIFY_RECOMPUTE']){
-                let recomputeMismatches = await this.verifyRecompute(
-                    { block_index: blockHeight }, blockHashFields(localHashes));
+                let recomputeMismatches = null;
+                // A recompute error must not read as a clean match: this source then stays uncounted.
+                try {
+                    recomputeMismatches = await this.verifyRecompute(
+                        { block_index: blockHeight }, blockHashFields(localHashes),
+                        { recordUnverified: true, holdTip: true });
+                } catch(e){
+                    getLogger().error(util.format('Local recompute errored at block %s, so %s is not counted as verified for the bootstrap tip:',
+                        blockHeight, source, e.message));
+                    if(verdict === 'agree') verdict = 'unverified';
+                }
                 if(recomputeMismatches){
                     await this.haltOnDivergence(blockHeight, recomputeMismatches, [source], 'local-recompute-divergence');
                     return 'halted';
@@ -3478,7 +3499,7 @@ class ClientSync {
                     continue;
                 }
                 if(opts.failClosed) throw e;
-                getLogger().error(util.format('Recompute verification errored at block %s (holding the tip, not halting):',
+                getLogger().error(util.format('Recompute verification errored at block %s (not halting; the block stays unverified):',
                     (event && event.block_index), e));
                 if(opts.recordUnverified) await this.recordSyncStateCounter('unverified_recompute', event && event.block_index);
                 if(opts.holdTip) throw e;
@@ -4033,7 +4054,7 @@ class ClientSync {
         let freshnessMismatches = this.checkpointFreshnessMismatches(cp);
         if(freshnessMismatches) return this.haltCheckpoint(cp, freshnessMismatches, 'checkpoint-freshness-stale');
         if(cp.block_index > this.lastAppliedBlock)               // not caught up to this checkpoint yet
-            return checkpointVerifier.verifyCheckpoint(cp, validators).valid ? 'ahead' : 'unanchored';
+            return this.judgeCheckpointPastTip(cp, validators);
         let q = checkpointVerifier.verifyCheckpoint(cp, validators);
         if(!q.valid) return this.anchorByRotation(cp, source);
         // Its committed roots must equal the replica's OWN recomputed roots at that height.
@@ -4046,6 +4067,19 @@ class ClientSync {
             ' block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', ' + q.validSigs +
             ' valid sigs, weighted=' + q.weighted + ')');
         return 'verified';
+    }
+
+    // A checkpoint past the tip: 'ahead' when quorum-valid, else 'unanchored' with a warning.
+    // No halt, since a rotated signer set cannot be followed until the replica reaches that height.
+    judgeCheckpointPastTip(cp, validators){
+        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        if(q.valid) return 'ahead';
+        getLogger().warn('Checkpoint-quorum anchor: served checkpoint past the tip for ' + this.chain + '/' +
+            this.network + ' at block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', replica tip ' +
+            this.lastAppliedBlock + ') FAILED the pinned quorum (' + q.validSigs + '/' + q.quorum +
+            ' valid sigs, weighted=' + q.weighted + '); cannot follow rotation until the replica reaches ' +
+            'that height, not anchoring this cycle');
+        return 'unanchored';
     }
 
     // The anchor source's /latest checkpoint body, or null on a transport fault or 404.
@@ -4133,8 +4167,10 @@ class ClientSync {
         if(cp.state_root == null || !checkpointVerifier.commitmentActive(cp)) return true;
         if(typeof cp.block_index !== 'number') return true;      // malformed: no height to anchor
         // A genuine federation sequence only advances, so a lower seq means the source rewound.
-        if(this._lastVerifiedCheckpointSeq !== null && typeof cp.checkpoint_seq === 'number'
-                && cp.checkpoint_seq < this._lastVerifiedCheckpointSeq){
+        // Compare the signed form, so a string or array served for the seq cannot slip past.
+        // An unreadable seq goes on to the quorum check, which no genuine signature passes for it.
+        let seq = signedCheckpointSeq(cp.checkpoint_seq);
+        if(this._lastVerifiedCheckpointSeq !== null && seq !== null && seq < this._lastVerifiedCheckpointSeq){
             getLogger().warn('Checkpoint-quorum anchor: seq regression for ' + this.chain + '/' + this.network +
                 ' (served seq ' + cp.checkpoint_seq + ' < last verified ' + this._lastVerifiedCheckpointSeq +
                 '); source may be withholding newer checkpoints, not anchoring');
@@ -4178,9 +4214,11 @@ class ClientSync {
     // Advance the high-water mark of verified checkpoint sequences. Monotonic: a later
     // verify never lowers it, so a subsequent regressed seq is rejected by the anchor.
     recordVerifiedCheckpointSeq(seq){
-        if(typeof seq !== 'number') return;
-        if(this._lastVerifiedCheckpointSeq === null || seq > this._lastVerifiedCheckpointSeq)
-            this._lastVerifiedCheckpointSeq = seq;
+        // Store the signed integer form, whatever JSON type the source served it as.
+        let signedSeq = signedCheckpointSeq(seq);
+        if(signedSeq === null) return;
+        if(this._lastVerifiedCheckpointSeq === null || signedSeq > this._lastVerifiedCheckpointSeq)
+            this._lastVerifiedCheckpointSeq = signedSeq;
     }
 
     verifiedCheckpointBlockKey(){ return 'verified_checkpoint_block:' + this.dbType; }

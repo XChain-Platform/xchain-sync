@@ -17,7 +17,6 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const sinon = require('sinon');
-const proxyquire = require('proxyquire');
 const lifecycle = require('../../src/table_lifecycle');
 const SnapshotBuilder = require('../../src/server/snapshot_builder');
 const {
@@ -142,30 +141,11 @@ describe('replica-owned migration ledger classification', function(){
     });
 });
 
-describe('source-unstreamed table derivation', function(){
-    const tableSetsPath = '../../src/server/snapshot_builder/table_sets';
-    const fixture = { table: 'zz_source_only_probe', replication: 'source-only' };
-
-    function loadWithFixture(){
-        return proxyquire(tableSetsPath, {
-            '../../table_lifecycle': {
-                tablesWhere: predicate => lifecycle.tablesWhere(predicate)
-                    .concat(predicate(fixture) ? [fixture.table] : []),
-            },
-        });
-    }
-
-    it('derives the set from source-only registry entries, apart from the operator-local set', function(){
-        const sets = loadWithFixture();
-        assert.ok(sets.SOURCE_UNSTREAMED_TABLES.has(fixture.table));
-        assert.ok(!sets.OPERATOR_LOCAL_TABLES.has(fixture.table));
-        assert.ok(sets.SOURCE_UNSTREAMED_TABLES.has('merkle_reorgs'));
-    });
-
-    it('allows no member without a source-only registry entry except merkle_reorgs', function(){
-        const unregistered = [...SOURCE_UNSTREAMED_TABLES].filter(table => table !== 'merkle_reorgs'
-            && !lifecycle.tablesWhere(t => t.replication === 'source-only').includes(table));
-        assert.deepStrictEqual(unregistered, []);
+describe('source-unstreamed table set', function(){
+    it('declares merkle_reorgs as its only member, apart from the operator-local set', function(){
+        assert.deepStrictEqual([...SOURCE_UNSTREAMED_TABLES], ['merkle_reorgs'],
+            'a new member is a deliberate classification recorded beside merkle_reorgs');
+        assert.ok(!OPERATOR_LOCAL_TABLES.has('merkle_reorgs'));
     });
 
     it('clears an unstreamed table only where the replica has it and never inserts a shipped copy', async function(){

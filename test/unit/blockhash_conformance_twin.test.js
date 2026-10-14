@@ -38,6 +38,9 @@
  *   7. the state_key collation flag-day gate in all three copies (the
  *      STATE_KEY_COLLATION_KEY value, the activeAt call shape, the ' COLLATE
  *      utf8_bin' splice value and where it is spliced), which item 2 cannot see
+ *   8. the values each side hands its fold (the indexer's foldBlockHashes call
+ *      arguments, the block_index - 1 chaining argument, the previous-hash fill),
+ *      which item 4 cannot see; checked in blockhash_conformance_twin.test/04_*
  *
  * A one-sided edit to any of these forks every sync validator's recomputed
  * hash on the next real block (durable divergence halt fleet-wide). The
@@ -172,8 +175,11 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         const pair = loadPair(this, 'src/client/block_hasher.js', 'src/db/actions.js');
         if(!pair) return;
         const tailRe = /let tables = \[[^]*?tables\.forEach\(table => \{[^]*?\}\);/;
-        const tSync    = pair.sync.match(tailRe);
-        const tIndexer = pair.indexer.match(tailRe);
+        // Scoped to the functions that hash, so a decoy or uncalled copy elsewhere cannot match.
+        const tSync    = extractFunction(pair.sync,
+            /async computeBlockHashes\(block_index, network, coin\)\{/, 'BlockHasher.js').match(tailRe);
+        const tIndexer = extractFunction(pair.indexer,
+            /foldBlockHashes\(block_index, ledger, actions, contracts_data, hashes\)\{/, 'db/actions.js').match(tailRe);
         assert.ok(tSync && tIndexer, 'hash-assembly tail (tables.forEach) not found on one side');
         assert.strictEqual(normalize(tSync[0]), normalize(tIndexer[0]),
             'hash-assembly tail drifted between BlockHasher.computeBlockHashes and db.getBlockHashes; ' +

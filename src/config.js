@@ -76,9 +76,9 @@ function bootstrapDepthKey(chain, network){
     return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
 }
 
-// Source reorg ceiling: the decoder aborts reorg recovery past its dispenser-expiry
-// safe depth, so no honest source emits a deeper REORG. Mirrors xchain-decoder's
-// DISPENSER_EXPIRE_SAFE_DEPTH and xchain-utxo-tracker's undo_blocks.js; change together.
+// Source reorg ceiling: xchain-decoder aborts reorg recovery past DISPENSER_EXPIRE_SAFE_DEPTH,
+// so no honest source emits a deeper REORG. Mirrors it and xchain-utxo-tracker's undo_blocks.js;
+// change together (source_reorg_ceiling_parity.test.js fails on drift either way).
 const SOURCE_SAFE_REORG_DEPTH = 126
 const LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
 
@@ -623,8 +623,10 @@ function addCheckpointConfig(config){
     // including an unreachable CHECKPOINT_ANCHOR_URL) is measured from the newest
     // checkpoint this replica verified, so serving no anchorable checkpoint also halts.
     // A quorum-valid checkpoint past the tip is a catch-up, not withholding, and is exempt.
-    // That base is in memory: a cleared halt re-fires each cycle until a fresh anchor
-    // verifies, and a restart drops the base until the next verify.
+    // That base is persisted in sync_state and reloaded at startup before catch-up runs an
+    // anchor cycle, so a restart does not disarm the halt: a cleared halt re-fires each cycle,
+    // across restarts, until a fresh anchor verifies. A stored value that fails validation
+    // on reload leaves the base unset until the next verify.
     config['CHECKPOINT_FRESHNESS_STRICT'] = (process.env.CHECKPOINT_FRESHNESS_STRICT || '').toLowerCase() === 'true';
 }
 

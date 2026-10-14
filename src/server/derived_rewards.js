@@ -47,11 +47,16 @@
  * applies via the normal validator_rewards path (INSERT IGNORE on the UNIQUE key, so
  * re-injection across the live + snapshot channels is idempotent). Indexer dbType only.
  *
- * Coverage boundary: only writers that stamp derive_block_index ride this channel. The
- * pre-flag-day writers (actions/anchor/settle.js at SNAPSHOT_BLOCK, the pushvalidatorrewards hub
- * push) backdate block_index and leave derive_block_index NULL; their rows remain
- * reachable by a snapshot whose window spans the earn-block only, and their shortfall
- * surfaces through ClientSync.verifyTableCounts.
+ * Coverage boundary: only rows that stamp derive_block_index ride this channel. Every
+ * xchain-indexer writer that backdates block_index stamps it (the three listed above); the
+ * other createValidatorReward caller, actions/attest/settle.js, writes at the block it
+ * processes and streams with that block. A new backdating writer must stamp it too: the
+ * indexer's call-site census (test/unit/rewards/create_validator_reward_callsites.test.js)
+ * flags a new createValidatorReward caller, but not a raw INSERT. Rows written before the
+ * column existed carry NULL, are reachable only by a snapshot whose window spans their
+ * earn-block, and their shortfall surfaces through ClientSync.verifyTableCounts. Rollback's
+ * restore of reconciled anchor-reward losers can re-insert a NULL-stamped pre-image, but it
+ * runs on the reverse path, mirrored on the replica in client/rollback.js.
  *
  ********************************************************************/
 

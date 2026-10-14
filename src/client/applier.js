@@ -57,6 +57,17 @@ const ESCROW_TRIGGER_TABLES = new Set([
 // migration ledger: a source copy that still arrives is never applied, and the
 // full-snapshot clear loop never deletes the replica's rows.
 
+// Compare two decoded key values, by bytes when both are binary.
+function sameKeyValue(a, b){
+    if(Buffer.isBuffer(a) && Buffer.isBuffer(b)) return a.equals(b);
+    return a === b;
+}
+
+// Render a decoded key value for a log line, so raw bytes never reach the log.
+function keyValueLabel(v){
+    return Buffer.isBuffer(v) ? '0x' + v.toString('hex') : v;
+}
+
 function initializeCoreState(applier, db, util, chain, network) {
     applier.db = db;
     applier.util = util;
@@ -403,7 +414,7 @@ class ClientApplier {
                 localTables = this.localSnapshotTableNames(await this.db.findStreamableTableNames());
             } catch(e){
                 logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
-                this.ignoreSchemaGap(e);
+                throw e;
             }
 
             let payloadTables = this.payloadSnapshotTableNames(snapshotData);
@@ -606,12 +617,13 @@ class ClientApplier {
 
         // Fail closed on a row that cannot be identified: inserting it would append a
         // duplicate the DELETE could never scope to (block_index is not UNIQUE).
+        // Decode the key as the INSERT does, so a binary key binds a Buffer, not the wire sentinel.
         let keyValues = [];
         for(let row of rows){
-            let v = row[naturalKey];
+            let v = decodeValue(row[naturalKey]);
             if(v === undefined || v === null)
                 throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
-            if(!keyValues.includes(v)) keyValues.push(v);
+            if(!keyValues.some(k => sameKeyValue(k, v))) keyValues.push(v);
         }
         return { columns, naturalKey, keyValues };
     }
@@ -795,7 +807,8 @@ class ClientApplier {
             for(let column of keyColumns){
                 if(row[column] === undefined)
                     throw new Error('Lookup repair row for ' + table + ' is missing natural key ' + column);
-                values.push(row[column]);
+                // Decode the key as the INSERT does, so the lookup matches a binary key.
+                values.push(decodeValue(row[column]));
             }
 
             let keyHolders = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
@@ -857,7 +870,8 @@ class ClientApplier {
                 let mine = await this.db.findRowIdById(table, id);
                 if(mine && mine.length) continue;                 // the source's row is already here
 
-                let values = keyColumns.map(c => row[c]);
+                // Decode the key as the INSERT does, so the holder lookup matches a binary key.
+                let values = keyColumns.map(c => decodeValue(row[c]));
                 if(values.some(v => v === undefined)) continue;
                 let holder = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
                 if(!holder || holder.length !== 1) continue;       // absent, or ambiguous: not this shape
@@ -869,7 +883,7 @@ class ClientApplier {
                 await this.db.deleteRowById(table, holderId);
                 retired.push(holderId);
                 logger.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
-                    ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
+                    ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + keyValueLabel(values[i])).join(',')) +
                     ' retired_id=' + holderId + ' landed_id=' + id +
                     ' (the source no longer serves the retired id within this page\'s id window)');
             }

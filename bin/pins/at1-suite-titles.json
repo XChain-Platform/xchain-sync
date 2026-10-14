@@ -37,6 +37,21 @@
       "ClientSync: runIncrementalCatchUp reads the resume cursor fail-CLOSED (opts.rethrow)",
       "ClientSync: runIncrementalCatchUp returns early when no sources configured"
     ],
+    "03adcaec6f5e7625": [
+      "ClientSync: verifyAgainstSource a clean local recompute keeps the agreement",
+      "ClientSync: verifyAgainstSource a local recompute error downgrades agreement to unverified and records it, without halting",
+      "ClientSync: verifyAgainstSource calls haltOnDivergence when VERIFY_RECOMPUTE=true and recompute has mismatches",
+      "ClientSync: verifyAgainstSource halts on a confirmed same-height cross-source hash mismatch when HALT_ON_DIVERGENCE is on",
+      "ClientSync: verifyAgainstSource logs \"HASH MISMATCH\" when hashes differ",
+      "ClientSync: verifyAgainstSource logs \"Hash verification failed\" when axios.get rejects",
+      "ClientSync: verifyAgainstSource logs \"Hash verification passed\" when hashes match",
+      "ClientSync: verifyAgainstSource logs \"Table-count verification passed\" when counts match",
+      "ClientSync: verifyAgainstSource logs TABLE_COUNT_MISMATCH when source has more rows",
+      "ClientSync: verifyAgainstSource returns early when dbType is decoder",
+      "ClientSync: verifyAgainstSource returns early when localHashes is null",
+      "ClientSync: verifyAgainstSource skips the cross-source hash check on tip skew (no spurious HASH MISMATCH, no halt)",
+      "ClientSync: verifyAgainstSource the bootstrap quorum does not count an unverified source and warns that the tip is under-verified"
+    ],
     "03d0b8b6f4107f85": [
       "sync boot consensus-pin verification halts startApi fail-closed on a pin mismatch, before any express app",
       "sync boot consensus-pin verification passes on the vendored bundle for every network",
@@ -101,24 +116,6 @@
       "XCHAIN_ESC locked leaf: journal reads @regression as-of-height reads serve the value the checkpoint committed",
       "XCHAIN_ESC locked leaf: journal reads @regression incremental application equals a full rebuild of the same live set",
       "XCHAIN_ESC locked leaf: journal reads @regression the touched set is per LOCKER, and only for blocks that changed a total"
-    ],
-    "082588dcc7b8a7d8": [
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a checkpoint for another network",
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a genuine checkpoint for another chain",
-      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a range step for another chain",
-      "ClientSync: served checkpoint binding to this replica @regression anchors a ticker-form checkpoint on a replica named by the full coin name",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint carries no state_root",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint is rootless past the commitment flag day",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint fetch fails",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint past the tip fails the pinned quorum",
-      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the source serves a regressed seq",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt before any checkpoint has been verified",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt on an unanchorable checkpoint while the last anchor is within the bound",
-      "ClientSync: strict freshness counts unanchored cycles @regression does not halt while catching up to a quorum-valid checkpoint past the tip",
-      "ClientSync: strict freshness counts unanchored cycles @regression records the verified height and never lowers it",
-      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height during start and enforces strict freshness",
-      "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
-      "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
     ],
     "0828824e678890c4": [
       "ClientSync: catch-up verifies every block of the range @regression a clean range verifies and leaves the replica identical to the origin",
@@ -227,7 +224,7 @@
     ],
     "0c3480e683309fb5": [
       "streamScopeColumns: every streamed table owns the column it is scoped by @regression declares a scope column the DDL actually has",
-      "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the two close_block tables by close_block on every forward channel",
+      "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the close_block tables by close_block on every forward channel",
       "streamScopeColumns: every streamed table owns the column it is scoped by @regression resolves the block scope column from the registry, defaulting to block_index",
       "streamScopeColumns: generic rollback rows are scoped by block_index @regression flags a generically rolled-back row with a non-default blockKey",
       "streamScopeColumns: generic rollback rows are scoped by block_index @regression keeps every non-default blockKey out of the generic rollback loops"
@@ -328,20 +325,6 @@
     "1628e91f205184a5": [
       "SyncService getHubConfigAgeSeconds returns null when the hub has never answered",
       "SyncService getHubConfigAgeSeconds returns whole seconds since the last successful fetch"
-    ],
-    "166f6e439bdf0fe2": [
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
-      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
-      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
-      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
-      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
-      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
-      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
-      "source-unstreamed table derivation allows no member without a source-only registry entry except merkle_reorgs",
-      "source-unstreamed table derivation clears an unstreamed table only where the replica has it and never inserts a shipped copy",
-      "source-unstreamed table derivation derives the set from source-only registry entries, apart from the operator-local set"
     ],
     "166fa60da55ff1a9": [
       "ClientApplier surrogate-id registry matches the indexer DDL @regression every allow-listed table carries a reason, so the list cannot grow silently",
@@ -885,6 +868,12 @@
       "Advisory table-content parity computeTableContentChecksums skips tables the local schema does not have (an older replica must not spam or fail)",
       "Advisory table-content parity computeTableContentChecksums windows blocks as [upto - window + 1, upto] and never below zero"
     ],
+    "3486b3960351508b": [
+      "source reorg ceiling parity with the decoder and utxo-tracker knows the full name of every chain it keys a source undo window for",
+      "source reorg ceiling parity with the decoder and utxo-tracker rollbackDepthSafeCeiling equals the decoder dispenser-expiry safe depth for every chain",
+      "source reorg ceiling parity with the decoder and utxo-tracker rollbackDepthSafeCeiling equals the utxo-tracker undo ceiling for every chain",
+      "source reorg ceiling parity with the decoder and utxo-tracker the poller walk-back reach covers the decoder depth for every chain"
+    ],
     "3498ab5bdacfbd7d": [
       "contract_state_root: frozen row-to-leaf mapping @regression the SQL shape is pinned at source: binary collation, no pre-max NULL filter",
       "contract_state_root: incremental equals full build @regression a block that deletes the last live key returns the tree to EMPTY",
@@ -1371,21 +1360,6 @@
     "4d60233a4d0d52f7": [
       "Integration: REST API GET /status returns null values when no blocks",
       "Integration: REST API GET /status returns status for all chains"
-    ],
-    "cfe77aacb98b3e42": [
-      "Database.findEditedTokens runs the valid-issues tokens query with [from, to] and conn third",
-      "collectTokenEditRows leaves acc.tokens undefined for an empty result",
-      "collectTokenEditRows rethrows other numeric errnos",
-      "collectTokenEditRows skips rows without an action_index",
-      "collectTokenEditRows swallows an error that carries no errno",
-      "collectTokenEditRows swallows missing table and column errnos",
-      "collectTokenSupplyRows leaves acc.tokens undefined for an empty result",
-      "collectTokenSupplyRows rethrows other numeric errnos",
-      "collectTokenSupplyRows skips rows without an action_index",
-      "collectTokenSupplyRows swallows an error that carries no errno",
-      "collectTokenSupplyRows swallows missing table and column errnos",
-      "updated rows token classes edit class reads through findEditedTokens with from, to and conn",
-      "updated rows token classes supply class passes from, to and conn through and keys rows by action_index"
     ],
     "4e3b2b369cf376be": [
       "Integration: ServerPoller buildBlockPayload action-scoped probe emits a byte-identical payload on a block that has rows",
@@ -1909,18 +1883,6 @@
       "contract_state_root: strict reads @regression a faulting touched-key read THROWS rather than threading the block forward unchanged",
       "contract_state_root: strict reads @regression every derivation read goes through doQueryStrict, never doQuery"
     ],
-    "6e98846a4e3b9709": [
-      "ClientSync: verifyAgainstSource calls haltOnDivergence when VERIFY_RECOMPUTE=true and recompute has mismatches",
-      "ClientSync: verifyAgainstSource halts on a confirmed same-height cross-source hash mismatch when HALT_ON_DIVERGENCE is on",
-      "ClientSync: verifyAgainstSource logs \"HASH MISMATCH\" when hashes differ",
-      "ClientSync: verifyAgainstSource logs \"Hash verification failed\" when axios.get rejects",
-      "ClientSync: verifyAgainstSource logs \"Hash verification passed\" when hashes match",
-      "ClientSync: verifyAgainstSource logs \"Table-count verification passed\" when counts match",
-      "ClientSync: verifyAgainstSource logs TABLE_COUNT_MISMATCH when source has more rows",
-      "ClientSync: verifyAgainstSource returns early when dbType is decoder",
-      "ClientSync: verifyAgainstSource returns early when localHashes is null",
-      "ClientSync: verifyAgainstSource skips the cross-source hash check on tip skew (no spurious HASH MISMATCH, no halt)"
-    ],
     "6f3bf3f9c5f1d95a": [
       "XCHAIN_ESC locked leaf: strict reads @regression a faulting live-set read THROWS rather than rebuilding balances_root with no locked leaves",
       "XCHAIN_ESC locked leaf: strict reads @regression a faulting per-key read THROWS rather than DELETING the leaf (delete-on-zero)",
@@ -1984,6 +1946,11 @@
       "ServerPoller updateStatus replication freshness reports stale past the lag ceiling",
       "ServerPoller updateStatus replication freshness reports stale when the SQL thread stopped (Seconds_Behind NULL)",
       "ServerPoller updateStatus stamps measured_at on a successful measurement, and publishes nothing on a failed one"
+    ],
+    "72484f08c0af2014": [
+      "Rollback coverage guard @regression every registry row with a non-default blockKey is deleted by that column on a replica reorg",
+      "Rollback coverage guard @regression every special and recomputed table is touched by ClientRollback, not covered by its label alone",
+      "Rollback coverage guard @regression flags a made-up special table and a made-up close_block row the source never handles"
     ],
     "72c2cac4e73d4e53": [
       "SnapshotBuilder streamFullSnapshot emits every row of a keyless table exactly once in a single ordered pass (no offset re-paging)",
@@ -2267,6 +2234,11 @@
       "ClientSync: small branches handleReorg: decoder track also HALTS on max-depth exceed",
       "ClientSync: small branches handleReorg: exceeds MAX_ROLLBACK_DEPTH \u2192 HALTS and does NOT rollback",
       "ClientSync: small branches handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)"
+    ],
+    "81e83c2e7406e406": [
+      "consensus block-hash conformance twins (static drift-lock) @regression BlockHasher gathers at block_index and chains to block_index - 1",
+      "consensus block-hash conformance twins (static drift-lock) @regression db.getBlockHashes hands the fold its rows in order and chains to block_index - 1",
+      "consensus block-hash conformance twins (static drift-lock) @regression db.getPreviousBlockHashes binds its argument and fills the same keys as BlockHasher"
     ],
     "82ad4278d662f2a2": [
       "contract_state_root: arming boundary and reorg @regression a snapshot bootstrap at an armed height agrees with a from-genesis node",
@@ -2725,6 +2697,24 @@
       "Boundary: Config Parsing zero values (falsy-zero) preserves SNAPSHOT_RATE_INCR=0",
       "Boundary: Config Parsing zero values (falsy-zero) preserves SYNC_API_PORT=0"
     ],
+    "9585280fe939c0f5": [
+      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error",
+      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit, nothing cleared) on a schema-gap errno 1054 from local table enumeration",
+      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit, nothing cleared) on a schema-gap errno 1146 from local table enumeration",
+      "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
+      "ClientApplier applyFullSnapshot clears a source-empty local table absent from the payload (re-bootstrap staleness)",
+      "ClientApplier applyFullSnapshot clears tables in reverse order and inserts in forward order",
+      "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
+      "ClientApplier applyFullSnapshot fails closed on an invalid table name (rejects rather than silently dropping its rows)",
+      "ClientApplier applyFullSnapshot ignores node-local tables (mempool_transactions) shipped by an older source",
+      "ClientApplier applyFullSnapshot refuses a local-only table with an invalid name before any clear, and commits nothing",
+      "ClientApplier applyFullSnapshot refuses an invalid payload table name that carries zero rows",
+      "ClientApplier applyFullSnapshot rolls back on error",
+      "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression",
+      "ClientApplier applyFullSnapshot skips null snapshot",
+      "ClientApplier applyFullSnapshot skips snapshot without tables",
+      "ClientApplier applyFullSnapshot throws on a schema-version mismatch before opening a transaction"
+    ],
     "964a9e8a96d5896d": [
       "ClientSync handleReorg at genesis reloads the genesis tip hashes when rolling back to block 1",
       "ClientSync handleReorg calls rollback with the event block_index",
@@ -2816,6 +2806,19 @@
       "ClientSync.reconcileDispensers (schema-gap heal) re-applies the source schema when the replace fails on a missing column (errno 1054)",
       "ClientSync.reconcileDispensers (schema-gap heal) re-applies the source schema when the replace fails on a missing table (errno 1146)",
       "ClientSync.reconcileDispensers (schema-gap heal) still returns false when the schema heal itself throws"
+    ],
+    "9ad3460fa108aa72": [
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps push_generations node-local and outside every snapshot bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression keeps the skip set to snapshot-class tables that every snapshot still streams",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression places every snapshot-class registry table in exactly one incremental bucket",
+      "indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @regression returns no rows for a skipped table without running the action_index query",
+      "replica-owned migration ledger classification classifies schema_migrations as the replica ledger, apart from the other exclusion sets",
+      "replica-owned migration ledger classification defines the replica ledger set once, for the builder and the applier alike",
+      "replica-owned migration ledger classification keeps the source ledger out of every snapshot the builder streams",
+      "replica-owned migration ledger classification refuses a full snapshot from another schema version before clearing any table",
+      "replica-owned migration ledger classification stamps a schema version that clients without the applier ledger guard refuse",
+      "source-unstreamed table set clears an unstreamed table only where the replica has it and never inserts a shipped copy",
+      "source-unstreamed table set declares merkle_reorgs as its only member, apart from the operator-local set"
     ],
     "9b652f1a15749f6a": [
       "07 Rollback Performance data integrity after deep rollback",
@@ -3368,6 +3371,15 @@
       "HubClient getallconfigs cursor + watermark handling treats a watermarked payload as a full tree on the first fetch (no cursor sent yet)",
       "HubClient getallconfigs cursor + watermark handling unwraps a { configs, seq } payload (no watermark) and resets the cursor"
     ],
+    "b8748bf0024a980a": [
+      "ClientApplier binary natural keys lookup repair probe decodes a binary natural key before the lookup repair probe",
+      "ClientApplier binary natural keys lookup repair probe passes a plain lookup key through unchanged",
+      "ClientApplier binary natural keys natural-key delete set decodes a binary natural key and keeps one value per distinct key",
+      "ClientApplier binary natural keys natural-key delete set passes a plain natural key through unchanged",
+      "ClientApplier binary natural keys natural-key delete set still refuses a row whose natural key is missing",
+      "ClientApplier binary natural keys stale lookup generation retire decodes a binary unique key and retires the stale holder inside the page window",
+      "ClientApplier binary natural keys stale lookup generation retire passes a plain unique key through unchanged"
+    ],
     "b92e0d472730652e": [
       "SyncService getClientSync returns the live sync or null"
     ],
@@ -3575,6 +3587,12 @@
       "stake weight collation activation row twin extractRow detects a drifted height",
       "stake weight collation activation row twin is byte-identical to the xchain-indexer canonical row"
     ],
+    "c4aada2e76ca2c13": [
+      "SnapshotBuilder binary wire sentinel in the snapshot body writers encodes a Buffer column in the bundled incremental table writer",
+      "SnapshotBuilder binary wire sentinel in the snapshot body writers encodes a Buffer column in the paged lookup body writer",
+      "SnapshotBuilder binary wire sentinel on the HTTP row routes encodes a Buffer column on the decoder dispensers route",
+      "SnapshotBuilder binary wire sentinel on the HTTP row routes encodes a Buffer column on the id-cursor lookup page route"
+    ],
     "c54bb56b0f6fae1f": [
       "state_hash: replication-integrity recompute conformance @regression RED: a missing backdated credit (dropped apply) changes the state_hash",
       "state_hash: replication-integrity recompute conformance @regression RED: tampering any single mutated row changes the state_hash",
@@ -3684,6 +3702,30 @@
       "Database.listExistingTables() returns the table names as a Set, tolerating either column case",
       "Database.streamTableRows() runs ONE un-paged ordered query on the given snapshot connection",
       "Database.truncateTable() calls doQuery with TRUNCATE TABLE"
+    ],
+    "c903bb8b1f2ac188": [
+      "ClientSync: a past-tip checkpoint that fails the quorum is reported @regression stays quiet for a quorum-valid checkpoint past the tip",
+      "ClientSync: a past-tip checkpoint that fails the quorum is reported @regression warns without halting in advisory mode",
+      "ClientSync: checkpoint seq read in its signed form @regression advances the seq high-water mark from a string seq that anchors",
+      "ClientSync: checkpoint seq read in its signed form @regression records only seqs a federation signature can cover, and never lowers the mark",
+      "ClientSync: checkpoint seq read in its signed form @regression skips a replayed checkpoint whose regressed seq is served as a string",
+      "ClientSync: checkpoint seq read in its signed form @regression skips a replayed checkpoint whose regressed seq is served as an array",
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a checkpoint for another network",
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a genuine checkpoint for another chain",
+      "ClientSync: served checkpoint binding to this replica @regression HALTS as checkpoint-binding-mismatch on a range step for another chain",
+      "ClientSync: served checkpoint binding to this replica @regression anchors a ticker-form checkpoint on a replica named by the full coin name",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint carries no state_root",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when a fresh-height checkpoint is rootless past the commitment flag day",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint fetch fails",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the checkpoint past the tip fails the pinned quorum",
+      "ClientSync: strict freshness counts unanchored cycles @regression HALTS when the source serves a regressed seq",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt before any checkpoint has been verified",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt on an unanchorable checkpoint while the last anchor is within the bound",
+      "ClientSync: strict freshness counts unanchored cycles @regression does not halt while catching up to a quorum-valid checkpoint past the tip",
+      "ClientSync: strict freshness counts unanchored cycles @regression records the verified height and never lowers it",
+      "ClientSync: strict freshness counts unanchored cycles @regression restores the verified height during start and enforces strict freshness",
+      "ClientSync: strict freshness counts unanchored cycles @regression retries persistence after a sync-state write failure",
+      "ClientSync: strict freshness counts unanchored cycles @regression stays advisory with strict off"
     ],
     "c9075a98991eb872": [
       "Boundary: Transparency Log Pagination limit parameter limit=\"abc\": defaults to 100",
@@ -3884,6 +3926,21 @@
       "Boundary: Transparency Log Pagination limit parameter limit=100: default value",
       "Boundary: Transparency Log Pagination limit parameter limit=1: minimum valid",
       "Boundary: Transparency Log Pagination limit parameter limit=999: just below max"
+    ],
+    "cfe77aacb98b3e42": [
+      "Database.findEditedTokens runs the valid-issues tokens query with [from, to] and conn third",
+      "collectTokenEditRows leaves acc.tokens undefined for an empty result",
+      "collectTokenEditRows rethrows other numeric errnos",
+      "collectTokenEditRows skips rows without an action_index",
+      "collectTokenEditRows swallows an error that carries no errno",
+      "collectTokenEditRows swallows missing table and column errnos",
+      "collectTokenSupplyRows leaves acc.tokens undefined for an empty result",
+      "collectTokenSupplyRows rethrows other numeric errnos",
+      "collectTokenSupplyRows skips rows without an action_index",
+      "collectTokenSupplyRows swallows an error that carries no errno",
+      "collectTokenSupplyRows swallows missing table and column errnos",
+      "updated rows token classes edit class reads through findEditedTokens with from, to and conn",
+      "updated rows token classes supply class passes from, to and conn through and keys rows by action_index"
     ],
     "d04e4264d025b2c1": [
       "ClientSync: bootstrapFromSnapshot applies the full snapshot under the shared write lock (M-21)",
@@ -4429,23 +4486,6 @@
       "Integration: the follower at an armed height, and a reorg across it leaves both activation maps exactly as it found them",
       "Integration: the follower at an armed height, and a reorg across it reports version 2 at the armed height and 1 immediately below it"
     ],
-    "f4fb6fa90ff8d987": [
-      "ClientApplier applyFullSnapshot aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error",
-      "ClientApplier applyFullSnapshot binds the scoped state_tree_roots clear to the TICKER, not the full coin name @regression",
-      "ClientApplier applyFullSnapshot clears a source-empty local table absent from the payload (re-bootstrap staleness)",
-      "ClientApplier applyFullSnapshot clears tables in reverse order and inserts in forward order",
-      "ClientApplier applyFullSnapshot does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression",
-      "ClientApplier applyFullSnapshot fails closed on an invalid table name (rejects rather than silently dropping its rows)",
-      "ClientApplier applyFullSnapshot ignores node-local tables (mempool_transactions) shipped by an older source",
-      "ClientApplier applyFullSnapshot refuses a local-only table with an invalid name before any clear, and commits nothing",
-      "ClientApplier applyFullSnapshot refuses an invalid payload table name that carries zero rows",
-      "ClientApplier applyFullSnapshot rolls back on error",
-      "ClientApplier applyFullSnapshot scoped-clears state_tree_roots at/above the snapshot height before seeding @regression",
-      "ClientApplier applyFullSnapshot skips null snapshot",
-      "ClientApplier applyFullSnapshot skips snapshot without tables",
-      "ClientApplier applyFullSnapshot throws on a schema-version mismatch before opening a transaction",
-      "ClientApplier applyFullSnapshot tolerates a genuine schema-gap error (1146) on local table enumeration"
-    ],
     "f5621b6227dcbcd6": [
       "consensus anchor fold registry rows arms both regtest entries from the shared venue variable",
       "consensus anchor fold registry rows carries both activation rows",
@@ -4664,8 +4704,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 382,
-      "titleCount": 3032,
+      "fileCount": 387,
+      "titleCount": 3062,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4689,6 +4729,7 @@
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
         "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
+        "test/unit/blockhash_conformance_twin.test/04_hash_call_binding.test.js": "81e83c2e7406e406",
         "test/unit/boundaries/batch_insert.test.js": "ec173aca8005e2db",
         "test/unit/boundaries/block_index.test.js": "3c56690bfa37c105",
         "test/unit/boundaries/circuit_breaker.test.js": "f5bb2b28cc7a8e95",
@@ -4740,12 +4781,13 @@
         "test/unit/client/rollback_guard_startup_halt.test.js": "9cfd853f2e4d2fa3",
         "test/unit/client/rollback_maturity_escrow_release.test.js": "6a3241c076e978ef",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
-        "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "f4fb6fa90ff8d987",
+        "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "9585280fe939c0f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
         "test/unit/client_applier.test/03_insert_rows.test.js": "4ee97831bb1bf547",
         "test/unit/client_applier.test/04_apply_dispensers_replace.test.js": "932531f1175e9a43",
         "test/unit/client_applier.test/05_anchor_actions_bundle_sections.test.js": "07d974594667f5bb",
         "test/unit/client_applier.test/06_insert_rows_upsert_error_tag.test.js": "a8143fefd1a46c99",
+        "test/unit/client_applier.test/07_binary_natural_keys.test.js": "b8748bf0024a980a",
         "test/unit/client_applier_schema_migrations_snapshot.test.js": "54140585946817e9",
         "test/unit/client_applier_strict_ignore_check.test.js": "76d8fd79030c9638",
         "test/unit/client_rollback.test.js": "a86e3201d3a619c6",
@@ -4786,7 +4828,7 @@
         "test/unit/client_sync.test/startup_catch_up_404_level.test.js": "4afbe50e37085854",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
-        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
+        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "c903bb8b1f2ac188",
         "test/unit/client_sync_checkpoint_quorum.test/03_checkpoint_quorum_signed_root_gates.test.js": "b946ccc26dcddcd5",
         "test/unit/client_sync_dispenser_reconcile_after_reorg.test.js": "2b28d2ad3e43acb2",
         "test/unit/client_sync_dispenser_reconcile_tick.test.js": "422bb0e33ab3603c",
@@ -4819,7 +4861,7 @@
         "test/unit/client_sync_io.test/catch_up/10_incremental_catch_up_coalescing.test.js": "5ff54077cc3ba86f",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
         "test/unit/client_sync_io.test/verify/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
-        "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "6e98846a4e3b9709",
+        "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "03adcaec6f5e7625",
         "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
         "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "235d1488d9a1d9fe",
         "test/unit/client_sync_schema_apply.test.js": "b6ab840e3149d748",
@@ -4943,7 +4985,9 @@
         "test/unit/repo_guards/carrier_logic_pin.test.js": "0c13b5d1d073adc0",
         "test/unit/repo_guards/config_key_coverage.test.js": "dbf1db338a37ed48",
         "test/unit/repo_guards/markets_id_parity_tool.test.js": "07811aa22e123504",
+        "test/unit/repo_guards/source_reorg_ceiling_parity.test.js": "3486b3960351508b",
         "test/unit/rollback_coverage.test.js": "c1767a0c1636a29f",
+        "test/unit/rollback_coverage.test/01_special_tables_handled.test.js": "72484f08c0af2014",
         "test/unit/schema_datetime_columns.test.js": "28e4ceac4ff3fdac",
         "test/unit/schema_gap.test.js": "43893e9d550945c2",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
@@ -4990,7 +5034,8 @@
         "test/unit/snapshot_builder.test/12_snapshot_concurrency_cap.test.js": "81aeefdb52ea39d2",
         "test/unit/snapshot_builder.test/13_stream_incremental_snapshot_cooldown_escrows.test.js": "576558aaf4038ea6",
         "test/unit/snapshot_builder.test/14_incremental_snapshot_cooldown_post_activation.test.js": "ab66d18ef5798490",
-        "test/unit/snapshot_source_classification.test.js": "166f6e439bdf0fe2",
+        "test/unit/snapshot_builder.test/15_binary_wire_sentinel.test.js": "c4aada2e76ca2c13",
+        "test/unit/snapshot_source_classification.test.js": "9ad3460fa108aa72",
         "test/unit/sql_datetime_ddl_state_tree_roots.test.js": "d1f0d0aeec5914a9",
         "test/unit/sql_datetime_ddl_transparency_log.test.js": "df77321eda7793e8",
         "test/unit/sql_util.test.js": "40158d38b88066f8",
@@ -5335,8 +5380,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 114,
-      "titleCount": 881,
+      "fileCount": 116,
+      "titleCount": 893,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5344,6 +5389,7 @@
         "test/unit/blockhash_conformance_twin.test/01_state_key_collation_gate.test.js": "5acefa6d7927309b",
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
         "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
+        "test/unit/blockhash_conformance_twin.test/04_hash_call_binding.test.js": "81e83c2e7406e406",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
@@ -5355,7 +5401,7 @@
         "test/unit/client_sync.test/events/06_handle_event.test.js": "e962afbc1dd6ade5",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
-        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "082588dcc7b8a7d8",
+        "test/unit/client_sync_checkpoint_quorum.test/02_checkpoint_anchor_binding_and_freshness.test.js": "c903bb8b1f2ac188",
         "test/unit/client_sync_checkpoint_quorum.test/03_checkpoint_quorum_signed_root_gates.test.js": "b946ccc26dcddcd5",
         "test/unit/client_sync_halt.test.js": "890c1afd26223048",
         "test/unit/client_sync_halt.test/01_independent_recompute_halt.test.js": "83270a69eb7e38bb",
@@ -5413,6 +5459,7 @@
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/rollback_coverage.test.js": "fe9ae5e0abacec1d",
+        "test/unit/rollback_coverage.test/01_special_tables_handled.test.js": "72484f08c0af2014",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
         "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
         "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
