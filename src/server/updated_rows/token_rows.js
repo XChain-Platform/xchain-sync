@@ -107,13 +107,7 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    but never halts. This carry must stay live before any future state-hash twin
     //    arms, or a follower would halt on a row it was never sent.
     try {
-        let tokenRows = await db.doQuery(
-            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
-                "SELECT i.tick_id FROM issues i " +
-                    "JOIN actions a ON a.action_index = i.action_index " +
-                    "JOIN index_statuses s ON s.id = i.status_id AND s.status = 'valid' " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND i.tick_id IS NOT NULL)",
-            [from, to], conn);
+        let tokenRows = await db.findEditedTokens(from, to, conn);
         add(acc, 'tokens', tokenRows);
     } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
 }
