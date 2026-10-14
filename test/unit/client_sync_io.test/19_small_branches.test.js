@@ -113,13 +113,6 @@ it('handleBlock (decoder): logs gap and triggers catch-up when blockIndex > last
 
         clock.restore();
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
     it('handleBlock: HALT_ON_DIVERGENCE=true calls haltOnDivergence on hash mismatch', async function(){
         ({ sync, db, applier } = makeSync({
             SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
@@ -162,13 +155,6 @@ describe('ClientSync: small branches', function(){
 
         assert.deepStrictEqual(sync.lastHashes, { block_hash: 'bh5' });
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
     it('handleReorg: exceeds MAX_ROLLBACK_DEPTH → HALTS and does NOT rollback', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync({ MAX_ROLLBACK_DEPTH: 5 }));
@@ -221,12 +207,6 @@ describe('ClientSync: litecoin testnet reorg depth', function(){
         assert.strictEqual(rb.rollback.calledOnceWith(867), true);
         assert.strictEqual(sync.isHalted(), false);
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
     // Stress-sweep 2026-07-08: a reorg ABOVE the tip must be a no-op, never a cursor
     // advance. depth = tip - block_index + 1 goes <= 0 above the tip, so it never trips
     // MAX_ROLLBACK_DEPTH; the old code then ran a no-op rollback and set
@@ -243,13 +223,6 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.isHalted(), false, 'an above-tip reorg is a no-op, not a halt');
         assert.strictEqual(sync.lastAppliedBlock, 100, 'the cursor must NOT advance past applied data');
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
     it('handleReorg: a legitimate below-tip reorg still rolls back and moves the cursor', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync()); // MAX_ROLLBACK_DEPTH default 10
@@ -261,13 +234,6 @@ describe('ClientSync: small branches', function(){
         assert.strictEqual(sync.isHalted(), false);
         assert.strictEqual(sync.lastAppliedBlock, 94, 'cursor moves to block_index - 1 after a real rollback');
     });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
     // uuid:4b95ddef. The apply-time state-commitment check is the only control that
     // writes a sync_halt marker for a replica/source root divergence. Gating it on the
     // WIRE carrying balances_root lets a source with no state_tree_roots row at an
@@ -314,16 +280,6 @@ it('HALTS with state-commitment-missing when the source omits balances_root', as
             assert.strictEqual(sync.haltOnDivergence.called, false, 'a burst-null state_root is deliberate');
             assert.strictEqual(sync.lastAppliedBlock, 101, 'the block still applies');
         });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
 
         it('does NOT halt when the replica itself says the commitment is not active', async function(){
             let { sync, applier } = makeCommitSync();
@@ -349,16 +305,6 @@ describe('ClientSync: small branches', function(){
             assert.ok(sync.haltOnDivergence.calledOnce);
             assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-commitment-divergence');
         });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
 
         // A post-commit verification ERROR must not launder the commitment gate.
         // applyBlock commits before the gates run, so a throw from the state-hash read
@@ -394,16 +340,6 @@ describe('ClientSync: small branches', function(){
             assert.strictEqual(sync.lastAppliedBlock, 100,
                 'an unverified block must never advance the tip');
         });
-    });
-});
-
-describe('ClientSync: small branches', function(){
-    beforeEach(setupSmallBranchTest);
-    afterEach(function(){ sinon.restore(); });
-
-
-    describe('applyBlockEvent: state-commitment roots withheld at an active height', function(){
-
 
         it('clears the carried roots once every gate passes, so a later duplicate stays a skip', async function(){
             // Negative control for the test above: the stash must not outlive a clean

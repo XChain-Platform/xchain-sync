@@ -121,20 +121,6 @@ describe('ClientSync: fetchAndApplySchema', function(){
 
         assert.strictEqual(db.doQuery.called, false, 'empty DDL must be skipped');
     });
-});
-
-describe('ClientSync: fetchAndApplySchema', function(){
-    let sync, db;
-
-    beforeEach(function(){
-        ({ sync, db } = makeSync());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
     it('rejects invalid table name (e.g. bad-name) and continues', async function(){
         sinon.stub(axios, 'get').resolves({ data: {
             tables: {
@@ -182,20 +168,6 @@ describe('ClientSync: fetchAndApplySchema', function(){
 
         assert.deepStrictEqual(sync._sourceTables, new Set(['goodtable', 'emptytable']));
     });
-});
-
-describe('ClientSync: fetchAndApplySchema', function(){
-    let sync, db;
-
-    beforeEach(function(){
-        ({ sync, db } = makeSync());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
     it('swallows per-table doQuery error and continues', async function(){
         sinon.stub(axios, 'get').resolves({ data: {
             tables: {
@@ -223,17 +195,6 @@ describe('ClientSync: fetchAndApplySchema', function(){
             'outer catch must log "Failed to fetch schema"');
         assert.strictEqual(sync._sourceTables, null, 'failed fetch must leave source schema unknown');
     });
-});
-
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
     it('throws (does not silently return) when no sources configured', async function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: '' }));
 
@@ -277,19 +238,6 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
         assert.ok(lockSpy.calledBefore(applier.applyFullSnapshot),
             'withApplyLock must be entered before applyFullSnapshot runs');
     });
-});
-
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
     it('happy path with gzipped buffer', async function(){
         ({ sync, db, applier } = makeSync());
         sinon.stub(sync, 'fetchAndApplySchema').resolves();
@@ -333,19 +281,6 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
 
         assert.ok(sync.verifyDecoderCompleteness.calledOnce);
     });
-});
-
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
     it('catch/retry: rotates sources and THROWS on repeated failure (no swallow)', async function(){
         // BOOTSTRAP_MAX_RETRIES:0 → one rotation round, then propagate. The old code
         // returned normally here, letting start() live-follow an empty replica.
@@ -378,19 +313,6 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1));
         assert.strictEqual(sync.lastAppliedBlock, null);
     });
-});
-
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
     it('retries the single configured source with backoff, then succeeds', async function(){
         // Transient failure then success: the production single-source topology must
         // recover via in-process retry rather than dying on the first transient 404.
