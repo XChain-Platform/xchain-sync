@@ -921,6 +921,22 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
+                // Clear tokens.bridged on every token left with no applied XBRIDGE v3 lock,
+                // mirroring the source (xchain-indexer/src/rollback/rederive.js), which runs it
+                // between the escrow and COINPay re-derives as here. The first lock sets the
+                // bit in place on a surviving token row whose action_index is the first
+                // issuance, so the generic delete cannot reach it and no forward window
+                // re-sends the row. Skipped on a truncated replica: it holds only [base..tip]
+                // of xbridges, so a token whose first lock sits below the floor would read as
+                // never locked, and clearing it would invent a divergence.
+                if(!truncatedReplica){
+                    try {
+                        await rederiveTokenBridged(this.db);
+                    } catch(e){
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    }
+                }
+
                 // Reverse an orphaned COINPAY's in-place match promotion, mirroring the
                 // source (xchain-indexer/src/rollback/rederive.js). Skipped on a truncated replica
                 // for the same reason the pair-scoped market sweep is: the payment history
@@ -1466,9 +1482,29 @@ async function rederiveCoinpayMatchStatus(db){
     await db.doQuery(coinpayMatchPromoteSql, []);
 }
 
+// Re-derive tokens.bridged from the already-replicated xbridges rows. Replica mirror of
+// xchain-indexer/src/db/rollback/rederive.js rederiveTokenBridged: the bit is a write-time
+// cache of "this token has an applied XBRIDGE v3 lock", so after the reorg delete it is
+// cleared on every token with no surviving valid v3 lock. It only ever clears, because a
+// surviving lock already set the bit. The SQL between the //<TOKEN-BRIDGED-REDERIVE-SQL>
+// markers is kept logically identical with the source's (cross-repo drift guard in
+// test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins whatever transaction
+// the caller already opened. Skipped on a truncated replica (see the call site).
+async function rederiveTokenBridged(db){
+    //<TOKEN-BRIDGED-REDERIVE-SQL>
+    const tokenBridgedClearSql =
+        `UPDATE tokens SET bridged=0
+         WHERE bridged=1 AND NOT EXISTS (
+             SELECT 1 FROM xbridges x INNER JOIN index_statuses s ON (s.id=x.status_id)
+             WHERE x.tick_id=tokens.tick_id AND x.version=3 AND s.status='valid')`;
+    //</TOKEN-BRIDGED-REDERIVE-SQL>
+    await db.doQuery(tokenBridgedClearSql, []);
+}
+
 // Hung on the class rather than on module.exports so the file has ONE export
 // shape. Every call site reads the same property off the same object either way.
 ClientRollback.rederiveEscrowGate = rederiveEscrowGate;
 ClientRollback.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;
+ClientRollback.rederiveTokenBridged = rederiveTokenBridged;
 
 module.exports = ClientRollback;

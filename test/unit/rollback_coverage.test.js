@@ -421,6 +421,50 @@ describe('Rollback coverage guard @regression', function(){
             'the re-derive call must sit inside a !truncatedReplica guard');
     });
 
+    // Cross-repo drift guard for the tokens.bridged re-derive. The first applied XBRIDGE v3
+    // lock sets the bit IN PLACE on a surviving token row, so a reorg that orphans that lock
+    // leaves the bit set unless the rollback clears it. Source
+    // (xchain-indexer/src/db/rollback/rederive.js rederiveTokenBridged) and replica
+    // (xchain-sync/src/client/rollback.js) must clear it with the SAME predicate, or the
+    // explorer reads a BRIDGED badge off the replica that the source does not hold. The
+    // source carries its statement inside the rederiveTokenBridged(db) method; the replica
+    // carries it between //<TOKEN-BRIDGED-REDERIVE-SQL> markers. Both are reduced to their
+    // backtick literals and compared whitespace-normalised.
+    it('tokens.bridged re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const norm = (lits) => lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
+        if(!requireSibling(this, indexerPath)) return;
+        const syncMatch = fs.readFileSync(syncPath, 'utf8')
+            .match(/\/\/<TOKEN-BRIDGED-REDERIVE-SQL>([\s\S]*?)\/\/<\/TOKEN-BRIDGED-REDERIVE-SQL>/);
+        assert.ok(syncMatch, 'TOKEN-BRIDGED-REDERIVE-SQL markers not found in ' + syncPath);
+        const indexerMatch = readSourceText(indexerPath)
+            .match(/async rederiveTokenBridged\(db\)\s*\{([\s\S]*?)\n\s*\},/);
+        assert.ok(indexerMatch, 'rederiveTokenBridged(db) not found in the xchain-indexer rollback module');
+        const syncLits = syncMatch[1].match(/`[^`]*`/g) || [];
+        const indexerLits = indexerMatch[1].match(/`[^`]*`/g) || [];
+        assert.strictEqual(syncLits.length, 1, 'expected 1 SQL literal in the replica block, got ' + syncLits.length);
+        assert.strictEqual(indexerLits.length, 1, 'expected 1 SQL literal in the source method, got ' + indexerLits.length);
+        assert.strictEqual(norm(syncLits), norm(indexerLits),
+            'tokens.bridged re-derive SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/rederive.js; keep them identical');
+    });
+
+    // The replica must RUN the bridged re-derive, in the source's order (escrow, bridged,
+    // COINPay), and never on a truncated replica: that replica holds only [base..tip] of
+    // xbridges, so a token whose first lock predates the floor would read as never locked.
+    it('the replica calls the tokens.bridged re-derive in source order, and never on a truncated replica', function(){
+        const src = fs.readFileSync(require('path').resolve(__dirname, '../../src/client/rollback.js'), 'utf8');
+        const call = src.indexOf('await rederiveTokenBridged(this.db)');
+        assert.ok(call > -1, 'ClientRollback defines the bridged re-derive but never calls it');
+        const guard = src.lastIndexOf('if(!truncatedReplica){', call);
+        assert.ok(guard > -1 && call - guard < 400,
+            'the bridged re-derive call must sit inside a !truncatedReplica guard');
+        const escrow = src.indexOf('await rederiveEscrowGate(this.db)');
+        const coinpay = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
+        assert.ok(escrow > -1 && escrow < call && call < coinpay,
+            'the bridged re-derive must run after the escrow re-derive and before the COINPay re-derive, as the source does');
+    });
+
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
     // both the source (xchain-indexer/src/db/rollback/sweeps.js) and the replica
     // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored cross_chain_calls /

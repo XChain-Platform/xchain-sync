@@ -165,6 +165,55 @@ describe('Integration: ClientRollback', function() {
         });
     });
 
+    // tokens.bridged is set in place on a surviving token row by the first applied XBRIDGE
+    // v3 lock; the generic delete cannot reach it, so the rollback re-derives it from the
+    // surviving xbridges rows exactly as the source indexer does (rederiveTokenBridged).
+    describe('tokens.bridged re-derive', function() {
+        async function idOf(table, column, value) {
+            await replicaDb.doQuery("INSERT IGNORE INTO `" + table + "` (`" + column + "`) VALUES (?)", [value]);
+            const rows = await replicaDb.doQuery("SELECT id FROM `" + table + "` WHERE `" + column + "` = ?", [value]);
+            return Number(rows[0].id);
+        }
+
+        // One bridged token row per tick, issued at action 150 (survives a rollback to block 6,
+        // whose first action is 600), and its v3 locks as [action_index, status_id] pairs.
+        async function seedBridgedToken(tick, locks, version = 3) {
+            const tickId = await idOf('index_tickers', 'tick', tick);
+            await replicaDb.doQuery(
+                "INSERT INTO tokens (tick_id, action_index, last_action_index, supply, bridged) VALUES (?, 150, 150, '0', 1)",
+                [tickId]);
+            for (const [actionIndex, statusId] of locks)
+                await replicaDb.doQuery(
+                    "INSERT INTO xbridges (action_index, version, tick_id, status_id, block_index) VALUES (?, ?, ?, ?, ?)",
+                    [actionIndex, version, tickId, statusId, Math.floor(actionIndex / 100)]);
+            return tickId;
+        }
+
+        async function bridgedOf(tickId) {
+            const rows = await replicaDb.doQuery("SELECT bridged FROM tokens WHERE tick_id = ?", [tickId]);
+            return Number(rows[0].bridged);
+        }
+
+        it('clears bridged when the only v3 lock is orphaned and keeps it when one survives', async function() {
+            await fixtures.seedBlocks(replicaDb, 1, 10);
+            const valid = await idOf('index_statuses', 'status', 'valid');
+            const invalid = await idOf('index_statuses', 'status', 'invalid: AMOUNT');
+            const orphanedOnly = await seedBridgedToken('BRGORPHAN', [[700, valid]]);
+            const survivor = await seedBridgedToken('BRGSURVIVE', [[250, valid], [800, valid]]);
+            const refusedOnly = await seedBridgedToken('BRGREFUSED', [[300, invalid], [900, valid]]);
+            const xchainLock = await seedBridgedToken('BRGV0', [[350, valid]], 0);
+
+            await rollback.rollback(6);
+
+            assert.strictEqual(await bridgedOf(orphanedOnly), 0, 'a token whose only lock was orphaned must read unbridged');
+            assert.strictEqual(await bridgedOf(survivor), 1, 'a surviving valid v3 lock keeps the bit');
+            assert.strictEqual(await bridgedOf(refusedOnly), 0, 'a refused v3 lock never bridged the token');
+            assert.strictEqual(await bridgedOf(xchainLock), 0, 'only a v3 token lock sets the bit');
+            const locksLeft = await replicaDb.doQuery("SELECT COUNT(*) AS n FROM xbridges WHERE action_index >= 600");
+            assert.strictEqual(Number(locksLeft[0].n), 0, 'the orphaned locks are deleted');
+        });
+    });
+
     describe('rollback then re-sync', function() {
         it('allows new data to be applied after rollback', async function() {
             await fixtures.seedBlocks(replicaDb, 1, 10);
