@@ -359,6 +359,16 @@ describe('ClientSync: fetchAndApplySchema', function(){
     schemaAndSnapshotGroup1();
     schemaAndSnapshotGroup2();
     schemaAndSnapshotGroup3();
+});
+
+describe('ClientSync: bootstrapFromSnapshot', function(){
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
     schemaAndSnapshotGroup4();
     schemaAndSnapshotGroup5();
     schemaAndSnapshotGroup6();

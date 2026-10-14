@@ -43,7 +43,6 @@ function makeSync(configOverrides, dbOverrides, identity){
 }
 
 let sync, db, applier;
-
 function setupSmallBranchTest(){
     sinon.stub(console, 'log');
     sinon.stub(console, 'error');
@@ -214,6 +213,9 @@ function litecoinReorgGroup1(){
     // MAX_ROLLBACK_DEPTH; the old code then ran a no-op rollback and set
     // lastAppliedBlock = block_index - 1, inflating the tip past real data and wedging
     // the replica (every later canonical block is then dropped by handleBlock).
+}
+
+function smallBranchReorgTail(){
     it('handleReorg: target ABOVE the tip is ignored (no rollback, no cursor advance)', async function(){
         let rb;
         ({ sync, db, applier, rb } = makeSync());
@@ -374,8 +376,14 @@ describe('ClientSync: litecoin testnet reorg depth', function(){
     beforeEach(setupSmallBranchTest);
     afterEach(function(){ sinon.restore(); });
 
-
     litecoinReorgGroup1();
+});
+
+describe('ClientSync: small branches', function(){
+    beforeEach(setupSmallBranchTest);
+    afterEach(function(){ sinon.restore(); });
+
+    smallBranchReorgTail();
     // uuid:4b95ddef. The apply-time state-commitment check is the only control that
     // writes a sync_halt marker for a replica/source root divergence. Gating it on the
     // WIRE carrying balances_root lets a source with no state_tree_roots row at an
