@@ -1372,7 +1372,8 @@
       "Integration: REST API GET /status returns null values when no blocks",
       "Integration: REST API GET /status returns status for all chains"
     ],
-    "4d7eee56f411f316": [
+    "cfe77aacb98b3e42": [
+      "Database.findEditedTokens runs the valid-issues tokens query with [from, to] and conn third",
       "collectTokenEditRows leaves acc.tokens undefined for an empty result",
       "collectTokenEditRows rethrows other numeric errnos",
       "collectTokenEditRows skips rows without an action_index",
@@ -1383,7 +1384,7 @@
       "collectTokenSupplyRows skips rows without an action_index",
       "collectTokenSupplyRows swallows an error that carries no errno",
       "collectTokenSupplyRows swallows missing table and column errnos",
-      "updated rows token classes edit class issues one tokens query with [from, to] and conn third",
+      "updated rows token classes edit class reads through findEditedTokens with from, to and conn",
       "updated rows token classes supply class passes from, to and conn through and keys rows by action_index"
     ],
     "4e3b2b369cf376be": [
@@ -4664,7 +4665,7 @@
   "scripts": {
     "test": {
       "fileCount": 382,
-      "titleCount": 3031,
+      "titleCount": 3032,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4952,7 +4953,7 @@
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server/updated_rows/accumulator.test.js": "547bbbb3e69a37dd",
         "test/unit/server/updated_rows/table_specs.test.js": "8f8f77d749f72058",
-        "test/unit/server/updated_rows/token_rows.test.js": "4d7eee56f411f316",
+        "test/unit/server/updated_rows/token_rows.test.js": "cfe77aacb98b3e42",
         "test/unit/server_poller.test.js": "fc2e4e6f74912b6b",
         "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js": "48914b893fa0ef67",
         "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js": "9e1eab683f917093",
