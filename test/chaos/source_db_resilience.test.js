@@ -261,10 +261,18 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         await fixtures.seedBlocks(sourceDbDirect, 21, 23);
 
-        // Give held reads time to release before the forced poll (cooldown
-        // settle; the breaker exposes no state to wait on).
-        await sleep(5000);
-        await server.poll();
+        // Force polls until the replica reaches the seeded height, bounded at
+        // about 30s, instead of a fixed sleep before a single poll. Held reads
+        // and the breaker cooldown release on their own schedule, so early
+        // polls may fail; the recovery wait below remains the final gate.
+        const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
+        const pollDeadline = Date.now() + 30000;
+        while (Date.now() < pollDeadline) {
+            try { await server.poll(); } catch { /* source may still be recovering */ }
+            const last = await replicaDb.getLastBlock();
+            if (last !== null && last >= 23) break;
+            await sleep(250);
+        }
 
         const recoveryMs = await waitForSyncRecovery(23, 60000);
         expect(recoveryMs).to.be.above(-1, 'Sync should recover after pool exhaustion');
