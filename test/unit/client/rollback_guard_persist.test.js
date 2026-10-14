@@ -57,15 +57,18 @@ function makeSync(db){
     return { sync, applier, rollback };
 }
 
-describe('ClientSync rollback guard persistence', function(){
-    let errorStub;
-
+function stubConsole(){
+    const stubs = {};
     beforeEach(function(){
         sinon.stub(console, 'log');
-        errorStub = sinon.stub(console, 'error');
+        stubs.error = sinon.stub(console, 'error');
     });
-
     afterEach(function(){ sinon.restore(); });
+    return stubs;
+}
+
+describe('ClientSync rollback guard persistence', function(){
+    const stubs = stubConsole();
 
     it('halts when a split rollback exceeds the limit across a restart', async function(){
         const durableState = new Map();
@@ -107,8 +110,12 @@ describe('ClientSync rollback guard persistence', function(){
         assert.strictEqual(await sync.loadRollbackGuardState(), 'unreadable');
 
         assert.deepStrictEqual(sync.rollbackGuardState(), { peak: null, low: null });
-        assert.strictEqual(errorStub.called, true);
+        assert.strictEqual(stubs.error.called, true);
     });
+});
+
+describe('ClientSync rollback guard persistence', function(){
+    stubConsole();
 
     it('writes the guard state strictly so a swallowed query fault cannot pass as saved', async function(){
         const db = makeDb(new Map());
@@ -170,12 +177,7 @@ describe('Database.setSyncState strict write', function(){
 });
 
 describe('ClientSync rollback guard reset boundaries', function(){
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-
-    afterEach(function(){ sinon.restore(); });
+    stubConsole();
 
     it('resets the guard after a full snapshot is applied', async function(){
         const durableState = new Map([
