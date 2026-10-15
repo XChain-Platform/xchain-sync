@@ -154,15 +154,37 @@ describe('ClientRollback', function(){
             assert.ok(attestIdx < tokenDeleteIdx, 'attests reset must precede the deletes');
         });
 
-        it('skips the in-place resets and the escrow re-derive when firstActionIndex is null', async function(){
+        it('skips the escrow re-derive when firstActionIndex is null', async function(){
             db.getFirstActionIndex.resolves(null);
             await rollback.rollback(100);
             let touched = db.doQuery.getCalls().filter(c =>
                 AFFECTED_RE.test(c.args[0]) ||
-                REDERIVE_RE.test(c.args[0]) ||
-                (c.args[0].includes("request_status = 'pending'"))
+                REDERIVE_RE.test(c.args[0])
             );
             assert.strictEqual(touched.length, 0);
+        });
+
+        it('still runs the block-keyed in-place resets when firstActionIndex is null (action-free block)', async function(){
+            // A BET deadline latch stamps bet_feeds.closed_block, a DELEGATE v1 materialization
+            // journals a rotation and a rollcall eviction stamps delegations, all in blocks that
+            // mint no actions row. Gated on firstActionIndex the replica kept the feed closed.
+            db.getFirstActionIndex.resolves(null);
+            // The deactivation_block resets need the coin for ACTIVATION_DELAY_BLOCKS.
+            rollback = new ClientRollback(db, util, 'BTC', 'regtest');
+            await rollback.rollback(100);
+            let sqls = db.doQuery.getCalls().map(c => c.args[0]);
+            let has = re => sqls.some(q => re.test(q));
+            assert.ok(has(/UPDATE bet_feeds f JOIN index_statuses os ON \(os\.status = 'open'\) SET f\.feed_status_id = os\.id, f\.closed_block = NULL/), 'feed deadline close must be re-opened');
+            assert.ok(has(/UPDATE bets b /), 'settled bets must be re-opened');
+            assert.ok(has(/UPDATE attests SET request_status = 'pending'/), 'attests reset');
+            assert.ok(has(/UPDATE xcalls SET request_status = 'pending'/), 'xcalls reset');
+            assert.ok(has(/UPDATE polls SET poll_status = 'open'/), 'polls re-open');
+            assert.ok(has(/UPDATE polls SET callback_execute_action_index = NULL/), 'poll callback reset');
+            assert.ok(has(/UPDATE contract_stakes t JOIN contract_slash_debits/), 'contract slash restore');
+            assert.ok(has(/UPDATE contract_stakes t JOIN contract_delegation_rotations/), 'delegation rotation restore');
+            assert.ok(has(/UPDATE stakes t JOIN capability_slash_debits/), 'capability slash restore');
+            assert.ok(has(/UPDATE delegations SET deactivation_block = NULL/), 'delegation deactivation clear');
+            assert.ok(has(/UPDATE contract_delegations SET deactivation_block = NULL/), 'contract delegation deactivation clear');
         });
 
     });

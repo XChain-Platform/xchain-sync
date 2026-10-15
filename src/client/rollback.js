@@ -324,15 +324,18 @@ class ClientRollback {
                 }
             }
 
-            // ── In-place column resets (mirror xchain-indexer/src/rollback/in_place_flips.js) ──
-            // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows
-            // (action_index < firstActionIndex) to undo stamps that orphaned actions
-            // wrote on them. The DELETE loops below only drop orphaned-RANGE rows, so
-            // without replaying these resets the replica keeps the stale stamp and
-            // diverges from the source (and from a from-genesis replay) after a reorg.
-            // a consensus-affecting split. These three resets key purely on
-            // firstActionIndex / block_index, so they port exactly; run them BEFORE the
-            // deletes, matching the source order.
+            // ── In-place column resets (mirror xchain-indexer/src/rollback/index.js restoreInPlaceFlips) ──
+            // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows to undo
+            // stamps that orphaned blocks wrote on them. Every reset in the block below is
+            // block-keyed (a stamp at or above block_index), so it runs whether or not the
+            // orphaned range holds an actions row: a block pass can write these stamps in a
+            // block that mints none (the BET deadline latch stamps bet_feeds.closed_block, the
+            // DELEGATE v1 materialization journals a key rotation, a rollcall eviction stamps
+            // delegations), and an action-free orphaned range leaves firstActionIndex null.
+            // Skipping them there left the surviving rows flipped on the replica while a fresh
+            // node held them open, a consensus-affecting split. Each is a no-op when nothing
+            // was flipped. The DELETE loops below only drop orphaned-RANGE rows, so these
+            // resets run BEFORE the deletes, matching the source order.
             //
             // NOTE: the source ALSO re-NULLs deactivation_block on
             // stakes/delegations/contract_stakes/contract_delegations. Those resets key on
@@ -340,7 +343,7 @@ class ClientRollback {
             // constant (never hub-overlaid; the indexer's mergeHubParams overlay is empty
             // for consensus params), so the replica now holds it via consensus-constants.js
             // and mirrors all four resets below.
-            if(firstActionIndex !== null){
+            {
                 // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
                 // AFTER the dataTables delete (mirror of xchain-indexer/src/rollback/rederive.js), a range
                 // reset here would only handle the SET direction (offer orphaned), not the CLEAR
@@ -699,11 +702,8 @@ class ClientRollback {
                 }
                 } // end deactivation_block mirror (activationDelay present)
 
-                // Cooldown-maturity reversal moved OUT of this firstActionIndex guard (see below,
-                // after the guard closes) - the legacy maturity path mutates a surviving row with
-                // no actions row in the maturity block, so an orphaned range with no other actions
-                // leaves firstActionIndex null and would skip it, diverging the replica from the
-                // (now-fixed) source.
+                // Cooldown-maturity reversal runs outside this block (see below, after it closes):
+                // the legacy maturity path mutates a surviving row with no actions row.
             }
 
             // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
