@@ -101,6 +101,10 @@ function applyDdl(state, sql) {
 
     let uq = /ADD UNIQUE INDEX `(\w+)` \(([^)]*)\)/.exec(sql);
     if (uq) t.indexes[uq[1]] = uq[2].split(',').map(s => s.trim().replace(/`/g, ''));
+
+    // A plain secondary index, such as the ensure list's anchor_actions block_index_doge.
+    let ix = /ADD INDEX `(\w+)` \(([^)]*)\)/.exec(sql);
+    if (ix) t.indexes[ix[1]] = ix[2].split(',').map(s => s.trim().replace(/`/g, ''));
 }
 
 // One follower startup, in SyncService.discoverChains order.

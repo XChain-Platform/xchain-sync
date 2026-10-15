@@ -96,3 +96,20 @@ describe('replica secondary-index ensure list', function(){
             assert.ok(rows.includes(want), want + ' is missing from the ensure list; an aged replica scans the whole table on every block');
     });
 });
+
+describe('replica secondary-index ensure list: anchor_actions and state_checkpoints', function(){
+
+    it('carries the anchor_actions block_index_doge and state_checkpoints block_index indexes', function(){
+        // collectAnchorInvalid scopes the completing chunk by block_index_doge and
+        // getMirroredStateCheckpointCandidates ranges on (chain, network, block_index) every
+        // block. Names and columns match the indexer migration
+        // 2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql, so a replica whose
+        // source already holds them skips the ALTER by name.
+        const rows = ensureIndexList().map(r => r.table + '.' + r.indexName + ' (' + r.columns + ')');
+        for(const want of [
+            'anchor_actions.idx_anchor_block_doge (block_index_doge)',
+            'state_checkpoints.idx_chain_block (chain, network, block_index)',
+        ])
+            assert.ok(rows.includes(want), want + ' is missing from the ensure list; an aged replica reads the whole table on every block');
+    });
+});
