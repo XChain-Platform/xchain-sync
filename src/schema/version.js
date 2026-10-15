@@ -262,13 +262,15 @@
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
- * above, and `accounted` names the migration files bearing exactly that date
- * (dates are not unique, so the tail has to be enumerated or a same-day
- * migration would hide behind the cursor). `indexOnly` identifies the accounted
- * files that did not receive a version bump, so the gate also verifies their
- * replicated DDL remains non-unique secondary-index-only.
+ * above. `before` names the earlier files with replicated DDL so a newly added
+ * back-dated migration cannot hide behind the cursor, and `accounted` names the
+ * migration files bearing exactly the frontier date (dates are not unique, so
+ * the tail has to be enumerated too). `hashes` pins the reviewed content of each
+ * accounted file. `indexOnly` identifies the accounted files that did not receive
+ * a version bump, so the gate also verifies their replicated DDL remains
+ * non-unique secondary-index-only.
  * test/unit/schema_version_gate.test.js reads both, walks the sibling migration
- * ledgers, and fails when a migration past the frontier carries DDL against a
+ * ledgers, and fails when an unrecorded migration carries DDL against a
  * wire-replicated table of that dbType while the frontier stands still. Pure-DML
  * backfills do not change what a follower can store and are not flagged. Per the
  * operator ruling of 2026-09-09,
@@ -284,6 +286,70 @@ const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
 const MIGRATION_FRONTIER = {
     indexer: {
         through: '2026-10-14',
+        before: [
+            '2026-05-30-balances-composite-index.sql',
+            '2026-06-03-unique-full-column-index-addresses.sql',
+            '2026-06-13-attests-request-status-add-rejected.sql',
+            '2026-06-17-attests-drop-unique-request-id-version.sql',
+            '2026-06-19-index-tables-add-block-index.sql',
+            '2026-06-21-index-tables-block-index-secondary-idx.sql',
+            '2026-06-23-tokens-action-index-idx.sql',
+            '2026-06-23-validator-rewards-block-index-idx.sql',
+            '2026-06-26-cross-chain-settlements-block-index-idx.sql',
+            '2026-06-26-unstakes-cooldown-status-composite-idx.sql',
+            '2026-06-27-polls-weight-mode-add-quadratic-time-weighted.sql',
+            '2026-07-03-votes-append-only-unique-idx.sql',
+            '2026-07-05-contract-index-columns-nullable.sql',
+            '2026-07-05-polls-binding-callback-columns.sql',
+            '2026-07-07-tick-id-columns-nullable.sql',
+            '2026-07-10-contract-state-bin-key-index.sql',
+            '2026-07-13-balances-drop-redundant-address-id-index.sql',
+            '2026-07-15-markets-dedup-unique-pair.sql',
+            '2026-07-15-sweeps-drop-legacy-escrows-column.sql',
+            '2026-07-16-reposition-state-key-bin.sql',
+            '2026-07-17-attests-add-responsible-set-json.sql',
+            '2026-07-17-polls-callback-delay-columns.sql',
+            '2026-07-18-reward-tables-source-block-composite-idx.sql',
+            '2026-07-18-status-tables-status-action-composite-idx.sql',
+            '2026-07-19-anchor-actions-publisher-attestation-columns.sql',
+            '2026-07-19-events-reorg-marker-witness-columns.sql',
+            '2026-07-24-pubkeys-widen-uncompressed.sql',
+            '2026-07-26-bet-cancel-resolve-status-tables.sql',
+            '2026-07-28-escrow-leaf-journal-table.sql',
+            '2026-07-29-gated-files-threshold-and-publisher.sql',
+            '2026-07-30-attests-add-relay-origin-columns.sql',
+            '2026-08-10-bet-cancel-resolve-standalone-indexes.sql',
+            '2026-08-11-attests-relay-identity-index.sql',
+            '2026-08-12-validator-rewards-derive-block-index.sql',
+            '2026-08-13-contract-delegation-rotations-table.sql',
+            '2026-08-15-destroys-drop-unique-action-index.sql',
+            '2026-08-15-lists-add-memo.sql',
+            '2026-08-19-attest-validator-stats-surrogate-id.sql',
+            '2026-08-19-files-name-index.sql',
+            '2026-08-19-utf8mb4-index-memos-memo.sql',
+            '2026-08-19-utf8mb4-user-text-columns.sql',
+            '2026-08-24-validator-rewards-round-qualifier.sql',
+            '2026-08-26-prices-add-v2-batch-columns.sql',
+            '2026-08-28-anchor-actions-section-index-pk.sql',
+            '2026-08-30-rollcall-tables.sql',
+            '2026-09-02-utf8mb4-raw-wire-fields-not-null.sql',
+            '2026-09-02-utf8mb4-raw-wire-fields.sql',
+            '2026-09-03-attests-batch-action-index.sql',
+            '2026-09-03-attests-batch-chunk-columns.sql',
+            '2026-09-07-rollcall-gates.sql',
+            '2026-09-08-deploy-deferred-assembly.sql',
+            '2026-09-10-markets-native-coin-side.sql',
+            '2026-09-11-contract-meta-columns.sql',
+            '2026-09-12-bridge-tables.sql',
+            '2026-09-13-destroys-sends-leg-ordinal.sql',
+            '2026-09-30-list-share-tables.sql',
+            '2026-10-01-list-metas.sql',
+            '2026-10-01-list-transfers.sql',
+            '2026-10-06-resolved-block-idx.sql',
+            '2026-10-07-ledger-covering-index.sql',
+            '2026-10-08-token-bridge-fields.sql',
+            '2026-10-09-bet-edits.sql'
+        ],
         accounted: [
             // Non-unique secondary index on stream:action anchor_actions; its
             // state_checkpoints statement is hub-mirrored.
@@ -295,13 +361,34 @@ const MIGRATION_FRONTIER = {
         ],
         indexOnly: [
             '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql'
-        ]
+        ],
+        hashes: {
+            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql':
+                '419964d1d4775019f12bd1f7e2481b5e3b16bffcc661fc5d6a3aa201d854ab73',
+            '2026-10-14-price-snapshots-refchain-block-idx.sql':
+                '4f0c81c084e065acbed9fe205d95b392cc9e63d900308bcb3c4afabae67db9e1',
+            '2026-10-14-remote-token-admission.sql':
+                'f334a72ce620b84221354506b0dd885d3cda3f9457b81068b7d7b531b6115439'
+        }
     },
     decoder: {
         through: '2026-08-22',
+        before: [
+            '2026-05-28-unique-index-tables.sql',
+            '2026-06-02-widen-ids-to-bigint.sql',
+            '2026-06-13-dispensers-expiration-bigint.sql',
+            '2026-06-15-events-data-mediumtext.sql',
+            '2026-06-17-pubkeys-add-monotonic-id.sql',
+            '2026-07-24-pubkeys-widen-uncompressed.sql',
+            '2026-08-10-action-data-utf8mb4.sql'
+        ],
         accounted: [
             '2026-08-22-mempool-first-seen.sql'
-        ]
+        ],
+        hashes: {
+            '2026-08-22-mempool-first-seen.sql':
+                '65baa4b8645ac2de43de0291a2e9d0bac3d8dce83f4884894e2da6d19683b729'
+        }
     }
 };
 
