@@ -858,6 +858,22 @@
       "Database schema self-heal: one startup completes columns then key rebuilds keeps the stale keys when the column ADD is refused, and says so",
       "Database schema self-heal: one startup completes columns then key rebuilds never defers the work to a next startup"
     ],
+    "335d1a2992604541": [
+      "ClientRollback rollback clears escrow when no offer survives (orphaned offer / SET direction)",
+      "ClientRollback rollback contract slash-restore tiebreaks on (execution_index, slash_position), byte-matching the source (not AUTO_INCREMENT id)",
+      "ClientRollback rollback does not throw if the escrow re-derive tables are missing (older replica schema)",
+      "ClientRollback rollback re-derives escrow AFTER the action-scoped deletes",
+      "ClientRollback rollback re-stamps escrow to a surviving open offer (orphaned release / CLEAR direction)",
+      "ClientRollback rollback replays BOTH polls resets: the re-open (callback_due_block re-NULLed) and the timelock re-fire reset",
+      "ClientRollback rollback replays the anchor reconcile-log restore into validator_rewards (block_index-keyed, before deletes) (RB-ANCHOR)",
+      "ClientRollback rollback replays the attests and xcalls request_status resets (block_index-keyed)",
+      "ClientRollback rollback replays the delegation-rotation key restore into contract_stakes (block_index-keyed, before deletes)",
+      "ClientRollback rollback replays the slash-debit restore for both stake tables (block_index-keyed, before deletes)",
+      "ClientRollback rollback runs the in-place resets before the action-scoped deletes",
+      "ClientRollback rollback skips the escrow re-derive when firstActionIndex is null",
+      "ClientRollback rollback still replays the anchor reconcile-log restore when firstActionIndex is null (RB-ANCHOR-NULL)",
+      "ClientRollback rollback still runs the block-keyed in-place resets when firstActionIndex is null (action-free block)"
+    ],
     "347de06fd7b53919": [
       "Advisory table-content parity computeTableContentChecksums a failed table listing degrades to probing, not to an empty result",
       "Advisory table-content parity computeTableContentChecksums a source publishes its id ceiling and a follower reuses it verbatim",
@@ -1814,21 +1830,6 @@
       "Boundary: Reorg Detection first poll (lastPolledBlock = null): initializes without processing",
       "Boundary: Reorg Detection first poll with empty DB: remains null",
       "Boundary: Reorg Detection same-height non-detection: no event when data changes at same block"
-    ],
-    "677fde3e236166c4": [
-      "ClientRollback rollback clears escrow when no offer survives (orphaned offer / SET direction)",
-      "ClientRollback rollback contract slash-restore tiebreaks on (execution_index, slash_position), byte-matching the source (not AUTO_INCREMENT id)",
-      "ClientRollback rollback does not throw if the escrow re-derive tables are missing (older replica schema)",
-      "ClientRollback rollback re-derives escrow AFTER the action-scoped deletes",
-      "ClientRollback rollback re-stamps escrow to a surviving open offer (orphaned release / CLEAR direction)",
-      "ClientRollback rollback replays BOTH polls resets: the re-open (callback_due_block re-NULLed) and the timelock re-fire reset",
-      "ClientRollback rollback replays the anchor reconcile-log restore into validator_rewards (block_index-keyed, before deletes) (RB-ANCHOR)",
-      "ClientRollback rollback replays the attests and xcalls request_status resets (block_index-keyed)",
-      "ClientRollback rollback replays the delegation-rotation key restore into contract_stakes (block_index-keyed, before deletes)",
-      "ClientRollback rollback replays the slash-debit restore for both stake tables (block_index-keyed, before deletes)",
-      "ClientRollback rollback runs the in-place resets before the action-scoped deletes",
-      "ClientRollback rollback skips the in-place resets and the escrow re-derive when firstActionIndex is null",
-      "ClientRollback rollback still replays the anchor reconcile-log restore when firstActionIndex is null (RB-ANCHOR-NULL)"
     ],
     "68687be53be6c143": [
       "HubClient constructor builds the correct URL",
@@ -4801,7 +4802,7 @@
         "test/unit/client_applier_strict_ignore_check.test.js": "76d8fd79030c9638",
         "test/unit/client_rollback.test.js": "a86e3201d3a619c6",
         "test/unit/client_rollback.test/01_rollback.test.js": "c023695e884eff80",
-        "test/unit/client_rollback.test/02_rollback.test.js": "677fde3e236166c4",
+        "test/unit/client_rollback.test/02_rollback.test.js": "335d1a2992604541",
         "test/unit/client_rollback.test/03_rollback.test.js": "d5b6be232cd7b57f",
         "test/unit/client_rollback.test/04_pair_scoped_markets_rollback_idx_2_mirror.test.js": "9743546a34b05c9f",
         "test/unit/client_rollback.test/05_balance_rebuild_error_handling.test.js": "cefc03d7e7861167",
