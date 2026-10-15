@@ -77,6 +77,38 @@ for(const dbType of DB_TYPES){
             }
         });
 
+        it(dbType + ': earlier replicated-DDL records name existing older migrations', function(){
+            const dir = MIGRATION_DIRS[dbType];
+            if(!fs.existsSync(dir)){
+                if(SIBLING_REQUIRED) throw new Error('sibling migration ledger missing at ' + dir);
+                this.skip(); return;
+            }
+            const { through, before } = MIGRATION_FRONTIER[dbType];
+            assert.ok(Array.isArray(before), dbType + ' frontier.before must be an array');
+            assert.strictEqual(new Set(before).size, before.length,
+                dbType + ' frontier.before must not contain duplicate filenames');
+            for(const file of before){
+                const date = (file.match(/^(\d{4}-\d{2}-\d{2})-/) || [])[1];
+                assert.ok(date && date < through,
+                    'earlier file ' + file + ' must bear a date before the ' + dbType
+                    + ' frontier date ' + through);
+                assert.ok(fs.existsSync(path.join(dir, file)),
+                    'earlier file ' + file + ' is not in the ' + dbType + ' migration ledger ' + dir);
+            }
+        });
+
+        it(dbType + ': every accounted file has exactly one SHA-256 content pin', function(){
+            const { accounted, hashes } = MIGRATION_FRONTIER[dbType];
+            assert.ok(hashes && typeof hashes === 'object' && !Array.isArray(hashes),
+                dbType + ' frontier.hashes must be an object');
+            assert.deepStrictEqual(Object.keys(hashes).sort(), accounted.slice().sort(),
+                dbType + ' frontier.hashes must pin exactly the accounted files');
+            for(const [file, hash] of Object.entries(hashes)){
+                assert.ok(/^[a-f0-9]{64}$/.test(hash),
+                    dbType + ' content hash for ' + file + ' must be lowercase SHA-256');
+            }
+        });
+
     });
 
     describe('replication schema version and migration frontier @regression', function(){
