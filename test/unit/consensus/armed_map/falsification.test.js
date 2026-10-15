@@ -35,20 +35,20 @@ const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_R
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_BLOBS = {
-    'shared_rows.js':   'fd181cb331581013f30231043012372301440ebf',
+    'shared_rows.js':   '2f2dda1a4cd8a3068d501f3e2945b5d62c88f982',
     'shared_rows_1.js': 'fd0b20dc2865d029b60f15ce0907c433fd8e148d',
     'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
     'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
-    'shared_rows_5.js': '1d09f7d4b144aec870306c7793d50970c328fa1c',
+    'shared_rows_5.js': 'b15a59bb8b6ba3d68fcf7501a0b7d29af468c29c',
 };
 const INDEXER_CANONICAL_SHA256 = {
-    'shared_rows.js':   '1db6bd06818eca6fc27a57858ac820592e6dc9e366e87e75be28ea099f8780dc',
+    'shared_rows.js':   '214664fbfe0837bb7063a457e48b366a90bda370609cb03bdf8e8fd6a528c19e',
     'shared_rows_1.js': '1ed80849231893f3801d91a2cacc7041b54e26eaa63a680c845dc93aa5e1d278',
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': 'd671489c2b683ec2a94d0f45da1056687c38f78959a9f1780825eb7e3a37d6ea',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
-    'shared_rows_5.js': 'a68ebc698b5a236270e6bcfe11ca1524fc0a12c7eddd3ca30e4c0086ab629ec9',
+    'shared_rows_5.js': '79d286ecd153c19863faad5db2421db7810b05ed8e48a094493c90d81f96a6e0',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
