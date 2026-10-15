@@ -1508,12 +1508,6 @@
       "armed map v2: fingerprint module and publication publishes a 64-hex fingerprint over every manifest row",
       "armed map v2: fingerprint module and publication uses v2 for the legacy field and records version 2 plus the logic digest, with no _v2 alias (W5)"
     ],
-    "55d52d6d7d7aecd5": [
-      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
-      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
-      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
-      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)"
-    ],
     "564769c03a6a6f31": [
       "follower: escrow arming block full-builds balances @regression commits the live escrow leaf that has no arming-height journal row",
       "follower: escrow arming block full-builds balances @regression the block AFTER arming still threads incrementally"
@@ -4237,6 +4231,13 @@
       "02 Snapshot Performance Incremental snapshot export incremental from 50% (medium delta)",
       "02 Snapshot Performance Incremental snapshot export incremental from 90% (small delta)"
     ],
+    "e3368576c55cccbe": [
+      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
+      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
+      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
+      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)",
+      "replica secondary-index ensure list: anchor_actions and state_checkpoints carries the anchor_actions block_index_doge and state_checkpoints block_index indexes"
+    ],
     "e33e81c496f580b8": [
       "DATETIME session-zone validation accepts SYSTEM when the system zone is UTC",
       "DATETIME session-zone validation accepts UTC case-insensitively",
@@ -4705,7 +4706,7 @@
   "scripts": {
     "test": {
       "fileCount": 387,
-      "titleCount": 3062,
+      "titleCount": 3063,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4979,7 +4980,7 @@
         "test/unit/recovery_rewards.test.js": "c7ffd8486a3a6f7e",
         "test/unit/replica_freshness.test.js": "91e7a6f068b71e76",
         "test/unit/replica_gap_status.test.js": "bcf51d25df891659",
-        "test/unit/replica_secondary_indexes.test.js": "55d52d6d7d7aecd5",
+        "test/unit/replica_secondary_indexes.test.js": "e3368576c55cccbe",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/replicated_tables.test.js": "805d506efd2e2166",
         "test/unit/repo_guards/carrier_logic_pin.test.js": "0c13b5d1d073adc0",
