@@ -246,6 +246,19 @@
  *       sends them rounded, so a mixed pair would disagree on exactly these
  *       values with nothing to say why. Rows a follower already stored rounded
  *       are not rewritten by this change; they are corrected by a re-snapshot.
+ * Index-only frontier record (no version bump): the
+ *       2026-10-14-anchor-block-doge-and-checkpoint-block-idx migration adds a
+ *       non-unique (block_index_doge) secondary index to the stream:action
+ *       `anchor_actions` table. It changes neither replicated columns nor payload
+ *       shape, so an older follower can still store every streamed row. Its second
+ *       statement, a non-unique (chain, network, block_index) index, lands on the
+ *       hub-mirrored `state_checkpoints`, which never rides the wire. The same
+ *       frontier date carries 2026-10-14-price-snapshots-refchain-block-idx (an
+ *       index on the hub-mirrored `price_snapshots`) and
+ *       2026-10-14-remote-token-admission (three admit_block_* columns on the
+ *       hub-mirrored `remote_token_snapshots`), which touch no wire-replicated
+ *       table. All three migrations are mode=auto. Indexer stays at 18 and decoder
+ *       stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -270,14 +283,19 @@ const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-09',
+        through: '2026-10-14',
         accounted: [
-            // New stream:action table, versioned at 17.
-            '2026-10-09-bet-edits.sql',
-            // No wire-replicated table changes.
-            '2026-10-09-remote-token-snapshots.sql'
+            // Non-unique secondary index on stream:action anchor_actions; its
+            // state_checkpoints statement is hub-mirrored.
+            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql',
+            // No wire-replicated table changes (hub-mirrored price_snapshots).
+            '2026-10-14-price-snapshots-refchain-block-idx.sql',
+            // No wire-replicated table changes (hub-mirrored remote_token_snapshots).
+            '2026-10-14-remote-token-admission.sql'
         ],
-        indexOnly: []
+        indexOnly: [
+            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql'
+        ]
     },
     decoder: {
         through: '2026-08-22',
