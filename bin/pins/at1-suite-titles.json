@@ -1749,6 +1749,22 @@
       "ServerPoller buildBlockPayload skips a per-table SCHEMA-GAP read error (errno 1146) and still builds the block @regression",
       "ServerPoller buildBlockPayload streams contract_emissions via getEmissionRowsForBlock, not getActionScopedRows"
     ],
+    "6324961ce2aed7c0": [
+      "replication schema version and migration frontier @regression carries a frontier for exactly the same dbTypes",
+      "replication schema version and migration frontier @regression carries one positive integer version per replicated dbType, and no others",
+      "replication schema version and migration frontier @regression decoder: earlier replicated-DDL records name existing older migrations",
+      "replication schema version and migration frontier @regression decoder: every accounted file bears the frontier date and exists in the migration ledger",
+      "replication schema version and migration frontier @regression decoder: every accounted file has exactly one SHA-256 content pin",
+      "replication schema version and migration frontier @regression decoder: the accounted tail covers every migration dated on the frontier date",
+      "replication schema version and migration frontier @regression decoder: the frontier date is a well-formed migration date",
+      "replication schema version and migration frontier @regression decoder: the frontier does not run ahead of the migration ledger",
+      "replication schema version and migration frontier @regression indexer: earlier replicated-DDL records name existing older migrations",
+      "replication schema version and migration frontier @regression indexer: every accounted file bears the frontier date and exists in the migration ledger",
+      "replication schema version and migration frontier @regression indexer: every accounted file has exactly one SHA-256 content pin",
+      "replication schema version and migration frontier @regression indexer: the accounted tail covers every migration dated on the frontier date",
+      "replication schema version and migration frontier @regression indexer: the frontier date is a well-formed migration date",
+      "replication schema version and migration frontier @regression indexer: the frontier does not run ahead of the migration ledger"
+    ],
     "634548f3f3a46e14": [
       "E2E: Decoder dispensers reconcile Nth-catch-up cadence: every=1 reconciles drift away; a high `every` leaves it (no error)",
       "E2E: Decoder dispensers reconcile a full-snapshot bootstrap seeds dispensers to parity; reconcile is idempotent",
@@ -1967,18 +1983,6 @@
       "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set emits exactly four deactivation_block resets",
       "deactivation_block sync-mirror rollback emits the four re-NULL resets when a coin is set stakes reset joins unstakes and matches the EXACT stamped value (precise, not blanket)",
       "deactivation_block sync-mirror without a coin the mirror is skipped (and warns, not silent) emits zero resets and warns"
-    ],
-    "73d07ebbe093fcfd": [
-      "replication schema version and migration frontier @regression carries a frontier for exactly the same dbTypes",
-      "replication schema version and migration frontier @regression carries one positive integer version per replicated dbType, and no others",
-      "replication schema version and migration frontier @regression decoder: every accounted file bears the frontier date and exists in the migration ledger",
-      "replication schema version and migration frontier @regression decoder: the accounted tail covers every migration dated on the frontier date",
-      "replication schema version and migration frontier @regression decoder: the frontier date is a well-formed migration date",
-      "replication schema version and migration frontier @regression decoder: the frontier does not run ahead of the migration ledger",
-      "replication schema version and migration frontier @regression indexer: every accounted file bears the frontier date and exists in the migration ledger",
-      "replication schema version and migration frontier @regression indexer: the accounted tail covers every migration dated on the frontier date",
-      "replication schema version and migration frontier @regression indexer: the frontier date is a well-formed migration date",
-      "replication schema version and migration frontier @regression indexer: the frontier does not run ahead of the migration ledger"
     ],
     "7435d3e8a1e6d309": [
       "Tier 3 - config.getConfig @tier3 VERIFY_HASHES is always a boolean",
@@ -2417,6 +2421,26 @@
       "API rate-limit proxy trust security TRUST_PROXY=true keeps one client on separate buckets per chain, as the key intends",
       "API rate-limit proxy trust security TRUST_PROXY=true keys on the client address the proxy appended, not the socket"
     ],
+    "884c398f329d8e1e": [
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag DDL on a table this dbType never ships",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag DDL quoted inside the migration prose",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag a back-dated pure-DML migration",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag a pure-DML backfill on a replicated table",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag a recorded migration before the frontier, nor an unchanged accounted tail",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag an index-only migration explicitly recorded at an advanced frontier",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect failure text names where to record a back-dated file, the digest to pin and the frontier move",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a DROP INDEX and a CREATE TABLE of a replicated table",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a back-dated replicated DDL migration not recorded before the frontier",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a same-day migration the accounted tail does not name",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a standalone CREATE UNIQUE INDEX IF NOT EXISTS ... ON, backticks and all",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a unique index substituted into an index-only migration",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an ALTER TABLE on a replicated table dated past the frontier",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an accounted migration whose content changed after accounting",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an undated filename carrying replicated DDL rather than skipping it",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags payload-affecting DDL substituted into an index-only migration",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION decoder: every replicated-DDL migration is covered by the frontier",
+      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION indexer: every replicated-DDL migration is covered by the frontier"
+    ],
     "88538c23864af3e5": [
       "coverage ratchet floors enforces every declared floor, at the declared value",
       "coverage ratchet floors fails the job on a shortfall rather than only reporting it",
@@ -2561,22 +2585,6 @@
       "BlockBroadcaster addSubscription sends initial status if available",
       "BlockBroadcaster addSubscription sets metadata on ws",
       "BlockBroadcaster addSubscription uses x-forwarded-for when TRUST_PROXY is true"
-    ],
-    "8dd41af6340e2265": [
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag DDL on a table this dbType never ships",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag DDL quoted inside the migration prose",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag a migration dated before the frontier, nor the accounted same-day tail",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag a pure-DML backfill on a replicated table",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect does not flag an index-only migration explicitly recorded at an advanced frontier",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a DROP INDEX and a CREATE TABLE of a replicated table",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a same-day migration the accounted tail does not name",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a standalone CREATE UNIQUE INDEX IF NOT EXISTS ... ON, backticks and all",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags a unique index substituted into an index-only migration",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an ALTER TABLE on a replicated table dated past the frontier",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags an undated filename carrying replicated DDL rather than skipping it",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the gate detects what it claims to detect flags payload-affecting DDL substituted into an index-only migration",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION decoder: no replicated-DDL migration has landed past the frontier",
-      "replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression the sibling migration ledgers are level with SCHEMA_VERSION indexer: no replicated-DDL migration has landed past the frontier"
     ],
     "8e78b69ca3426aa3": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression the activation maps hold EXACTLY the armed set (arming is a code change, not config)"
@@ -4706,7 +4714,7 @@
   "scripts": {
     "test": {
       "fileCount": 387,
-      "titleCount": 3063,
+      "titleCount": 3071,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4992,8 +5000,8 @@
         "test/unit/schema_datetime_columns.test.js": "28e4ceac4ff3fdac",
         "test/unit/schema_gap.test.js": "43893e9d550945c2",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
-        "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
-        "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
+        "test/unit/schema_version.test.js": "6324961ce2aed7c0",
+        "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server/updated_rows/accumulator.test.js": "547bbbb3e69a37dd",
@@ -5382,7 +5390,7 @@
     },
     "test:regression": {
       "fileCount": 116,
-      "titleCount": 893,
+      "titleCount": 901,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5462,8 +5470,8 @@
         "test/unit/rollback_coverage.test.js": "fe9ae5e0abacec1d",
         "test/unit/rollback_coverage.test/01_special_tables_handled.test.js": "72484f08c0af2014",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
-        "test/unit/schema_version.test.js": "73d07ebbe093fcfd",
-        "test/unit/schema_version_gate.test.js": "8dd41af6340e2265",
+        "test/unit/schema_version.test.js": "6324961ce2aed7c0",
+        "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js": "48914b893fa0ef67",
