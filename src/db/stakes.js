@@ -270,11 +270,11 @@ module.exports = {
     // block_index > S (target_table='stakes' only; unstakes debits do not feed the
     // stakes weight), restoring each row's pre-slash amount: 0 + prev_amount = prev_amount.
     //
-    // SYNC-ONLY / forward-follow-only. MUST NOT be added to or called from xchain-indexer:
-    // the indexer's action handlers (anchor/xcall/xexec/cross_settle) and the in-order
-    // stakes_root build call getStakeWeightsByCapability while S is the tip, BEFORE any
-    // later slash mutates the row, so they already read the correct value; adding the
-    // add-back there would double-count and fork the committed ledger. This is a NO-OP
+    // Forward-follow reconstruction. From SLASH_HISTORICAL_SET_ACTIVATION the
+    // indexer's set, weight and membership reads (src/db/stakes/slash_add_back.js,
+    // stakeWeightsAtSql) add back the same later debits, so its past-height reads
+    // match this one; below that height the indexer sums the current amount. At the
+    // tip no later debit exists and both forms read the same. This is a NO-OP
     // when no slash with block_index > S exists (addback is NULL -> COALESCE 0), so it
     // returns a result byte-identical to getStakeWeightsByCapability(cap, S) computed
     // in order at S. stakeWeightsSql (the cross-repo byte-identical twin) is deliberately
