@@ -382,6 +382,14 @@
       "ServerPoller decoder payload ships dispenser-interned address ids @regression keeps the tx address ids when the source has no dispensers table",
       "ServerPoller decoder payload ships dispenser-interned address ids @regression never streams the dispensers rows themselves"
     ],
+    "1dd00a6f4396c899": [
+      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
+      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
+      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
+      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)",
+      "replica secondary-index ensure list: anchor_actions and state_checkpoints carries the anchor_actions block_index_doge and state_checkpoints block_index indexes",
+      "replica secondary-index ensure list: credits and debits carries the address-tick-amount indexes used by getNetBalance"
+    ],
     "1e0ca4c243605c9c": [
       "Integration: ServerPoller poll detects and processes new blocks",
       "Integration: ServerPoller poll initializes lastPolledBlock on first poll",
@@ -4240,13 +4248,6 @@
       "02 Snapshot Performance Incremental snapshot export incremental from 50% (medium delta)",
       "02 Snapshot Performance Incremental snapshot export incremental from 90% (small delta)"
     ],
-    "e3368576c55cccbe": [
-      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
-      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
-      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
-      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)",
-      "replica secondary-index ensure list: anchor_actions and state_checkpoints carries the anchor_actions block_index_doge and state_checkpoints block_index indexes"
-    ],
     "e33e81c496f580b8": [
       "DATETIME session-zone validation accepts SYSTEM when the system zone is UTC",
       "DATETIME session-zone validation accepts UTC case-insensitively",
@@ -4715,7 +4716,7 @@
   "scripts": {
     "test": {
       "fileCount": 387,
-      "titleCount": 3071,
+      "titleCount": 3072,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4989,7 +4990,7 @@
         "test/unit/recovery_rewards.test.js": "c7ffd8486a3a6f7e",
         "test/unit/replica_freshness.test.js": "91e7a6f068b71e76",
         "test/unit/replica_gap_status.test.js": "bcf51d25df891659",
-        "test/unit/replica_secondary_indexes.test.js": "e3368576c55cccbe",
+        "test/unit/replica_secondary_indexes.test.js": "1dd00a6f4396c899",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/replicated_tables.test.js": "805d506efd2e2166",
         "test/unit/repo_guards/carrier_logic_pin.test.js": "0c13b5d1d073adc0",
