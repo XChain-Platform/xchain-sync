@@ -884,6 +884,9 @@ class Database {
             { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)' },
             { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)' },
             { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)' },
+            // A getNetBalance read on a busy address scans the whole ledger table without these.
+            { table: 'credits',          indexName: 'credits_address_tick_amount', columns: '(address_id, tick_id, amount)' },
+            { table: 'debits',           indexName: 'debits_address_tick_amount',  columns: '(address_id, tick_id, amount)' },
             // Per-block state-hash request_status and poll_finalize reads, the resolved-row
             // and finalized-poll sync reads, and the reorg resets all select on these columns.
             { table: 'attests',          indexName: 'version_resolved',   columns: '(version, resolved_block)' },
