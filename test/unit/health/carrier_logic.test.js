@@ -29,7 +29,7 @@ const STATE_HASH_REL = 'src/consensus/state_hash.js';
 const STATE_HASH_GATED_REL = 'src/consensus/state_hash/gated_sections.js';
 const STATE_HASH_GATED_REPIN = Object.freeze({
     from: 'c7c6294a0ce1142c181243916524a5934c1de1d1d5d163066385e1588334b3b7',
-    to: 'f13f9952b2b5e2ba6e0e1dccd28499af99afd2a84ee4beee85259001196f55b0',
+    to: '462a5e17f8ba99b2c22cee34fec78b80802d8b24efd20552fea0856d79537ca1',
 });
 const health = require(MODULE);
 const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));

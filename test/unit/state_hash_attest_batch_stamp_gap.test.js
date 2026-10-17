@@ -51,7 +51,8 @@ async function assertActiveFold(){    const source = baseResults().concat([[{ ac
     assert.deepStrictEqual(s.data.attest_batch_head, [{ action_index: 100, status: STAMPED }]);
     assert.strictEqual(calls.length, 10);
     assert.deepStrictEqual(calls[9].args,
-        ['%' + G.ATTEST_BATCH_COMPLETION_STAMP, G.ATTEST_BATCH_HEAD_VERSION, G.ATTEST_BATCH_CONTINUATION_VERSION, 7]);
+        ['%' + G.ATTEST_BATCH_COMPLETION_STAMP, G.ATTEST_BATCH_HEAD_VERSION,
+         G.ATTEST_BATCH_CONTINUATION_VERSION, 7, G.ATTEST_BATCH_CONTINUATION_VERSION, 7]);
     const dropped = await build(stale);
     assert.notStrictEqual(dropped.hash, s.hash);
     const same = await build(baseResults().concat([[{ action_index: 100, status: STAMPED }]]));
@@ -93,16 +94,21 @@ describe('state_hash attest_batch_head class, follower twin @regression', functi
 
     it('active: stamped heads fold in before block_index and a dropped stamp changes the hash', assertActiveFold);
 
-    it('selection: stamped v5 head keyed by the completing chunk block, resolved status, total order', async function(){
+    it('selection: block-prefiltered stamped v5 head keyed by the completing chunk block, resolved status, total order', async function(){
         const calls = [];
         await G.collectAttestBatchHead(dbFor([[]], calls), 7);
         const sql = calls[0].sql;
         assert.match(sql, /s\.status LIKE \?/);
         assert.match(sql, /p\.version = \? AND p\.batch_chunk_index = 0/);
+        assert.match(sql, /EXISTS \( SELECT 1 FROM attests e/);
+        assert.match(sql, /e\.version = \? AND e\.request_id = p\.request_id AND e\.block_index = \?/);
         assert.match(sql, /ca\.source_id = pa\.source_id/);
         assert.match(sql, /cs\.status = 'valid'/);
         assert.match(sql, /\) = \? ORDER BY p\.action_index ASC$/);
         assert.doesNotMatch(sql, /status_id,|p\.status_id AS/);
+        assert.deepStrictEqual(calls[0].args,
+            ['%' + G.ATTEST_BATCH_COMPLETION_STAMP, G.ATTEST_BATCH_HEAD_VERSION,
+             G.ATTEST_BATCH_CONTINUATION_VERSION, 7, G.ATTEST_BATCH_CONTINUATION_VERSION, 7]);
     });
 
     it('literal twins equal the follower forward-carry and rollback constants', function(){
