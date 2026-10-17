@@ -20,6 +20,7 @@
  * line would be reading a formatted, level-gated line instead of what the code
  * under test actually passed. The patch is a production wiring concern and is
  * covered directly in test/unit/observability.test.js, which opts back in.
+ * Running Mocha with bare --no-config drops this preload and manufactures console-inspection failures.
  *
  ********************************************************************/
 

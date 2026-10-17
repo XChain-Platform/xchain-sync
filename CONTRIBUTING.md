@@ -76,6 +76,8 @@ The sync service runs a layered suite. Pick the tier that matches your change:
 
 Run the no-external-services tiers before every commit; the README documents the full script catalogue. Changes to snapshot serialization, WebSocket event handling, hash verification, or the client applier should include fuzz and security coverage, since a validator's view of consensus state depends on this pipeline.
 
+A bare `mocha --no-config` run drops the required `test/setup/index.js` preload and manufactures console-inspection failures, so include `--require ./test/setup/index.js` when scoping unit files.
+
 ---
 
 ## Coding style
