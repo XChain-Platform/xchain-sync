@@ -259,6 +259,14 @@
  *       hub-mirrored `remote_token_snapshots`), which touch no wire-replicated
  *       table. All three migrations are mode=auto. Indexer stays at 18 and decoder
  *       stays at 5.
+ * Index-only frontier record (no version bump): the
+ *       2026-10-17-ledger-address-tick-amount-index migration adds non-unique
+ *       (address_id, tick_id, amount) secondary indexes to `credits` and `debits`.
+ *       It changes neither replicated columns nor payload shape, so an older
+ *       follower can still store every streamed row. The same frontier date carries
+ *       2026-10-17-dispensers-sweeps-column-order, whose MODIFY ... AFTER column
+ *       reordering on `dispensers` and `sweeps` changes neither the replicated column
+ *       set nor the payload shape. Indexer stays at 18 and decoder stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -285,7 +293,7 @@ const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-14',
+        through: '2026-10-17',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -348,27 +356,21 @@ const MIGRATION_FRONTIER = {
             '2026-10-06-resolved-block-idx.sql',
             '2026-10-07-ledger-covering-index.sql',
             '2026-10-08-token-bridge-fields.sql',
-            '2026-10-09-bet-edits.sql'
-        ],
-        accounted: [
-            // Non-unique secondary index on stream:action anchor_actions; its
-            // state_checkpoints statement is hub-mirrored.
-            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql',
-            // No wire-replicated table changes (hub-mirrored price_snapshots).
-            '2026-10-14-price-snapshots-refchain-block-idx.sql',
-            // No wire-replicated table changes (hub-mirrored remote_token_snapshots).
-            '2026-10-14-remote-token-admission.sql'
-        ],
-        indexOnly: [
+            '2026-10-09-bet-edits.sql',
             '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql'
         ],
+        accounted: [
+            '2026-10-17-dispensers-sweeps-column-order.sql',
+            '2026-10-17-ledger-address-tick-amount-index.sql'
+        ],
+        indexOnly: [
+            '2026-10-17-ledger-address-tick-amount-index.sql'
+        ],
         hashes: {
-            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql':
-                '419964d1d4775019f12bd1f7e2481b5e3b16bffcc661fc5d6a3aa201d854ab73',
-            '2026-10-14-price-snapshots-refchain-block-idx.sql':
-                '4f0c81c084e065acbed9fe205d95b392cc9e63d900308bcb3c4afabae67db9e1',
-            '2026-10-14-remote-token-admission.sql':
-                'f334a72ce620b84221354506b0dd885d3cda3f9457b81068b7d7b531b6115439'
+            '2026-10-17-dispensers-sweeps-column-order.sql':
+                '7890fcc366c7150af6b5b7f96ca8114cd8dc494840c4783586ee085d56d61277',
+            '2026-10-17-ledger-address-tick-amount-index.sql':
+                '408e9db33ee786714822de03b3452eca278de54cb895bf1b58c664776bc6ac1f'
         }
     },
     decoder: {
