@@ -741,12 +741,12 @@
       "Integration: WebSocket Broadcasting subscribe and receive block receives block event after new block is polled",
       "Integration: WebSocket Broadcasting subscribe and receive block receives reorg event"
     ],
-    "2cf644b2dea304b0": [
+    "a122a447c627671c": [
       "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
       "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
       "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet inert, testnet armed by the v0.23.0 cut, unknown network off",
       "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
-      "state_hash attest_batch_head class, follower twin @regression selection: stamped v5 head keyed by the completing chunk block, resolved status, total order"
+      "state_hash attest_batch_head class, follower twin @regression selection: block-prefiltered stamped v5 head keyed by the completing chunk block, resolved status, total order"
     ],
     "2d5af37f72b7535a": [
       "M-17: state-commitment input reads fail closed outside a transaction CONTROL: plain doQuery still swallows the same failure and answers []",
@@ -5057,7 +5057,7 @@
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "2cf644b2dea304b0",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "a122a447c627671c",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
@@ -5498,7 +5498,7 @@
         "test/unit/state_commitment_batched_node_writes.test/02_db_node_store_put_many_sql_shape.test.js": "e8b11f7dc180370c",
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
-        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "2cf644b2dea304b0",
+        "test/unit/state_hash_attest_batch_stamp_gap.test.js": "a122a447c627671c",
         "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
