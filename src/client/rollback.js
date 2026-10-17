@@ -124,9 +124,10 @@ function initializeDecoderBlockTables(client){
     // Block-scoped tables, deleted by block_index. Derived from the decoder
     // replication topology (the same source ServerPoller streams from) so the
     // stream and rollback sides can no longer drift apart table-by-table,
-    // mirroring the lifecycle-derived indexer lists above. Order matters:
-    // rollback deletes transactions before blocks (tx rows scope the tx-scoped
-    // tables above them), while the topology lists blocks first - hence the
+    // mirroring the lifecycle-derived indexer lists above. Deletes run in
+    // dependency order, transactions before blocks; no FK joins the two today, so
+    // the order is a convention pinned by test/unit/client_rollback.test/
+    // 06_rollback_decoder.test.js. The topology lists blocks first - hence the
     // copy-and-reverse.
     client.decoderBlockTables = [...replicatedTables.getTopology('decoder').blockScoped].reverse();
 }
@@ -230,6 +231,12 @@ class ClientRollback {
         return this.rollbackIndexer(block_index);
     }
 
+    // Highest surviving id of an index lookup table, 0 when empty (the source's maxId rule).
+    async readSurvivingMaxId(table){
+        let rows = await this.db.doQuery('SELECT MAX(id) AS max_id FROM ' + table, []);
+        return rows && rows[0] && rows[0].max_id != null ? rows[0].max_id : 0;
+    }
+
     // Indexer rollback (original behaviour)
     async rollbackIndexer(block_index){
         let timer = this.util.startTimer();
@@ -317,15 +324,18 @@ class ClientRollback {
                 }
             }
 
-            // ── In-place column resets (mirror xchain-indexer/src/rollback/in_place_flips.js) ──
-            // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows
-            // (action_index < firstActionIndex) to undo stamps that orphaned actions
-            // wrote on them. The DELETE loops below only drop orphaned-RANGE rows, so
-            // without replaying these resets the replica keeps the stale stamp and
-            // diverges from the source (and from a from-genesis replay) after a reorg.
-            // a consensus-affecting split. These three resets key purely on
-            // firstActionIndex / block_index, so they port exactly; run them BEFORE the
-            // deletes, matching the source order.
+            // ── In-place column resets (mirror xchain-indexer/src/rollback/index.js restoreInPlaceFlips) ──
+            // The source indexer's rollback runs in-place UPDATEs on SURVIVING rows to undo
+            // stamps that orphaned blocks wrote on them. Every reset in the block below is
+            // block-keyed (a stamp at or above block_index), so it runs whether or not the
+            // orphaned range holds an actions row: a block pass can write these stamps in a
+            // block that mints none (the BET deadline latch stamps bet_feeds.closed_block, the
+            // DELEGATE v1 materialization journals a key rotation, a rollcall eviction stamps
+            // delegations), and an action-free orphaned range leaves firstActionIndex null.
+            // Skipping them there left the surviving rows flipped on the replica while a fresh
+            // node held them open, a consensus-affecting split. Each is a no-op when nothing
+            // was flipped. The DELETE loops below only drop orphaned-RANGE rows, so these
+            // resets run BEFORE the deletes, matching the source order.
             //
             // NOTE: the source ALSO re-NULLs deactivation_block on
             // stakes/delegations/contract_stakes/contract_delegations. Those resets key on
@@ -333,7 +343,7 @@ class ClientRollback {
             // constant (never hub-overlaid; the indexer's mergeHubParams overlay is empty
             // for consensus params), so the replica now holds it via consensus-constants.js
             // and mirrors all four resets below.
-            if(firstActionIndex !== null){
+            {
                 // tokens.escrow_action_index (the ownership-escrow gate) is RE-DERIVED below,
                 // AFTER the dataTables delete (mirror of xchain-indexer/src/rollback/rederive.js), a range
                 // reset here would only handle the SET direction (offer orphaned), not the CLEAR
@@ -465,8 +475,9 @@ class ClientRollback {
                 // source records each debit's pre-slash `prev_amount`). The action-scoped
                 // delete below drops orphaned-range rows but never re-streams the surviving
                 // mutated row, so the replica keeps the slashed amount and diverges from the
-                // source after a reorg. Mirror the source restore (xchain-indexer
-                // rollback.js): copy back the HIGHEST orphaned `prev_amount` per row.
+                // source after a reorg. Mirror the source restore (xchain-indexer/src/db/rollback/
+                // stake_restores.js restoreContractSlashAmounts): copy back the HIGHEST orphaned
+                // `prev_amount` per row.
                 // The restored value is a pure string copy, byte-identical to the source (no
                 // arithmetic on the amount itself). Keys only on block_index/stake_action_index,
                 // so it ports cleanly (no ACTIVATION_DELAY_BLOCKS dependency).
@@ -691,11 +702,8 @@ class ClientRollback {
                 }
                 } // end deactivation_block mirror (activationDelay present)
 
-                // Cooldown-maturity reversal moved OUT of this firstActionIndex guard (see below,
-                // after the guard closes) - the legacy maturity path mutates a surviving row with
-                // no actions row in the maturity block, so an orphaned range with no other actions
-                // leaves firstActionIndex null and would skip it, diverging the replica from the
-                // (now-fixed) source.
+                // Cooldown-maturity reversal runs outside this block (see below, after it closes):
+                // the legacy maturity path mutates a surviving row with no actions row.
             }
 
             // anchor_reward_reconcile_log restore (RB-ANCHOR): mirror of
@@ -913,6 +921,22 @@ class ClientRollback {
                     if(e.errno !== 1146 && e.errno !== 1054) throw e;
                 }
 
+                // Clear tokens.bridged on every token left with no applied XBRIDGE v3 lock,
+                // mirroring the source (xchain-indexer/src/rollback/rederive.js), which runs it
+                // between the escrow and COINPay re-derives as here. The first lock sets the
+                // bit in place on a surviving token row whose action_index is the first
+                // issuance, so the generic delete cannot reach it and no forward window
+                // re-sends the row. Skipped on a truncated replica: it holds only [base..tip]
+                // of xbridges, so a token whose first lock sits below the floor would read as
+                // never locked, and clearing it would invent a divergence.
+                if(!truncatedReplica){
+                    try {
+                        await rederiveTokenBridged(this.db);
+                    } catch(e){
+                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    }
+                }
+
                 // Reverse an orphaned COINPAY's in-place match promotion, mirroring the
                 // source (xchain-indexer/src/rollback/rederive.js). Skipped on a truncated replica
                 // for the same reason the pair-scoped market sweep is: the payment history
@@ -1006,15 +1030,21 @@ class ClientRollback {
             // the local delete the source's reproduced row pages back in cleanly (the
             // address_id/pair PK is free again). balances needs no mirror here: the replica
             // recomputes it wholesale (rebuildBalances) so the orphan never re-derives.
+            //
+            // Both sweeps carry the source's `> surviving MAX(id)` bound, read after the
+            // index-lookup delete above: only ids the reorg took off the top of the dense
+            // counter are dangling. A replica hole below MAX(id) is a missing lookup row,
+            // not a rolled-back one, so its referencing row must survive as on the source.
             try {
+                let tickerMax = await this.readSurvivingMaxId('index_tickers');
                 await this.db.doQuery(
                     // A side that is the native coin stores 0, not a ticker id, and 0 is not
                     // a dangling reference: matching it here deleted every token/native
                     // market the source keeps, so the replica served an empty market list
                     // after any reorg. Mirrors the source's exemption exactly.
-                    "DELETE FROM markets WHERE (tick1_id <> ? AND tick1_id NOT IN (SELECT id FROM index_tickers)) " +
-                    "OR (tick2_id <> ? AND tick2_id NOT IN (SELECT id FROM index_tickers))",
-                    [MARKET_NATIVE_TICK_ID, MARKET_NATIVE_TICK_ID]);
+                    "DELETE FROM markets WHERE (tick1_id <> ? AND tick1_id > ? AND tick1_id NOT IN (SELECT id FROM index_tickers)) " +
+                    "OR (tick2_id <> ? AND tick2_id > ? AND tick2_id NOT IN (SELECT id FROM index_tickers))",
+                    [MARKET_NATIVE_TICK_ID, tickerMax, MARKET_NATIVE_TICK_ID, tickerMax]);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -1034,20 +1064,24 @@ class ClientRollback {
             // surviving orders/order_matches row references either orientation - the same
             // predicate the source applies.
             try {
-                // COALESCE on both probes: the pair ids come from `markets`, where a side
-                // with no ticker is 0, while orders/order_matches store NULL for it. A bare
-                // compare never found a survivor for such a pair, so the delete below took
-                // a live market out of the replica on every reorg that touched one.
+                // Index-friendly probe: the pair ids come from `markets`, where a side with no
+                // ticker is 0, while orders/order_matches store NULL for it. Each side is
+                // (col=? OR (col IS NULL AND ?=0)) rather than COALESCE(col,0)=?, which wraps
+                // the indexed column and forces a scan. A bare compare never found a survivor
+                // for a tickerless pair, so the delete below took a live market out of the
+                // replica on every reorg that touched one.
                 for(let pair of affectedMarketPairs){
+                    const a = pair.tick1_id, b = pair.tick2_id;
+                    const probeParams = [a, a, b, b, b, b, a, a];
                     let survives = await this.db.doQuery(
-                        "SELECT 1 FROM orders WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
-                        "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
-                        [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                        "SELECT 1 FROM orders WHERE " +
+                        "((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) " +
+                        "OR ((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) LIMIT 1", probeParams);
                     if(!survives || survives.length === 0){
                         survives = await this.db.doQuery(
-                            "SELECT 1 FROM order_matches WHERE (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) " +
-                            "OR (COALESCE(give_tick_id,0)=? AND COALESCE(get_tick_id,0)=?) LIMIT 1",
-                            [pair.tick1_id, pair.tick2_id, pair.tick2_id, pair.tick1_id]);
+                            "SELECT 1 FROM order_matches WHERE " +
+                            "((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) " +
+                            "OR ((give_tick_id=? OR (give_tick_id IS NULL AND ?=0)) AND (get_tick_id=? OR (get_tick_id IS NULL AND ?=0))) LIMIT 1", probeParams);
                     }
                     if(!survives || survives.length === 0){
                         await this.db.doQuery(
@@ -1061,8 +1095,10 @@ class ClientRollback {
                 if(e.errno !== 1146 && e.errno !== 1054) throw e;
             }
             try {
+                let addressMax = await this.readSurvivingMaxId('index_addresses');
                 await this.db.doQuery(
-                    "DELETE FROM pubkeys WHERE address_id NOT IN (SELECT id FROM index_addresses)", []);
+                    "DELETE FROM pubkeys WHERE address_id > ? AND address_id NOT IN (SELECT id FROM index_addresses)",
+                    [addressMax]);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -1446,9 +1482,29 @@ async function rederiveCoinpayMatchStatus(db){
     await db.doQuery(coinpayMatchPromoteSql, []);
 }
 
+// Re-derive tokens.bridged from the already-replicated xbridges rows. Replica mirror of
+// xchain-indexer/src/db/rollback/rederive.js rederiveTokenBridged: the bit is a write-time
+// cache of "this token has an applied XBRIDGE v3 lock", so after the reorg delete it is
+// cleared on every token with no surviving valid v3 lock. It only ever clears, because a
+// surviving lock already set the bit. The SQL between the //<TOKEN-BRIDGED-REDERIVE-SQL>
+// markers is kept logically identical with the source's (cross-repo drift guard in
+// test/unit/rollback_coverage.test.js). Uses db.doQuery so it joins whatever transaction
+// the caller already opened. Skipped on a truncated replica (see the call site).
+async function rederiveTokenBridged(db){
+    //<TOKEN-BRIDGED-REDERIVE-SQL>
+    const tokenBridgedClearSql =
+        `UPDATE tokens SET bridged=0
+         WHERE bridged=1 AND NOT EXISTS (
+             SELECT 1 FROM xbridges x INNER JOIN index_statuses s ON (s.id=x.status_id)
+             WHERE x.tick_id=tokens.tick_id AND x.version=3 AND s.status='valid')`;
+    //</TOKEN-BRIDGED-REDERIVE-SQL>
+    await db.doQuery(tokenBridgedClearSql, []);
+}
+
 // Hung on the class rather than on module.exports so the file has ONE export
 // shape. Every call site reads the same property off the same object either way.
 ClientRollback.rederiveEscrowGate = rederiveEscrowGate;
 ClientRollback.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;
+ClientRollback.rederiveTokenBridged = rederiveTokenBridged;
 
 module.exports = ClientRollback;

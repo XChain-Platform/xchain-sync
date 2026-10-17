@@ -136,7 +136,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -152,7 +152,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(rogue, { block_index: 100, snapshot_block: 90, state_root: SR1 });   // signed by rogue
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];   // authoritative = s1, not rogue
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];   // authoritative = s1, not rogue
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -169,7 +169,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: 'ff'.repeat(32), block_merkle_root: cp.block_merkle_root };  // differs
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -189,7 +189,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 95, state_root: SR1 });   // snapshot 95 > trusted 90
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[95]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[89]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -203,7 +203,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: 'b1'.repeat(32) });
         // no rootsByHeight[90] -> seed roots 'missing'
         rootsByHeight[100] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -217,7 +217,7 @@ describe('ClientSync: checkpoint-quorum rotation following @regression', functio
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: 'b1'.repeat(32) });
         rootsByHeight[90]  = { state_root: 'cc'.repeat(32), block_merkle_root: 'aa'.repeat(32) };  // != seed
         rootsByHeight[100] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -258,7 +258,7 @@ describe('ClientSync: checkpoint-quorum rotation range source @regression', func
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         return cp;
     }
     function rangeUrls(){
@@ -325,7 +325,7 @@ describe('ClientSync: rotation following under the hub\'s full coin name @regres
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -341,7 +341,7 @@ describe('ClientSync: rotation following under the hub\'s full coin name @regres
         const cp = signedCpAt(rogue, { block_index: 100, snapshot_block: 90, state_root: SR1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         route(cp, [cp]);
 
         await sync.verifyCheckpointQuorum();
@@ -362,7 +362,7 @@ describe('ClientSync: rotation following records only the attested checkpoint @r
         const cp = signedCpAt(s1, { block_index: 100, snapshot_block: 90, state_root: SR1, checkpoint_seq: 1 });
         rootsByHeight[90]  = { state_root: SR0, block_merkle_root: 'aa'.repeat(32) };
         rootsByHeight[100] = { state_root: SR1, block_merkle_root: cp.block_merkle_root };
-        stakeByHeight[90]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
+        stakeByHeight[84]  = [{ pubkey: s1.pubkeyHex, source: 'R1', weight: '100' }];
         return { cp, s1 };
     }
 

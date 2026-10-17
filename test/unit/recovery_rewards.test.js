@@ -125,7 +125,7 @@ describe('collectRedrivenValidatorRewards', function(){
         // Regression: a bare catch here made both callers' isSchemaGapError gates dead
         // code (ServerPoller freezes the cursor, SnapshotBuilder aborts the stream), so a
         // deadlock/lock-wait/connection drop shipped the block short its backdated rows
-        // with no consensus-hash signal. Mirrors derivedRewards on the same rail.
+        // with no consensus-hash signal. Mirrors derived_rewards.js on the same rail.
         let missingTable = Object.assign(new Error("Table 'recovery_pending_rewards' doesn't exist"), { errno: 1146 });
         assert.deepStrictEqual(await collectRedrivenValidatorRewards(
             { doQuery: async () => { throw missingTable; } }, 150, 150), []);

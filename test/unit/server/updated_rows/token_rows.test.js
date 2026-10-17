@@ -11,6 +11,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
+const Database = require('../../../../src/db');
 const {
     collectTokenSupplyRows,
     collectTokenEditRows
@@ -19,7 +20,7 @@ const {
 const CONN = { id: 'conn' };
 
 function makeDb(result){
-    const calls = { ledger: [], query: [] };
+    const calls = { ledger: [], edited: [] };
     const settle = () => {
         if(result instanceof Error) throw result;
         return result;
@@ -30,8 +31,8 @@ function makeDb(result){
             calls.ledger.push(args);
             return settle();
         },
-        async doQuery(...args){
-            calls.query.push(args);
+        async findEditedTokens(...args){
+            calls.edited.push(args);
             return settle();
         }
     };
@@ -56,23 +57,19 @@ describe('updated rows token classes', function(){
         const acc = {};
         await collectTokenSupplyRows(db, 100, 200, CONN, acc);
         assert.deepStrictEqual(db.calls.ledger, [[100, 200, CONN]]);
-        assert.strictEqual(db.calls.query.length, 0);
+        assert.strictEqual(db.calls.edited.length, 0);
         assert.ok(acc.tokens instanceof Map);
         assert.deepStrictEqual([...acc.tokens.keys()], ['5', '9']);
         assert.strictEqual(acc.tokens.get('5').tick, 'A');
     });
 
-    it('edit class issues one tokens query with [from, to] and conn third', async function(){
+    it('edit class reads through findEditedTokens with from, to and conn', async function(){
         const rows = [{ action_index: 3, tick: 'C' }];
         const db = makeDb(rows);
         const acc = {};
         await collectTokenEditRows(db, 10, 20, CONN, acc);
-        assert.strictEqual(db.calls.query.length, 1);
+        assert.deepStrictEqual(db.calls.edited, [[10, 20, CONN]]);
         assert.strictEqual(db.calls.ledger.length, 0);
-        const [sql, params, conn] = db.calls.query[0];
-        assert.ok(/FROM `tokens`/.test(sql));
-        assert.deepStrictEqual(params, [10, 20]);
-        assert.strictEqual(conn, CONN);
         assert.ok(acc.tokens instanceof Map);
         assert.deepStrictEqual([...acc.tokens.keys()], ['3']);
     });
@@ -113,3 +110,18 @@ for(const [name, collect] of COLLECTORS){
         });
     });
 }
+
+describe('Database.findEditedTokens', function(){
+    it('runs the valid-issues tokens query with [from, to] and conn third', async function(){
+        const calls = [];
+        const fake = {
+            async doQuery(...args){ calls.push(args); return []; }
+        };
+        await Database.prototype.findEditedTokens.call(fake, 10, 20, CONN);
+        assert.strictEqual(calls.length, 1);
+        const [sql, params, conn] = calls[0];
+        assert.ok(/FROM `tokens`/.test(sql));
+        assert.deepStrictEqual(params, [10, 20]);
+        assert.strictEqual(conn, CONN);
+    });
+});

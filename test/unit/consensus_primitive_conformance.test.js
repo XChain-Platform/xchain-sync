@@ -37,6 +37,7 @@ const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js'
 
 const swq   = require('../../src/consensus/stake_weighted_quorum.js');
 const equiv = require('../../src/consensus/equivocation_header.js');
+const srb   = require('../../src/consensus/snapshot_reorg_buffer.js');
 
 const LOCAL_DIR = path.join(__dirname, '../../src');
 // Resolve the canonical xchain-documentation repo. Prefer an explicit path: GitHub CI
@@ -49,6 +50,15 @@ const CANON_DIR = path.join(DOCS_DIR, 'protocol', 'reference-impl');
 const VEC_DIR   = path.join(DOCS_DIR, 'protocol', 'test-vectors');
 const CANON_VERDICT = siblingCheckout(__dirname, CANON_DIR);
 const VEC_VERDICT = siblingCheckout(__dirname, VEC_DIR);
+
+// List the regular .js files of one side's consensus/gate_registry/, sorted; empty when absent.
+function registryParts(root){
+    const dir = path.join(root, 'consensus', 'gate_registry');
+    if(!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name.endsWith('.js')).map((d) => d.name).sort();
+}
+const LOCAL_PARTS = registryParts(LOCAL_DIR);
 
 let quorumVec = null, equivVec = null, activationVec = null;
 if(VEC_VERDICT.usable){
@@ -127,7 +137,7 @@ function decodeSnapshotBlock(v){
 }
 
 // The activation boundaries run through THIS repo's carriers and so its own gate registry,
-// which byte identity never reaches; no snapshot_reorg_buffer.js here, so no burial group.
+// which byte identity alone never reaches.
 describe('consensus-primitive conformance: activation predicate vectors @regression', function(){
     before(function(){
         if(!skipOrFail(this, VEC_VERDICT, 'the activation predicate test-vector guard')) return;
@@ -140,7 +150,7 @@ describe('consensus-primitive conformance: activation predicate vectors @regress
     const groups = activationVec || {};
 
     it('every group this repo runs is a non-empty list', function(){
-        for(const g of ['isStakeWeightedQuorumActive', 'isEquivHeaderActive'])
+        for(const g of ['isStakeWeightedQuorumActive', 'isEquivHeaderActive', 'snapshotBurial'])
             assert.ok(Array.isArray(groups[g]) && groups[g].length > 0, g + ' is missing or empty');
     });
     (groups.isStakeWeightedQuorumActive || []).forEach(function(c){
@@ -153,6 +163,13 @@ describe('consensus-primitive conformance: activation predicate vectors @regress
             assert.strictEqual(equiv.isEquivHeaderActive(decodeSnapshotBlock(c.snapshotBlock), c.network), c.expected);
         });
     });
+    (groups.snapshotBurial || []).forEach(function(c){
+        it('snapshotBurial: ' + c.name, function(){
+            const sb = decodeSnapshotBlock(c.snapshotBlock);
+            assert.strictEqual(srb.isSnapshotBurialActive(sb, c.network), c.active);
+            assert.strictEqual(srb.buriedSnapshotBlock(sb, c.network), decodeSnapshotBlock(c.buriedSnapshotBlock));
+        });
+    });
 });
 
 describe('consensus-primitive conformance: byte-identity to canonical source @regression', function(){
@@ -160,10 +177,10 @@ describe('consensus-primitive conformance: byte-identity to canonical source @re
         skipOrFail(this, CANON_VERDICT, 'the canonical consensus reference-impl byte-identity guard');
     });
 
-    // The two carriers sit under consensus/ on both sides since W5 (the same tail in
+    // The three carriers sit under consensus/ on both sides since W5 (the same tail in
     // every repo), so the compare is a raw byte compare of src/consensus/<f> against
     // protocol/reference-impl/consensus/<f>.
-    ['stake_weighted_quorum.js', 'equivocation_header.js'].forEach(function(f){
+    ['stake_weighted_quorum.js', 'equivocation_header.js', 'snapshot_reorg_buffer.js'].forEach(function(f){
         it(f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
             const local = fs.readFileSync(path.join(LOCAL_DIR, 'consensus', f), 'utf8');
             const canon = fs.readFileSync(path.join(CANON_DIR, 'consensus', f), 'utf8');
@@ -174,9 +191,26 @@ describe('consensus-primitive conformance: byte-identity to canonical source @re
     });
 
     // Compare the activation-registry parts too: a one-sided row edit here forks the
-    // follower at its flag day. The per-repo entry gate_registry.js is not a twin.
-    ['core.js', 'shared_rows.js', 'regtest_env.js', 'shared_rows_1.js', 'shared_rows_2.js',
-        'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'].forEach(function(f){
+    // follower at its flag day. The per-repo entry gate_registry.js is not a twin. The
+    // part list is the local directory listing, held equal to the canonical listing, so
+    // a part added or dropped on one side fails here instead of going unchecked.
+    it('gate_registry/ holds the vendored parts', function(){
+        assert.ok(LOCAL_PARTS.length > 0,
+            'src/consensus/gate_registry/ is missing or empty, so the per-part byte guard would check nothing');
+    });
+
+    it('gate_registry/ file set equals xchain-documentation/protocol/reference-impl', function(){
+        const canon = registryParts(CANON_DIR);
+        assert.ok(canon.length > 0, 'the canonical gate_registry/ under ' + CANON_DIR + ' is missing or empty');
+        const missing = canon.filter((f) => !LOCAL_PARTS.includes(f));
+        const extra   = LOCAL_PARTS.filter((f) => !canon.includes(f));
+        assert.deepStrictEqual({ missing, extra }, { missing: [], extra: [] },
+            'gate_registry/ file sets differ. Missing from this copy: [' + missing.join(', ') +
+            ']. Present only in this copy: [' + extra.join(', ') +
+            ']. Vendor the canonical part(s) with reconcile-twins.sh and wire them into src/consensus/gate_registry.js.');
+    });
+
+    LOCAL_PARTS.forEach(function(f){
         it('gate_registry/' + f + ' is byte-identical to xchain-documentation/protocol/reference-impl', function(){
             const rel   = path.join('consensus', 'gate_registry', f);
             const local = fs.readFileSync(path.join(LOCAL_DIR, rel), 'utf8');

@@ -66,6 +66,16 @@ describe('state-root assembly twins: identical functions @regression', function(
             'reservedSubRootCandidates differs between xchain-sync and xchain-indexer. Port the ' +
             'change, or move it out of the identical list in the ' + HEADER + ' header');
     });
+
+    it('shadowSubRoots is identical to indexer state_commitment/index.js', function(){
+        const pair = loadPair(this, 'src/state_commitment/index.js', 'src/state_commitment/index.js');
+        if(!pair) return;
+        const sig = /async function shadowSubRoots\(db, chain, network, blockIndex\)\{/;
+        assert.strictEqual(normalize(extractFunction(pair.sync, sig, HEADER)),
+            normalize(extractFunction(pair.indexer, sig, 'xchain-indexer/src/state_commitment/index.js')),
+            'shadowSubRoots differs between xchain-sync and xchain-indexer. Port the ' +
+            'change, or move it out of the identical list in the ' + HEADER + ' header');
+    });
 });
 
 describe('state-root assembly twins: computeBlockMerkleRoot @regression', function(){

@@ -68,11 +68,13 @@ async function collectTokenSupplyRows(db, from, to, conn, acc){
 async function collectTokenEditRows(db, from, to, conn, acc){
     // 7. tokens metadata refresh on surviving token rows, class 6's sibling one column
     //    family over. Every valid ISSUE re-derives the WHOLE tokens row from the tick's
-    //    `issues` history (issue/settle.js -> createToken, then updateTokens ->
-    //    getTokenInfo's replay), so an ISSUE that EDITS an existing tick is an in-place
-    //    UPDATE of owner_id, description, the seven locks, the callback and list fields,
-    //    the mint window and the bridge opt-in. action_index stays pinned at the FIRST
-    //    issuance while the edit's UPDATE moves last_action_index to the editing ISSUE, and
+    //    `issues` history (issue/token_state.js merges the ISSUE over getTokenInfo's
+    //    replay, then issue/settle.js -> createToken writes it; the forward updateTokens
+    //    moves only owner_id and last_action_index), so an ISSUE that EDITS an existing
+    //    tick is an in-place UPDATE of owner_id, description, the seven locks, the
+    //    callback and list fields, the mint window and the bridge opt-in. action_index
+    //    stays pinned at the FIRST issuance while the edit's UPDATE moves
+    //    last_action_index to the editing ISSUE, and
     //    the action-scoped stream keys on action_index, so - exactly as with supply - it
     //    carries the new `issues` row but never the edited `tokens` row it produced.
     //
@@ -105,13 +107,7 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    but never halts. This carry must stay live before any future state-hash twin
     //    arms, or a follower would halt on a row it was never sent.
     try {
-        let tokenRows = await db.doQuery(
-            "SELECT t.* FROM `tokens` t WHERE t.tick_id IN (" +
-                "SELECT i.tick_id FROM issues i " +
-                    "JOIN actions a ON a.action_index = i.action_index " +
-                    "JOIN index_statuses s ON s.id = i.status_id AND s.status = 'valid' " +
-                    "WHERE a.block_index BETWEEN ? AND ? AND i.tick_id IS NOT NULL)",
-            [from, to], conn);
+        let tokenRows = await db.findEditedTokens(from, to, conn);
         add(acc, 'tokens', tokenRows);
     } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
 }

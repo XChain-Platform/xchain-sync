@@ -76,6 +76,8 @@ The sync service runs a layered suite. Pick the tier that matches your change:
 
 Run the no-external-services tiers before every commit; the README documents the full script catalogue. Changes to snapshot serialization, WebSocket event handling, hash verification, or the client applier should include fuzz and security coverage, since a validator's view of consensus state depends on this pipeline.
 
+A bare `mocha --no-config` run drops the required `test/setup/index.js` preload and manufactures console-inspection failures, so include `--require ./test/setup/index.js` when scoping unit files.
+
 ---
 
 ## Coding style
@@ -93,7 +95,7 @@ Run the no-external-services tiers before every commit; the README documents the
 
 Match the existing log style: a concise subject line, then a short body explaining what changed and why.
 
-- Branch off `master` and keep history linear (rebase, don't merge).
+- Fork the repository, branch off `develop`, and open your pull request against `develop`. Keep history linear (rebase, don't merge). `master` is what production runs and only ever receives release merges from `develop`; a pull request into `master` from a fork or any other branch fails the `base-branch guard` check and cannot be merged.
 - One logical change per commit; don't batch unrelated work.
 - **No `Co-Authored-By` trailers.** This is a project policy.
 - **Never `--no-verify`.** If a hook fails, fix the cause; don't bypass it.

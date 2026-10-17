@@ -25,6 +25,12 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '../../..');
 const MODULE = path.join(ROOT, 'src/health/carrier_logic.js');
+const STATE_HASH_REL = 'src/consensus/state_hash.js';
+const STATE_HASH_GATED_REL = 'src/consensus/state_hash/gated_sections.js';
+const STATE_HASH_GATED_REPIN = Object.freeze({
+    from: 'c7c6294a0ce1142c181243916524a5934c1de1d1d5d163066385e1588334b3b7',
+    to: '462a5e17f8ba99b2c22cee34fec78b80802d8b24efd20552fea0856d79537ca1',
+});
 const health = require(MODULE);
 const logicPin = require(path.join(ROOT, 'bin/lib/carrier_logic_pin.js'));
 const { computeArmedMapFingerprint } = require(path.join(ROOT, 'src/consensus/armed_map/fingerprint'));
@@ -84,9 +90,35 @@ describe('health/carrier_logic: the published carrier logic digest', function ()
         assert.strictEqual(health.PIN_PATH, path.join(ROOT, 'bin/pins/carrier-logic.json'));
     });
 
+    it('records the gated stateHash carrier repin and keeps its indexer twin aligned', function () {
+        const pin = logicPin.readPin(ROOT);
+        const entry = pin.entries.stateHash;
+        const measured = logicPin.measure(ROOT, pin).stateHash;
+        const facade = fs.readFileSync(path.join(ROOT, STATE_HASH_REL), 'utf8');
+        const gated = fs.readFileSync(path.join(ROOT, STATE_HASH_GATED_REL), 'utf8');
+        const indexerRoot = logicPin.siblingDir('xchain-indexer', ROOT);
+        const indexerGated = fs.readFileSync(path.join(indexerRoot, STATE_HASH_GATED_REL), 'utf8');
+        const indexerEntry = logicPin.readPin(indexerRoot).entries.stateHash;
+
+        assert.strictEqual(entry.path, STATE_HASH_REL);
+        assert.strictEqual(measured.actual, entry.hash);
+        assert.match(facade, /require\(['"]\.\/state_hash\/gated_sections['"]\)/);
+        assert.match(gated, /p\.batch_total_chunks AS total_chunks, p\.batch_crc32 AS crc32/);
+        assert.match(gated, /c\.batch_total_chunks = p\.batch_total_chunks AND c\.batch_crc32 = p\.batch_crc32/);
+        assert.notStrictEqual(STATE_HASH_GATED_REPIN.from, STATE_HASH_GATED_REPIN.to);
+        assert.strictEqual(logicPin.tokenHash(gated), STATE_HASH_GATED_REPIN.to);
+        assert.strictEqual(logicPin.tokenHash(indexerGated), STATE_HASH_GATED_REPIN.to);
+        assert.strictEqual(indexerGated, gated);
+        assert.strictEqual(indexerEntry.hash, entry.hash);
+    });
+
     it('is memoised per process', function () {
         assert.strictEqual(health.carrierLogicDigest(), health.carrierLogicDigest());
     });
+
+});
+
+describe('health/carrier_logic: the published carrier logic digest', function () {
 
     it('reads the pin two directories up from src/health, so a copy with the pin publishes the hex', function () {
         assert.strictEqual(freshCopy(true).carrierLogicDigest(), logicPin.digest(logicPin.readPin(ROOT)));

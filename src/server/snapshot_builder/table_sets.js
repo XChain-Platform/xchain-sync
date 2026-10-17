@@ -100,6 +100,10 @@ const OPERATOR_LOCAL_TABLES = new Set([
 // existed is healed on its next full-snapshot apply (OPERATOR_LOCAL_TABLES is
 // clear-protected, which would freeze those foreign rows forever).
 //
+// DECLARED by name: the tableLifecycle registry has no replication mode for a
+// table the source never streams but the replica still clears, so a new member
+// is a deliberate classification added here with its reason, as merkle_reorgs is.
+//
 // merkle_reorgs: node-local transparency-log reorg audit (server-side/indexer-only
 // per its schema header; written by TransparencyLog.pruneFrom, new_root backfilled
 // by commitEpoch). No cursor column, no replica reader, not in getReplicatedTables.
@@ -109,8 +113,16 @@ const OPERATOR_LOCAL_TABLES = new Set([
 // omission is a classification on record. The registry-exhaustiveness test
 // (test/unit/sync_table_classification.test.js) keeps the next sync-owned table from
 // falling through the same way.
-const SOURCE_UNSTREAMED_TABLES = new Set([
-    'merkle_reorgs',
+const SOURCE_UNSTREAMED_TABLES = new Set(['merkle_reorgs']);
+
+// Replica-owned migration ledger. Each node's own migration runner records what it
+// applied here, so the source never streams it (full or incremental) and the
+// applier never applies a shipped copy nor clears the replica's rows. Disjoint from
+// both sets above: OPERATOR_LOCAL_TABLES pins its non-registry members, and
+// SOURCE_UNSTREAMED_TABLES is cleared on full-snapshot apply, which would erase the
+// replica's own ledger. The builder and ClientApplier both read this one Set.
+const REPLICA_LEDGER_TABLES = new Set([
+    'schema_migrations',
 ]);
 
 // Priority ordering for tables that must come first (index/dedup, then core).
@@ -290,9 +302,25 @@ function indexerFullDumpSet(){
     ]);
 }
 
+// Indexer 'snapshot'-class tables the incremental path deliberately omits. None has
+// a block_index or action_index cursor, so without this classification each one
+// reaches the action_index query, raises errno 1054 and is dropped as though the
+// source schema were older. Each rides the full snapshot only:
+//   - balances: derived aggregate; the follower rebuilds the touched rows from the
+//     credits/debits it applies (ClientApplier.rebuildBalancesTouchedBy).
+//   - state_tree_nodes: content-addressed SMT node store with no block or action
+//     key; the follower re-seeds its own tree (seedSnapshotRoots) after the apply.
+// Payload-neutral: these tables already contributed no rows to an incremental.
+const INDEXER_INCREMENTAL_SKIP = new Set([
+    'balances',
+    'state_tree_nodes',
+]);
+
 module.exports = {
     OPERATOR_LOCAL_TABLES,
     SOURCE_UNSTREAMED_TABLES,
+    REPLICA_LEDGER_TABLES,
+    INDEXER_INCREMENTAL_SKIP,
     PRIORITY_TABLES,
     TRAILING_TABLES,
     INDEXER_INBAND_PAGED,

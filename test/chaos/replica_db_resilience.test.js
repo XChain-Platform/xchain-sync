@@ -154,9 +154,11 @@ describe('CE-DST-01: Complete Replica DB Unavailability', function () {
         // Seed blocks while replica is down
         await seedSourceBlocks(11, 20);
         await server.poll();
-        // Keep the replica down while the broadcast lands (exposure window; each
-        // event against a dead replica costs a 10s acquire, and recovery gates).
+        // Keep the replica down while the broadcast lands (exposure window: the client
+        // event chain is queued behind 10s-acquire catch-ups, so handling cannot be awaited).
+        const appliedBefore = client.getLastAppliedBlock();
         await sleep(3000);
+        expect(client.getLastAppliedBlock(), 'A dead replica must not commit a block').to.equal(appliedBefore);
 
         // Restore replica
         await replicaFaults.dbUp();
@@ -231,17 +233,16 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
         // Seed blocks; server broadcasts, client receives but can't write
         await seedSourceBlocks(11, 15);
         await server.poll();
-        // Hold the client stuck on held writes, then prove the server still
-        // answers (negative window: a stuck write never settles to poll on).
+        // Prove the server answers as the hold begins, so the check after it shows survival.
+        let alive = await isServerAlive(server.getUrl());
+        expect(alive, 'Server must answer before the replica writes are held').to.equal(true);
+        // Hold the client stuck on held writes (exposure window: a stuck write never settles to poll on).
         await sleep(8000);
-
-        // Server must stay reachable even though the client is stuck
-        // retrying against replica-write timeouts.
+        // Server must stay reachable while the client retries against replica-write timeouts.
         // Client process must still be running (WebSocket connected)
         // Verify server is still serving (not blocked by client issues)
-        const alive = await isServerAlive(server.getUrl());
-        expect(alive).to.equal(true,
-            'Server must stay alive; client pool exhaustion must not affect server');
+        alive = await isServerAlive(server.getUrl());
+        expect(alive, 'Server must stay alive; client pool exhaustion must not affect server').to.equal(true);
     });
 
     it('client recovers after timeout toxic is removed', async function () {
@@ -250,8 +251,10 @@ describe('CE-DST-03: Connection Pool Exhaustion', function () {
         await seedSourceBlocks(11, 15);
         await server.poll();
         // Keep writes held before lifting the toxic (exposure window, not a
-        // gate: the recovery wait below decides).
+        // gate: the recovery wait below decides). A held write cannot commit.
+        const appliedBefore = client.getLastAppliedBlock();
         await sleep(5000);
+        expect(client.getLastAppliedBlock(), 'A held replica write must not commit').to.equal(appliedBefore);
 
         await replicaFaults.reset();
 
@@ -293,10 +296,12 @@ describe('CE-DST-04: Intermittent Connection Drops', function () {
     });
 
     it('all blocks eventually reach replica after toxic removal', async function () {
+        // Baseline before the toxic, so the wait counts only status rounds handled under it.
+        const seenStatus = client.getEventsHandled('status');
         await replicaFaults.resetConnections(0.3);
-        // Expose writes to resets before lifting the toxic (exposure window;
-        // the recovery wait below decides).
-        await sleep(3000);
+        // Expose writes to resets for three handled status rounds (each can start a
+        // catch-up write) before lifting the toxic; the recovery wait below decides.
+        await waitForClientEvents(client, 'status', seenStatus + 3, 60000);
         await replicaFaults.reset();
 
         // Allow catch-up to complete
@@ -322,9 +327,9 @@ describe('CE-DST-05: Replica Down → Blocks Accumulate → Recovery', function 
 
         // Take replica DB down
         await replicaFaults.dbDown();
-        // Hold the outage before blocks appear (exposure window; the client
-        // exposes no replica-down state to wait on).
-        await sleep(2000);
+        // Disabling the proxy severs the replica when the call returns, so baseline
+        // the handled blocks now and count only the ones broadcast into the outage.
+        const seenBlocks = client.getEventsHandled('block');
 
         // Seed a batch of blocks into source while replica is down
         await seedSourceBlocks(11, 30);
@@ -336,14 +341,15 @@ describe('CE-DST-05: Replica Down → Blocks Accumulate → Recovery', function 
             await sleep(300);
         }
 
-        // Let broadcasts fail on the client before restore (exposure window:
-        // settling all 20 at a 10s acquire each would outrun the test budget).
-        await sleep(5000);
+        // Restore once the client has handled one broadcast block against the dead
+        // replica (settling all 20 at a 10s acquire each would outrun the budget).
+        await waitForClientEvents(client, 'block', seenBlocks + 1, 60000);
+        expect(client.getLastAppliedBlock()).to.be.at.most(preOutageBlock,
+            'Client must not commit a block while the replica DB is down');
 
         // Restore replica DB
         await replicaFaults.dbUp();
-        // Settle after restore (not a gate: the recovery wait below decides).
-        await sleep(2000);
+        // No settle: the recovery wait below polls the replica from the restore on.
 
         // Client should detect gap and perform incremental catch-up
         const recoveryMs = await waitForSyncRecovery(30, 120000);

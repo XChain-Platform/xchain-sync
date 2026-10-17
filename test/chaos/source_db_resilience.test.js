@@ -44,7 +44,7 @@ const {
     assertHashesMatch
 } = require('../e2e/helpers/assertions');
 
-const { waitForServerPollFailures } = require('../e2e/helpers/waitFor');
+const { waitFor, waitForServerPollFailures } = require('../e2e/helpers/waitFor');
 const fixtures = require('../e2e/helpers/fixtures');
 
 const {
@@ -241,30 +241,42 @@ describe('CE-SRC-03: Connection Pool Exhaustion', function () {
     it('server stays alive when all DB connections are held for 30s', async function () {
         await sourceFaults.timeout(30000);
 
+        // Prove the server answers as the hold begins, so the check after it shows survival.
+        let alive = await isServerAlive(server.getUrl());
+        expect(alive, 'Server must answer before the pool is held').to.equal(true);
         // Hold the pool exhausted, then prove the server still answers (negative
         // window: held reads hang rather than fail, so there is nothing to poll).
         await sleep(8000);
 
-        const alive = await isServerAlive(server.getUrl());
-        expect(alive).to.equal(true,
-            'Server must stay alive during connection pool exhaustion');
+        alive = await isServerAlive(server.getUrl());
+        expect(alive, 'Server must stay alive during connection pool exhaustion').to.equal(true);
     });
 
     it('server recovers after timeout toxic is removed', async function () {
         await sourceFaults.timeout(30000);
         // Keep the pool held long enough to stall polls (exposure window, not a
-        // gate: the recovery wait below decides).
+        // gate: the recovery wait below decides). A held read must not move the cursor.
+        const cursorBefore = server.poller.lastPolledBlock;
         await sleep(5000);
+        expect(server.poller.lastPolledBlock, 'A held source read must not move the poll cursor').to.equal(cursorBefore);
 
         await sourceFaults.reset();
 
         const sourceDbDirect = require('./helpers/chaos-setup').getSourceDbDirect();
         await fixtures.seedBlocks(sourceDbDirect, 21, 23);
 
-        // Give held reads time to release before the forced poll (cooldown
-        // settle; the breaker exposes no state to wait on).
-        await sleep(5000);
-        await server.poll();
+        // Force polls until the replica reaches the seeded height, bounded at
+        // about 30s, instead of a fixed sleep before a single poll. Held reads
+        // and the breaker cooldown release on their own schedule, so early
+        // polls may fail; the recovery wait below remains the final gate.
+        const replicaDb = require('./helpers/chaos-setup').getReplicaDb();
+        const pollDeadline = Date.now() + 30000;
+        while (Date.now() < pollDeadline) {
+            try { await server.poll(); } catch { /* source may still be recovering */ }
+            const last = await replicaDb.getLastBlock();
+            if (last !== null && last >= 23) break;
+            await sleep(250);
+        }
 
         const recoveryMs = await waitForSyncRecovery(23, 60000);
         expect(recoveryMs).to.be.above(-1, 'Sync should recover after pool exhaustion');
@@ -315,9 +327,9 @@ describe('CE-SRC-04: Intermittent Connection Drops', function () {
 
     it('success rate returns to 100% after toxic is removed', async function () {
         await sourceFaults.resetConnections(0.3);
-        // Expose the pool to resets before lifting the toxic (exposure window;
-        // the five polls below are the assertion).
-        await sleep(2000);
+        // Expose the pool to resets for five background poll cycles; the polls below assert.
+        const cyclesBefore = server.pollCycles;
+        await waitFor(() => server.pollCycles >= cyclesBefore + 5, 15000);
         await sourceFaults.reset();
 
         let successCount = 0;
@@ -358,9 +370,10 @@ describe('CE-SRC-05: Source Down → Blocks Accumulate → Recovery', function (
         await waitForServerPollFailures(server, 1, 60000);
 
         await sourceFaults.dbUp();
-        // Settle after restore (not a gate: the polls below tolerate failure
-        // and the recovery wait decides).
-        await sleep(2000);
+        // Force polls once a background cycle has succeeded against the restored
+        // source (its cursor read throws while the source is still unreachable).
+        const okCyclesBefore = server.pollCycles - server.pollFailures;
+        await waitFor(() => server.pollCycles - server.pollFailures > okCyclesBefore, 40000);
 
         for (let i = 0; i < 10; i++) {
             try { await server.poll(); } catch { /* circuit may still be half-open */ }

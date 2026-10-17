@@ -37,8 +37,9 @@
  *     drift guard in test/unit/rollback_coverage.test.js.
  *
  * DbNodeStore, MemoryNodeStore and PersistentSMT.update / buildFull / prove are
- * byte-identical to the indexer, and assembleStateRoot, extraSubRootColumn and
- * reservedSubRootCandidates are identical to it in code (comments aside); merkle.js
+ * byte-identical to the indexer, and assembleStateRoot, extraSubRootColumn,
+ * reservedSubRootCandidates and shadowSubRoots are identical to it in code
+ * (comments aside); merkle.js
  * itself is a verbatim copy. The golden vectors + the persistent-vs-reference fuzz
  * test lock the equality, and the twin cases in
  * test/unit/blockhash_conformance_twin.test.js and its part
@@ -407,7 +408,7 @@ async function reportOrphanStats(query, chain, network, opts){
 // and merkle.stateRoot() maps a null/absent/empty-root slot to the identical
 // EMPTY_SMT_ROOT leaf, so this is byte-identical to the old two-argument
 // assembly on every chain. The equality is asserted, not assumed, in
-// test/unit/stateSubtreeActivation.test.js.
+// test/unit/state_subtree_activation.test.js.
 function assembleStateRoot(balancesRootHex, stakesRootHex, extraSubRoots){
     const subRoots = { balances_root: balancesRootHex, stakes_root: stakesRootHex };
     if(extraSubRoots){

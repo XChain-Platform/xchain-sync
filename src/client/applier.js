@@ -28,7 +28,7 @@ const { generatedColumns }   = require('../schema/generated_columns');
 const { computeFollowerRoots, seedSnapshotRoots } = require('../state_commitment');
 const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('../consensus/gates/state_commitment_gate');
 const { coinTicker }      = require('../consensus-constants');
-const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
+const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, REPLICA_LEDGER_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
 const lifecycle           = require('../table_lifecycle');
 const util = require('node:util');
 const { getLogger } = require('../observability');
@@ -53,11 +53,20 @@ const ESCROW_TRIGGER_TABLES = new Set([
     'dispensers', 'dispenser_statuses', 'tokens'
 ]);
 
-// Replica-owned migration ledger: the replica's own runner records applied
-// migrations here, so a source copy is never applied and the full-snapshot clear
-// loop never deletes the replica's rows. Classified explicitly so the table is not
-// shipped by accident nor swallowed (errno 1054) by the incremental fall-through.
-const REPLICA_LEDGER_TABLES = new Set(['schema_migrations']);
+// REPLICA_LEDGER_TABLES (snapshot_builder/table_sets.js) is the replica-owned
+// migration ledger: a source copy that still arrives is never applied, and the
+// full-snapshot clear loop never deletes the replica's rows.
+
+// Compare two decoded key values, by bytes when both are binary.
+function sameKeyValue(a, b){
+    if(Buffer.isBuffer(a) && Buffer.isBuffer(b)) return a.equals(b);
+    return a === b;
+}
+
+// Render a decoded key value for a log line, so raw bytes never reach the log.
+function keyValueLabel(v){
+    return Buffer.isBuffer(v) ? '0x' + v.toString('hex') : v;
+}
 
 function initializeCoreState(applier, db, util, chain, network) {
     applier.db = db;
@@ -363,10 +372,14 @@ class ClientApplier {
         if(e.errno !== 1146 && e.errno !== 1054) throw e;
     }
 
-    isClearableTable(table){
-        let tCheck = validation.validateIdentifier(table);
-        if(!tCheck.valid) logger.error('Skipping clear of invalid table: ' + table);
-        return tCheck.valid;
+    // Refuses the whole clear set before any DELETE runs (fail closed, as validateInsertTable).
+    // A skipped local-only table would keep its old rows inside a committed snapshot.
+    assertClearableTables(tables){
+        for(let table of tables){
+            let tCheck = validation.validateIdentifier(table);
+            if(!tCheck.valid)
+                throw new Error('Rejected table name in full-snapshot clear: ' + table + ' (' + tCheck.reason + '); rename or drop the table');
+        }
     }
 
     logLargeTableInsert(table, rows){
@@ -401,17 +414,20 @@ class ClientApplier {
                 localTables = this.localSnapshotTableNames(await this.db.findStreamableTableNames());
             } catch(e){
                 logger.error(util.format('Full-snapshot clear: local table enumeration failed:', e.message));
-                this.ignoreSchemaGap(e);
+                throw e;
             }
 
-            let tables = orderSnapshotTables([...new Set([...this.payloadSnapshotTableNames(snapshotData), ...localTables])]);
+            let payloadTables = this.payloadSnapshotTableNames(snapshotData);
+            let tables = orderSnapshotTables([...new Set([...payloadTables, ...localTables])]);
+            this.assertClearableTables(tables);
             // Reverse dependency order, using DELETE since TRUNCATE fails on FK-referenced tables.
-            for(let i = tables.length - 1; i >= 0; i--){
-                if(!this.isClearableTable(tables[i])) continue;
+            for(let i = tables.length - 1; i >= 0; i--)
                 await this.db.deleteAllRows(tables[i]);
-            }
 
+            // Only payload names kept above are inserted; an unstreamed table is cleared, never filled.
+            let insertable = new Set(payloadTables);
             for(let table of tables){
+                if(!insertable.has(table)) continue;
                 let rows = snapshotData.tables[table];
                 if(!rows || rows.length === 0) continue;
                 await this.insertRows(table, rows);
@@ -601,12 +617,13 @@ class ClientApplier {
 
         // Fail closed on a row that cannot be identified: inserting it would append a
         // duplicate the DELETE could never scope to (block_index is not UNIQUE).
+        // Decode the key as the INSERT does, so a binary key binds a Buffer, not the wire sentinel.
         let keyValues = [];
         for(let row of rows){
-            let v = row[naturalKey];
+            let v = decodeValue(row[naturalKey]);
             if(v === undefined || v === null)
                 throw new Error('Row for ' + table + ' is missing its natural key ' + naturalKey);
-            if(!keyValues.includes(v)) keyValues.push(v);
+            if(!keyValues.some(k => sameKeyValue(k, v))) keyValues.push(v);
         }
         return { columns, naturalKey, keyValues };
     }
@@ -790,7 +807,8 @@ class ClientApplier {
             for(let column of keyColumns){
                 if(row[column] === undefined)
                     throw new Error('Lookup repair row for ' + table + ' is missing natural key ' + column);
-                values.push(row[column]);
+                // Decode the key as the INSERT does, so the lookup matches a binary key.
+                values.push(decodeValue(row[column]));
             }
 
             let keyHolders = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
@@ -852,7 +870,8 @@ class ClientApplier {
                 let mine = await this.db.findRowIdById(table, id);
                 if(mine && mine.length) continue;                 // the source's row is already here
 
-                let values = keyColumns.map(c => row[c]);
+                // Decode the key as the INSERT does, so the holder lookup matches a binary key.
+                let values = keyColumns.map(c => decodeValue(row[c]));
                 if(values.some(v => v === undefined)) continue;
                 let holder = await this.db.findRowIdsByKeyColumns(table, keyColumns, values);
                 if(!holder || holder.length !== 1) continue;       // absent, or ambiguous: not this shape
@@ -864,7 +883,7 @@ class ClientApplier {
                 await this.db.deleteRowById(table, holderId);
                 retired.push(holderId);
                 logger.warn('STALE_LOOKUP_GENERATION_RETIRED table=' + table + ' key=' + indexName +
-                    ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + values[i]).join(',')) +
+                    ' natural_key=' + JSON.stringify(keyColumns.map((c, i) => c + '=' + keyValueLabel(values[i])).join(',')) +
                     ' retired_id=' + holderId + ' landed_id=' + id +
                     ' (the source no longer serves the retired id within this page\'s id window)');
             }

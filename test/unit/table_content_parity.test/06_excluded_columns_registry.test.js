@@ -116,7 +116,8 @@ describe('Advisory table-content parity', function(){
 
         it('reports an in-place carried table with no declared column, and ignores one outside the window', function(){
             let planned = plannedTables();
-            assert.deepStrictEqual(undeclaredInPlaceTables(new Set(['order_matches', 'tokens']), planned, {}), ['order_matches']);
+            assert.deepStrictEqual(undeclaredInPlaceTables(new Set(['order_matches', 'tokens', 'markets']), planned, {}),
+                ['order_matches', 'tokens']);
         });
     });
 });

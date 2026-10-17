@@ -67,19 +67,21 @@ module.exports = {
         }
     },
 
-    // Write a durable client marker (upsert). Fail-soft: a persistence failure is
-    // logged, never thrown, so it cannot abort a bootstrap/catch-up.
-    async setSyncState(key, value){
+    // Write a durable client marker (upsert). Fail-soft by default, so a failure cannot
+    // abort a bootstrap/catch-up; opts.rethrow logs and THROWS a CREATE or upsert fault.
+    async setSyncState(key, value, opts){
+        let strict = !!(opts && opts.rethrow);
         try {
-            await this.ensureSyncStateTable();
+            await this.ensureSyncStateTable(strict ? { rethrow: true } : undefined);
             await this.doQuery(
                 "INSERT INTO sync_state (state_key, state_value) VALUES (?, ?) " +
                 "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=CURRENT_TIMESTAMP",
-                [key, value == null ? null : String(value)]
+                [key, value == null ? null : String(value)], null, strict ? { rethrow: true } : undefined
             );
             return true;
         } catch(e){
-            logger.error(util.format('setSyncState(' + key + ') failed (continuing):', e));
+            logger.error(util.format('setSyncState(' + key + ') failed (' + (strict ? 'rethrowing' : 'continuing') + '):', e));
+            if(strict) throw e;
             return false;
         }
     },

@@ -74,7 +74,7 @@ const FROZEN = [
     /^src\/(merkle|contract_state_subtree|escrow_leaf_subtree|table_lifecycle|checkpoint)\.js$/,
     /^src\/table_lifecycle\//,
     /^src\/state_commitment\//,
-    /^test\/unit\/(stateSubtreeActivation|contractStateSubtree|escrowLeafSubtree)\.test\.js$/,
+    /^test\/unit\/(state_subtree_activation|contract_state_subtree|escrow_leaf_subtree)\.test(?:\.js$|\/)/,
 ];
 
 // Text that may never go back into a public repo. The shapes are described

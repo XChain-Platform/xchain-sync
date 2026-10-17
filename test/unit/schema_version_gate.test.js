@@ -29,6 +29,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
@@ -46,6 +47,10 @@ const MIGRATION_DIRS = {
         : path.join(__dirname, '../../../xchain-decoder/src/sql/migrations')
 };
 const SIBLING_REQUIRED = process.env.XCHAIN_REQUIRE_SIBLINGS === '1';
+
+function contentHash(text){
+    return crypto.createHash('sha256').update(text).digest('hex');
+}
 
 // Tables xchain-sync carries over the wire for each dbType, same derivation as
 // replicatedDatetimeColumns.test.js: the indexer registry's stream:* classes plus
@@ -114,23 +119,32 @@ function unsafeIndexOnlyTables(sqlText, wire){
     return [...unsafe].sort();
 }
 
-// Every migration past the frontier that changes the shape of a wire-replicated
-// table. `accounted` covers the same-day tail, because the frontier cursor is a date
-// and dates are not unique. A filename with no parseable date is reported too: the
-// gate cannot place it relative to the cursor, and guessing safe would hide it.
+// Every migration not recorded by the frontier that changes the shape of a
+// wire-replicated table. `before` records earlier replicated-DDL filenames so a new
+// back-dated file cannot hide behind the date cursor. `accounted` covers the same-day
+// tail, and `hashes` fixes the bytes reviewed when each accounted file was recorded.
+// A filename with no parseable date is reported too: the gate cannot place it
+// relative to the cursor, and guessing safe would hide it.
 function unaccountedReplicatedDdl(dir, frontier, wire){
     const findings = [];
     for(const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()){
         const date = (file.match(/^(\d{4}-\d{2}-\d{2})-/) || [])[1];
-        if(date && date < frontier.through) continue;
         const sqlText = fs.readFileSync(path.join(dir, file), 'utf8');
+        if(date && date < frontier.through && (frontier.before || []).includes(file)) continue;
         const isAccounted = date && date === frontier.through && frontier.accounted.includes(file);
         const isIndexOnly = isAccounted && (frontier.indexOnly || []).includes(file);
-        if(isAccounted && !isIndexOnly) continue;
+        const hashMismatch = isAccounted
+            && (!frontier.hashes || contentHash(sqlText) !== frontier.hashes[file]);
+        if(isAccounted && !isIndexOnly && !hashMismatch) continue;
         const hits = isIndexOnly
             ? unsafeIndexOnlyTables(sqlText, wire)
             : [...ddlTables(sqlText)].filter(t => wire.has(t)).sort();
-        if(hits.length) findings.push({ file, tables: hits, undated: !date });
+        if(hits.length || hashMismatch){
+            const finding = { file, tables: hits, undated: !date };
+            if(hashMismatch) finding.hashMismatch = true;
+            if(date && date < frontier.through) finding.backdated = true;
+            findings.push(finding);
+        }
     }
     return findings;
 }
@@ -140,7 +154,15 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
     describe('the gate detects what it claims to detect', function(){
 
         let dir;
-        const frontier = { through: '2026-09-11', accounted: ['2026-09-11-already-folded-in.sql'] };
+        const foldedSql = 'ALTER TABLE attests ADD COLUMN folded INT NULL;\n';
+        const frontier = {
+            through: '2026-09-11',
+            before: ['2026-09-10-sends-old.sql'],
+            accounted: ['2026-09-11-already-folded-in.sql'],
+            hashes: {
+                '2026-09-11-already-folded-in.sql': contentHash(foldedSql)
+            }
+        };
         const wire = new Set(['sends', 'attests']);
 
         function write(name, sql){ fs.writeFileSync(path.join(dir, name), sql); }
@@ -178,6 +200,19 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire),
                 [{ file: 'hotfix-sends.sql', tables: ['sends'], undated: true }]);
         });
+
+        it('flags a back-dated replicated DDL migration not recorded before the frontier', function(){
+            write('2026-09-09-sends-backdated.sql',
+                'ALTER TABLE sends ADD COLUMN escaped_version_gate INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
+                file: '2026-09-09-sends-backdated.sql', tables: ['sends'], undated: false, backdated: true
+            }]);
+        });
+
+        it('does not flag a back-dated pure-DML migration', function(){
+            write('2026-09-09-sends-backfill.sql', 'UPDATE sends SET memo_id = NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
+        });
     });
 });
 
@@ -186,7 +221,15 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
     describe('the gate detects what it claims to detect', function(){
 
         let dir;
-        const frontier = { through: '2026-09-11', accounted: ['2026-09-11-already-folded-in.sql'] };
+        const foldedSql = 'ALTER TABLE attests ADD COLUMN folded INT NULL;\n';
+        const frontier = {
+            through: '2026-09-11',
+            before: ['2026-09-10-sends-old.sql'],
+            accounted: ['2026-09-11-already-folded-in.sql'],
+            hashes: {
+                '2026-09-11-already-folded-in.sql': contentHash(foldedSql)
+            }
+        };
         const wire = new Set(['sends', 'attests']);
 
         function write(name, sql){ fs.writeFileSync(path.join(dir, name), sql); }
@@ -221,16 +264,40 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
         });
 
-        it('does not flag a migration dated before the frontier, nor the accounted same-day tail', function(){
+        it('does not flag a recorded migration before the frontier, nor an unchanged accounted tail', function(){
             write('2026-09-10-sends-old.sql', 'ALTER TABLE sends ADD COLUMN old_col INT NULL;\n');
-            write('2026-09-11-already-folded-in.sql', 'ALTER TABLE attests ADD COLUMN folded INT NULL;\n');
+            write('2026-09-11-already-folded-in.sql', foldedSql);
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), []);
+        });
+
+        it('flags an accounted migration whose content changed after accounting', function(){
+            write('2026-09-11-already-folded-in.sql',
+                'ALTER TABLE attests ADD COLUMN changed_after_accounting INT NULL;\n');
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
+                file: '2026-09-11-already-folded-in.sql',
+                tables: ['attests'],
+                undated: false,
+                hashMismatch: true
+            }]);
         });
 
         it('flags a same-day migration the accounted tail does not name', function(){
             write('2026-09-11-snuck-in.sql', 'ALTER TABLE sends ADD COLUMN snuck INT NULL;\n');
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.file),
                 ['2026-09-11-snuck-in.sql']);
+        });
+
+        it('failure text names where to record a back-dated file, the digest to pin and the frontier move', function(){
+            write('2026-09-09-sends-backdated.sql', 'ALTER TABLE sends ADD COLUMN gate_hint INT NULL;\n');
+            const edited = 'ALTER TABLE attests ADD COLUMN edited_for_hint INT NULL;\n';
+            write('2026-09-11-already-folded-in.sql', edited);
+            const text = frontierMessage('indexer', dir, frontier, unaccountedReplicatedDdl(dir, frontier, wire));
+            assert.ok(text.includes('[dated before the frontier: if an earlier frontier already accounted it,'
+                + ' add it to MIGRATION_FRONTIER.indexer.before]'));
+            assert.ok(text.includes('sha256 ' + contentHash(edited)
+                + ': if this edit is reviewed, set MIGRATION_FRONTIER.indexer.hashes]'));
+            assert.ok(text.includes('move each previously accounted file with replicated DDL into before'
+                + ' and pin each new accounted file in hashes.'));
         });
     });
 });
@@ -243,7 +310,11 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
         const frontier = {
             through: '2026-09-12',
             accounted: ['2026-09-12-sends-covering-index.sql'],
-            indexOnly: ['2026-09-12-sends-covering-index.sql']
+            indexOnly: ['2026-09-12-sends-covering-index.sql'],
+            hashes: {
+                '2026-09-12-sends-covering-index.sql': contentHash(
+                    'ALTER TABLE sends ADD INDEX IF NOT EXISTS sends_covering (action_index, block_index);\n')
+            }
         };
         const wire = new Set(['sends', 'attests']);
 
@@ -267,17 +338,47 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
         it('flags payload-affecting DDL substituted into an index-only migration', function(){
             write('ALTER TABLE sends ADD COLUMN payload_shape_changed INT NULL;\n');
             assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
-                file: '2026-09-12-sends-covering-index.sql', tables: ['sends'], undated: false
+                file: '2026-09-12-sends-covering-index.sql',
+                tables: ['sends'],
+                undated: false,
+                hashMismatch: true
             }]);
         });
 
         it('flags a unique index substituted into an index-only migration', function(){
             write('CREATE UNIQUE INDEX sends_covering ON sends (action_index, block_index);\n');
-            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire).map(f => f.tables),
-                [['sends']]);
+            assert.deepStrictEqual(unaccountedReplicatedDdl(dir, frontier, wire), [{
+                file: '2026-09-12-sends-covering-index.sql',
+                tables: ['sends'],
+                undated: false,
+                hashMismatch: true
+            }]);
         });
     });
 });
+
+// The failure text for a set of findings. A back-dated file and an edited accounted
+// file are usually frontier bookkeeping, not a missing version bump, so the hint
+// says where to record them and prints the digest to pin.
+function frontierMessage(dbType, dir, frontier, findings){
+    return 'replicated DDL is not covered by the ' + dbType + ' migration frontier ('
+        + frontier.through + ') with no SCHEMA_VERSION.' + dbType + ' bump:\n'
+        + findings.map(f => '  ' + f.file + ' -> ' + f.tables.join(', ')
+            + (f.undated ? '  [filename carries no date]' : '')
+            + (f.backdated ? '  [dated before the frontier: if an earlier frontier already accounted it,'
+                + ' add it to MIGRATION_FRONTIER.' + dbType + '.before]' : '')
+            + (f.hashMismatch ? '  [content differs from frontier hash; sha256 '
+                + contentHash(fs.readFileSync(path.join(dir, f.file), 'utf8'))
+                + ': if this edit is reviewed, set MIGRATION_FRONTIER.' + dbType + '.hashes]' : '')).join('\n')
+        + '\nIf the DDL changes replicated columns or payload shape, bump SCHEMA_VERSION.'
+        + dbType + ' in src/schema/version.js with a history entry naming what a follower'
+        + ' on the previous version cannot store, move the frontier to the newest'
+        + ' migration date, and land it with the next fleet release. If it adds only'
+        + ' non-unique secondary indexes, leave the version unchanged and move the'
+        + ' frontier with an index-only accounting comment naming the migration.'
+        + ' When moving the frontier, move each previously accounted file with replicated DDL'
+        + ' into before and pin each new accounted file in hashes.';
+}
 
 describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @regression', function(){
 
@@ -285,7 +386,7 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
 
         for(const dbType of Object.keys(MIGRATION_DIRS)){
 
-            it(dbType + ': no replicated-DDL migration has landed past the frontier', function(){
+            it(dbType + ': every replicated-DDL migration is covered by the frontier', function(){
                 const dir = MIGRATION_DIRS[dbType];
                 if(!fs.existsSync(dir)){
                     if(SIBLING_REQUIRED) throw new Error('sibling migration ledger missing at ' + dir);
@@ -296,17 +397,7 @@ describe('replicated-DDL migrations cannot land without a SCHEMA_VERSION bump @r
 
                 const findings = unaccountedReplicatedDdl(dir, MIGRATION_FRONTIER[dbType], wire);
                 assert.deepStrictEqual(findings, [], findings.length
-                    ? 'replicated DDL landed past the ' + dbType + ' migration frontier ('
-                        + MIGRATION_FRONTIER[dbType].through + ') with no SCHEMA_VERSION.' + dbType
-                        + ' bump:\n'
-                        + findings.map(f => '  ' + f.file + ' -> ' + f.tables.join(', ')
-                            + (f.undated ? '  [filename carries no date]' : '')).join('\n')
-                        + '\nIf the DDL changes replicated columns or payload shape, bump SCHEMA_VERSION.'
-                        + dbType + ' in src/schema/version.js with a history entry naming what a follower'
-                        + ' on the previous version cannot store, move the frontier to the newest'
-                        + ' migration date, and land it with the next fleet release. If it adds only'
-                        + ' non-unique secondary indexes, leave the version unchanged and move the'
-                        + ' frontier with an index-only accounting comment naming the migration.'
+                    ? frontierMessage(dbType, dir, MIGRATION_FRONTIER[dbType], findings)
                     : '');
             });
         }

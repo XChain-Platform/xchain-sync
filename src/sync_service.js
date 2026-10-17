@@ -43,6 +43,22 @@ const { getLogger }   = require('./observability');
 const util = require('node:util');
 const envConfig = require('./config');
 
+// Longest the shutdown drain waits for client syncs to finish in-flight work before it
+// closes the pools: under the 8 s default hard-exit budget in http/shutdown.js.
+const CLIENT_DRAIN_MS = 5000;
+
+// Settle client stop promises, bounded by CLIENT_DRAIN_MS; a rejection is logged only.
+async function waitForClientDrains(drains){
+    let timer;
+    let bound = new Promise(resolve => { timer = setTimeout(resolve, CLIENT_DRAIN_MS); });
+    let settled = Promise.allSettled(drains.map(d => Promise.resolve(d))).then(results => {
+        for(let r of results)
+            if(r.status === 'rejected') getLogger().warn(util.format('SyncService.stop: client drain failed:', r.reason));
+    });
+    try { await Promise.race([settled, bound]); }
+    finally { clearTimeout(timer); }
+}
+
 class SyncService {
 
     constructor(config) {
@@ -138,10 +154,17 @@ class SyncService {
             catch(e){ getLogger().warn(util.format('SyncService.stop: poller stop failed:', e && e.message ? e.message : e)); }
         }
 
+        // Each client stops taking work at once and hands back a promise for the work it
+        // has in flight (a live apply and its verification, a catch-up pass). Those finish
+        // before the pools close, up to CLIENT_DRAIN_MS; past that the pools close anyway
+        // and the client's verified-tip marker, which never rose past unfinished work,
+        // makes the next start re-verify it.
+        let drains = [];
         for(let sync of this.clientSyncs.values()){
-            try { if(typeof sync.stop === 'function') sync.stop(); }
+            try { if(typeof sync.stop === 'function') drains.push(sync.stop()); }
             catch(e){ getLogger().warn(util.format('SyncService.stop: client sync stop failed:', e && e.message ? e.message : e)); }
         }
+        await waitForClientDrains(drains);
 
         // Both are unref'd, so they cannot hold the loop open on their own, but a
         // hub re-poll firing mid-drain would create fresh pools and DB handles
@@ -607,6 +630,9 @@ class SyncService {
                 : { stale: null, secondsBehind: null, sourceHeight: null },
             halted:        sync ? sync.isHalted() : false,
             haltInfo:      (sync && sync.isHalted()) ? sync.getHaltInfo() : null,
+            // false while a halt's sync_halt write is still being retried.
+            haltDurable:   (sync && sync.isHalted() && typeof sync.isHaltDurable === 'function')
+                ? sync.isHaltDurable() : null,
             trainActivation: (sync && typeof sync.getTrainActivation === 'function')
                 ? sync.getTrainActivation() : null,
             truncated:     sync ? sync.isTruncated() : false,

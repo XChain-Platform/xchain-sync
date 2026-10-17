@@ -339,7 +339,10 @@ class BlockHasher {
                     rows = await this.db.getContentWindowRows(step.table, step.bound, fromBlock, Number(uptoBlock));
                 }
                 if(!rows || rows.length === 0) continue;
-                tables[step.table] = { n: rows.length, h: this.contentDigest(step.table, rows) };
+                tables[step.table] = {
+                    n: rows.length,
+                    h: this.contentDigest(step.table, rows, step.excludedColumns)
+                };
                 if(idMax !== null) tables[step.table].id_max = String(idMax);
             } catch(e){
                 // Advisory: one unreadable table must not cost the other 92 their check.
@@ -365,8 +368,10 @@ class BlockHasher {
     // column nor the local timezone can fork the digest. Columns the follower is not
     // expected to match (the stripped surrogate id, generated columns, in-place
     // edited columns) are dropped per the registry declaration.
-    contentDigest(table, rows){
-        let excluded = new Set(lifecycle.contentParityExcludedColumns(table));
+    contentDigest(table, rows, excludedColumns){
+        let excluded = new Set(arguments.length < 3
+            ? lifecycle.contentParityExcludedColumns(table)
+            : excludedColumns);
         let canon = rows.map(row => {
             let out = {};
             for(let key of Object.keys(row).filter(k => !excluded.has(k)).sort()){

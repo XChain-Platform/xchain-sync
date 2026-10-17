@@ -36,7 +36,8 @@
  *     decoderBlockTables / decoderTxScopedTables for decoder), or
  *   - recomputed during rollback (RECOMPUTED), or
  *   - handled by bespoke logic (SPECIAL_CASE), or
- *   - listed in ROLLBACK_EXEMPT with a reason, or
+ *   - listed with a reason in ROLLBACK_EXEMPT (indexer tables, from the registry) or
+ *     DECODER_ROLLBACK_EXEMPT / SPECIAL_BUCKET_ROLLBACK_EXEMPT (decoder tables), or
  *   - an `index_` / append-only lookup (orphan rows are inert; re-sent INSERT IGNORE).
  *
  * Classify by understanding the table, not by silencing the test.
@@ -81,6 +82,13 @@ function replicatedTables(dbType){
 // them (src/client/rollback.js: decoderTxScopedTables comment; src/schema/replicated_tables.js, "Parity rests").
 const SPECIAL_BUCKET_ROLLBACK_EXEMPT = {
     dispensers: 'decoder live-prunes; seeded by snapshot, held by the periodic reconcile; untouched on reorg',
+};
+
+// Decoder tables left untouched on reorg, each with the decoder's own reason. The
+// lifecycle registry describes the indexer DB only, so an indexer exemption that
+// shares a decoder table's name never counts for the decoder.
+const DECODER_ROLLBACK_EXEMPT = {
+    events: 'no block_index and no monotonic cursor, so rollbackDecoder cannot delete it per block',
 };
 
 // Append-only / id-keyed dedup lookups whose orphan rows are inert (re-sent INSERT
@@ -217,7 +225,7 @@ describe('Rollback coverage guard @regression', function(){
         const covered = new Set([
             ...rollback.decoderBlockTables,
             ...rollback.decoderTxScopedTables,
-            ...Object.keys(ROLLBACK_EXEMPT),
+            ...Object.keys(DECODER_ROLLBACK_EXEMPT),
             ...Object.keys(SPECIAL_BUCKET_ROLLBACK_EXEMPT),
         ]);
         const uncovered = universe.filter(t => !covered.has(t) && !isLookupTable(t));
@@ -228,9 +236,17 @@ describe('Rollback coverage guard @regression', function(){
             uncovered.length
                 ? `These tables are replicated by ServerPoller (decoder) but not handled by ` +
                   `rollbackDecoder: ${uncovered.join(', ')}. Add to decoderBlockTables / ` +
-                  `decoderTxScopedTables, or ROLLBACK_EXEMPT with a reason.`
+                  `decoderTxScopedTables, or to DECODER_ROLLBACK_EXEMPT (SPECIAL_BUCKET_ROLLBACK_EXEMPT ` +
+                  `for stream:special) with a reason. Indexer ROLLBACK_EXEMPT entries do not count here.`
                 : undefined
         );
+
+        // Each decoder exemption names a replicated decoder table that rollbackDecoder skips.
+        const rolledBack = new Set([...rollback.decoderBlockTables, ...rollback.decoderTxScopedTables]);
+        for(const t of Object.keys(DECODER_ROLLBACK_EXEMPT)){
+            assert.ok(universe.includes(t), `DECODER_ROLLBACK_EXEMPT names ${t}, which the decoder does not replicate`);
+            assert.ok(!rolledBack.has(t), `DECODER_ROLLBACK_EXEMPT names ${t}, which rollbackDecoder deletes`);
+        }
     });
 
     it('every table the source indexer rolls back is mirrored by ClientRollback (cross-repo drift guard)', function(){
@@ -405,6 +421,50 @@ describe('Rollback coverage guard @regression', function(){
             'the re-derive call must sit inside a !truncatedReplica guard');
     });
 
+    // Cross-repo drift guard for the tokens.bridged re-derive. The first applied XBRIDGE v3
+    // lock sets the bit IN PLACE on a surviving token row, so a reorg that orphans that lock
+    // leaves the bit set unless the rollback clears it. Source
+    // (xchain-indexer/src/db/rollback/rederive.js rederiveTokenBridged) and replica
+    // (xchain-sync/src/client/rollback.js) must clear it with the SAME predicate, or the
+    // explorer reads a BRIDGED badge off the replica that the source does not hold. The
+    // source carries its statement inside the rederiveTokenBridged(db) method; the replica
+    // carries it between //<TOKEN-BRIDGED-REDERIVE-SQL> markers. Both are reduced to their
+    // backtick literals and compared whitespace-normalised.
+    it('tokens.bridged re-derive SQL is identical across xchain-indexer and xchain-sync (cross-repo drift guard)', function(){
+        const norm = (lits) => lits.map(l => l.replace(/`/g, '').replace(/\s+/g, ' ').trim()).join('\n');
+        const syncPath = require('path').resolve(__dirname, '../../src/client/rollback.js');
+        const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
+        if(!requireSibling(this, indexerPath)) return;
+        const syncMatch = fs.readFileSync(syncPath, 'utf8')
+            .match(/\/\/<TOKEN-BRIDGED-REDERIVE-SQL>([\s\S]*?)\/\/<\/TOKEN-BRIDGED-REDERIVE-SQL>/);
+        assert.ok(syncMatch, 'TOKEN-BRIDGED-REDERIVE-SQL markers not found in ' + syncPath);
+        const indexerMatch = readSourceText(indexerPath)
+            .match(/async rederiveTokenBridged\(db\)\s*\{([\s\S]*?)\n\s*\},/);
+        assert.ok(indexerMatch, 'rederiveTokenBridged(db) not found in the xchain-indexer rollback module');
+        const syncLits = syncMatch[1].match(/`[^`]*`/g) || [];
+        const indexerLits = indexerMatch[1].match(/`[^`]*`/g) || [];
+        assert.strictEqual(syncLits.length, 1, 'expected 1 SQL literal in the replica block, got ' + syncLits.length);
+        assert.strictEqual(indexerLits.length, 1, 'expected 1 SQL literal in the source method, got ' + indexerLits.length);
+        assert.strictEqual(norm(syncLits), norm(indexerLits),
+            'tokens.bridged re-derive SQL drifted between xchain-sync/src/client/rollback.js and xchain-indexer/src/db/rollback/rederive.js; keep them identical');
+    });
+
+    // The replica must RUN the bridged re-derive, in the source's order (escrow, bridged,
+    // COINPay), and never on a truncated replica: that replica holds only [base..tip] of
+    // xbridges, so a token whose first lock predates the floor would read as never locked.
+    it('the replica calls the tokens.bridged re-derive in source order, and never on a truncated replica', function(){
+        const src = fs.readFileSync(require('path').resolve(__dirname, '../../src/client/rollback.js'), 'utf8');
+        const call = src.indexOf('await rederiveTokenBridged(this.db)');
+        assert.ok(call > -1, 'ClientRollback defines the bridged re-derive but never calls it');
+        const guard = src.lastIndexOf('if(!truncatedReplica){', call);
+        assert.ok(guard > -1 && call - guard < 400,
+            'the bridged re-derive call must sit inside a !truncatedReplica guard');
+        const escrow = src.indexOf('await rederiveEscrowGate(this.db)');
+        const coinpay = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
+        assert.ok(escrow > -1 && escrow < call && call < coinpay,
+            'the bridged re-derive must run after the escrow re-derive and before the COINPay re-derive, as the source does');
+    });
+
     // Cross-repo drift guard for the cross-chain mirror reorg delete. On reorg
     // both the source (xchain-indexer/src/db/rollback/sweeps.js) and the replica
     // (xchain-sync/src/client/rollback.js) locally prune the hub-mirrored cross_chain_calls /
@@ -567,8 +627,10 @@ describe('Rollback coverage guard @regression', function(){
             icons:   /DELETE FROM icons WHERE (?:token_id > \? AND )?token_id NOT IN \(SELECT id FROM tokens\)/,
             // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
             // side that has no ticker); without them the sweep deletes live markets.
-            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND (?:tick1_id > \? AND )?tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND (?:tick2_id > \? AND )?tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
-            pubkeys: /DELETE FROM pubkeys WHERE (?:address_id > \? AND )?address_id NOT IN \(SELECT id FROM index_addresses\)/,
+            // The `> ?` surviving-MAX(id) bound is required on both sides: without it a
+            // replica with a lookup hole below MAX(id) deletes rows the source keeps.
+            markets: /DELETE FROM markets WHERE \(tick1_id <> \? AND tick1_id > \? AND tick1_id NOT IN \(SELECT id FROM index_tickers\)\) OR \(tick2_id <> \? AND tick2_id > \? AND tick2_id NOT IN \(SELECT id FROM index_tickers\)\)/,
+            pubkeys: /DELETE FROM pubkeys WHERE address_id > \? AND address_id NOT IN \(SELECT id FROM index_addresses\)/,
         };
         const flagged = [...new Set(lifecycleTwin.ORPHAN_SWEEPS.filter(s => s.replica).map(s => s.table))].sort();
         assert.deepStrictEqual(Object.keys(SWEEP_RES).sort(), flagged,
@@ -593,30 +655,93 @@ describe('Rollback coverage guard @regression', function(){
     // orders, the survival probe over order_matches, and the two-orientation delete. The
     // source aliases its probe tables (o. / om.) and the replica does not, so the alias
     // is optional in the regex; everything else must match text-for-text.
-    it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', function(){
+    it('pair-scoped IDX-2 markets deletion is mirrored across xchain-indexer and xchain-sync (parity drift guard)', async function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath = pathMod.resolve(__dirname, '../../src/client/rollback.js');
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const IDX2_OPS = [
-            // COALESCE(...,0) on every side: the probe compares a `markets` pair id, where a
-            // tickerless side is 0, against orders/order_matches, which store NULL for it.
+            // Index-friendly sides, (col=? OR (col IS NULL AND ?=0)): the probe compares a `markets`
+            // pair id, where a tickerless side is 0, against orders/order_matches, which store
+            // NULL for it, without wrapping the indexed column.
             { name: 'surviving-orders probe (both orientations)',
-              re: /SELECT 1 FROM orders (?:o )?WHERE \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:o\.)?give_tick_id,0\)=\? AND COALESCE\((?:o\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM orders (?:o )?WHERE \(\((?:o\.)?give_tick_id=\? OR \((?:o\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:o\.)?get_tick_id=\? OR \((?:o\.)?get_tick_id IS NULL AND \?=0\)\)\) OR \(\((?:o\.)?give_tick_id=\? OR \((?:o\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:o\.)?get_tick_id=\? OR \((?:o\.)?get_tick_id IS NULL AND \?=0\)\)\) LIMIT 1/ },
             { name: 'surviving-matches probe (both orientations)',
-              re: /SELECT 1 FROM order_matches (?:om )?WHERE \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) OR \(COALESCE\((?:om\.)?give_tick_id,0\)=\? AND COALESCE\((?:om\.)?get_tick_id,0\)=\?\) LIMIT 1/ },
+              re: /SELECT 1 FROM order_matches (?:om )?WHERE \(\((?:om\.)?give_tick_id=\? OR \((?:om\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:om\.)?get_tick_id=\? OR \((?:om\.)?get_tick_id IS NULL AND \?=0\)\)\) OR \(\((?:om\.)?give_tick_id=\? OR \((?:om\.)?give_tick_id IS NULL AND \?=0\)\) AND \((?:om\.)?get_tick_id=\? OR \((?:om\.)?get_tick_id IS NULL AND \?=0\)\)\) LIMIT 1/ },
             { name: 'two-orientation markets delete',
               re: /DELETE FROM markets WHERE \(tick1_id=\? AND tick2_id=\?\) OR \(tick1_id=\? AND tick2_id=\?\)/ },
         ];
-        for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
-            const norm = readSourceText(p)
-                .replace(/[`"']/g, ' ')
-                .replace(/\s+\+\s+/g, ' ')
-                .replace(/\s+/g, ' ');
+        const normSql = (t) => String(t).replace(/[`"']/g, ' ').replace(/\s+\+\s+/g, ' ').replace(/\s+/g, ' ');
+        const gradeOps = (label, norm) => {
             for(const op of IDX2_OPS){
                 assert.ok(op.re.test(norm), `${label} is missing the IDX-2 ${op.name}; source and replica must both drop a market whose pair kept no surviving order/match, or the replica serves a stale zeroed OHLCV row no snapshot can remove`);
             }
+        };
+        // Replica half: its statements are literal strings in src/client/rollback.js, so the
+        // source text is the contract there.
+        gradeOps('xchain-sync src/client/rollback.js (replica)', normSql(fs.readFileSync(syncPath, 'utf8')));
+
+        // Indexer half: the source builds its probe from template helpers, so its text no
+        // longer holds the statement. Run the orphaned market-pair sweep against a recording
+        // db stub and grade the SQL that ONE sweep issues. Every query returns no rows, so each
+        // probe finds no survivor and the sweep proceeds to the delete. The sweep is picked by a
+        // narrow name (orphaned/sweep + market + pair), each candidate is graded on its own
+        // statements (never pooled with another function's), and a candidate that throws fails
+        // the guard instead of being skipped.
+        const pairs = [{ tick1_id: 11, tick2_id: 22 }, { tick1_id: 0, tick2_id: 33 }];
+        const makeDb = (issued) => new Proxy({}, {
+            get(_t, prop){
+                if(prop === 'then' || typeof prop === 'symbol') return undefined;
+                return (...args) => {
+                    if(!/^(?:query|doQuery|execute|exec|run|all|get|select)$/i.test(prop)) return Promise.resolve([]);
+                    const q = args[0];
+                    issued.push({ sql: (q && typeof q === 'object' && q.sql) ? q.sql : String(q), params: Array.isArray(args[1]) ? args[1] : (q && q.values) || [] });
+                    return Promise.resolve([]);
+                };
+            },
+        });
+        const SWEEP_NAME = /^(?=.*(?:orphan|sweep))(?=.*market)(?=.*pair)/i;
+        const rbDir = pathMod.dirname(indexerPath);
+        const candidates = [];
+        const addFns = (owner, where) => {
+            for(const name of Object.getOwnPropertyNames(owner)){
+                if(!SWEEP_NAME.test(name)) continue;
+                const d = Object.getOwnPropertyDescriptor(owner, name);
+                if(d && typeof d.value === 'function') candidates.push({ where: where + '.' + name, fn: d.value, owner });
+            }
+        };
+        for(const f of fs.readdirSync(rbDir).filter((n) => n.endsWith('.js'))){
+            const mod = require(pathMod.join(rbDir, f));
+            if(mod && (typeof mod === 'object' || typeof mod === 'function')) addFns(mod, f);
+            if(typeof mod === 'function' && mod.prototype) addFns(mod.prototype, f + '#prototype');
         }
+        assert.ok(candidates.length > 0, 'xchain-indexer src/rollback/ exposes no orphaned market-pair sweep to grade (looked for a function name containing orphan|sweep, market and pair)');
+        const failures = [];
+        let graded = 0;
+        for(const c of candidates){
+            const issued = [];
+            const db = makeDb(issued);
+            const self = Object.create(c.owner);
+            self.db = db;
+            self.indexerDb = db;
+            for(const k of ['affectedMarketPairs', 'marketPairs', 'pairs']) self[k] = pairs;
+            // No try/catch: a sweep that cannot run against the stub must fail loudly, not pass unexercised.
+            // The method form reads its db from this.indexerDb and takes (markets); a bare
+            // statement helper takes (db, markets). Call each in the shape it declares.
+            if(c.fn.length <= 1) await c.fn.call(self, pairs);
+            else await c.fn.call(self, db, pairs, { affectedMarketPairs: pairs, db });
+            const norm = normSql(issued.map((i) => i.sql).join('\n'));
+            const missing = IDX2_OPS.filter((op) => !op.re.test(norm)).map((op) => op.name);
+            if(missing.length){ failures.push(`${c.where} issued ${issued.length} statement(s) but is missing: ${missing.join(', ')}`); continue; }
+            const del = issued.find((i) => /DELETE FROM markets/.test(normSql(i.sql)));
+            assert.ok(del.params.map(Number).includes(11) && del.params.map(Number).includes(22),
+                `${c.where} issued the markets delete without binding the swept pair ids (got ${JSON.stringify(del.params)})`);
+            graded++;
+        }
+        // Every name-matched candidate must issue the full statement set: one complete sweep
+        // must not mask an incomplete sibling that the indexer could run instead.
+        assert.deepStrictEqual(failures, [], 'xchain-indexer market-pair sweep candidate(s) did not issue the full IDX-2 statement set through the recording db stub: ' + failures.join('; '));
+        assert.ok(graded > 0, 'no xchain-indexer market-pair sweep was graded through the recording db stub');
     });
 
     // Forward parity (the other half of the cooldown-maturity twin): the reverse delete

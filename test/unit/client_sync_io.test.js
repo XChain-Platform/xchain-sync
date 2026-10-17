@@ -74,16 +74,9 @@ function makeSync(configOverrides, dbOverrides){
     return { sync, db, applier, rb, hv, util, config };
 }
 
-describe('ClientSync: fetchAndApplySchema', function(){
-    let sync, db;
+let sync, db;
 
-    beforeEach(function(){
-        ({ sync, db } = makeSync());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
+function schemaAndSnapshotGroup1(){
     it('creates a table that does not yet exist', async function(){
         let getStub = sinon.stub(axios, 'get');
         getStub.resolves({ data: {
@@ -121,20 +114,9 @@ describe('ClientSync: fetchAndApplySchema', function(){
 
         assert.strictEqual(db.doQuery.called, false, 'empty DDL must be skipped');
     });
-});
+}
 
-describe('ClientSync: fetchAndApplySchema', function(){
-    let sync, db;
-
-    beforeEach(function(){
-        ({ sync, db } = makeSync());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
+function schemaAndSnapshotGroup2(){
     it('rejects invalid table name (e.g. bad-name) and continues', async function(){
         sinon.stub(axios, 'get').resolves({ data: {
             tables: {
@@ -168,7 +150,9 @@ describe('ClientSync: fetchAndApplySchema', function(){
         assert.ok(errorCalls.some(m => m && m.indexOf('Rejected DDL') !== -1),
             'should log rejected DDL');
     });
+}
 
+function schemaAndSnapshotGroup3(){
     it('records validated source table names for replica-gap checks', async function(){
         sinon.stub(axios, 'get').resolves({ data: {
             tables: {
@@ -182,19 +166,6 @@ describe('ClientSync: fetchAndApplySchema', function(){
 
         assert.deepStrictEqual(sync._sourceTables, new Set(['goodtable', 'emptytable']));
     });
-});
-
-describe('ClientSync: fetchAndApplySchema', function(){
-    let sync, db;
-
-    beforeEach(function(){
-        ({ sync, db } = makeSync());
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
 
     it('swallows per-table doQuery error and continues', async function(){
         sinon.stub(axios, 'get').resolves({ data: {
@@ -223,17 +194,9 @@ describe('ClientSync: fetchAndApplySchema', function(){
             'outer catch must log "Failed to fetch schema"');
         assert.strictEqual(sync._sourceTables, null, 'failed fetch must leave source schema unknown');
     });
-});
+}
 
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
+function schemaAndSnapshotGroup4(){
     it('throws (does not silently return) when no sources configured', async function(){
         ({ sync, db, applier } = makeSync({ SYNC_SOURCES: '' }));
 
@@ -277,19 +240,9 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
         assert.ok(lockSpy.calledBefore(applier.applyFullSnapshot),
             'withApplyLock must be entered before applyFullSnapshot runs');
     });
-});
+}
 
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
+function schemaAndSnapshotGroup5(){
     it('happy path with gzipped buffer', async function(){
         ({ sync, db, applier } = makeSync());
         sinon.stub(sync, 'fetchAndApplySchema').resolves();
@@ -333,19 +286,9 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
 
         assert.ok(sync.verifyDecoderCompleteness.calledOnce);
     });
-});
+}
 
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
+function schemaAndSnapshotGroup6(){
     it('catch/retry: rotates sources and THROWS on repeated failure (no swallow)', async function(){
         // BOOTSTRAP_MAX_RETRIES:0 → one rotation round, then propagate. The old code
         // returned normally here, letting start() live-follow an empty replica.
@@ -378,19 +321,9 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
         assert.ok(errorCalls.some(m => m && m.indexOf('All sync sources exhausted') !== -1));
         assert.strictEqual(sync.lastAppliedBlock, null);
     });
-});
+}
 
-describe('ClientSync: bootstrapFromSnapshot', function(){
-    let sync, db, applier;
-
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-
-
+function schemaAndSnapshotGroup7(){
     it('retries the single configured source with backoff, then succeeds', async function(){
         // Transient failure then success: the production single-source topology must
         // recover via in-process retry rather than dying on the first transient 404.
@@ -412,4 +345,32 @@ describe('ClientSync: bootstrapFromSnapshot', function(){
         assert.strictEqual(sync.lastAppliedBlock, 42);
         assert.ok(sleep.callCount >= 2, 'backed off between retry rounds');
     });
+}
+
+describe('ClientSync: fetchAndApplySchema', function(){
+
+    beforeEach(function(){
+        ({ sync, db } = makeSync());
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    schemaAndSnapshotGroup1();
+    schemaAndSnapshotGroup2();
+    schemaAndSnapshotGroup3();
+});
+
+describe('ClientSync: bootstrapFromSnapshot', function(){
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    schemaAndSnapshotGroup4();
+    schemaAndSnapshotGroup5();
+    schemaAndSnapshotGroup6();
+    schemaAndSnapshotGroup7();
 });

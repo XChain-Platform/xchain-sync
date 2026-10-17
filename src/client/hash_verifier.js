@@ -109,9 +109,10 @@ class HashVerifier {
     // prevHashes: { ledger_hash, actions_hash, contract_hash } from the client's last applied block
     // payload: incoming block event with hashes
     // Returns { valid: bool, reason: string|null }
+    // The gap check reads prevBlockIndex alone, so a null prevHashes still detects a gap.
     verifyChainContinuity(prevBlockIndex, prevHashes, payload){
         // No previous block means the first block after bootstrap, nothing to chain to.
-        if(prevBlockIndex === null || prevHashes === null)
+        if(prevBlockIndex === null)
             return { valid: true, reason: null };
 
         // Guard against null/undefined payload

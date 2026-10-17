@@ -73,8 +73,8 @@ function registerHandleReorgTests(){
 }
 
 // Block 0 is a real height on a chain indexed from genesis (regtest, e2e): a rollback
-// to block 1 keeps block 0, so its hashes must reload, or the next block's
-// continuity gap check is skipped against a null tip.
+// to block 1 keeps block 0, so its hashes must reload, or a re-delivered block 0
+// meets the head-duplicate fork check with no hashes to compare.
 function registerGenesisReorgTests(){
     describe('handleReorg at genesis', function(){
         beforeEach(function(){ sync.lastAppliedBlock = 100; });

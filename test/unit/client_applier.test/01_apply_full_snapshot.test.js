@@ -192,10 +192,8 @@ function registerFullSnapshotCases3(){
 
 function registerFullSnapshotCases4(){
     it('aborts the bootstrap (no commit) when local table enumeration fails with a non-schema-gap error', async function(){
-        // Fail closed: an enumeration failure other than a schema gap (1146/1054)
-        // must propagate so the surrounding catch rolls the transaction back
-        // instead of committing a bootstrap with localTables=[], which would
-        // silently retain stale rows in tables omitted from the payload.
+        // Fail closed: any enumeration failure must propagate so the surrounding catch
+        // rolls back instead of committing with localTables=[], which keeps stale rows.
         let enumErr = new Error('connection lost');
         enumErr.errno = 2013;
         db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).rejects(enumErr);
@@ -208,21 +206,24 @@ function registerFullSnapshotCases4(){
         assert.strictEqual(db.commitTransaction.called, false);
         assert.strictEqual(db.rollbackTransaction.calledOnce, true);
     });
-    it('tolerates a genuine schema-gap error (1146) on local table enumeration', async function(){
-        // A missing information_schema view/table on a thin/older replica is the
-        // one enumeration failure safe to swallow; the apply proceeds with
-        // localTables=[] (payload tables only) and still commits.
-        let schemaGapErr = new Error('table does not exist');
-        schemaGapErr.errno = 1146;
-        db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).rejects(schemaGapErr);
-        let snapshot = {
-            schema_version: SCHEMA_VERSION.indexer,
-            block_height: 10,
-            tables: { blocks: [{ block_index: 1 }] }
-        };
-        await applier.applyFullSnapshot(snapshot);
-        assert.strictEqual(db.commitTransaction.calledOnce, true);
-    });
+    for(const errno of [1146, 1054]){
+        it('aborts the bootstrap (no commit, nothing cleared) on a schema-gap errno ' + errno + ' from local table enumeration', async function(){
+            // information_schema.tables always exists on MariaDB, so no schema-gap errno here is benign.
+            let schemaGapErr = new Error('schema gap');
+            schemaGapErr.errno = errno;
+            db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).rejects(schemaGapErr);
+            let snapshot = {
+                schema_version: SCHEMA_VERSION.indexer,
+                block_height: 10,
+                tables: { blocks: [{ block_index: 1 }] }
+            };
+            await assert.rejects(() => applier.applyFullSnapshot(snapshot), /schema gap/);
+            assert.strictEqual(db.commitTransaction.called, false);
+            assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+            let deletes = db.doQuery.getCalls().map(c => String(c.args[0])).filter(q => /^DELETE FROM /.test(q));
+            assert.deepStrictEqual(deletes, []);
+        });
+    }
     it('throws on a schema-version mismatch before opening a transaction', async function(){
         let snapshot = { schema_version: 'v0-wrong', block_height: 10, tables: { t: [{ id: 1 }] } };
         await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Schema version mismatch/);
@@ -239,6 +240,35 @@ function registerFullSnapshotCases4(){
         await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name/);
     });
 }
+function registerFullSnapshotCases5(){
+    it('refuses a local-only table with an invalid name before any clear, and commits nothing', async function(){
+        // A local-only table never reaches insertRows, so only the clear step can refuse it.
+        db.doQuery.withArgs(sinon.match(/information_schema\.tables/)).resolves([
+            { table_name: 'blocks' },
+            { table_name: 'stray-table' }
+        ]);
+        let snapshot = {
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { blocks: [{ block_index: 1 }] }
+        };
+        await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name in full-snapshot clear: stray-table/);
+        for(let call of db.doQuery.getCalls())
+            assert.strictEqual(/^DELETE/.test(call.args[0]), false, 'no table is cleared: ' + call.args[0]);
+        assert.strictEqual(db.commitTransaction.called, false);
+        assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+    });
+    it('refuses an invalid payload table name that carries zero rows', async function(){
+        let snapshot = {
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { blocks: [{ block_index: 1 }], 'bad-empty': [] }
+        };
+        await assert.rejects(() => applier.applyFullSnapshot(snapshot), /Rejected table name/);
+        assert.strictEqual(db.commitTransaction.called, false);
+        assert.strictEqual(db.rollbackTransaction.calledOnce, true);
+    });
+}
 describe('ClientApplier', function(){
     registerHooks();
 
@@ -247,5 +277,6 @@ describe('ClientApplier', function(){
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();
         registerFullSnapshotCases4();
+        registerFullSnapshotCases5();
     });
 });

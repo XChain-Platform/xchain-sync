@@ -2,21 +2,21 @@
   "name": "xchain-sync",
   "private": true,
   "description": "Database replication service for the XChain Platform: syncs indexer and decoder databases to validators and consumers via REST snapshots and WebSocket streaming",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/XChain-Platform/xchain-sync.git"
   },
   "dependencies": {
-    "acorn": "8.18.0",
+    "acorn": "8.16.0",
     "axios": "^1.20.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
-    "mariadb": "3.5.3",
+    "mariadb": "3.5.4",
     "mathjs": "15.2.0",
     "ws": "^8.21.0"
   },
@@ -84,7 +84,8 @@
     },
     "@eslint/eslintrc": {
       "ajv": "^6.14.0"
-    }
+    },
+    "qs": "^6.16.0"
   },
   "engines": {
     "comment": "Bounded to Node 22 as a support declaration: it matches .nvmrc, CI and the digest-pinned node:22 Docker image, and newer majors are not validated against this stack. This service does not load xchain-vm, so the bound is not an ABI requirement.",

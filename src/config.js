@@ -76,9 +76,9 @@ function bootstrapDepthKey(chain, network){
     return String(ticker).toUpperCase() + ':' + String(network).toUpperCase();
 }
 
-// Source reorg ceiling: the decoder aborts reorg recovery past its dispenser-expiry
-// safe depth, so no honest source emits a deeper REORG. Mirrors xchain-decoder's
-// DISPENSER_EXPIRE_SAFE_DEPTH and xchain-utxo-tracker's undo_blocks.js; change together.
+// Source reorg ceiling: xchain-decoder aborts reorg recovery past DISPENSER_EXPIRE_SAFE_DEPTH,
+// so no honest source emits a deeper REORG. Mirrors it and xchain-utxo-tracker's undo_blocks.js;
+// change together (source_reorg_ceiling_parity.test.js fails on drift either way).
 const SOURCE_SAFE_REORG_DEPTH = 126
 const LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
 
@@ -467,6 +467,15 @@ function addSourceQuorumConfig(config){
     config['VERIFY_RECOMPUTE'] = (process.env.VERIFY_RECOMPUTE || 'true').toLowerCase() !== 'false';
 }
 
+function addRangeVerificationConfig(config){
+    // Blocks recomputed per window when a replica verifies the committed blocks above
+    // its durable last-verified block (a catch-up range, or the unverified tail at
+    // startup or after a halt clear). The verified marker is written after each window
+    // and the event loop is yielded, so a 100k-block range holds one block's preimage
+    // in memory at a time and a restart resumes from the last finished window.
+    config['VERIFY_RANGE_BATCH'] = parseIntMin1(process.env.VERIFY_RANGE_BATCH, 500);
+}
+
 function addReplicaVerificationConfig(config){
     // VERIFY_STATE_HASH: apply-time recompute of the per-block state_hash (the
     // in-place mutations + backdated refund credits the three consensus hashes
@@ -614,8 +623,10 @@ function addCheckpointConfig(config){
     // including an unreachable CHECKPOINT_ANCHOR_URL) is measured from the newest
     // checkpoint this replica verified, so serving no anchorable checkpoint also halts.
     // A quorum-valid checkpoint past the tip is a catch-up, not withholding, and is exempt.
-    // That base is in memory: a cleared halt re-fires each cycle until a fresh anchor
-    // verifies, and a restart drops the base until the next verify.
+    // That base is persisted in sync_state and reloaded at startup before catch-up runs an
+    // anchor cycle, so a restart does not disarm the halt: a cleared halt re-fires each cycle,
+    // across restarts, until a fresh anchor verifies. A stored value that fails validation
+    // on reload leaves the base unset until the next verify.
     config['CHECKPOINT_FRESHNESS_STRICT'] = (process.env.CHECKPOINT_FRESHNESS_STRICT || '').toLowerCase() === 'true';
 }
 
@@ -700,6 +711,7 @@ function getConfig(){
     addClientDatabaseConfig(config);
     addWebSocketAndAccessConfig(config);
     addSourceQuorumConfig(config);
+    addRangeVerificationConfig(config);
     addReplicaVerificationConfig(config);
     addParityConfig(config);
     addCheckpointConfig(config);

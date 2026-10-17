@@ -84,7 +84,7 @@ describe('ClientRollback', function(){
             db.doQuery.callsFake(async (query) => {
                 if(/FROM orders\b[\s\S]*action_index >= \?/.test(query) && /UNION/.test(query))
                     return [{ tick1_id: 7, tick2_id: 9 }];
-                if(/SELECT 1 FROM orders WHERE \(COALESCE\(give_tick_id,0\)=\?/.test(query)) return [{ 1: 1 }];
+                if(/SELECT 1 FROM orders WHERE \(\(give_tick_id=\? OR \(give_tick_id IS NULL AND \?=0\)\)/.test(query)) return [{ 1: 1 }];
                 return [];
             });
             await rollback.rollback(100);
@@ -97,7 +97,7 @@ describe('ClientRollback', function(){
             db.doQuery.callsFake(async (query) => {
                 if(/FROM orders\b[\s\S]*action_index >= \?/.test(query) && /UNION/.test(query))
                     return [{ tick1_id: 7, tick2_id: 9 }];
-                if(/SELECT 1 FROM order_matches WHERE \(COALESCE\(give_tick_id,0\)=\?/.test(query)) return [{ 1: 1 }];
+                if(/SELECT 1 FROM order_matches WHERE \(\(give_tick_id=\? OR \(give_tick_id IS NULL AND \?=0\)\)/.test(query)) return [{ 1: 1 }];
                 return [];
             });
             await rollback.rollback(100);
@@ -130,7 +130,7 @@ describe('ClientRollback', function(){
             db.doQuery.callsFake(async (query) => {
                 if(/FROM orders\b[\s\S]*action_index >= \?/.test(query) && /UNION/.test(query))
                     return [{ tick1_id: 7, tick2_id: 9 }];
-                if(/SELECT 1 FROM orders WHERE \(COALESCE\(give_tick_id,0\)=\?/.test(query))
+                if(/SELECT 1 FROM orders WHERE \(\(give_tick_id=\? OR \(give_tick_id IS NULL AND \?=0\)\)/.test(query))
                     throw Object.assign(new Error('Lock wait timeout'), { errno: 1205 });
                 return [];
             });

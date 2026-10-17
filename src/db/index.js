@@ -889,7 +889,12 @@ class Database {
             { table: 'attests',          indexName: 'version_resolved',   columns: '(version, resolved_block)' },
             { table: 'xcalls',           indexName: 'version_resolved',   columns: '(version, resolved_block)' },
             { table: 'polls',            indexName: 'resolved_block',     columns: '(resolved_block)' },
-            { table: 'polls',            indexName: 'callback_due_block', columns: '(callback_due_block)' }
+            { table: 'polls',            indexName: 'callback_due_block', columns: '(callback_due_block)' },
+            // Per-block reads: the anchor_invalid state-hash class scopes the completing chunk by
+            // block_index_doge, and the mirrored-checkpoint candidate read ranges on
+            // (chain, network, block_index). No other key serves either.
+            { table: 'anchor_actions',    indexName: 'idx_anchor_block_doge', columns: '(block_index_doge)' },
+            { table: 'state_checkpoints', indexName: 'idx_chain_block',       columns: '(chain, network, block_index)' }
         ];
         for(let { table, indexName, columns } of ensureIndexes){
             let tableRows = await this.doQuery(

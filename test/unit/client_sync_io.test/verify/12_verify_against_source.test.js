@@ -308,3 +308,49 @@ describe('ClientSync: verifyAgainstSource', function(){
         assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'cross-source-divergence');
     });
 });
+
+// Build a sync whose local and remote hashes agree at block 100 with the recompute on.
+function agreeingRecomputeSync(){
+    let built = makeSync({ VERIFY_HASHES: true, VERIFY_RECOMPUTE: true });
+    built.db.getBlockHashRow.resolves({ ledger_hash: 'lh1', actions_hash: 'ah1', contract_hash: 'ch1' });
+    sinon.stub(axios, 'get').resolves({ data: {
+        block_height: 100, ledger_hash: 'lh1', actions_hash: 'ah1', contract_hash: 'ch1', table_counts: null
+    }});
+    sinon.stub(built.sync, 'haltOnDivergence').resolves();
+    sinon.stub(built.sync, 'recordSyncStateCounter').resolves();
+    return built.sync;
+}
+
+describe('ClientSync: verifyAgainstSource', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('a local recompute error downgrades agreement to unverified and records it, without halting', async function(){
+        let sync = agreeingRecomputeSync();
+        sinon.stub(sync.blockHasher, 'computeBlockHashes').rejects(new Error('transient DB error'));
+
+        assert.strictEqual(await sync.verifyAgainstSource('http://src1:3006', 100), 'unverified');
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+        assert.ok(sync.recordSyncStateCounter.calledWith('unverified_recompute', 100));
+    });
+
+    it('a clean local recompute keeps the agreement', async function(){
+        let sync = agreeingRecomputeSync();
+        sinon.stub(sync.blockHasher, 'computeBlockHashes').resolves({ ledger_hash: 'lh1', actions_hash: 'ah1', contract_hash: 'ch1' });
+
+        assert.strictEqual(await sync.verifyAgainstSource('http://src1:3006', 100), 'agree');
+        assert.strictEqual(sync.recordSyncStateCounter.called, false);
+    });
+
+    it('the bootstrap quorum does not count an unverified source and warns that the tip is under-verified', async function(){
+        let { sync } = makeSync({ VERIFY_HASHES: true, SYNC_SOURCES: 'http://src1:3006,http://src2:3006' });
+        sinon.stub(sync, 'verifyAgainstSource').resolves('unverified');
+        let warn = sinon.stub(require('../../../../src/observability').getLogger(), 'warn');
+
+        assert.strictEqual(await sync.bootstrapVerifyIndexerQuorum(), true);
+        assert.ok(warn.getCalls().some(c => String(c.args[0]).includes('SECURITY: bootstrap cross-check reached only 1')));
+    });
+});

@@ -108,16 +108,19 @@ describe('Integration: ClientRollback', function() {
             // Rollback to block 6 (removes blocks 6-10, keeping 1-5)
             await rollback.rollback(6);
 
-            // Verify balances recalculated
-            let balancesAfter = await replicaDb.doQuery("SELECT * FROM balances");
-            assert.ok(balancesAfter.length > 0);
-
-            // Each remaining block credits a distinct address 500, so this count
-            // stands in for an exact per-address balance check.
-            // Each remaining block had a credit of 500
-            // With unique addresses per block, each address should have 500
             let creditsRemaining = await testDb.getRowCount(replicaDb, 'credits');
             assert.strictEqual(creditsRemaining, 5);
+
+            // Seeding already rebuilt 10 balance rows, so only the rollback's own rebuild
+            // can bring them to the five surviving addresses of 500 each and drop the rest.
+            let balancesAfter = await replicaDb.doQuery("SELECT * FROM balances");
+            assert.strictEqual(balancesAfter.length, 5, 'one balance row per surviving credited address');
+            for (let row of balancesAfter)
+                assert.strictEqual(Number(row.amount), 500, 'stale balance amount ' + row.amount);
+            let orphaned = await replicaDb.doQuery(
+                "SELECT COUNT(*) AS n FROM balances b LEFT JOIN credits c " +
+                "ON c.address_id = b.address_id AND c.tick_id = b.tick_id WHERE c.address_id IS NULL");
+            assert.strictEqual(Number(orphaned[0].n), 0, 'balances kept rows for rolled-back credits');
         });
 
         it('excludes zero-balance entries', async function() {
@@ -126,6 +129,12 @@ describe('Integration: ClientRollback', function() {
                 creditAmount: '1000', debitAmount: '1000',
                 sourceAddr: 'same_addr', tickName: 'ZERO'
             });
+
+            // Seeding leaves balances empty, so plant a stale non-zero row that only the
+            // rollback's own rebuild can remove.
+            let pair = await replicaDb.doQuery("SELECT address_id, tick_id FROM credits LIMIT 1");
+            await replicaDb.doQuery("INSERT INTO balances (address_id, tick_id, amount) VALUES (?, ?, ?)",
+                [pair[0].address_id, pair[0].tick_id, '1000']);
 
             await rollback.rollback(3);
 
@@ -156,6 +165,55 @@ describe('Integration: ClientRollback', function() {
         });
     });
 
+    // tokens.bridged is set in place on a surviving token row by the first applied XBRIDGE
+    // v3 lock; the generic delete cannot reach it, so the rollback re-derives it from the
+    // surviving xbridges rows exactly as the source indexer does (rederiveTokenBridged).
+    describe('tokens.bridged re-derive', function() {
+        async function idOf(table, column, value) {
+            await replicaDb.doQuery("INSERT IGNORE INTO `" + table + "` (`" + column + "`) VALUES (?)", [value]);
+            const rows = await replicaDb.doQuery("SELECT id FROM `" + table + "` WHERE `" + column + "` = ?", [value]);
+            return Number(rows[0].id);
+        }
+
+        // One bridged token row per tick, issued at action 150 (survives a rollback to block 6,
+        // whose first action is 600), and its v3 locks as [action_index, status_id] pairs.
+        async function seedBridgedToken(tick, locks, version = 3) {
+            const tickId = await idOf('index_tickers', 'tick', tick);
+            await replicaDb.doQuery(
+                "INSERT INTO tokens (tick_id, action_index, last_action_index, supply, bridged) VALUES (?, 150, 150, '0', 1)",
+                [tickId]);
+            for (const [actionIndex, statusId] of locks)
+                await replicaDb.doQuery(
+                    "INSERT INTO xbridges (action_index, version, tick_id, status_id, block_index) VALUES (?, ?, ?, ?, ?)",
+                    [actionIndex, version, tickId, statusId, Math.floor(actionIndex / 100)]);
+            return tickId;
+        }
+
+        async function bridgedOf(tickId) {
+            const rows = await replicaDb.doQuery("SELECT bridged FROM tokens WHERE tick_id = ?", [tickId]);
+            return Number(rows[0].bridged);
+        }
+
+        it('clears bridged when the only v3 lock is orphaned and keeps it when one survives', async function() {
+            await fixtures.seedBlocks(replicaDb, 1, 10);
+            const valid = await idOf('index_statuses', 'status', 'valid');
+            const invalid = await idOf('index_statuses', 'status', 'invalid: AMOUNT');
+            const orphanedOnly = await seedBridgedToken('BRGORPHAN', [[700, valid]]);
+            const survivor = await seedBridgedToken('BRGSURVIVE', [[250, valid], [800, valid]]);
+            const refusedOnly = await seedBridgedToken('BRGREFUSED', [[300, invalid], [900, valid]]);
+            const xchainLock = await seedBridgedToken('BRGV0', [[350, valid]], 0);
+
+            await rollback.rollback(6);
+
+            assert.strictEqual(await bridgedOf(orphanedOnly), 0, 'a token whose only lock was orphaned must read unbridged');
+            assert.strictEqual(await bridgedOf(survivor), 1, 'a surviving valid v3 lock keeps the bit');
+            assert.strictEqual(await bridgedOf(refusedOnly), 0, 'a refused v3 lock never bridged the token');
+            assert.strictEqual(await bridgedOf(xchainLock), 0, 'only a v3 token lock sets the bit');
+            const locksLeft = await replicaDb.doQuery("SELECT COUNT(*) AS n FROM xbridges WHERE action_index >= 600");
+            assert.strictEqual(Number(locksLeft[0].n), 0, 'the orphaned locks are deleted');
+        });
+    });
+
     describe('rollback then re-sync', function() {
         it('allows new data to be applied after rollback', async function() {
             await fixtures.seedBlocks(replicaDb, 1, 10);
@@ -163,6 +221,12 @@ describe('Integration: ClientRollback', function() {
 
             let blocksAfterRollback = await testDb.getRowCount(replicaDb, 'blocks');
             assert.strictEqual(blocksAfterRollback, 5);
+
+            // Check the rollback's own balance rebuild before re-seeding, which rebuilds balances itself.
+            let balancesAfterRollback = await replicaDb.doQuery("SELECT amount FROM balances");
+            assert.strictEqual(balancesAfterRollback.length, 5, 'one balance row per surviving block 1-5');
+            for (let row of balancesAfterRollback)
+                assert.strictEqual(Number(row.amount), 1000, 'stale balance amount ' + row.amount);
 
             // Re-seed blocks 6-8 with different data
             await fixtures.seedBlocks(replicaDb, 6, 8, { creditAmount: '9999' });
@@ -174,9 +238,15 @@ describe('Integration: ClientRollback', function() {
             let credits = await replicaDb.doQuery(
                 "SELECT c.amount FROM credits c INNER JOIN actions a ON a.action_index = c.action_index INNER JOIN transactions t ON t.tx_index = a.tx_index WHERE t.block_index >= 6"
             );
+            // Require one credit per re-seeded block 6-8, so an empty result cannot pass the loop.
+            assert.strictEqual(credits.length, 3, 'one re-synced credit per block 6-8');
             for (let row of credits) {
                 assert.strictEqual(row.amount, '9999');
             }
+
+            // Keep blocks 9-10 rolled back: five original credits plus the three replacements.
+            let creditsTotal = await testDb.getRowCount(replicaDb, 'credits');
+            assert.strictEqual(creditsTotal, 8, 'credits from rolled-back blocks 9-10 survived the re-sync');
         });
     });
 });

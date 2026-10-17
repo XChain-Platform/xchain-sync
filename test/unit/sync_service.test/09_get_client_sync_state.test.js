@@ -88,7 +88,7 @@ describe("SyncService", function(){
                 { lastKnownServerBlock: null, sourceHeightStale: null,
                   upstreamReplica: { stale: null, secondsBehind: null, sourceHeight: null },
                   halted: false,
-                  haltInfo: null, trainActivation: null, truncated: false, bootstrapBase: null,
+                  haltInfo: null, haltDurable: null, trainActivation: null, truncated: false, bootstrapBase: null,
                   sourceQuorum: null, sourcesConfigured: null, sourcesActive: null,
                   sourcesAgreeing: null, sourcesEvicted: [] });
         });

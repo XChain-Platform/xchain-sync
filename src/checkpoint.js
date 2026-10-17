@@ -103,6 +103,12 @@ function commitmentMissing(cp){
         || cp.block_merkle_version === null || cp.block_merkle_version === undefined;
 }
 
+// True when the commitment is active at this checkpoint's snapshot_block. Below it the
+// roots are outside the signed bytes, so a served state_root or block_merkle_root is unsigned.
+function commitmentActive(cp){
+    return !!cp && isCheckpointCommitmentActive(cp.snapshot_block, cp.network);
+}
+
 // Does one validator entry carry the stake fields the weighted regime requires?
 // Blank source and a missing, blank or nonnumeric weight are all disqualifying.
 // meetsStakeThreshold also fails closed on each of these (its decimal check is the
@@ -246,6 +252,8 @@ module.exports = {
     // drift from it: here client/sync.js checkpointSkipsAnchoring, and in the SDK twin
     // protocol/light_client/validator_set_follow.js verifyCheckpointWithProvenSet.
     commitmentMissing,
+    // Exported so client/sync.js gates a served root on THIS predicate, not a copy.
+    commitmentActive,
     verifyCheckpoint,
     suppliedValidators,
     verifyServedCheckpoint,
