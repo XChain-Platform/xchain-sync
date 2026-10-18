@@ -8,6 +8,9 @@
  * This file is part of XChain Platform. Licensed under the GNU Affero
  * General Public License v3.0 or later; see LICENSE.md.
  *
+ * The index-map class stays live so this fixture follows the canonical
+ * regtest preimage and query order.
+ *
  ********************************************************************/
 'use strict';
 
@@ -15,14 +18,15 @@ const assert  = require('assert');
 const Utility = require('../../src/util');
 const {
     buildStateHashData, isAttestBatchHeadStateHashActive, ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION,
-    POLL_FINALIZE_STATE_HASH_ACTIVATION, INDEX_MAP_STATE_HASH_ACTIVATION,
-    BET_STATUS_STATE_HASH_ACTIVATION, TOKEN_SUPPLY_STATE_HASH_ACTIVATION,
+    POLL_FINALIZE_STATE_HASH_ACTIVATION, BET_STATUS_STATE_HASH_ACTIVATION,
+    TOKEN_SUPPLY_STATE_HASH_ACTIVATION,
 } = require('../../src/consensus/state_hash');
 const G = require('../../src/consensus/state_hash/gated_sections');
 const updatedRows = require('../../src/server/updated_rows');
 
 const util = new Utility();
-const PREFEATURE_KEYS = ['deactivations', 'slashes', 'request_status', 'cooldown', 'credits', 'anchor_invalid', 'block_index', 'state_hash_version'];
+const PREFEATURE_KEYS = ['deactivations', 'slashes', 'request_status', 'cooldown', 'credits', 'anchor_invalid',
+                         'index_addresses_new', 'index_tickers_new', 'block_index', 'state_hash_version'];
 const STAMPED = 'invalid: ATTEST_BATCH (reassembly CRC mismatch)' + G.ATTEST_BATCH_COMPLETION_STAMP;
 
 function dbFor(results, calls){
@@ -33,7 +37,7 @@ function dbFor(results, calls){
     };
 }
 
-function baseResults(){ return [[], [], [], [], [], [], [], [], []]; }
+function baseResults(){ return [[], [], [], [], [], [], [], [], [], [], []]; }
 
 async function build(results, calls){
     const data = await buildStateHashData(dbFor(results || baseResults(), calls), 7,
@@ -47,10 +51,10 @@ async function assertActiveFold(){    const source = baseResults().concat([[{ ac
     const s = await build(source, calls);
     assert.deepStrictEqual(Object.keys(s.data),
         ['deactivations', 'slashes', 'request_status', 'cooldown', 'credits', 'anchor_invalid',
-         'attest_batch_head', 'block_index', 'state_hash_version']);
+         'index_addresses_new', 'index_tickers_new', 'attest_batch_head', 'block_index', 'state_hash_version']);
     assert.deepStrictEqual(s.data.attest_batch_head, [{ action_index: 100, status: STAMPED }]);
-    assert.strictEqual(calls.length, 10);
-    assert.deepStrictEqual(calls[9].args,
+    assert.strictEqual(calls.length, 12);
+    assert.deepStrictEqual(calls[11].args,
         ['%' + G.ATTEST_BATCH_COMPLETION_STAMP, G.ATTEST_BATCH_HEAD_VERSION,
          G.ATTEST_BATCH_CONTINUATION_VERSION, 7, G.ATTEST_BATCH_CONTINUATION_VERSION, 7]);
     const dropped = await build(stale);
@@ -60,7 +64,7 @@ async function assertActiveFold(){    const source = baseResults().concat([[{ ac
 }
 
 describe('state_hash attest_batch_head class, follower twin @regression', function(){
-    const maps = { poll: POLL_FINALIZE_STATE_HASH_ACTIVATION, index: INDEX_MAP_STATE_HASH_ACTIVATION,
+    const maps = { poll: POLL_FINALIZE_STATE_HASH_ACTIVATION,
                    bet: BET_STATUS_STATE_HASH_ACTIVATION, token: TOKEN_SUPPLY_STATE_HASH_ACTIVATION };
     let prev;
     before(function(){
@@ -88,7 +92,7 @@ describe('state_hash attest_batch_head class, follower twin @regression', functi
             const calls = [];
             const { data } = await build(null, calls);
             assert.deepStrictEqual(Object.keys(data), PREFEATURE_KEYS);
-            assert.strictEqual(calls.length, 9);
+            assert.strictEqual(calls.length, 11);
         } finally { ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION.regtest = prevH; }
     });
 
