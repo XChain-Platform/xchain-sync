@@ -38,7 +38,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows.js':   'ca3695a6216c66ebcd0a16e441f3851e089468bb',
     'shared_rows_1.js': '884db71be5d3200fb335442a664af638e55ed041',
     'shared_rows_2.js': 'd04351e66bfdb7035803631b1ac93db8db9f19e3',
-    'shared_rows_3.js': '322af4669da3c40326eee479f1b1116946d91e3f',
+    'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
     'shared_rows_5.js': '4a2fcda214d960c32f635fb05bc1918fe741f8e0',
 };
@@ -46,7 +46,7 @@ const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '69985d91fce466d8f40f41217502be1ff055f0d1cd89fc3cc6ea1cfdb548f992',
     'shared_rows_1.js': '7f300e583910d9f928f411dd34b259d462dc3682d142f24a25cb2f9b42011b41',
     'shared_rows_2.js': '63d4b236c7d3e62aa8b70518d2a314a58613cf05b6727f0f21d0d1cf5ca2cc7f',
-    'shared_rows_3.js': '8882e7bf8604b3d4d5f5f0d137ad88196b6064a8be9af384ea2be926cda536f5',
+    'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
     'shared_rows_5.js': '40c1b7d3d28dde2703b40badf1a268b7e673618f3f374c681fd898e73945ad3a',
 };
