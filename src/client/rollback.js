@@ -775,19 +775,9 @@ class ClientRollback {
             // Runs BEFORE the dataTables delete.
             await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
 
-            // Reset an anchor batch's surviving archive-head parent (v1/v6,
-            // ARCHIVE_HEAD_VERSIONS in state_hash.js) stamped 'invalid_archive' by an
-            // orphaned final chunk, mirror of xchain-indexer/src/rollback/batch_heads.js. When the last v2
-            // chunk of a chunked archive batch lands and the reassembled blob fails its CRC
-            // check, the source stamps the parent (in an earlier, surviving block)
-            // 'invalid_archive' IN PLACE. If that completing chunk is in the orphaned range,
-            // the dataTables delete below removes the chunk but cannot undo the parent stamp,
-            // leaving the replica's parent stuck 'invalid_archive' while a from-genesis replay
-            // re-derives its pre-flip status. Self-join the parent to an orphaned v2 chunk of
-            // the same match_batch_seq whose status is 'valid' (a completing chunk is always
-            // 'valid'; the valid-filter excludes a late rejected duplicate) and restore the
-            // journaled pre-stamp status. Legacy rows with no journal fall back to 'unverified',
-            // the conservative re-verification state. Runs BEFORE the delete.
+            // Restore the surviving archive head stamped by an orphaned final chunk.
+            // Journaled heads recover their prior status; legacy heads become unverified.
+            // This must run before the orphaned action rows are deleted below.
             if(firstActionIndex !== null){
                 try {
                     // Author scope, flag-day gated and INERT on every network today; mirror of

@@ -886,14 +886,8 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // Bespoke-logic parity: anchor invalid_archive journal restore. When the final v2
-    // chunk of a chunked archive batch is orphaned by a reorg, the parent v1 (in a surviving
-    // earlier block) was stamped 'invalid_archive' IN PLACE by that chunk's apply; deleting
-    // the chunk row leaves the parent stuck 'invalid_archive' on both source and replica until
-    // a from-genesis replay. Both xchain-indexer src/rollback/ (source) and src/client/rollback.js (replica) must
-    // carry the self-join UPDATE that restores the journaled status, falls back to
-    // 'unverified' for legacy rows, and clears the journal. If you change one, change
-    // the other and extend this guard.
+    // Keep the archive-head journal restore identical on the source and replica.
+    // The reset must restore or fall back to unverified, then clear the journal.
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
