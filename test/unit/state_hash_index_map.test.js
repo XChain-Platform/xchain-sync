@@ -63,6 +63,9 @@ describe('state_hash index-map class (id-determinism P4) - follower twin @regres
         ATTEST_BATCH_HEAD_STATE_HASH_ACTIVATION.regtest = attestBatchHeadPrev;
     });
 
+    // Index-map rows are now part of every preimage, so each fixture supplies both
+    // query results directly. Changing only the address id proves that persistent
+    // identifier drift changes the follower hash while the ticker rows remain fixed.
     it('armed: a divergent id->address pair changes state_hash (follower would HALT)', async function(){
         const fromGenesis = baseResults().concat([[{ id: 1, address: 'bc1qSrc' }], [{ id: 2, tick: 'TOKA' }]]);
         const recovered   = baseResults().concat([[{ id: 3, address: 'bc1qSrc' }], [{ id: 2, tick: 'TOKA' }]]);

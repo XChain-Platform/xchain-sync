@@ -398,7 +398,7 @@
       "id": "stateHash",
       "from": "5ac03b6746c93bc0615d0a4d857f5eb4861c44aa5890ee60e922794ed29bc785",
       "to": "a47cbbadb6e1f624c3dde36feb74985ba2a066c1cb5e1f09d17e8540f9c28515",
-      "reason": "XC-3351 gate retirement",
+      "reason": "retire the index map state hash gate",
       "date": "2026-10-18"
     }
   ]
