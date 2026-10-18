@@ -381,7 +381,7 @@ const MIGRATION_FRONTIER = {
         indexOnly: [],
         hashes: {
             '2026-10-18-anchor-actions-pre-archive-status.sql':
-                'd56139663facae3d137d6da322fe10ad8b45ff6dda1bc68290dc54a274cb0e3a'
+                '29ace5abd9378dad83304568beb08945eb352022d250c66e677a0c04e5ed81ac'
         }
     },
     decoder: {
