@@ -4721,12 +4721,16 @@
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config keep the reader defaults when unset",
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config keeps DISPENSERS_RECONCILE_MAX_INTERVAL_MS=0 as the documented disable",
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config pass a set value through"
+    ],
+    "f6fbd3a44c9a1195": [
+      "state hash index-map inclusion on every network includes each index-map class for every coin, network and sampled block",
+      "state hash index-map inclusion on every network reads errno 1146 as empty index-map classes"
     ]
   },
   "scripts": {
     "test": {
-      "fileCount": 389,
-      "titleCount": 3079,
+      "fileCount": 390,
+      "titleCount": 3081,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5116,7 +5120,8 @@
         "test/unit/utf8mb4_replica_widen.test.js": "9e46fbfae5839c05",
         "test/unit/utility.test.js": "436350992c034c95",
         "test/unit/validation.test.js": "8abfcb4541ad0c52",
-        "test/unit/wire_codec.test.js": "84756c5ba4034f32"
+        "test/unit/wire_codec.test.js": "84756c5ba4034f32",
+        "test/unit/consensus/index_map_every_network.test.js": "f6fbd3a44c9a1195"
       }
     },
     "test:boundary": {
