@@ -1910,6 +1910,12 @@
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression no prior shadow root: full-builds through the caller callback (window start)",
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression null balanceUpdates (committed path full-recomputed) forces the shadow full build too"
     ],
+    "6f53c214736534f2": [
+      "ClientRollback invalid_archive parent reset @regression resets one surviving parent from each network using the first orphaned action index",
+      "ClientRollback invalid_archive parent reset @regression rethrows any other reset error and rolls back the transaction",
+      "ClientRollback invalid_archive parent reset @regression skips the reset when getFirstActionIndex resolves null",
+      "ClientRollback invalid_archive parent reset @regression swallows missing-table and missing-column errors from the reset"
+    ],
     "6fe6527e42a197a6": [
       "ClientSync persistent replica gaps ages decoder shortfalls from the periodic path only",
       "ClientSync persistent replica gaps does not clear a tracked gap on a sweep that never completed",
@@ -4715,8 +4721,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 387,
-      "titleCount": 3072,
+      "fileCount": 388,
+      "titleCount": 3076,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4813,6 +4819,7 @@
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
         "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "aa9ac5216302721b",
         "test/unit/client_rollback.test/11_token_bridged_rederive.test.js": "a4f6aa69e33278ea",
+        "test/unit/client_rollback.test/12_archive_invalid_reset_pin.test.js": "6f53c214736534f2",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",
