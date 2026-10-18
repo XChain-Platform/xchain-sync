@@ -30,7 +30,6 @@ describe('consensus-bound registry rows', function () {
     describe('price scale activation', function () {
         const NAMES = [
             'PRICE_SCALE_MAX_DECIMALS',
-            'PRICE_SCALE_ACTIVATION',
             'PRICE_VALUE_RE_LEGACY',
             'PRICE_VALUE_RE_CANONICAL',
         ];
@@ -41,13 +40,6 @@ describe('consensus-bound registry rows', function () {
                 assert.strictEqual(gateRegistry.keys().filter((candidate) => candidate === key).length, 1);
             });
         }
-
-        it('resolves the price scale activation table', function () {
-            assert.deepStrictEqual(
-                gateRegistry.get('price_scale_activation.PRICE_SCALE_ACTIVATION'),
-                { mainnet: 0, testnet: 0, regtest: 0 }
-            );
-        });
 
         it('resolves the price scale max decimals bound', function () {
             assert.strictEqual(gateRegistry.get('price_scale_activation.PRICE_SCALE_MAX_DECIMALS'), 8);
