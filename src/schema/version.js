@@ -263,10 +263,11 @@
  *       2026-10-17-ledger-address-tick-amount-index migration adds non-unique
  *       (address_id, tick_id, amount) secondary indexes to `credits` and `debits`.
  *       It changes neither replicated columns nor payload shape, so an older
- *       follower can still store every streamed row. The same frontier date carries
- *       2026-10-17-dispenser-statuses-dispenser-action-idx, which adds a non-unique
+ *       follower can still store every streamed row. The
+ *       2026-10-17-dispenser-statuses-dispenser-action-idx migration adds a non-unique
  *       (dispenser_action_index, action_index) secondary index to `dispenser_statuses`
- *       and changes neither the replicated column set nor the payload shape, and
+ *       that changes neither the replicated column set nor the payload shape. The
+ *       same frontier date carries
  *       2026-10-17-dispensers-sweeps-column-order, whose MODIFY ... AFTER column
  *       reordering on `dispensers` and `sweeps` changes neither the replicated column
  *       set nor the payload shape. Indexer stays at 18 and decoder stays at 5.
