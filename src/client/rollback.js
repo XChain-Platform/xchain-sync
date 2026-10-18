@@ -785,8 +785,9 @@ class ClientRollback {
             // leaving the replica's parent stuck 'invalid_archive' while a from-genesis replay
             // re-derives its pre-flip status. Self-join the parent to an orphaned v2 chunk of
             // the same match_batch_seq whose status is 'valid' (a completing chunk is always
-            // 'valid'; the valid-filter excludes a late rejected duplicate) and reset to
-            // 'unverified', the conservative re-verification state. Runs BEFORE the delete.
+            // 'valid'; the valid-filter excludes a late rejected duplicate) and restore the
+            // journaled pre-stamp status. Legacy rows with no journal fall back to 'unverified',
+            // the conservative re-verification state. Runs BEFORE the delete.
             if(firstActionIndex !== null){
                 try {
                     // Author scope, flag-day gated and INERT on every network today; mirror of
@@ -800,7 +801,7 @@ class ClientRollback {
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
-                        "SET p.status_id = us.id " +
+                        "SET p.status_id = COALESCE(p.pre_archive_status_id, us.id), p.pre_archive_status_id = NULL " +
                         "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +
                         " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
                         [firstActionIndex, firstActionIndex]);

@@ -3082,6 +3082,10 @@
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships each row once when both channels return the same synthetic-action row @regression",
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships the synthetic-action credit and release once when the matured join is empty @regression"
     ],
+    "abc321c1e9fd95fd": [
+      "ClientRollback archive stamp journal restore @regression resets an unjournaled head to unverified and leaves the journal clear",
+      "ClientRollback archive stamp journal restore @regression restores a journaled head status verbatim and clears the journal"
+    ],
     "ad581ffaee874b66": [
       "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
       "Advisory table-content parity excluded-column registry @regression declares the edited columns of every in-place carried table still in the parity window",
@@ -4725,8 +4729,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 389,
-      "titleCount": 3079,
+      "fileCount": 390,
+      "titleCount": 3081,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4824,6 +4828,7 @@
         "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "aa9ac5216302721b",
         "test/unit/client_rollback.test/11_token_bridged_rederive.test.js": "a4f6aa69e33278ea",
         "test/unit/client_rollback.test/12_archive_invalid_reset_pin.test.js": "6f53c214736534f2",
+        "test/unit/client_rollback.test/12_archive_stamp_journal_restore.test.js": "abc321c1e9fd95fd",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",

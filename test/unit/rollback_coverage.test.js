@@ -886,13 +886,14 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    // Bespoke-logic parity: anchor invalid_archive to unverified reset. When the final v2
+    // Bespoke-logic parity: anchor invalid_archive journal restore. When the final v2
     // chunk of a chunked archive batch is orphaned by a reorg, the parent v1 (in a surviving
     // earlier block) was stamped 'invalid_archive' IN PLACE by that chunk's apply; deleting
     // the chunk row leaves the parent stuck 'invalid_archive' on both source and replica until
     // a from-genesis replay. Both xchain-indexer src/rollback/ (source) and src/client/rollback.js (replica) must
-    // carry the self-join UPDATE that resets the parent to 'unverified'. If you change one,
-    // change the other and extend this guard.
+    // carry the self-join UPDATE that restores the journaled status, falls back to
+    // 'unverified' for legacy rows, and clears the journal. If you change one, change
+    // the other and extend this guard.
     it('anchor invalid_archive to unverified reset is mirrored across xchain-indexer and xchain-sync (bespoke-logic drift guard)', function(){
         const fs = require('fs'), pathMod = require('path');
         const syncPath    = pathMod.resolve(__dirname, '../../src/client/rollback.js');
@@ -904,7 +905,7 @@ describe('Rollback coverage guard @regression', function(){
             // like 'invalid_archive' normalizes to a bare ` invalid_archive ` -- match that form.
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
-            { name: 'anchor reset to unverified',          re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = us\.id/ },
+            { name: 'anchor journal restore and clear',     re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
             // The parent predicate must select the FULL archive-head version set
             // (currently just v1) via the shared state_hash.js constant, on both sides,
             // rather than a hardcoded literal that drifts from it. Matches the indexer's
