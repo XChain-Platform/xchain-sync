@@ -264,6 +264,9 @@
  *       (address_id, tick_id, amount) secondary indexes to `credits` and `debits`.
  *       It changes neither replicated columns nor payload shape, so an older
  *       follower can still store every streamed row. The same frontier date carries
+ *       2026-10-17-dispenser-statuses-dispenser-action-idx, which adds a non-unique
+ *       (dispenser_action_index, action_index) secondary index to `dispenser_statuses`
+ *       and changes neither the replicated column set nor the payload shape, and
  *       2026-10-17-dispensers-sweeps-column-order, whose MODIFY ... AFTER column
  *       reordering on `dispensers` and `sweeps` changes neither the replicated column
  *       set nor the payload shape. Indexer stays at 18 and decoder stays at 5.
@@ -360,13 +363,17 @@ const MIGRATION_FRONTIER = {
             '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql'
         ],
         accounted: [
+            '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
             '2026-10-17-dispensers-sweeps-column-order.sql',
             '2026-10-17-ledger-address-tick-amount-index.sql'
         ],
         indexOnly: [
+            '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
             '2026-10-17-ledger-address-tick-amount-index.sql'
         ],
         hashes: {
+            '2026-10-17-dispenser-statuses-dispenser-action-idx.sql':
+                'fea0bd480722af6fb878fc5e89c9d12fd5111c9d9d43ed17f0a4c6c66ecf2cbd',
             '2026-10-17-dispensers-sweeps-column-order.sql':
                 '7890fcc366c7150af6b5b7f96ca8114cd8dc494840c4783586ee085d56d61277',
             '2026-10-17-ledger-address-tick-amount-index.sql':
