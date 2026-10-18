@@ -54,7 +54,8 @@ describe('state_hash: replication-integrity recompute conformance @regression', 
     it('builds the fixed-order preimage covering every mutation class', async function(){
         const { data } = await hashWith(dbFor(vectors.results.map(r => r.slice()), vectors.completed_id));
         assert.deepStrictEqual(Object.keys(data),
-            ['deactivations', 'slashes', 'request_status', 'cooldown', 'credits', 'anchor_invalid', 'block_index', 'state_hash_version'],
+            ['deactivations', 'slashes', 'request_status', 'cooldown', 'credits', 'anchor_invalid',
+             'index_addresses_new', 'index_tickers_new', 'block_index', 'state_hash_version'],
             'preimage key order is part of the hash; a change requires a STATE_HASH_VERSION bump');
         assert.strictEqual(data.state_hash_version, STATE_HASH_VERSION);
         assert.strictEqual(data.block_index, vectors.block_index);

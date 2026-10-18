@@ -58,7 +58,6 @@ const EXPECTED_KEYS = Object.freeze([
     'stateHash.BET_STATUS_STATE_HASH_ACTIVATION',
     'stateHash.COOLDOWN_TABLES',
     'stateHash.DEACTIVATION_TABLES',
-    'stateHash.INDEX_MAP_STATE_HASH_ACTIVATION',
     'stateHash.POLL_FINALIZE_STATE_HASH_ACTIVATION',
     'stateHash.REQUEST_STATUS_TABLES',
     'stateHash.SLASH_SPECS',
