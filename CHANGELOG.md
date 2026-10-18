@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-17
+
+### Added
+- Carried the remote token pin, bridged policy, fiat dispenser, token supply and execute fee cap rows, each behind a gate.
+- Carried the snapshot burial consensus primitive and the order-match price-cross registry row.
+
+### Changed
+- Recomputed every replica block above a durable verified tip before following the source.
+- Checked back-dated and edited migrations against the schema version frontier and hashed non-in-place state hash columns.
+- Armed ORDER_MATCH_PRICE_CROSS_ACTIVATION on BTC:testnet at 156908.
+- Armed ORDER_MATCH_PRICE_CROSS_ACTIVATION on LTC:testnet at 4927400.
+- Armed ORDER_MATCH_PRICE_CROSS_ACTIVATION on DOGE:testnet at 68005165.
+- Armed REMOTE_TOKEN_ADMISSION_ACTIVATION on BTC:testnet at 156908.
+- Armed REMOTE_TOKEN_ADMISSION_ACTIVATION on LTC:testnet at 4927400.
+- Armed REMOTE_TOKEN_ADMISSION_ACTIVATION on DOGE:testnet at 68005165.
+
+### Fixed
+- Re-derived bridged token state and undid block-keyed flips when a replica rolls back.
+- Held and re-verified a committed block whose post-commit verification throws, and held startup until the rollback guard reads.
+
 ## [0.23.0] - 2026-10-11
 
 ### Added

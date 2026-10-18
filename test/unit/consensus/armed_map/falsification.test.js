@@ -40,7 +40,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
     'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
-    'shared_rows_5.js': 'b15a59bb8b6ba3d68fcf7501a0b7d29af468c29c',
+    'shared_rows_5.js': '4a2fcda214d960c32f635fb05bc1918fe741f8e0',
 };
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '7224c8746d57983719333c6efc734858368c7ae044e4f59586233820c6dba9ae',
@@ -48,7 +48,7 @@ const INDEXER_CANONICAL_SHA256 = {
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': 'd671489c2b683ec2a94d0f45da1056687c38f78959a9f1780825eb7e3a37d6ea',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
-    'shared_rows_5.js': '79d286ecd153c19863faad5db2421db7810b05ed8e48a094493c90d81f96a6e0',
+    'shared_rows_5.js': '40c1b7d3d28dde2703b40badf1a268b7e673618f3f374c681fd898e73945ad3a',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
