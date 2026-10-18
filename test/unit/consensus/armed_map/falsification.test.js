@@ -36,7 +36,7 @@ const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.j
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_BLOBS = {
     'shared_rows.js':   '065d2da6b0947e0461ec900f13878f48a66d27c4',
-    'shared_rows_1.js': 'fd0b20dc2865d029b60f15ce0907c433fd8e148d',
+    'shared_rows_1.js': '884db71be5d3200fb335442a664af638e55ed041',
     'shared_rows_2.js': '7ec76d4d6c6dcef6d509b08bba84c1b58b208fa1',
     'shared_rows_3.js': '478878079e1449362a7670b9e867a5a6174ac3fb',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
@@ -44,7 +44,7 @@ const INDEXER_CANONICAL_BLOBS = {
 };
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '81b161fc45fd6d963c2cefd5985f933872c49710c884d38826cc6e1296200979',
-    'shared_rows_1.js': '1ed80849231893f3801d91a2cacc7041b54e26eaa63a680c845dc93aa5e1d278',
+    'shared_rows_1.js': '7f300e583910d9f928f411dd34b259d462dc3682d142f24a25cb2f9b42011b41',
     'shared_rows_2.js': '8c9ddc10be60387322faa3facbda25b7f17ac1c5ecefaf6340e78bb96dd7e496',
     'shared_rows_3.js': 'd671489c2b683ec2a94d0f45da1056687c38f78959a9f1780825eb7e3a37d6ea',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
