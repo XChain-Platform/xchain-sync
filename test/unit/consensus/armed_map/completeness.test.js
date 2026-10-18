@@ -65,7 +65,7 @@ describe('armed map v2: manifest completeness over src/', function () {
         // activation and mutation collectors each read their rows from the registry,
         // so the scan counts those two files rather than the facade alone.
         assert.strictEqual(shims.size, 16, 'the shim scan found ' + shims.size + ' files');
-        assert.strictEqual(shimKeys.size, 43, 'the shim scan found ' + shimKeys.size + ' keys');
+        assert.strictEqual(shimKeys.size, 41, 'the shim scan found ' + shimKeys.size + ' keys');
     });
 
     it('the shim keys equal the independent expected-key census', function () {

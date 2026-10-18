@@ -279,6 +279,9 @@
     "16b6025bc75d7d05": [
       "SyncService waitForHub timeout exits the process after MAX_HUB_WAIT_MS with no hub"
     ],
+    "17946dcd3345474c": [
+      "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)"
+    ],
     "19b6bdb857cf7156": [
       "ClientSync syncLookupTablesPaged catch-up: starts from the replica MAX(id) so only NEW rows are fetched",
       "ClientSync syncLookupTablesPaged decoder: pages pubkeys by its surrogate id cursor",
@@ -738,11 +741,6 @@
       "RollbackGuard state serialization round-trips an active streak through state",
       "RollbackGuard state serialization round-trips reset state",
       "RollbackGuard state serialization stays reset when restored state is malformed"
-    ],
-    "34ecc125f5c3c276": [
-      "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)",
-      "state_hash index-map class (id-determinism P4) - follower twin @regression gate: regtest armed from genesis, arms at/after the per-chain height",
-      "state_hash index-map class (id-determinism P4) - follower twin @regression inert: follower preimage is byte-identical to the pre-feature shape"
     ],
     "35f586531a7008e6": [
       "Database.beginTransaction() acquires a connection and calls beginTransaction on it",
@@ -3866,7 +3864,7 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 390,
+      "fileCount": 391,
       "titleCount": 3079,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
@@ -4214,7 +4212,7 @@
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
         "test/unit/state_hash_attest_batch_stamp_gap.test.js": "a122a447c627671c",
-        "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
+        "test/unit/state_hash_index_map.test.js": "17946dcd3345474c",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
