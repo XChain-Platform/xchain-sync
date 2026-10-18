@@ -859,6 +859,10 @@
       "Chaos: source cursor read fails closed a source-DB outage surfaces out of poll instead of reading as an idle chain",
       "Chaos: source cursor read fails closed an outage on a poller with no cursor yet does not seed lastPolledBlock from a swallowed error"
     ],
+    "31ee6c76f3ff525b": [
+      "state hash archive-invalid selection on every network queries the widened archive-head class for every coin, network and sampled block",
+      "state hash archive-invalid selection on every network reads errno 1146 as an empty archive-invalid class"
+    ],
     "324f0246f861a9ae": [
       "Database schema self-heal: one startup completes columns then key rebuilds adds each column BEFORE the rebuild that names it",
       "Database schema self-heal: one startup completes columns then key rebuilds converges a follower sitting in the deferred state on its next start",
@@ -4721,8 +4725,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 388,
-      "titleCount": 3076,
+      "fileCount": 389,
+      "titleCount": 3079,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4902,6 +4906,7 @@
         "test/unit/consensus/anchor_fold_registry_rows.test.js": "f5621b6227dcbcd6",
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
+        "test/unit/consensus/archive_invalid_every_network.test.js": "31ee6c76f3ff525b",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
         "test/unit/consensus/armed_map/completeness.test.js": "be8349064e8f7983",
         "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
