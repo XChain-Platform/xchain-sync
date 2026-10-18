@@ -271,6 +271,15 @@
  *       2026-10-17-dispensers-sweeps-column-order, whose MODIFY ... AFTER column
  *       reordering on `dispensers` and `sweeps` changes neither the replicated column
  *       set nor the payload shape. Indexer stays at 18 and decoder stays at 5.
+ *  19 - (indexer only) nullable `pre_archive_status_id` was added to the
+ *       stream:action `anchor_actions` table by the
+ *       2026-10-18-anchor-actions-pre-archive-status migration. It journals the
+ *       status held before an archive failure stamps a surviving head
+ *       `invalid_archive`, allowing rollback to restore that exact status and clear
+ *       the journal. A v18 follower has no column for the streamed value and fails
+ *       strict apply with an unknown-column error. The migration is mode=auto, so
+ *       the forced schema refresh carries the column onto followers. Decoder is
+ *       unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -293,11 +302,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 18, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 19, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-17',
+        through: '2026-10-18',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -361,24 +370,18 @@ const MIGRATION_FRONTIER = {
             '2026-10-07-ledger-covering-index.sql',
             '2026-10-08-token-bridge-fields.sql',
             '2026-10-09-bet-edits.sql',
-            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql'
-        ],
-        accounted: [
+            '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql',
             '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
             '2026-10-17-dispensers-sweeps-column-order.sql',
             '2026-10-17-ledger-address-tick-amount-index.sql'
         ],
-        indexOnly: [
-            '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
-            '2026-10-17-ledger-address-tick-amount-index.sql'
+        accounted: [
+            '2026-10-18-anchor-actions-pre-archive-status.sql'
         ],
+        indexOnly: [],
         hashes: {
-            '2026-10-17-dispenser-statuses-dispenser-action-idx.sql':
-                'fea0bd480722af6fb878fc5e89c9d12fd5111c9d9d43ed17f0a4c6c66ecf2cbd',
-            '2026-10-17-dispensers-sweeps-column-order.sql':
-                '7890fcc366c7150af6b5b7f96ca8114cd8dc494840c4783586ee085d56d61277',
-            '2026-10-17-ledger-address-tick-amount-index.sql':
-                '408e9db33ee786714822de03b3452eca278de54cb895bf1b58c664776bc6ac1f'
+            '2026-10-18-anchor-actions-pre-archive-status.sql':
+                '29ace5abd9378dad83304568beb08945eb352022d250c66e677a0c04e5ed81ac'
         }
     },
     decoder: {
