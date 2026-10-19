@@ -30,22 +30,18 @@ module.exports = {
 
     // --- Durable client key/value markers (sync_state) ------------------------
     // Small durable store for per-client state that must survive a restart but is
-    // not block data (mirrors the sync_halt durable-state pattern). Created on
-    // demand so no schema file / migration is needed on existing replicas. Keys are
+    // not block data (mirrors the sync_halt durable-state pattern). Reconciled on
+    // demand by the dated SQL migration so existing replicas gain it. Keys are
     // namespaced by the caller (e.g. 'bootstrap_base:indexer'). Used by ClientSync
     // to persist the truncated-replica join floor (_bootstrapBase): an in-memory-only
     // field is lost on restart, dropping the join-block recompute skip and the
     // truncation floor that protects against an in-window reorg below `base`.
-    // opts.rethrow makes a failed CREATE throw, and the table is then not marked ready.
+    // opts.rethrow makes a failed migration throw, and the table is then not marked ready.
     async ensureSyncStateTable(opts){
         if(this._syncStateReady) return;
-        await this.doQuery(
-            "CREATE TABLE IF NOT EXISTS sync_state (" +
-            "  state_key   VARCHAR(128) NOT NULL PRIMARY KEY," +
-            "  state_value TEXT," +
-            "  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP" +
-            ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci",
-            undefined, null, (opts && opts.rethrow) ? { rethrow: true } : undefined
+        await this.runSqlMigrationStatement(
+            '2026-10-19-sync-state.sql', 'sync-state', undefined,
+            (opts && opts.rethrow) ? { rethrow: true } : undefined
         );
         this._syncStateReady = true;
     },

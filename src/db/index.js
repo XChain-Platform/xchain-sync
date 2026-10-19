@@ -52,26 +52,6 @@ const envConfig = require('../config');
 const { bigIntTypeCast } = require('../util/wire_codec');
 const logger = getLogger();
 
-// Columns that a key rebuild in ensureReplicaSecondaryIndexes NAMES, with the
-// authoritative definition from the indexer migration that introduced each one. A
-// rebuild whose column is absent is errno 1072 and the whole ALTER is refused, so the
-// column has to land first; the source-DDL heal that would carry it (addMissingColumns)
-// runs LATER in startup on the common client topology, and never at all on a replica
-// holding a durable halt, which is why these definitions are declared here and healed
-// beside the rebuild instead of deferred to a next startup that repeats the same order.
-const KEY_REBUILD_PRECONDITION_COLUMNS = [
-    // xchain-indexer 2026-08-28-anchor-actions-section-index-pk.
-    { table: 'anchor_actions', column: 'section_index',
-      definition: 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `action_index`' },
-    // xchain-indexer 2026-08-24-validator-rewards-round-qualifier, both tables it alters:
-    // the reward identity and the reconcile-log pre-image the replica mirror joins on
-    // (ClientApplier.mirrorAnchorRewardReconcile).
-    { table: 'validator_rewards', column: 'round_qualifier',
-      definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' },
-    { table: 'anchor_reward_reconcile_log', column: 'round_qualifier',
-      definition: 'BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`' }
-];
-
 const DB_RETRY_DELAY_MS = 5000;
 const DB_CONNECT_RETRY_MAX_ATTEMPTS = 12;
 const DB_CONNECT_RETRY_TIMEOUT_MS = 60000;
@@ -124,6 +104,7 @@ async function connectWithRetry(database, connectionParams, operation, errorMess
 // table has one. Required by computed path, so nothing here names a mixin as a
 // literal any tool could follow: the list IS the registry.
 const MIXIN_FILES = [
+    './sql_migrations.js',
     './sync_meta.js',
     './sync_halt.js',
     './state_tree_roots.js',
@@ -322,160 +303,6 @@ class Database {
         }
     }
 
-    // Bring an already-existing table on this (target) database up to the
-    // source schema by adding any columns the source has and the target
-    // lacks. Schema replication only ever CREATEd missing tables; a column
-    // added to a table that the replica had already bootstrapped from older
-    // DDL was never propagated, so the first snapshot/block carrying the new
-    // column failed with "Unknown column '...' in 'field list'" and rolled
-    // back permanently. Source column names + definitions are derived from
-    // the source's CREATE TABLE DDL (validated by validateDdl by the caller);
-    // the target's columns come from INFORMATION_SCHEMA. Each gap is closed
-    // with an ALTER TABLE ADD COLUMN. A column whose definition cannot be
-    // cleanly parsed is logged and skipped rather than aborting the whole sync;
-    // a column the SERVER refuses is a different thing and fails loudly (see
-    // below). DDL auto-commits, so this must run before any snapshot
-    // transaction is opened. Returns the number of columns added, and THROWS
-    // when a generated ALTER was refused by the server: the column is
-    // still missing, so every later row carrying it fails with errno 1054, and
-    // a swallowed error here is a replica that stalls silently for days.
-    // Callers route the throw into their own fail-closed path (ClientSync's
-    // schema-apply fixpoint records a durable halt).
-    //
-    // The ALTER is deliberately UNQUALIFIED (the table name alone, never
-    // db.table) and runs on the pool, whose connections carry a default
-    // database. On a replica that is itself a replication source for a
-    // downstream tier, a fully-qualified DDL statement executed with no default
-    // database is dropped by the downstream Replicate_Do_DB filter and never
-    // reaches it, so the self-heal would appear to work here while the tier
-    // below stayed broken.
-    //
-    // NOTE FOR OPERATORS: a replica that stalled BEFORE this fix shipped will
-    // not self-heal until it next runs schema replication. If one is wedged on
-    // an "Unknown column" error, restart it (replication re-runs on startup)
-    // or apply the missing `ALTER TABLE ... ADD COLUMN` on it manually once.
-    async addMissingColumns(tableName, sourceDdl){
-        let sourceColumns = validation.extractColumnNames(sourceDdl);
-        if(sourceColumns.length === 0) return 0;
-
-        let destRows = await this.doQuery(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?",
-            [this.dbName, tableName]
-        );
-        let destSet = new Set(destRows.map(r => r.column_name || r.COLUMN_NAME));
-
-        let added  = 0;
-        let failed = [];
-        for(let col of sourceColumns){
-            if(destSet.has(col)) continue;
-
-            let colCheck = validation.validateIdentifier(col);
-            if(!colCheck.valid){
-                logger.error('Skipping invalid column name ' + col + ' on ' + tableName + ' (' + colCheck.reason + ')');
-                continue;
-            }
-
-            let def = validation.extractColumnDefinition(sourceDdl, col);
-            if(!def){
-                logger.warn('Could not extract definition for column ' + col + ' on ' + tableName + '; skipping (manual ALTER may be required)');
-                continue;
-            }
-
-            let actions = ['ADD COLUMN ' + def];
-            if(validation.isAutoIncrementDefinition(def)){
-                let keyAction = await this.autoIncrementKeyAction(tableName, col, sourceDdl);
-                actions.push(keyAction);
-            }
-            let alter = "ALTER TABLE `" + tableName + "` " + actions.join(', ');
-
-            try {
-                // doQueryStrict, not doQuery: outside a transaction doQuery logs the
-                // error and returns [], so the success log below fired on a REFUSED
-                // ALTER and reported "Added column" for a column that does not exist.
-                await this.doQueryStrict(alter);
-                logger.info('Added column ' + col + ' to ' + tableName);
-                added++;
-            } catch(e){
-                failed.push({ column: col, errno: (e && e.errno) || null, message: (e && e.message) || String(e) });
-                logger.error(util.format('FAILED to add column ' + col + ' to ' + tableName +
-                    ' (errno ' + ((e && e.errno) || 'unknown') + '); the column is still missing. ALTER was: ' + alter, e));
-            }
-        }
-
-        if(failed.length){
-            let err = new Error('Schema column self-heal failed on ' + tableName + ': ' +
-                failed.map(f => f.column + ' (errno ' + f.errno + ')').join(', '));
-            err.errno         = failed[0].errno;
-            err.failedColumns = failed;
-            throw err;
-        }
-        return added;
-    }
-
-    // Build the key clause that must accompany an ADD COLUMN for an
-    // AUTO_INCREMENT column. MariaDB rejects the bare add with errno 1075
-    // ("there can be only one auto column and it must be defined as a key"),
-    // which is what wedged the decoder replicas' pubkeys.id self-heal.
-    //
-    // The key is taken from the SOURCE DDL so the replica converges on the
-    // source's own definition rather than a guess. A source PRIMARY KEY is only
-    // reproducible when the replica has no primary key yet; otherwise (and when
-    // the source's covering key is multi-column or absent) a UNIQUE key on the
-    // column alone satisfies the auto-increment requirement without disturbing
-    // the existing keys.
-    async autoIncrementKeyAction(tableName, col, sourceDdl){
-        let key = validation.extractKeyForColumn(sourceDdl, col);
-
-        if(key && key.type === 'primary' && !(await this.hasPrimaryKey(tableName)))
-            return 'ADD PRIMARY KEY (`' + col + '`)';
-
-        if(key && key.type === 'unique' && key.name)
-            return 'ADD UNIQUE KEY `' + key.name + '` (`' + col + '`)';
-
-        if(key && key.type === 'index' && key.name)
-            return 'ADD KEY `' + key.name + '` (`' + col + '`)';
-
-        return 'ADD UNIQUE KEY `' + col + '` (`' + col + '`)';
-    }
-
-    // Whether this table already carries a PRIMARY KEY on this database. A
-    // failed probe answers "yes": the caller then adds a UNIQUE key, which is
-    // valid either way, while a wrong "no" produces an ADD PRIMARY KEY that a
-    // table with one rejects outright (errno 1068).
-    async hasPrimaryKey(tableName){
-        try {
-            let rows = await this.doQueryStrict(
-                "SELECT index_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? AND index_name = 'PRIMARY' LIMIT 1",
-                [this.dbName, tableName]
-            );
-            return rows.length > 0;
-        } catch(e){
-            logger.error(util.format('Could not read primary-key state for ' + tableName + '; assuming one exists:', e));
-            return true;
-        }
-    }
-
-    // Add a key-rebuild precondition column that is still absent, and answer whether the
-    // column is there afterwards. Definitions come from KEY_REBUILD_PRECONDITION_COLUMNS,
-    // never from a guess, and the ADD is IF NOT EXISTS so a concurrent startup that won
-    // the race is not an error. A refused ADD returns false and the caller leaves the
-    // stale key alone: the rebuild would only be refused too, with no signal.
-    async ensureKeyRebuildColumn(table, column){
-        let spec = KEY_REBUILD_PRECONDITION_COLUMNS.find(c => c.table === table && c.column === column);
-        if(!spec) return false;
-        try {
-            await this.doQueryStrict('ALTER TABLE `' + table + '` ADD COLUMN IF NOT EXISTS `' +
-                column + '` ' + spec.definition);
-            logger.info('Added ' + table + '.' + column + ' on ' + this.dbName +
-                '; the key rebuild that names it can run in this same startup.');
-            return true;
-        } catch(e){
-            logger.error(util.format('Failed to add ' + table + '.' + column + ' on ' + this.dbName +
-                ' (errno ' + ((e && e.errno) || 'unknown') + '); the key rebuild that names it cannot run', e));
-            return false;
-        }
-    }
-
     async discoverReplicatedTables(sourceDb){
         const sourceTables = await sourceDb.doQuery(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -488,31 +315,6 @@ class Database {
         );
         const existingSet = new Set(existingTables.map(r => r.table_name || r.TABLE_NAME));
         return { sourceTables, existingSet };
-    }
-
-    async readReplicatedCreateStatement(sourceDb, tableName, retry){
-        // Validate table name before using in SQL
-        const idCheck = validation.validateIdentifier(tableName);
-        if(!idCheck.valid){
-            if(!retry)
-                logger.error('Skipping invalid table name: ' + tableName + ' (' + idCheck.reason + ')');
-            return null;
-        }
-
-        const ddlRows = await sourceDb.doQuery("SHOW CREATE TABLE `" + tableName + "`");
-        if(ddlRows.length === 0) return null;
-
-        const createSql = ddlRows[0]['Create Table'];
-        if(!createSql) return null;
-
-        // Validate DDL before executing
-        const ddlCheck = validation.validateDdl(createSql);
-        if(!ddlCheck.valid){
-            const suffix = retry ? ' (retry)' : '';
-            logger.error('Rejected DDL for ' + tableName + suffix + ': ' + ddlCheck.reason);
-            return null;
-        }
-        return createSql;
     }
 
     async createReplicatedTables(sourceDb, sourceTables, existingSet){
@@ -593,7 +395,7 @@ class Database {
     }
 
     // Replicate schema from a source database into this database.
-    // Reads all table DDLs from the source via SHOW CREATE TABLE and
+    // Reads all table definitions from the source and
     // creates any missing tables locally.
 
     // Propagate source-added columns into existing replica tables.
@@ -669,27 +471,32 @@ class Database {
         // with the column), which is exactly what makes it easy to ship and only
         // discover in production. See the SPV sub-tree spec Stage A work list.
         let drift = [
-            { table: 'orders', column: 'give_ownership', definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
-            { table: 'orders', column: 'get_ownership',  definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
-            { table: 'swaps',  column: 'give_ownership', definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
-            { table: 'swaps',  column: 'get_ownership',  definition: 'TINYINT(1) NOT NULL DEFAULT 0' },
+            { table: 'orders', column: 'give_ownership', migration: 'orders-give-ownership' },
+            { table: 'orders', column: 'get_ownership',  migration: 'orders-get-ownership' },
+            { table: 'swaps',  column: 'give_ownership', migration: 'swaps-give-ownership' },
+            { table: 'swaps',  column: 'get_ownership',  migration: 'swaps-get-ownership' },
             { table: 'state_tree_roots', column: 'contract_state_root',
-              definition: 'CHAR(64) NULL AFTER `block_merkle_root`' },
+              migration: 'state-tree-roots-contract-state-root' },
             { table: 'state_tree_roots', column: 'contract_state_root_shadow',
-              definition: 'CHAR(64) NULL AFTER `contract_state_root`' },
+              migration: 'state-tree-roots-contract-state-root-shadow' },
             // Stage B's shadow column, with the same reasoning as the two above:
             // state_tree_roots is follower-derived, so an aged replica never gains
             // it from the definition file and the first shadow-window block would
             // fail its INSERT with errno 1054.
             { table: 'state_tree_roots', column: 'balances_root_escrow_shadow',
-              definition: 'CHAR(64) NULL AFTER `contract_state_root_shadow`' },
+              migration: 'state-tree-roots-balances-root-escrow-shadow' },
             // The key-rebuild preconditions ride the same ADD COLUMN loop, so the columns
             // land in this step and the rebuilds that name them run against a converged
             // table later in the SAME startup. Both are NOT NULL DEFAULT 0, so the add
             // backfills existing rows on the value their widened key expects.
-            ...KEY_REBUILD_PRECONDITION_COLUMNS
+            { table: 'anchor_actions', column: 'section_index',
+              migration: 'anchor-actions-section-index-add' },
+            { table: 'validator_rewards', column: 'round_qualifier',
+              migration: 'validator-rewards-round-qualifier-add' },
+            { table: 'anchor_reward_reconcile_log', column: 'round_qualifier',
+              migration: 'anchor-reward-reconcile-round-qualifier-add' }
         ];
-        for(let { table, column, definition } of drift){
+        for(let { table, column, migration } of drift){
             let tableRows = await this.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
                 [this.dbName, table]
@@ -702,8 +509,8 @@ class Database {
             );
             if(colRows.length > 0) continue;
 
-            logger.info('Schema drift on ' + table + '.' + column + ': column missing on replica. Adding ' + definition + '.');
-            await this.doQuery('ALTER TABLE `' + table + '` ADD COLUMN `' + column + '` ' + definition);
+            logger.info('Schema drift on ' + table + '.' + column + ': column missing on replica. Applying migration.');
+            await this.runSqlMigrationStatement('2026-10-19-replica-columns.sql', migration);
         }
     }
 
@@ -712,9 +519,10 @@ class Database {
         // we relax it on the replica iff it is currently NOT NULL. `type` is the
         // authoritative column type (sans NOT NULL) used for the MODIFY.
         let relax = [
-            { table: 'contract_emissions', column: 'action_index', type: 'BIGINT UNSIGNED NULL' }
+            { table: 'contract_emissions', column: 'action_index',
+              migration: 'contract-emissions-action-index-nullable' }
         ];
-        for(let { table, column, type } of relax){
+        for(let { table, column, migration } of relax){
             let colRows = await this.doQuery(
                 "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
                 [this.dbName, table, column]
@@ -724,7 +532,9 @@ class Database {
             if(String(nullable).toUpperCase() !== 'NO') continue;    // already nullable; no-op
 
             logger.info('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
-            await this.doQuery('ALTER TABLE `' + table + '` MODIFY COLUMN `' + column + '` ' + type);
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-columns.sql', migration
+            );
         }
     }
 
@@ -768,7 +578,9 @@ class Database {
                 // never enter a hash preimage, so cross-replica order is immaterial.
                 await this.doQuery('SET @n := ?', [base]);
                 await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
-                await this.doQuery('ALTER TABLE `' + table + '` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
+                await this.runSqlMigrationStatement(
+                    '2026-10-19-replica-columns.sql', 'repair-auto-increment', { table }
+                );
                 logger.info('Repaired AUTO_INCREMENT on ' + table + '.id');
             } catch(e){
                 // errno 1146 (table absent) or 1054 (column absent) can race; log and continue.
@@ -798,9 +610,8 @@ class Database {
                     let columnType = String(enumRows[0].COLUMN_TYPE || enumRows[0].column_type || '');
                     if(columnType.indexOf("'rejected'") === -1){
                         logger.info('Schema drift on attests.request_status: ENUM missing \'rejected\'. Widening to canonical set.');
-                        await this.doQuery(
-                            "ALTER TABLE `attests` MODIFY COLUMN `request_status` " +
-                            "ENUM('pending','fulfilled','expired','errored','rejected') NOT NULL DEFAULT 'pending'"
+                        await this.runSqlMigrationStatement(
+                            '2026-10-19-replica-columns.sql', 'attests-request-status'
                         );
                     }
                 }
@@ -852,18 +663,18 @@ class Database {
 
     // Ensure known secondary indexes exist on replicated tables. addMissingColumns
     // propagates new columns from the source schema but does not carry secondary indexes
-    // (SHOW CREATE TABLE returns index definitions inline with the CREATE TABLE DDL, but
+    // (the source definition returns index definitions inline with the table DDL, but
     // the /schema fetch path's validateDdl rejects multi-statement DDL, so a separate
-    // ALTER TABLE ADD INDEX is the only safe delivery path). Snapshot-bootstrapped
+    // a separate index change is the only safe delivery path). Snapshot-bootstrapped
     // replicas that pre-date a migration that added a secondary index to the source never
     // receive it; this idempotent ensure step closes that gap at startup.
     //
-    // Only additive, never drops existing indexes. Each ALTER TABLE ADD INDEX IF NOT
+    // Only additive, never drops existing indexes. Each conditional index addition
     // EXISTS is a no-op once the index exists, so repeated startups are safe. The InnoDB
     // online DDL builds the index INPLACE and does not block DML, but it does run
     // synchronously at startup; on a large already-populated table it takes time. On a
     // freshly snapshot-bootstrapped replica the tables are already correct (the source
-    // shipped them in CREATE TABLE DDL), so this only incurs cost on replicas that were
+    // shipped them in source DDL), so this only incurs cost on replicas that were
     // bootstrapped before the index was added to the source.
     async ensureReplicaSecondaryIndexes(){
         if(this.dbType !== 'indexer') return;
@@ -881,25 +692,25 @@ class Database {
     // shipped is found by name and skipped.
     async ensureReplicaBlockIndexes(){
         let ensureIndexes = [
-            { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)' },
-            { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)' },
-            { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)' },
+            { table: 'index_tickers',    indexName: 'block_index', columns: '(block_index)', migration: 'index-tickers-block-index' },
+            { table: 'index_addresses',  indexName: 'block_index', columns: '(block_index)', migration: 'index-addresses-block-index' },
+            { table: 'state_tree_roots', indexName: 'block_index', columns: '(block_index)', migration: 'state-tree-roots-block-index' },
             // A getNetBalance read on a busy address scans the whole ledger table without these.
-            { table: 'credits',          indexName: 'credits_address_tick_amount', columns: '(address_id, tick_id, amount)' },
-            { table: 'debits',           indexName: 'debits_address_tick_amount',  columns: '(address_id, tick_id, amount)' },
+            { table: 'credits',          indexName: 'credits_address_tick_amount', columns: '(address_id, tick_id, amount)', migration: 'credits-credits-address-tick-amount' },
+            { table: 'debits',           indexName: 'debits_address_tick_amount',  columns: '(address_id, tick_id, amount)', migration: 'debits-debits-address-tick-amount' },
             // Per-block state-hash request_status and poll_finalize reads, the resolved-row
             // and finalized-poll sync reads, and the reorg resets all select on these columns.
-            { table: 'attests',          indexName: 'version_resolved',   columns: '(version, resolved_block)' },
-            { table: 'xcalls',           indexName: 'version_resolved',   columns: '(version, resolved_block)' },
-            { table: 'polls',            indexName: 'resolved_block',     columns: '(resolved_block)' },
-            { table: 'polls',            indexName: 'callback_due_block', columns: '(callback_due_block)' },
+            { table: 'attests',          indexName: 'version_resolved',   columns: '(version, resolved_block)', migration: 'attests-version-resolved' },
+            { table: 'xcalls',           indexName: 'version_resolved',   columns: '(version, resolved_block)', migration: 'xcalls-version-resolved' },
+            { table: 'polls',            indexName: 'resolved_block',     columns: '(resolved_block)', migration: 'polls-resolved-block' },
+            { table: 'polls',            indexName: 'callback_due_block', columns: '(callback_due_block)', migration: 'polls-callback-due-block' },
             // Per-block reads: the anchor_invalid state-hash class scopes the completing chunk by
             // block_index_doge, and the mirrored-checkpoint candidate read ranges on
             // (chain, network, block_index). No other key serves either.
-            { table: 'anchor_actions',    indexName: 'idx_anchor_block_doge', columns: '(block_index_doge)' },
-            { table: 'state_checkpoints', indexName: 'idx_chain_block',       columns: '(chain, network, block_index)' }
+            { table: 'anchor_actions',    indexName: 'idx_anchor_block_doge', columns: '(block_index_doge)', migration: 'anchor-actions-idx-anchor-block-doge' },
+            { table: 'state_checkpoints', indexName: 'idx_chain_block',       columns: '(chain, network, block_index)', migration: 'state-checkpoints-idx-chain-block' }
         ];
-        for(let { table, indexName, columns } of ensureIndexes){
+        for(let { table, indexName, migration } of ensureIndexes){
             let tableRows = await this.doQuery(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
                 [this.dbName, table]
@@ -915,7 +726,7 @@ class Database {
             if(idxRows.length > 0) continue;  // already present; no-op
 
             try {
-                await this.doQuery('ALTER TABLE `' + table + '` ADD INDEX `' + indexName + '` ' + columns);
+                await this.runSqlMigrationStatement('2026-10-19-replica-keys.sql', migration);
                 logger.info('Added secondary index ' + indexName + ' to ' + table + ' on ' + this.dbName);
             } catch(e){
                 // errno 1061 = duplicate key name (race with another startup); harmless.
@@ -943,8 +754,12 @@ class Database {
                     if(nonUnique === 0){
                         // A unique index on this replica needs relaxation.
                         logger.info('Schema drift on attests: UNIQUE(request_id_version) detected. Relaxing to non-unique.');
-                        await this.doQuery('ALTER TABLE `attests` DROP INDEX `request_id_version`');
-                        await this.doQuery('CREATE INDEX `request_id_version` ON `attests` (request_id, version)');
+                        await this.runSqlMigrationStatement(
+                            '2026-10-19-replica-keys.sql', 'attests-drop-request-id-version'
+                        );
+                        await this.runSqlMigrationStatement(
+                            '2026-10-19-replica-keys.sql', 'attests-request-id-version'
+                        );
                     }
                 }
             }
@@ -969,7 +784,9 @@ class Database {
                 );
                 if(staleIdx.length > 0){
                     logger.info('Schema drift on votes: stale UNIQUE(poll_voter_choice) detected. Migrating to append-only poll_voter_action_choice.');
-                    await this.doQuery('ALTER TABLE `votes` DROP INDEX `poll_voter_choice`');
+                    await this.runSqlMigrationStatement(
+                        '2026-10-19-replica-keys.sql', 'votes-drop-poll-voter-choice'
+                    );
                 }
                 let newIdx = await this.doQuery(
                     "SELECT index_name FROM information_schema.statistics " +
@@ -977,7 +794,9 @@ class Database {
                     [this.dbName]
                 );
                 if(newIdx.length === 0){
-                    await this.doQuery('CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes` (poll_index, voter_address_id, action_index, choice)');
+                    await this.runSqlMigrationStatement(
+                        '2026-10-19-replica-keys.sql', 'votes-poll-voter-action-choice'
+                    );
                 }
             }
         } catch(e){
@@ -1016,8 +835,10 @@ class Database {
                     } else {
                         logger.info('Schema drift on anchor_actions: single-column PRIMARY KEY (action_index) detected. ' +
                             'Widening to (action_index, section_index) for ANCHOR v7 bundle sections.');
-                        await this.doQueryStrict(
-                            'ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`)');
+                        await this.runSqlMigrationStatement(
+                            '2026-10-19-replica-keys.sql', 'anchor-actions-primary-key', undefined,
+                            { strict: true }
+                        );
                     }
                 }
             }
@@ -1059,10 +880,10 @@ class Database {
                     } else {
                         logger.info('Schema drift on validator_rewards: four-column UNIQUE reward_unique detected. ' +
                             'Rebuilding with round_qualifier for the anchor_archive reward identity.');
-                        await this.doQueryStrict(
-                            'ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ' +
-                            'ADD UNIQUE INDEX `reward_unique` ' +
-                            '(`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`)');
+                        await this.runSqlMigrationStatement(
+                            '2026-10-19-replica-keys.sql', 'validator-rewards-reward-unique', undefined,
+                            { strict: true }
+                        );
                     }
                 }
             }
@@ -1077,7 +898,7 @@ class Database {
     //
     // The source indexer converges through a dated migration
     // (2026-09-02-utf8mb4-raw-wire-fields.sql and its NOT NULL pair). sync runs no
-    // migrations: a replica's tables are copied from the source's SHOW CREATE TABLE at
+    // migrations: a replica's tables are copied from the source definition at
     // bootstrap, and addMissingColumns only ever ADDs a column, never retypes one. So a
     // replica built before that migration keeps utf8mb3 on these columns forever - and the
     // moment the widened ORIGIN accepts a 4-byte character (a contract whose source carries
@@ -1093,7 +914,7 @@ class Database {
     // replica pays one information_schema read per table and nothing else), an absent table or
     // column is skipped, and the widen only ever grows the accepted byte domain - utf8mb3 is a
     // strict subset of utf8mb4, so no stored value is rewritten and no row is lost. The
-    // per-table clauses ride ONE ALTER because each ALTER is a COPY rebuild under a metadata
+    // per-table clauses ride one schema statement because each statement is a COPY rebuild under a metadata
     // lock. indexer replicas only (decoder replicas hold none of these tables).
     async ensureReplicaUtf8mb4Columns(){
         if(this.dbType !== 'indexer') return;
@@ -1128,8 +949,11 @@ class Database {
             if(pending.length === 0) continue;
 
             try {
-                await this.doQuery('ALTER TABLE `' + table + '` ' +
-                    pending.map(utf8mb4Columns.modifyClause).join(', '), [], null, { rethrow: true });
+                await this.runSqlMigrationStatement(
+                    '2026-10-19-replica-columns.sql', 'utf8mb4-columns',
+                    { table, clauses: pending.map(utf8mb4Columns.modifyClause).join(', ') },
+                    { rethrow: true }
+                );
                 logger.info('Widened ' + pending.length + ' raw-wire-field column(s) on ' + table +
                     ' to utf8mb4 in ' + this.dbName + ': ' + pending.map(e => e.column).join(', '));
             } catch(e){
