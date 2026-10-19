@@ -31,10 +31,10 @@
     "progress"
   ],
   "htmlReporter": {
-    "fileName": "reports/mutation/mutation-report.html"
+    "fileName": "tmp/mutation/mutation-report.html"
   },
   "jsonReporter": {
-    "fileName": "reports/mutation/mutation-report.json"
+    "fileName": "tmp/mutation/mutation-report.json"
   },
   "thresholds": {
     "high": 90,
@@ -42,7 +42,7 @@
     "break": 75
   },
   "incremental": true,
-  "incrementalFile": "reports/mutation/.stryker-incremental.json",
+  "incrementalFile": "tmp/mutation/.stryker-incremental.json",
   "concurrency": 4,
   "timeoutMS": 10000,
   "timeoutFactor": 1.5,
