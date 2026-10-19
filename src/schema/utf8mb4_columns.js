@@ -88,9 +88,10 @@
  *     a dated MODIFY that has nothing to do.
  *   * list_metas.name and .description are born utf8mb4 on both schema paths.
  *
- * BYTE-ALIGNED TWIN: copied verbatim into xchain-sync/src/schema/utf8mb4_columns.js (sync has no
- * dependency on this package by design; same convention as table_lifecycle.js /
- * state_hash.js). Edit here, then `cp` to the twin; the sync suite asserts byte-identity.
+ * SYNCED COPY of the canonical inventory in xchain-indexer/src/chain/utf8mb4_columns.js.
+ * Never edit this file: change the canonical file, then run
+ * `node bin/sync-utf8mb4-columns.js --write` in xchain-indexer. xchain-sync has no
+ * dependency on that package by design, so it carries this copy.
  *
  * Entry fields:
  *   table    table name (src/sql/<table>.sql)

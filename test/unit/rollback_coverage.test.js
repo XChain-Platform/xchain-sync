@@ -1221,13 +1221,10 @@ describe('Rollback coverage guard @regression', function(){
     // different stakes_root at an armed height - the same class of fork the source-cap
     // twin above guards. It also carries the schema-drift contract both services'
     // startup checks read, so one definition of "undrifted" serves both fleets.
-    // utf8mb4Columns.js is the widen set for the columns that ingest raw wire fields
-    // (contracts.code and the grammar-constrained fields). The source converges through a
-    // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
-    // copy means an origin that accepts a 4-byte character and a replica that halts on it
-    // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
+    // The utf8mb4 inventory is a synced copy, not a byte twin; see
+    // test/unit/schema/utf8mb4_columns_parity.test.js.
     // The two sides no longer share one relative path. xchain-sync keeps its twins flat
-    // under src/ except the utf8mb4 map, which sits in src/schema/, and the W5 gates,
+    // under src/ except the W5 gates,
     // which sit under src/consensus/gates/ on both sides, while the indexer has sorted
     // its other copies into feature directories, so the indexer tail is spelled out per
     // twin and a third element names the sync path where it is not src/ plus the basename.
@@ -1246,7 +1243,6 @@ describe('Rollback coverage guard @regression', function(){
         ['table_lifecycle.js',                   'src/hub/table_lifecycle.js'],
         ['table_lifecycle/action_tables.js',     'src/hub/table_lifecycle/action_tables.js'],
         ['table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
-        ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js',  'schema/utf8mb4_columns.js'],
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
