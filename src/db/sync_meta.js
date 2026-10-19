@@ -28,15 +28,8 @@ const { getLogger } = require('../observability');
 const logger = getLogger();
 module.exports = {
 
-    // --- Durable client key/value markers (sync_state) ------------------------
-    // Small durable store for per-client state that must survive a restart but is
-    // not block data (mirrors the sync_halt durable-state pattern). Reconciled on
-    // demand by the dated SQL migration so existing replicas gain it. Keys are
-    // namespaced by the caller (e.g. 'bootstrap_base:indexer'). Used by ClientSync
-    // to persist the truncated-replica join floor (_bootstrapBase): an in-memory-only
-    // field is lost on restart, dropping the join-block recompute skip and the
-    // truncation floor that protects against an in-window reorg below `base`.
-    // opts.rethrow makes a failed migration throw, and the table is then not marked ready.
+    // Durable client state is reconciled through the dated migration on demand.
+    // A strict failure leaves the table unmarked so the next call can retry.
     async ensureSyncStateTable(opts){
         if(this._syncStateReady) return;
         await this.runSqlMigrationStatement(

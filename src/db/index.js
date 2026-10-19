@@ -104,7 +104,7 @@ async function connectWithRetry(database, connectionParams, operation, errorMess
 // table has one. Required by computed path, so nothing here names a mixin as a
 // literal any tool could follow: the list IS the registry.
 const MIXIN_FILES = [
-    './sql_migrations.js',
+    '../sql/migrations/runner.js',
     './sync_meta.js',
     './sync_halt.js',
     './state_tree_roots.js',
@@ -661,21 +661,8 @@ class Database {
         }
     }
 
-    // Ensure known secondary indexes exist on replicated tables. addMissingColumns
-    // propagates new columns from the source schema but does not carry secondary indexes
-    // (the source definition returns index definitions inline with the table DDL, but
-    // the /schema fetch path's validateDdl rejects multi-statement DDL, so a separate
-    // a separate index change is the only safe delivery path). Snapshot-bootstrapped
-    // replicas that pre-date a migration that added a secondary index to the source never
-    // receive it; this idempotent ensure step closes that gap at startup.
-    //
-    // Only additive, never drops existing indexes. Each conditional index addition
-    // EXISTS is a no-op once the index exists, so repeated startups are safe. The InnoDB
-    // online DDL builds the index INPLACE and does not block DML, but it does run
-    // synchronously at startup; on a large already-populated table it takes time. On a
-    // freshly snapshot-bootstrapped replica the tables are already correct (the source
-    // shipped them in source DDL), so this only incurs cost on replicas that were
-    // bootstrapped before the index was added to the source.
+    // Add missing secondary indexes to replicas created before their source migration.
+    // Existing indexes are skipped, and new indexes are built online at startup.
     async ensureReplicaSecondaryIndexes(){
         if(this.dbType !== 'indexer') return;
         await this.ensureReplicaBlockIndexes();
@@ -894,28 +881,8 @@ class Database {
         }
     }
 
-    // Widen the raw-wire-field columns to utf8mb4 on an already-existing replica.
-    //
-    // The source indexer converges through a dated migration
-    // (2026-09-02-utf8mb4-raw-wire-fields.sql and its NOT NULL pair). sync runs no
-    // migrations: a replica's tables are copied from the source definition at
-    // bootstrap, and addMissingColumns only ever ADDs a column, never retypes one. So a
-    // replica built before that migration keeps utf8mb3 on these columns forever - and the
-    // moment the widened ORIGIN accepts a 4-byte character (a contract whose source carries
-    // an emoji, an EXECUTE method name, a VOTE quorum), every aged follower halts applying
-    // that block with errno 1366 while the source runs on. This is the replica half of that
-    // migration, and it has to land with it: an origin that can hold the bytes and a
-    // follower that cannot is a fleet-wide halt with no schema error anywhere upstream.
-    //
-    // src/schema/utf8mb4_columns.js is the byte-identical twin of the indexer's copy, so the two
-    // sides cannot disagree about which columns are in the set or what shape they take.
-    //
-    // Idempotent and additive: a column already utf8mb4 is skipped (so a snapshot-bootstrapped
-    // replica pays one information_schema read per table and nothing else), an absent table or
-    // column is skipped, and the widen only ever grows the accepted byte domain - utf8mb3 is a
-    // strict subset of utf8mb4, so no stored value is rewritten and no row is lost. The
-    // per-table clauses ride one schema statement because each statement is a COPY rebuild under a metadata
-    // lock. indexer replicas only (decoder replicas hold none of these tables).
+    // Widen raw wire fields on aged indexer replicas to match the source schema.
+    // Existing utf8mb4 columns and absent tables are skipped.
     async ensureReplicaUtf8mb4Columns(){
         if(this.dbType !== 'indexer') return;
         for(const [table, entries] of utf8mb4Columns.byTable()){

@@ -22,12 +22,12 @@
 const fs         = require('fs');
 const path       = require('path');
 const util       = require('node:util');
-const validation = require('../util/validation');
-const { splitSqlStatements } = require('./sql_util');
-const { getLogger } = require('../observability');
+const validation = require('../../util/validation');
+const { splitSqlStatements } = require('../../db/sql_util');
+const { getLogger } = require('../../observability');
 const logger = getLogger();
 
-const MIGRATION_DIR = path.join(__dirname, '..', 'sql', 'migrations');
+const MIGRATION_DIR = __dirname;
 const KEY_REBUILD_PRECONDITION_COLUMNS = [
     { table: 'anchor_actions', column: 'section_index', key: 'anchor-actions-section-index' },
     { table: 'validator_rewards', column: 'round_qualifier', key: 'validator-rewards-round-qualifier' },
