@@ -222,13 +222,6 @@
       "bin/pins/carrier-logic.json: the carrier logic pin (e) every twin file's bytes equal every sibling copy",
       "bin/pins/carrier-logic.json: the carrier logic pin (g) the membership rule and the pin name the same files, both ways"
     ],
-    "0c3480e683309fb5": [
-      "streamScopeColumns: every streamed table owns the column it is scoped by @regression declares a scope column the DDL actually has",
-      "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the close_block tables by close_block on every forward channel",
-      "streamScopeColumns: every streamed table owns the column it is scoped by @regression resolves the block scope column from the registry, defaulting to block_index",
-      "streamScopeColumns: generic rollback rows are scoped by block_index @regression flags a generically rolled-back row with a non-default blockKey",
-      "streamScopeColumns: generic rollback rows are scoped by block_index @regression keeps every non-default blockKey out of the generic rollback loops"
-    ],
     "0c488b6b47a588af": [
       "MerkleTree @consensus @regression buildTree() a single leaf is its own root",
       "MerkleTree @consensus @regression buildTree() does not mutate the caller's leaves array",
@@ -346,6 +339,9 @@
     "16b6025bc75d7d05": [
       "SyncService waitForHub timeout exits the process after MAX_HUB_WAIT_MS with no hub"
     ],
+    "17946dcd3345474c": [
+      "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)"
+    ],
     "19b6bdb857cf7156": [
       "ClientSync syncLookupTablesPaged catch-up: starts from the replica MAX(id) so only NEW rows are fetched",
       "ClientSync syncLookupTablesPaged decoder: pages pubkeys by its surrogate id cursor",
@@ -381,6 +377,14 @@
       "ServerPoller decoder payload ships dispenser-interned address ids @regression fails the block on a transient dispensers read error so it is retried",
       "ServerPoller decoder payload ships dispenser-interned address ids @regression keeps the tx address ids when the source has no dispensers table",
       "ServerPoller decoder payload ships dispenser-interned address ids @regression never streams the dispensers rows themselves"
+    ],
+    "1dd00a6f4396c899": [
+      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
+      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
+      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
+      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)",
+      "replica secondary-index ensure list: anchor_actions and state_checkpoints carries the anchor_actions block_index_doge and state_checkpoints block_index indexes",
+      "replica secondary-index ensure list: credits and debits carries the address-tick-amount indexes used by getNetBalance"
     ],
     "1e0ca4c243605c9c": [
       "Integration: ServerPoller poll detects and processes new blocks",
@@ -741,13 +745,6 @@
       "Integration: WebSocket Broadcasting subscribe and receive block receives block event after new block is polled",
       "Integration: WebSocket Broadcasting subscribe and receive block receives reorg event"
     ],
-    "a122a447c627671c": [
-      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
-      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
-      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet inert, testnet armed by the v0.23.0 cut, unknown network off",
-      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
-      "state_hash attest_batch_head class, follower twin @regression selection: block-prefiltered stamped v5 head keyed by the completing chunk block, resolved status, total order"
-    ],
     "2d5af37f72b7535a": [
       "M-17: state-commitment input reads fail closed outside a transaction CONTROL: plain doQuery still swallows the same failure and answers []",
       "M-17: state-commitment input reads fail closed outside a transaction applyStakeWeightCap throws on its own read, past the getStatusId hop",
@@ -851,6 +848,10 @@
       "Chaos: source cursor read fails closed a source-DB outage surfaces out of poll instead of reading as an idle chain",
       "Chaos: source cursor read fails closed an outage on a poller with no cursor yet does not seed lastPolledBlock from a swallowed error"
     ],
+    "31ee6c76f3ff525b": [
+      "state hash archive-invalid selection on every network queries the widened archive-head class for every coin, network and sampled block",
+      "state hash archive-invalid selection on every network reads errno 1146 as an empty archive-invalid class"
+    ],
     "324f0246f861a9ae": [
       "Database schema self-heal: one startup completes columns then key rebuilds adds each column BEFORE the rebuild that names it",
       "Database schema self-heal: one startup completes columns then key rebuilds converges a follower sitting in the deferred state on its next start",
@@ -909,11 +910,6 @@
       "RollbackGuard state serialization round-trips an active streak through state",
       "RollbackGuard state serialization round-trips reset state",
       "RollbackGuard state serialization stays reset when restored state is malformed"
-    ],
-    "34ecc125f5c3c276": [
-      "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)",
-      "state_hash index-map class (id-determinism P4) - follower twin @regression gate: regtest armed from genesis, arms at/after the per-chain height",
-      "state_hash index-map class (id-determinism P4) - follower twin @regression inert: follower preimage is byte-identical to the pre-feature shape"
     ],
     "350a60ae36012e8e": [
       "Smoke: Client Mode ClientApplier applies a block without error",
@@ -989,6 +985,13 @@
       "BlockBroadcaster security per-IP limit with TRUST_PROXY=true a client cannot exhaust another client bucket by claiming its address in the prefix",
       "BlockBroadcaster security per-IP limit with TRUST_PROXY=true rotating the forged leading entry does not buy extra connections",
       "BlockBroadcaster security per-IP limit with TRUST_PROXY=true two real clients behind the proxy get independent buckets"
+    ],
+    "39a2dac10979dbd3": [
+      "streamScopeColumns: every streamed table owns the column it is scoped by @regression declares a scope column the DDL actually has",
+      "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the close_block tables by close_block on every forward channel",
+      "streamScopeColumns: every streamed table owns the column it is scoped by @regression resolves the block scope column from the registry, defaulting to block_index",
+      "streamScopeColumns: generic rollback rows are scoped by block_index @regression flags a generically rolled-back row with a non-default blockKey",
+      "streamScopeColumns: generic rollback rows are scoped by block_index @regression keeps every non-default blockKey out of the generic rollback loops"
     ],
     "39c89678ecd7b9af": [
       "Advisory table-content parity compareTableContent a table present on one side only is skipped with its own reason",
@@ -1902,6 +1905,12 @@
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression no prior shadow root: full-builds through the caller callback (window start)",
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression null balanceUpdates (committed path full-recomputed) forces the shadow full build too"
     ],
+    "6f53c214736534f2": [
+      "ClientRollback invalid_archive parent reset @regression resets one surviving parent from each network using the first orphaned action index",
+      "ClientRollback invalid_archive parent reset @regression rethrows any other reset error and rolls back the transaction",
+      "ClientRollback invalid_archive parent reset @regression skips the reset when getFirstActionIndex resolves null",
+      "ClientRollback invalid_archive parent reset @regression swallows missing-table and missing-column errors from the reset"
+    ],
     "6fe6527e42a197a6": [
       "ClientSync persistent replica gaps ages decoder shortfalls from the periodic path only",
       "ClientSync persistent replica gaps does not clear a tracked gap on a sweep that never completed",
@@ -2081,17 +2090,6 @@
     "7b5dc0d725692134": [
       "SyncService startServerMode creates broadcaster and snapshotBuilder",
       "SyncService startServerMode starts a poller for each discovered database"
-    ],
-    "7b9966eaf8e7bf6f": [
-      "consensus-bound registry rows anchor bundle order and rollcall activation resolves the anchor bundle order activation table",
-      "consensus-bound registry rows anchor bundle order and rollcall activation resolves the rollcall activation row exactly once",
-      "consensus-bound registry rows price scale activation accepts and refuses the canonical price value pattern",
-      "consensus-bound registry rows price scale activation carries PRICE_SCALE_ACTIVATION exactly once",
-      "consensus-bound registry rows price scale activation carries PRICE_SCALE_MAX_DECIMALS exactly once",
-      "consensus-bound registry rows price scale activation carries PRICE_VALUE_RE_CANONICAL exactly once",
-      "consensus-bound registry rows price scale activation carries PRICE_VALUE_RE_LEGACY exactly once",
-      "consensus-bound registry rows price scale activation resolves the price scale activation table",
-      "consensus-bound registry rows price scale activation resolves the price scale max decimals bound"
     ],
     "7bd37c7fd3de6737": [
       "getBlockLeafRows special-address canonicalization (consensus) canonicalizes credit/debit/escrow special addresses to their role token",
@@ -2634,6 +2632,15 @@
       "08 Bootstrap Stampede (N-concurrent-bootstrap load) a 25-validator flag-day cohort cannot pin the pool",
       "08 Bootstrap Stampede (N-concurrent-bootstrap load) derives a cap that always leaves the poller a connection"
     ],
+    "90c1f2553733ccb7": [
+      "consensus-bound registry rows anchor bundle order and rollcall activation resolves the anchor bundle order activation table",
+      "consensus-bound registry rows anchor bundle order and rollcall activation resolves the rollcall activation row exactly once",
+      "consensus-bound registry rows price scale activation accepts and refuses the canonical price value pattern",
+      "consensus-bound registry rows price scale activation carries PRICE_SCALE_MAX_DECIMALS exactly once",
+      "consensus-bound registry rows price scale activation carries PRICE_VALUE_RE_CANONICAL exactly once",
+      "consensus-bound registry rows price scale activation carries PRICE_VALUE_RE_LEGACY exactly once",
+      "consensus-bound registry rows price scale activation resolves the price scale max decimals bound"
+    ],
     "910a4f5c866b3b8b": [
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 SPV forward-follow getStakeWeightsByCapabilityAsOf at/after activation the reconstruction is source-capped too (matches the committed root)",
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 SPV forward-follow getStakeWeightsByCapabilityAsOf below activation the reconstruction keeps the legacy uncapped LIMIT (unchanged pre-flag-day)",
@@ -2909,6 +2916,13 @@
       "ClientSync rollback guard reset boundaries resets the guard when an operator clears a max-depth halt",
       "Database.setSyncState strict write throws an upsert fault under opts.rethrow and still releases the connection"
     ],
+    "a122a447c627671c": [
+      "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
+      "state_hash attest_batch_head class, follower twin @regression below threshold: no attest_batch_head key and no extra query",
+      "state_hash attest_batch_head class, follower twin @regression gate: regtest armed from genesis, mainnet inert, testnet armed by the v0.23.0 cut, unknown network off",
+      "state_hash attest_batch_head class, follower twin @regression literal twins equal the follower forward-carry and rollback constants",
+      "state_hash attest_batch_head class, follower twin @regression selection: block-prefiltered stamped v5 head keyed by the completing chunk block, resolved status, total order"
+    ],
     "a1c61939d5e79b8d": [
       "Integration: Client Bootstrap full bootstrap from snapshot preserves exact data values (no type coercion)",
       "Integration: Client Bootstrap full bootstrap from snapshot replicates all block data to replica",
@@ -3063,6 +3077,10 @@
     "ab66d18ef5798490": [
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships each row once when both channels return the same synthetic-action row @regression",
       "SnapshotBuilder: post-activation cooldown maturity in an incremental window ships the synthetic-action credit and release once when the matured join is empty @regression"
+    ],
+    "abc321c1e9fd95fd": [
+      "ClientRollback archive stamp journal restore @regression resets an unjournaled head to unverified and leaves the journal clear",
+      "ClientRollback archive stamp journal restore @regression restores a journaled head status verbatim and clears the journal"
     ],
     "ad581ffaee874b66": [
       "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
@@ -3412,6 +3430,13 @@
     ],
     "bd1e405ed8d1de94": [
       "05 Sustained Sync processes blocks continuously for 60000ms without degradation"
+    ],
+    "be30d095ec85b25c": [
+      "train_activation twin + canon parity holds TRAIN_ACTIVATION value-equal to the canonical map at <siblings>/xchain-documentation/protocol/constants.js",
+      "train_activation twin + canon parity holds src/train_activation.js byte-identical to the twin at <siblings>/xchain-indexer/src/consensus/gates/train_gate.js",
+      "train_activation twin + canon parity reports skipped and names what it looked for when a sibling is absent",
+      "train_activation twin + canon parity still exports the gate the parity cases compare, whatever the checkout state",
+      "train_activation twin + canon parity throws rather than skipping on an absent sibling when XCHAIN_REQUIRE_SIBLINGS=1"
     ],
     "be6b2b4e899038ac": [
       "ClientSync: state_hash halt class digests @regression does not halt or build detail when the state_hash matches",
@@ -4151,13 +4176,6 @@
       "Integration: ServerPoller poll processes multiple sequential blocks",
       "Integration: ServerPoller poll records each block in transparency log"
     ],
-    "ddaecab1444ba291": [
-      "train_activation twin + canon parity holds TRAIN_ACTIVATION value-equal to the canonical map at <siblings>/xchain-documentation/protocol/constants.js",
-      "train_activation twin + canon parity holds src/train_activation.js byte-identical to the twin at <siblings>/xchain-indexer/src/consensus/gates/train_gate.js",
-      "train_activation twin + canon parity reports skipped and names what it looked for when a sibling is absent",
-      "train_activation twin + canon parity still exports the gate the parity cases compare, whatever the checkout state",
-      "train_activation twin + canon parity throws rather than skipping on an absent sibling when XCHAIN_REQUIRE_SIBLINGS=1"
-    ],
     "de57542d908be190": [
       "coinTicker() + per-chain activation lookup normalization is idempotent on tickers and case-insensitive",
       "coinTicker() + per-chain activation lookup normalization maps full lowercase chain names to their ticker",
@@ -4239,13 +4257,6 @@
       "02 Snapshot Performance Incremental snapshot export incremental from 10% (large delta)",
       "02 Snapshot Performance Incremental snapshot export incremental from 50% (medium delta)",
       "02 Snapshot Performance Incremental snapshot export incremental from 90% (small delta)"
-    ],
-    "e3368576c55cccbe": [
-      "replica secondary-index ensure list carries state_tree_roots.block_index, which ClientRollback's range delete needs",
-      "replica secondary-index ensure list carries the resolved_block and callback_due_block indexes the per-block reads need",
-      "replica secondary-index ensure list every ensured index is declared in that table's schema definition",
-      "replica secondary-index ensure list sanity: the gate actually parses entries (it cannot pass vacuously)",
-      "replica secondary-index ensure list: anchor_actions and state_checkpoints carries the anchor_actions block_index_doge and state_checkpoints block_index indexes"
     ],
     "e33e81c496f580b8": [
       "DATETIME session-zone validation accepts SYSTEM when the system zone is UTC",
@@ -4518,6 +4529,10 @@
       "Database.ensureReplicatedColumns: nullability relaxation relaxes contract_emissions.action_index NOT NULL -> NULL when the replica column is NOT NULL",
       "Database.ensureReplicatedColumns: nullability relaxation the added definition matches src/sql/state_tree_roots.sql (one column, two declarations)"
     ],
+    "f6fbd3a44c9a1195": [
+      "state hash index-map inclusion on every network includes each index-map class for every coin, network and sampled block",
+      "state hash index-map inclusion on every network reads errno 1146 as empty index-map classes"
+    ],
     "f77234f6a5f65a2b": [
       "API rate-limit proxy trust security startApi wiring does not let one client drain the snapshot budget of another",
       "API rate-limit proxy trust security startApi wiring leaves the served app untrusting when TRUST_PROXY is unset",
@@ -4714,8 +4729,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 387,
-      "titleCount": 3071,
+      "fileCount": 391,
+      "titleCount": 3079,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4812,6 +4827,8 @@
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
         "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "aa9ac5216302721b",
         "test/unit/client_rollback.test/11_token_bridged_rederive.test.js": "a4f6aa69e33278ea",
+        "test/unit/client_rollback.test/12_archive_invalid_reset_pin.test.js": "6f53c214736534f2",
+        "test/unit/client_rollback.test/12_archive_stamp_journal_restore.test.js": "abc321c1e9fd95fd",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",
@@ -4894,12 +4911,14 @@
         "test/unit/consensus/anchor_fold_registry_rows.test.js": "f5621b6227dcbcd6",
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
+        "test/unit/consensus/archive_invalid_every_network.test.js": "31ee6c76f3ff525b",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
         "test/unit/consensus/armed_map/completeness.test.js": "be8349064e8f7983",
         "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
-        "test/unit/consensus/consensus_bound_rows.test.js": "7b9966eaf8e7bf6f",
+        "test/unit/consensus/consensus_bound_rows.test.js": "90c1f2553733ccb7",
         "test/unit/consensus/gate_registry.test.js": "29c7591a9edf1c0f",
+        "test/unit/consensus/index_map_every_network.test.js": "f6fbd3a44c9a1195",
         "test/unit/consensus/regtest_env_twin.test.js": "cbad35bf1daff99f",
         "test/unit/consensus/stake_weight_collation_twin.test.js": "c4195dde3aa9c82f",
         "test/unit/consensus/state_hash_fold_twin.test.js": "6bf91ada4d7570c1",
@@ -4989,7 +5008,7 @@
         "test/unit/recovery_rewards.test.js": "c7ffd8486a3a6f7e",
         "test/unit/replica_freshness.test.js": "91e7a6f068b71e76",
         "test/unit/replica_gap_status.test.js": "bcf51d25df891659",
-        "test/unit/replica_secondary_indexes.test.js": "e3368576c55cccbe",
+        "test/unit/replica_secondary_indexes.test.js": "1dd00a6f4396c899",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/replicated_tables.test.js": "805d506efd2e2166",
         "test/unit/repo_guards/carrier_logic_pin.test.js": "0c13b5d1d073adc0",
@@ -5058,12 +5077,12 @@
         "test/unit/state_commitment_strict_reads.test.js": "2d5af37f72b7535a",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
         "test/unit/state_hash_attest_batch_stamp_gap.test.js": "a122a447c627671c",
-        "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
+        "test/unit/state_hash_index_map.test.js": "17946dcd3345474c",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_armed_set.test.js": "8e78b69ca3426aa3",
-        "test/unit/stream_scope_columns.test.js": "0c3480e683309fb5",
+        "test/unit/stream_scope_columns.test.js": "39a2dac10979dbd3",
         "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_meta_client_retention.test.js": "64d6e397618c5805",
         "test/unit/sync_service.test.js": "d43f78d5b62fbee6",
@@ -5091,7 +5110,7 @@
         "test/unit/table_content_parity.test/05_operational_log_exclusion.test.js": "14ec247717c62037",
         "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",
         "test/unit/train_activation.test.js": "4bbfbfece133da72",
-        "test/unit/train_activation_twin.test.js": "ddaecab1444ba291",
+        "test/unit/train_activation_twin.test.js": "be30d095ec85b25c",
         "test/unit/train_gate_verdict_characterization.test.js": "5039fe55a9d97010",
         "test/unit/transparency_log.test.js": "6ff6cbc7afd5ddfd",
         "test/unit/transparency_log_readonly.test.js": "438f210bee5c5290",
@@ -5390,8 +5409,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 116,
-      "titleCount": 901,
+      "fileCount": 118,
+      "titleCount": 905,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5408,6 +5427,8 @@
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
         "test/unit/client_rollback.test/10_dangling_index_sweep_bound.test.js": "f84d3023c6126a01",
         "test/unit/client_rollback.test/11_token_bridged_rederive.test.js": "a4f6aa69e33278ea",
+        "test/unit/client_rollback.test/12_archive_invalid_reset_pin.test.js": "6f53c214736534f2",
+        "test/unit/client_rollback.test/12_archive_stamp_journal_restore.test.js": "abc321c1e9fd95fd",
         "test/unit/client_sync.test/events/06_handle_event.test.js": "e962afbc1dd6ade5",
         "test/unit/client_sync_checkpoint_quorum.test.js": "b57e7bf0add0a957",
         "test/unit/client_sync_checkpoint_quorum.test/01_checkpoint_quorum_rotation_following.test.js": "ce91a71f01705b54",
@@ -5499,12 +5520,12 @@
         "test/unit/state_commitment_orphan_stats.test.js": "7cdc0abf30a6f6ac",
         "test/unit/state_hash.test.js": "c54bb56b0f6fae1f",
         "test/unit/state_hash_attest_batch_stamp_gap.test.js": "a122a447c627671c",
-        "test/unit/state_hash_index_map.test.js": "34ecc125f5c3c276",
+        "test/unit/state_hash_index_map.test.js": "17946dcd3345474c",
         "test/unit/state_subtree_activation.test.js": "a2343508ab4cdd95",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_armed_set.test.js": "8e78b69ca3426aa3",
-        "test/unit/stream_scope_columns.test.js": "0c3480e683309fb5",
+        "test/unit/stream_scope_columns.test.js": "39a2dac10979dbd3",
         "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_service.test/14_state_tree_metric_coin_ticker.test.js": "bce5f38ce4fa01fe",
         "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",

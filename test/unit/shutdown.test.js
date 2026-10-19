@@ -114,12 +114,9 @@ describe('graceful shutdown', function(){
                 log: silentLog
             });
             shutdown('SIGTERM');
-            // Deliberately a fixed window rather than a poll, and longer than the
-            // 50ms budget: the "only once" half of this claim is that the timeout
-            // timer produced NO second exit after the throw already produced one,
-            // so the budget has to be allowed to expire. Waiting for the first
-            // code instead would return before the timer could misfire and assert
-            // nothing.
+            await waitFor(() => codes.length > 0, 2000, 5);
+            assert.deepStrictEqual(codes, [1]);
+            // Hold a fixed window past the 50ms budget: the timer must add no second exit.
             await new Promise((r) => setTimeout(r, 120));
             assert.deepStrictEqual(codes, [1]);
         });

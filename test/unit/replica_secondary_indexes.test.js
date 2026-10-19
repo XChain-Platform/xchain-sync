@@ -113,3 +113,15 @@ describe('replica secondary-index ensure list: anchor_actions and state_checkpoi
             assert.ok(rows.includes(want), want + ' is missing from the ensure list; an aged replica reads the whole table on every block');
     });
 });
+
+describe('replica secondary-index ensure list: credits and debits', function(){
+
+    it('carries the address-tick-amount indexes used by getNetBalance', function(){
+        const rows = ensureIndexList().map(r => r.table + '.' + r.indexName + ' (' + r.columns + ')');
+        for(const want of [
+            'credits.credits_address_tick_amount (address_id, tick_id, amount)',
+            'debits.debits_address_tick_amount (address_id, tick_id, amount)',
+        ])
+            assert.ok(rows.includes(want), want + ' is missing from the ensure list; a busy address scans the whole ledger table');
+    });
+});

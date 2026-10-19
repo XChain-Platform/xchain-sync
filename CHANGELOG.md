@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-18
+
+### Added
+- Carried the unstake delegated row journal, anchor checkpoint sequence binding and reassembly arming gate rows.
+- Added a dispenser status index and ledger address balance indexes to the replica migration frontier.
+
+### Changed
+- Dropped the copies of the retired price batching floor and archive and index map state hash gates.
+- Aligned the attest batch link parity classification and refreshed the canonical migration hash.
+
+### Fixed
+- Restored the journaled archive status when a replica rolls back.
+
 ## [0.24.0] - 2026-10-17
 
 ### Added
