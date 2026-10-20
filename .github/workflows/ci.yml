@@ -250,7 +250,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: XChain-Platform/xchain-sync
-          ref: 1a764b2c84c8c226e2e2d0c5d743b007fa2ba458
+          ref: 3dc83c2a824c089ad37f8be09d4d5a68394b0651
           path: suite-title-pin/xchain-sync
 
       - name: Check out declared sibling repositories
