@@ -1012,9 +1012,12 @@ class Database {
         }
     }
 
+    // Refuse a second begin: every query funnels through the one open connection, so
+    // replacing it would drop the first unit's writes and let its commit land another's.
     async beginTransaction(){
         if(this.transactionConnection != null)
-            await this.releaseConnection();
+            this.util.throwError('beginTransaction: a transaction is already open on ' + this.dbName +
+                '; the open one is left untouched');
         this.transactionConnection = await this.getConnection();
         try {
             await this.transactionConnection.beginTransaction();

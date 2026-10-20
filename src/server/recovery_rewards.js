@@ -38,6 +38,7 @@
  ********************************************************************/
 
 const { isSchemaGapError } = require('../db/tables/schema_gap');
+const { validatorRewardKey } = require('./reward_identity');
 
 // Selects validator_rewards rows re-materialized (recovery_pending_rewards.applied_block)
 // inside the inclusive window [fromBlock, toBlock] whose own block_index (earn-block E)
@@ -78,8 +79,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // stays as it is; over-selecting there is harmless once this key is qualifier-aware.
         for(let r of (rows || [])){
             if(r && r.source_id != null && r.signing_pubkey_id != null)
-                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference
-                        + ':' + r.round_qualifier, r);
+                acc.set(validatorRewardKey(r), r);
         }
     } catch(e){
         // recovery_pending_rewards / applied_block may not exist on a non-recovery stack

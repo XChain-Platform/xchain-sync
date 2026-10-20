@@ -136,11 +136,13 @@ describe('ClientSync: misc branch coverage', function(){
         db.clearHalt.rejects(new Error('db fail'));
         sync._halted = { blockIndex: 5, reason: 'test', mismatches: [], sources: [], at: '2026-01-01' };
 
-        await sync.clearHalt();
+        let halt = sync._halted;
+
+        await assert.rejects(() => sync.clearHalt(), /halt clear was not persisted, so the halt stays in force; retry the clear: db fail/);
 
         let errCalls = console.error.getCalls().map(c => c.args[0]);
         assert.ok(errCalls.some(m => m && m.indexOf('clearHalt persistence failed') !== -1));
-        assert.strictEqual(sync._halted, null, '_halted must still be cleared');
+        assert.strictEqual(sync._halted, halt, 'the halt stays in force when sync_halt still holds it');
     });
 
     it('flushHeartbeat: swallows ws.send error', function(){
@@ -197,5 +199,34 @@ describe('ClientSync: misc branch coverage', function(){
         assert.strictEqual(s.validatorId, 'unknown');
 
         if(savedId !== undefined) process.env.VALIDATOR_ID = savedId;
+    });
+});
+
+describe('ClientSync: a failed durable halt clear', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('clearHalt: a failed durable clear keeps the halt copy, the guard state and the owed halt write', async function(){
+        let { sync, db } = makeSync();
+        db.clearHalt.rejects(new Error('db fail'));
+        let halt = { blockIndex: 5, reason: 'max-rollback-depth-exceeded', mismatches: [], sources: [], at: null };
+        sync._halted = halt;
+        sync._haltDurable = false;
+        sync._pendingHaltCopy = true;
+        let drop = sinon.spy(sync, 'dropPendingHaltCopy');
+        let reset = sinon.spy(sync, 'resetRollbackGuardState');
+        let retry = sinon.stub(sync, 'scheduleHaltPersistRetry');
+
+        await assert.rejects(() => sync.clearHalt(), /halt clear was not persisted/);
+
+        assert.ok(drop.notCalled, 'the halt copy survives for the next start');
+        assert.ok(reset.notCalled, 'the rollback guard state is untouched');
+        assert.ok(retry.calledOnceWith(halt, 5000), 'the owed sync_halt write is retried again');
+        assert.strictEqual(sync._haltDurable, false);
+        assert.strictEqual(sync._pendingHaltCopy, true);
+        assert.strictEqual(sync.isHaltDurable(), false);
     });
 });

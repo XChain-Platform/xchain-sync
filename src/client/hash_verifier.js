@@ -23,9 +23,10 @@ class HashVerifier {
 
     constructor(){}
 
-    // Returns { match: bool, mismatches: [...] }
+    // Returns { match: bool, blockHeight, mismatches: [...], skipped: [...] }
     compareBlockHashes(blockHeight, hashesA, hashesB){
         let mismatches = [];
+        let skipped = [];
 
         if(hashesA.ledger_hash !== hashesB.ledger_hash)
             mismatches.push({ field: 'ledger_hash', a: hashesA.ledger_hash, b: hashesB.ledger_hash });
@@ -34,10 +35,20 @@ class HashVerifier {
         if(hashesA.contract_hash !== hashesB.contract_hash)
             mismatches.push({ field: 'contract_hash', a: hashesA.contract_hash, b: hashesB.contract_hash });
 
+        // Compare state_hash only when both sides carry one: it is null before its
+        // activation height and absent from sources that do not publish it.
+        let stateA = hashesA.state_hash, stateB = hashesB.state_hash;
+        if(stateA != null && stateB != null){
+            if(stateA !== stateB) mismatches.push({ field: 'state_hash', a: stateA, b: stateB });
+        } else if(stateA != null || stateB != null){
+            skipped.push({ field: 'state_hash', reason: stateA == null ? 'absent-local' : 'absent-remote' });
+        }
+
         return {
             match: mismatches.length === 0,
             blockHeight: blockHeight,
-            mismatches: mismatches
+            mismatches: mismatches,
+            skipped: skipped
         };
     }
 

@@ -239,6 +239,22 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
         pinned.assertPinnedEnvOverrides({ CHECKPOINT_VALIDATORS_BITCOIN_MAINNET: JSON.stringify(goodSet) });
     });
 
+    // A well-formed value under a name no getter reads leaves the anchor off exactly as an
+    // invalid one does, so the name is refused; every name a getter reads still passes.
+    it('refuses a well-formed override under a chain or network name the getters never read', function(){
+        const set = JSON.stringify(goodSet), seed = JSON.stringify(goodSeed);
+        for(const name of ['CHECKPOINT_VALIDATORS_BITCON_MAINNET', 'CHECKPOINT_VALIDATORS_BTC_MAINNET2',
+            'CHECKPOINT_VALIDATORS_btc_mainnet', 'CHECKPOINT_VALIDATORS_BTC_TESTNET_NEXT'])
+            assertRefuses({ [name]: set }, name + ' (pinned validator set) names no chain and network');
+        assertRefuses({ CHECKPOINT_SEED_DOGE_SIGNET: seed }, 'CHECKPOINT_SEED_DOGE_SIGNET (pinned seed checkpoint) names no');
+        for(const chain of ['BTC', 'LTC', 'DOGE', 'BITCOIN', 'LITECOIN', 'DOGECOIN']){
+            for(const net of ['MAINNET', 'TESTNET', 'REGTEST']){
+                pinned.assertPinnedEnvOverrides({ ['CHECKPOINT_VALIDATORS_' + chain + '_' + net]: set,
+                    ['CHECKPOINT_SEED_' + chain + '_' + net]: seed });
+            }
+        }
+    });
+
     it('defaults to process.env when called with no argument', function(){
         process.env[VKEY] = 'not json';
         try {

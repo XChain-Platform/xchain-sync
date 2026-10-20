@@ -264,13 +264,15 @@ function getPinnedCheckpoint(chain, network) {
     return entry || null;
 }
 
-// Env names the getters can actually read: the prefix plus a CHAIN_NETWORK suffix,
-// both halves non-empty. Mirrors config.js bootstrapDepthEnvKey's shape rule.
+// The override families the startup scan checks: each prefix, the name builder and pin
+// map its getter reads through, and how its value parses.
 const _OVERRIDE_PREFIXES = [
-    { prefix: 'CHECKPOINT_VALIDATORS_', parse: parseValidatorSetEnv, what: 'pinned validator set' },
-    { prefix: 'CHECKPOINT_SEED_',       parse: parseSeedEnv,         what: 'pinned seed checkpoint' },
+    { prefix: 'CHECKPOINT_VALIDATORS_', keyFn: envKey,     pins: PINNED,             parse: parseValidatorSetEnv, what: 'pinned validator set' },
+    { prefix: 'CHECKPOINT_SEED_',       keyFn: seedEnvKey, pins: PINNED_CHECKPOINTS, parse: parseSeedEnv,         what: 'pinned seed checkpoint' },
 ];
 
+// A prefixed name with a CHAIN_NETWORK suffix, both halves non-empty. Mirrors config.js
+// bootstrapDepthEnvKey's shape rule.
 function isChainNetworkShaped(prefix, envKey) {
     if (envKey.indexOf(prefix) !== 0) return false;
     const rest = envKey.slice(prefix.length);
@@ -278,11 +280,22 @@ function isChainNetworkShaped(prefix, envKey) {
     return sep > 0 && sep < rest.length - 1;
 }
 
+// Does a getter ever read this shaped name? Only when it is the upper-case name keyFn builds
+// for its own halves and the chain folds onto a ticker that, with the network, keys `pins`.
+function isReadOverrideName(family, name) {
+    const rest = name.slice(family.prefix.length);
+    const sep  = rest.lastIndexOf('_');
+    const chain = rest.slice(0, sep), network = rest.slice(sep + 1);
+    if (family.keyFn(chain, network) !== name) return false;
+    return Object.prototype.hasOwnProperty.call(family.pins, tickerOf(chain) + ':' + network.toLowerCase());
+}
+
 /**
  * REFUSE to start when an explicitly supplied CHECKPOINT_VALIDATORS_* or
- * CHECKPOINT_SEED_* value is present but unusable.
+ * CHECKPOINT_SEED_* value is present but unusable, or sits under a CHAIN_NETWORK name no
+ * getter reads (an unknown chain or network, or a name not in upper case).
  *
- * A malformed override is not inert. The getters answer null for it, exactly as they
+ * A malformed or misnamed override is not inert. The getters answer null for it, exactly as they
  * do for an override nobody set, and every baked-in pin still ships null, so
  * ClientSync.verifyCheckpointQuorum's `if(!validators || !validators.length) return;`
  * skips checkpoint authentication entirely on a replica whose operator turned
@@ -297,10 +310,15 @@ function assertPinnedEnvOverrides(env) {
     const source = env || envConfig.envSource();
     const bad = [];
     for (const envKey of Object.keys(source)) {
-        for (const { prefix, parse, what } of _OVERRIDE_PREFIXES) {
+        for (const family of _OVERRIDE_PREFIXES) {
+            const { prefix, parse, what } = family;
             if (!isChainNetworkShaped(prefix, envKey)) continue;
             const raw = source[envKey];
             if (raw === undefined || raw === null || raw === '') break;   // absent: inert, not an error
+            if (!isReadOverrideName(family, envKey)) {
+                bad.push(envKey + ' (' + what + ') names no chain and network the pin getters read');
+                break;
+            }
             const { error } = parse(raw);
             if (error) bad.push(envKey + ' (' + what + ') ' + error);
             break;
@@ -309,9 +327,9 @@ function assertPinnedEnvOverrides(env) {
     if (bad.length === 0) return;
     throw new Error(
         'Invalid checkpoint pin override: ' + bad.join('; ') +
-        '. Refusing to start: an unusable override resolves to the same null as an ABSENT one, ' +
+        '. Refusing to start: an unusable or unread override resolves to the same null as an ABSENT one, ' +
         'which silently skips checkpoint-quorum verification instead of anchoring it. ' +
-        'Fix the value or unset the variable to run deliberately unanchored.'
+        'Fix the name or value, or unset the variable to run deliberately unanchored.'
     );
 }
 

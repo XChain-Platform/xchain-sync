@@ -103,7 +103,8 @@ function blockHashFields(row){
     return {
         ledger_hash: row.ledger_hash,
         actions_hash: row.actions_hash,
-        contract_hash: row.contract_hash
+        contract_hash: row.contract_hash,
+        state_hash: row.state_hash
     };
 }
 
@@ -116,6 +117,10 @@ function compareSourceBlockHashes(client, source, blockHeight, remoteStatus, loc
     }
     let result = client.hashVerifier.compareBlockHashes(blockHeight,
         blockHashFields(localHashes), blockHashFields(remoteStatus));
+    // Log a one-sided state_hash as a skip; it never changes the verdict.
+    for(let skip of (result.skipped || [])){
+        getLogger().warn(skip.field + ' not compared against ' + source + ' at block ' + blockHeight + ': ' + skip.reason);
+    }
     if(result.match){
         getLogger().info('Hash verification passed against ' + source);
         return { verdict: 'agree', mismatches: null };
@@ -718,6 +723,22 @@ class ClientSync {
         if(!h) return 'null';
         return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash) +
             '|' + String(h.state_hash == null ? null : h.state_hash);
+    }
+
+    // Comparison key for a source's ledger/actions/contract hashes alone.
+    baseTupleKey(h){
+        if(!h) return 'null';
+        return String(h.ledger_hash) + '|' + String(h.actions_hash) + '|' + String(h.contract_hash);
+    }
+
+    // Vote key for a report within one tally. A null state_hash is no evidence (a source
+    // ships it null below its burst tip), so it joins the one state_hash its base tuple
+    // carries; beside two or more distinct ones it keeps its own key and abstains.
+    voteKey(h, baseStates){
+        let states = h ? baseStates.get(this.baseTupleKey(h)) : null;
+        if(h && h.state_hash == null && states && states.size === 1)
+            return this.baseTupleKey(h) + '|' + String([...states][0]);
+        return this.hashTupleKey(h);
     }
 
     // Sources still eligible to vote (configured minus evicted).
@@ -3218,34 +3239,56 @@ class ClientSync {
             ledger_hash: event.ledger_hash,
             actions_hash: event.actions_hash,
             contract_hash: event.contract_hash,
-            state_hash: event.state_hash
+            state_hash: event.state_hash,
+            // Keep the payload so a quorum can apply the report that carries a state_hash.
+            event: event
         };
         return this.pendingHashes.get(blockIndex);
     }
 
     tallyPendingBlockHashes(pending){
-        // Group reported, non-evicted sources by hash tuple.
+        // Group reported, non-evicted sources by vote key (see voteKey).
         // Count only active reports when deciding whether every source has answered.
-        let groups = new Map(); // hashKey -> [sourceIndex...]
-        let reportedCount = 0;
-        for(let idxStr of Object.keys(pending)){
-            let idx = Number(idxStr);
-            if(this._evictedSources.has(idx)) continue;
-            reportedCount++;
-            let key = this.hashTupleKey(pending[idxStr]);
+        let active = Object.keys(pending).map(Number).filter(idx => !this._evictedSources.has(idx));
+        let baseStates = new Map(); // baseKey -> Set of the non-null state hashes reported
+        for(let idx of active){
+            let base = this.baseTupleKey(pending[idx]);
+            if(!baseStates.has(base)) baseStates.set(base, new Set());
+            if(pending[idx] && pending[idx].state_hash != null) baseStates.get(base).add(pending[idx].state_hash);
+        }
+        let groups = new Map(); // voteKey -> [sourceIndex...]
+        let abstain = new Set(); // keys of null reports beside a real state_hash split
+        for(let idx of active){
+            let key = this.voteKey(pending[idx], baseStates);
             if(!groups.has(key)) groups.set(key, []);
             groups.get(key).push(idx);
+            if(pending[idx] && pending[idx].state_hash == null && baseStates.get(this.baseTupleKey(pending[idx])).size > 1)
+                abstain.add(key);
         }
-        return { groups, reportedCount };
+        return { groups, reportedCount: active.length, baseStates, abstain };
     }
 
-    acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup){
+    // The payload to apply for an accepted group: the given event, unless it carries no
+    // state_hash and a member's does, so the apply-time state_hash check still runs.
+    // Never copy a state_hash across payloads: a burst payload's rows are tip-state.
+    checkableGroupEvent(pending, members, event){
+        if(event.state_hash != null) return event;
+        for(let idx of members){
+            let report = pending[idx];
+            if(report && report.event && report.event.state_hash != null) return report.event;
+        }
+        return event;
+    }
+
+    acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup, tally){
         // Strike every reported dissenter and record the applied majority.
+        // Never strike an abstaining null report: it carries no state evidence.
         // Clear pending confirmation state and cancel its liveness timer.
         for(let idxStr of Object.keys(pending)){
             let idx = Number(idxStr);
             if(this._evictedSources.has(idx)) continue;
-            if(this.hashTupleKey(pending[idxStr]) !== currentKey) this.strikeSource(idx, blockIndex);
+            let key = this.voteKey(pending[idxStr], tally.baseStates);
+            if(key !== currentKey && !tally.abstain.has(key)) this.strikeSource(idx, blockIndex);
         }
         this._lastSourcesAgreeing = currentGroup.length;
         this.pendingHashes.delete(blockIndex);
@@ -3309,8 +3352,9 @@ class ClientSync {
                     // Re-tally the reports that arrived while waiting. The fallback covers a
                     // SILENT source only: a height another active source already contests is
                     // rejected like a split every source reported, never applied first-come.
-                    let { groups } = this.tallyPendingBlockHashes(this.pendingHashes.get(blockIndex));
-                    let heldKey = this.hashTupleKey(event);
+                    let pending = this.pendingHashes.get(blockIndex);
+                    let { groups, baseStates } = this.tallyPendingBlockHashes(pending);
+                    let heldKey = this.voteKey(event, baseStates);
                     if(groups.size > 1){
                         getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
                             ' with conflicting source reports; rejecting instead of applying the first arrival');
@@ -3332,7 +3376,7 @@ class ClientSync {
                         ', applying the uncontested report');
                     // Guards the timer callback: applyBlockEvent can still reject before its own catch.
                     try {
-                        await this.applyBlockEvent(event);
+                        await this.applyBlockEvent(this.checkableGroupEvent(pending, groups.get(heldKey), event));
                     } catch(e){
                         getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
                     }
@@ -3356,16 +3400,18 @@ class ClientSync {
 
         let blockIndex = event.block_index;
         let pending = this.recordPendingBlockHash(event, sourceIndex);
-        let { groups, reportedCount } = this.tallyPendingBlockHashes(pending);
+        let tally = this.tallyPendingBlockHashes(pending);
+        let { groups, reportedCount } = tally;
 
         // Gate application on the current arrival's group so the accepted tuple always
         // belongs to the payload held by this call. The majority winner is unique.
         // Strike dissenters only after the current tuple reaches the effective quorum.
-        let currentKey = this.hashTupleKey(pending[sourceIndex]);
+        let currentKey = this.voteKey(pending[sourceIndex], tally.baseStates);
         let currentGroup = groups.get(currentKey) || [];
-        if(currentGroup.length >= this.effectiveQuorum()){
-            this.acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup);
-            return null;
+        if(!tally.abstain.has(currentKey) && currentGroup.length >= this.effectiveQuorum()){
+            this.acceptBlockQuorum(blockIndex, pending, currentKey, currentGroup, tally);
+            let applyEvent = this.checkableGroupEvent(pending, currentGroup, event);
+            return applyEvent === event ? null : { applyEvent };
         }
         if(reportedCount >= this.activeSourceCount()){
             return { completion: this.rejectBlockWithoutQuorum(blockIndex, groups) };
@@ -3405,6 +3451,11 @@ class ClientSync {
         }
 
         action = this.handleBlockQuorum(event, sourceIndex);
+        // Apply the group member's payload the quorum chose when it is not this arrival's.
+        if(action && action.applyEvent){
+            await this.applyBlockEvent(action.applyEvent);
+            return;
+        }
         if(action){
             if(action.completion) await action.completion;
             return;
@@ -3883,6 +3934,7 @@ class ClientSync {
     // re-seed moves past it. A halt of another kind (no source quorum, train activation,
     // a checkpoint, a state-commitment divergence) is the operator's ruling to clear.
     async clearHalt(){
+        const wasDurable = this._haltDurable;
         // A halt write still being retried belongs to the halt being cleared.
         this.cancelHaltPersistRetry();
         this._haltDurable = true;
@@ -3907,7 +3959,15 @@ class ClientSync {
                 '/' + this.dbType + '; the saved row was deleted');
             return invalid;
         }
-        try { await this.db.clearHalt(this.dbType); } catch(e){ getLogger().error(util.format('clearHalt persistence failed:', e)); }
+        // Fail closed when the durable clear does not land: sync_halt still holds the halt and the
+        // next start would halt on it, so keep it in force, keep its copy and resume an owed write.
+        try { await this.db.clearHalt(this.dbType); } catch(e){
+            this._haltDurable = wasDurable;
+            if(wasDurable === false && this._halted) this.scheduleHaltPersistRetry(this._halted, 5000);
+            getLogger().error(util.format('clearHalt persistence failed; the halt stays in force:', e));
+            throw new Error('halt clear was not persisted, so the halt stays in force; retry the clear: ' +
+                ((e && e.message) || String(e)));
+        }
         await this.dropPendingHaltCopy();
         const was = this._halted;
         if(was && was.reason === 'max-rollback-depth-exceeded')

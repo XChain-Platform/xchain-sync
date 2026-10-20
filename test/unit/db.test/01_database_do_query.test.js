@@ -254,15 +254,16 @@ describe('Database.beginTransaction()', function () {
         assert.ok(conn.beginTransaction.calledOnce);
     });
 
-    it('if transactionConnection already exists: releases it first, then opens new one', async function () {
+    it('if transactionConnection already exists: refuses and leaves the open transaction untouched', async function () {
         let oldConn = fakeConn();
         let newConn = fakeConn();
         db.transactionConnection = oldConn;
-        // getConnection will be called after releaseConnection (which nulls it)
-        sinon.stub(db, 'getConnection').resolves(newConn);
-        await db.beginTransaction();
-        assert.ok(oldConn.release.calledOnce);
-        assert.strictEqual(db.transactionConnection, newConn);
+        let getConnection = sinon.stub(db, 'getConnection').resolves(newConn);
+        await assert.rejects(() => db.beginTransaction(), /a transaction is already open/);
+        assert.ok(oldConn.release.notCalled, 'the open unit keeps its connection');
+        assert.ok(oldConn.rollback.notCalled, 'the open unit keeps its uncommitted writes');
+        assert.ok(getConnection.notCalled);
+        assert.strictEqual(db.transactionConnection, oldConn);
     });
 
     it('releases conn and nulls transactionConnection when beginTransaction throws', async function () {

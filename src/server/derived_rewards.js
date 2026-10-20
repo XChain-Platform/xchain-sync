@@ -61,6 +61,7 @@
  ********************************************************************/
 
 const { isSchemaGapError } = require('../db/tables/schema_gap');
+const { validatorRewardKey } = require('./reward_identity');
 
 // Selects validator_rewards rows MATERIALIZED (derive_block_index) inside the inclusive
 // window [fromBlock, toBlock] whose own block_index (earn-block E) is BELOW their
@@ -97,8 +98,7 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
         // second overwrites the first in this Map and never reaches the replica at all.
         for(let r of (rows || [])){
             if(r && r.source_id != null && r.signing_pubkey_id != null)
-                acc.set(r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference
-                        + ':' + r.round_qualifier, r);
+                acc.set(validatorRewardKey(r), r);
         }
     } catch(e){
         // derive_block_index may not exist on an older source schema (pre-RB-ANCHOR);

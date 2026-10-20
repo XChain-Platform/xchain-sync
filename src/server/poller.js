@@ -35,6 +35,7 @@ const { collectUpdatedRows } = require('./updated_rows');
 const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
+const { validatorRewardKey } = require('./reward_identity');
 const seedReorgWindow = require('./poller/reorg_window_seed');
 const TransparencyLog = require('./transparency_log');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
@@ -1018,9 +1019,9 @@ class ServerPoller {
     // a duplicate and dropped from the payload before it ever reaches a replica.
     mergeValidatorRewardRows(payload, rows){
         let existing = payload.data['validator_rewards'] || [];
-        let seen = new Set(existing.map(r => r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier));
+        let seen = new Set(existing.map(validatorRewardKey));
         for(let r of rows){
-            let k = r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
+            let k = validatorRewardKey(r);
             if(!seen.has(k)){ seen.add(k); existing.push(r); }
         }
         payload.data['validator_rewards'] = existing;

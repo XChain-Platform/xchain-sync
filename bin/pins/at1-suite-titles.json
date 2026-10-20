@@ -75,19 +75,6 @@
       "armed map v2: falsification on temp trees pins all six shared row files to the indexer canonical byte digests",
       "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
     ],
-    "072602400b206ab1": [
-      "HashVerifier compareBlockHashes detects all three fields mismatched",
-      "HashVerifier compareBlockHashes detects single field mismatch",
-      "HashVerifier compareBlockHashes returns match when all hashes are identical",
-      "HashVerifier compareBlockHashes treats null vs null as match",
-      "HashVerifier compareBlockHashes treats null vs string as mismatch",
-      "HashVerifier verifyChainContinuity returns invalid for a block gap when prevHashes is null",
-      "HashVerifier verifyChainContinuity returns invalid for block gap",
-      "HashVerifier verifyChainContinuity returns invalid for duplicate block",
-      "HashVerifier verifyChainContinuity returns valid for sequential block",
-      "HashVerifier verifyChainContinuity returns valid when prevBlockIndex is null (bootstrap)",
-      "HashVerifier verifyChainContinuity returns valid when prevHashes is null"
-    ],
     "07811aa22e123504": [
       "bin/markets-id-parity fetch reads markets at the tip and pages every ticker",
       "bin/markets-id-parity fetch refuses a source with no polled height instead of pulling since/0",
@@ -279,6 +266,10 @@
       "SyncService mode branching in start calls startClientMode for client mode",
       "SyncService mode branching in start calls startServerMode for server mode"
     ],
+    "134ad03c5062e3c4": [
+      "/status state_hash publishes state_hash on a client indexer row, null before it exists",
+      "/status state_hash publishes state_hash on a server indexer row and omits it on a decoder row"
+    ],
     "13c2f94637234733": [
       "ServerPoller decoder single range statement @regression uses one consistent decoder range statement when snapshot helpers are unavailable @regression",
       "ServerPoller decoder snapshot transaction @regression seeds one consistent decoder range read and resolves a mid-seed reorg at the true fork @regression",
@@ -355,6 +346,12 @@
       "ClientSync syncLookupTablesPaged pages one table by id cursor until has_more=false, applying each non-empty page",
       "ClientSync syncLookupTablesPaged stops if has_more is true but the cursor cannot advance (no infinite spin)",
       "ClientSync syncLookupTablesPaged throws on a schema-version mismatch (fail closed)"
+    ],
+    "1ad311d10965d7a2": [
+      "Replica units refuse a commit that found no open transaction a commit that returns nothing (a double without the flag) still counts as committed",
+      "Replica units refuse a commit that found no open transaction a decoder reorg rollback throws instead of reporting the rollback completed",
+      "Replica units refuse a commit that found no open transaction a dispensers swap throws instead of reporting the table replaced",
+      "Replica units refuse a commit that found no open transaction a live block apply throws instead of reporting the block applied"
     ],
     "1cc46b5d9b0c38cc": [
       "SyncService discoverChains datetime retype wiring client mode calls ensureDatetimeColumns once per chain, after verifySyncTables and before ensureReplicatedColumns, with includeFollowerDerived: true",
@@ -623,6 +620,9 @@
       "foldIssueRows reads a allow_list of 0 (number, string or BigInt) as a detach to NULL",
       "foldIssueRows reads a block_list of 0 (number, string or BigInt) as a detach to NULL"
     ],
+    "2402b4d4caebb5fa": [
+      "ClientRollback schema-gap catches skip a schema gap only through isSchemaGapError, never an inline errno pair"
+    ],
     "2442df610ebb6911": [
       "coin-registry conformance (vendored copy) @regression byte-identity to canonical xchain-hub/src/coins BTC.js is byte-identical to the canonical xchain-hub copy",
       "coin-registry conformance (vendored copy) @regression byte-identity to canonical xchain-hub/src/coins DOGE.js is byte-identical to the canonical xchain-hub copy",
@@ -801,31 +801,6 @@
       "SnapshotBuilder streamTableRowsById rejects a non-pageable table with 400",
       "SnapshotBuilder streamTableRowsById streams an id-ordered page with max_id and has_more=false when short"
     ],
-    "2fb051ef6cd51bcb": [
-      "pinnedValidators @regression fails closed (null) on a malformed env override",
-      "pinnedValidators @regression is INERT: every real (chain, network) pins null",
-      "pinnedValidators @regression parses a well-formed env override (case-insensitive lookup)",
-      "pinnedValidators @regression returns null for an unknown chain/network and for null args",
-      "pinnedValidators: assertPinnedEnvOverrides @regression accepts well-formed validator and seed overrides",
-      "pinnedValidators: assertPinnedEnvOverrides @regression defaults to process.env when called with no argument",
-      "pinnedValidators: assertPinnedEnvOverrides @regression does not reject a chain/network pair that is absent from the baked-in map",
-      "pinnedValidators: assertPinnedEnvOverrides @regression does not throw when no override is present at all",
-      "pinnedValidators: assertPinnedEnvOverrides @regression ignores a prefixed name with no CHAIN_NETWORK shape (the getters never read it)",
-      "pinnedValidators: assertPinnedEnvOverrides @regression names every offender, not just the first",
-      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a seed override that is not JSON, not an object, or missing a required field",
-      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a typed validator override the checkpoint verifier always rejects",
-      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a validator override that is not JSON, not an array, empty, or wrongly shaped",
-      "pinnedValidators: assertPinnedEnvOverrides @regression treats an unset or empty-string override as absent, not invalid",
-      "pinnedValidators: rotation seed checkpoint @regression fails closed (null) on a malformed env seed override",
-      "pinnedValidators: rotation seed checkpoint @regression is INERT: every real (chain, network) seed pins null",
-      "pinnedValidators: rotation seed checkpoint @regression parses a well-formed env seed override (case-insensitive lookup)",
-      "pinnedValidators: rotation seed checkpoint @regression returns null for an unknown chain/network and for null args",
-      "pinnedValidators: the hub's full coin name @regression is INERT under the full coin names too",
-      "pinnedValidators: the hub's full coin name @regression resolves the ticker-form env override under the hub's full coin name",
-      "pinnedValidators: the hub's full coin name @regression still resolves a full-name env override, and the ticker form wins when both are set",
-      "pinnedValidators: the hub's full coin name, seed checkpoint @regression resolves the ticker-form env seed under the hub's full coin name",
-      "pinnedValidators: the hub's full coin name, seed checkpoint @regression still resolves a full-name env seed, and the ticker form wins when both are set"
-    ],
     "2fd0cd8cfcbeba36": [
       "Boundary: Reorg Detection resolves a 400-deep LTC testnet reorg to its true fork point",
       "Boundary: Reorg Detection sizes the recorded-hash window from the chain reorg ceiling",
@@ -926,33 +901,27 @@
       "Smoke: Client Mode snapshot is downloadable and parseable",
       "Smoke: Client Mode sync_meta table exists in replica"
     ],
-    "35f586531a7008e6": [
-      "Database.beginTransaction() acquires a connection and calls beginTransaction on it",
-      "Database.beginTransaction() if transactionConnection already exists: releases it first, then opens new one",
-      "Database.beginTransaction() releases conn and nulls transactionConnection when beginTransaction throws",
-      "Database.doQuery() coerces plain-object args to string, leaves Buffer intact",
-      "Database.doQuery() does NOT release conn when inside a transaction",
-      "Database.doQuery() explicit conn arg: query errors propagate (caller rolls back the snapshot)",
-      "Database.doQuery() explicit conn arg: runs on that connection, never acquires/releases one",
-      "Database.doQuery() on query error in non-tx path with opts.rethrow: logs, releases, AND re-throws (fail-closed)",
-      "Database.doQuery() on query error in non-tx path: logs error, does NOT throw, returns []",
-      "Database.doQuery() on query error inside a transaction: logs AND re-throws",
-      "Database.doQuery() returns [] and does NOT call getConnection when query is null",
-      "Database.doQuery() returns [] when query is undefined",
-      "Database.doQuery() runs a query via a connection and releases it (non-tx path)",
-      "Database.getConnection(): circuit breaker circuit open + cooldown expired \u2192 transitions to half-open, succeeds",
-      "Database.getConnection(): circuit breaker circuit open + cooldown not expired \u2192 throws immediately",
-      "Database.getConnection(): circuit breaker half-open \u2192 success \u2192 closes circuit",
-      "Database.getConnection(): circuit breaker happy path: returns connection and resets failures",
-      "Database.getConnection(): circuit breaker maxAttempts exhaustion: throws when failures < threshold",
-      "Database.getConnection(): circuit breaker retry-with-backoff: fails once then succeeds",
-      "Database.getConnection(): circuit breaker returns transactionConnection directly when one is active",
-      "Database.getConnection(): circuit breaker threshold exceeded: circuit opens and throws",
-      "Database.releaseConnection() is a no-op when transactionConnection is null",
-      "Database.releaseConnection() releases and nulls transactionConnection when present",
-      "Database.rollbackTransaction() is a no-op when no active transaction",
-      "Database.rollbackTransaction() releases in finally even when rollback throws",
-      "Database.rollbackTransaction() rolls back and releases when transactionConnection is active"
+    "3637c3dd9e3c233a": [
+      "ClientSync: verifyAgainstSource compares state_hash agrees and logs a skip when the source publishes no state_hash",
+      "ClientSync: verifyAgainstSource compares state_hash agrees when both state hashes match",
+      "ClientSync: verifyAgainstSource compares state_hash halts on a state_hash-only divergence under HALT_ON_DIVERGENCE",
+      "ClientSync: verifyAgainstSource compares state_hash reports diverge when only state_hash differs at the same height"
+    ],
+    "36c6843f80cb090f": [
+      "HashVerifier compareBlockHashes detects all three fields mismatched",
+      "HashVerifier compareBlockHashes detects single field mismatch",
+      "HashVerifier compareBlockHashes returns match when all hashes are identical",
+      "HashVerifier compareBlockHashes state_hash detects a state_hash-only mismatch when both sides carry one",
+      "HashVerifier compareBlockHashes state_hash matches with nothing skipped when neither side carries a state_hash",
+      "HashVerifier compareBlockHashes state_hash skips state_hash, still matching, when only one side carries it",
+      "HashVerifier compareBlockHashes treats null vs null as match",
+      "HashVerifier compareBlockHashes treats null vs string as mismatch",
+      "HashVerifier verifyChainContinuity returns invalid for a block gap when prevHashes is null",
+      "HashVerifier verifyChainContinuity returns invalid for block gap",
+      "HashVerifier verifyChainContinuity returns invalid for duplicate block",
+      "HashVerifier verifyChainContinuity returns valid for sequential block",
+      "HashVerifier verifyChainContinuity returns valid when prevBlockIndex is null (bootstrap)",
+      "HashVerifier verifyChainContinuity returns valid when prevHashes is null"
     ],
     "37100c93c95b19e0": [
       "HubClient hub-vs-bundle consensus-hash cross-check does not re-log an unchanged mismatch on the next poll",
@@ -1488,6 +1457,18 @@
       "Tier 1 - HashVerifier @tier1 verifyChainContinuity valid is true for exactly sequential blocks",
       "Tier 1 - HashVerifier @tier1 verifyChainContinuity valid is true when prevBlockIndex is null"
     ],
+    "51f4843c86a45112": [
+      "ClientSync: a failed durable halt clear clearHalt: a failed durable clear keeps the halt copy, the guard state and the owed halt write",
+      "ClientSync: misc branch coverage clearHalt: logs error when db.clearHalt throws",
+      "ClientSync: misc branch coverage clearHalt: logs without \"was halted\" when _halted is null",
+      "ClientSync: misc branch coverage constructor: validatorId falls back to \"unknown\" when hostname() is empty",
+      "ClientSync: misc branch coverage flushHeartbeat: swallows ws.send error",
+      "ClientSync: misc branch coverage haltOnDivergence: logs on recordHalt failure but still halts in memory",
+      "ClientSync: misc branch coverage haltOnDivergence: uses defaults when mismatches/sources are falsy",
+      "ClientSync: misc branch coverage safeParse: returns raw string when JSON.parse fails",
+      "ClientSync: misc branch coverage verifyRecompute: returns null for decoder dbType",
+      "ClientSync: misc branch coverage verifyTableCounts: treats NaN local count as 0"
+    ],
     "5229b20ad602f73b": [
       "Integration: token supply recompute is idempotent: a second recompute leaves every supply unchanged",
       "Integration: token supply recompute recomputes each token supply byte-identically to (credits - debits) + escrows"
@@ -1703,17 +1684,6 @@
       "Security: remediated dependency advisories @regression @tier4 ADV-3: minimatch can still brace-expand through the overridden brace-expansion",
       "Security: remediated dependency advisories @regression @tier4 ADV-4: brace-expansion survives the CVE-2026-14257 unbounded-length input",
       "Security: remediated dependency advisories @regression @tier4 ADV-5: the installed axios reports a patched runtime version"
-    ],
-    "5ccec02617fb694b": [
-      "ClientSync: misc branch coverage clearHalt: logs error when db.clearHalt throws",
-      "ClientSync: misc branch coverage clearHalt: logs without \"was halted\" when _halted is null",
-      "ClientSync: misc branch coverage constructor: validatorId falls back to \"unknown\" when hostname() is empty",
-      "ClientSync: misc branch coverage flushHeartbeat: swallows ws.send error",
-      "ClientSync: misc branch coverage haltOnDivergence: logs on recordHalt failure but still halts in memory",
-      "ClientSync: misc branch coverage haltOnDivergence: uses defaults when mismatches/sources are falsy",
-      "ClientSync: misc branch coverage safeParse: returns raw string when JSON.parse fails",
-      "ClientSync: misc branch coverage verifyRecompute: returns null for decoder dbType",
-      "ClientSync: misc branch coverage verifyTableCounts: treats NaN local count as 0"
     ],
     "5cf9fde8844c1229": [
       "updatedRows.collectUpdatedRows errno-less errors @regression re-throws a TypeError raised inside the cooldown-maturity class",
@@ -2023,6 +1993,11 @@
       "Database.addMissingColumns: AUTO_INCREMENT key clause reports a refused ALTER as a failure and never logs \"Added column\"",
       "Database.addMissingColumns: AUTO_INCREMENT key clause reproduces a source PRIMARY KEY when the replica has no primary key",
       "Database.addMissingColumns: AUTO_INCREMENT key clause synthesises a UNIQUE key when the source declares no single-column key on the auto column"
+    ],
+    "76012416eb4db01f": [
+      "validator-reward identity key is the only reward dedup key the payload merges build",
+      "validator-reward identity key keeps the colon-joined key format, null included, and separates rows that differ only in round_qualifier",
+      "validator-reward identity key names the reward_unique columns, in key order"
     ],
     "76d8fd79030c9638": [
       "ClientApplier strictIgnoreCheck is a no-op by default: no SHOW WARNINGS round trip on the ordinary apply path",
@@ -2668,6 +2643,53 @@
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 live getStakeWeightsByCapability below activation (BTC:mainnet < 960000) uses the legacy uncapped LIMIT",
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 live getStakeWeightsByCapability drops the overflow source above maxSources (follower selects the same set the source commits)",
       "SWQ source-cap follower gate (SWQ-TRUNC-1 liveness) @regression @tier1 live getStakeWeightsByCapability stays on the legacy path when no coin/network is threaded (backward compatible)"
+    ],
+    "91d191912b3539d2": [
+      "vendored checkpoint verifier (twin conformance) @regression a garbage-then-valid duplicate for one signer still PASSES (seen marked after verify)",
+      "vendored checkpoint verifier (twin conformance) @regression a malformed validator_signatures value counts as zero signatures",
+      "vendored checkpoint verifier (twin conformance) @regression a weighted-regime set that mixes weighted and unweighted entries never verifies",
+      "vendored checkpoint verifier (twin conformance) @regression an empty validator set can never verify",
+      "vendored checkpoint verifier (twin conformance) @regression below the mainnet flag day the count regime needs 2f+1 valid signatures",
+      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint matches the ACTIVE SPV-root spec byte-for-byte (EQUIV-wrapped, roots committed)",
+      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)",
+      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint pins the mainnet flag day (960999 legacy, 961000 roots and EQUIV wrap)",
+      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint pins the testnet flag day (145999 EQUIV-wrapped rootless, 146000 roots committed)",
+      "vendored checkpoint verifier (twin conformance) @regression rejects a checkpoint whose signer is not in the pinned set",
+      "vendored checkpoint verifier (twin conformance) @regression rejects a checkpoint with a tampered field (signature no longer matches the canonical)",
+      "vendored checkpoint verifier (twin conformance) @regression rejects a post-flag-day empty-string root even when the signature covers it",
+      "vendored checkpoint verifier (twin conformance) @regression src/checkpoint.js is code-identical to the xchain-sdk copy (comments excepted)",
+      "vendored checkpoint verifier (twin conformance) @regression src/consensus/equivocation_header.js is code-identical to the xchain-sdk copy (comments excepted)",
+      "vendored checkpoint verifier (twin conformance) @regression src/consensus/stake_weighted_quorum.js is code-identical to the xchain-sdk copy (comments excepted)",
+      "vendored checkpoint verifier (twin conformance) @regression the mainnet checkpoint gates flip exactly at snapshot_block 961000",
+      "vendored checkpoint verifier (twin conformance) @regression the testnet checkpoint gates: EQUIV and stake-weighted from genesis, commitment at snapshot_block 146000",
+      "vendored checkpoint verifier (twin conformance) @regression two pubkeys that share a source count that source once",
+      "vendored checkpoint verifier (twin conformance) @regression verifies a real Ed25519 quorum-signed checkpoint against its pinned set"
+    ],
+    "91d7a6aeff6eed9c": [
+      "pinnedValidators @regression fails closed (null) on a malformed env override",
+      "pinnedValidators @regression is INERT: every real (chain, network) pins null",
+      "pinnedValidators @regression parses a well-formed env override (case-insensitive lookup)",
+      "pinnedValidators @regression returns null for an unknown chain/network and for null args",
+      "pinnedValidators: assertPinnedEnvOverrides @regression accepts well-formed validator and seed overrides",
+      "pinnedValidators: assertPinnedEnvOverrides @regression defaults to process.env when called with no argument",
+      "pinnedValidators: assertPinnedEnvOverrides @regression does not reject a chain/network pair that is absent from the baked-in map",
+      "pinnedValidators: assertPinnedEnvOverrides @regression does not throw when no override is present at all",
+      "pinnedValidators: assertPinnedEnvOverrides @regression ignores a prefixed name with no CHAIN_NETWORK shape (the getters never read it)",
+      "pinnedValidators: assertPinnedEnvOverrides @regression names every offender, not just the first",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a seed override that is not JSON, not an object, or missing a required field",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a typed validator override the checkpoint verifier always rejects",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a validator override that is not JSON, not an array, empty, or wrongly shaped",
+      "pinnedValidators: assertPinnedEnvOverrides @regression refuses a well-formed override under a chain or network name the getters never read",
+      "pinnedValidators: assertPinnedEnvOverrides @regression treats an unset or empty-string override as absent, not invalid",
+      "pinnedValidators: rotation seed checkpoint @regression fails closed (null) on a malformed env seed override",
+      "pinnedValidators: rotation seed checkpoint @regression is INERT: every real (chain, network) seed pins null",
+      "pinnedValidators: rotation seed checkpoint @regression parses a well-formed env seed override (case-insensitive lookup)",
+      "pinnedValidators: rotation seed checkpoint @regression returns null for an unknown chain/network and for null args",
+      "pinnedValidators: the hub's full coin name @regression is INERT under the full coin names too",
+      "pinnedValidators: the hub's full coin name @regression resolves the ticker-form env override under the hub's full coin name",
+      "pinnedValidators: the hub's full coin name @regression still resolves a full-name env override, and the ticker form wins when both are set",
+      "pinnedValidators: the hub's full coin name, seed checkpoint @regression resolves the ticker-form env seed under the hub's full coin name",
+      "pinnedValidators: the hub's full coin name, seed checkpoint @regression still resolves a full-name env seed, and the ticker form wins when both are set"
     ],
     "91e7a6f068b71e76": [
       "/status replication freshness SYNC_REPLICA_MAX_LAG_S is configurable and defaults to 120s",
@@ -3442,6 +3464,34 @@
       "ClientSync: checkpoint anchor ignores roots below the commitment flag day @regression a rotation step below the flag day waits before its signer set is computed",
       "ClientSync: checkpoint anchor ignores roots below the commitment flag day @regression does not anchor a genuine pre-flag-day checkpoint that carries attached roots"
     ],
+    "b98bb97c87e32de9": [
+      "Database.beginTransaction() acquires a connection and calls beginTransaction on it",
+      "Database.beginTransaction() if transactionConnection already exists: refuses and leaves the open transaction untouched",
+      "Database.beginTransaction() releases conn and nulls transactionConnection when beginTransaction throws",
+      "Database.doQuery() coerces plain-object args to string, leaves Buffer intact",
+      "Database.doQuery() does NOT release conn when inside a transaction",
+      "Database.doQuery() explicit conn arg: query errors propagate (caller rolls back the snapshot)",
+      "Database.doQuery() explicit conn arg: runs on that connection, never acquires/releases one",
+      "Database.doQuery() on query error in non-tx path with opts.rethrow: logs, releases, AND re-throws (fail-closed)",
+      "Database.doQuery() on query error in non-tx path: logs error, does NOT throw, returns []",
+      "Database.doQuery() on query error inside a transaction: logs AND re-throws",
+      "Database.doQuery() returns [] and does NOT call getConnection when query is null",
+      "Database.doQuery() returns [] when query is undefined",
+      "Database.doQuery() runs a query via a connection and releases it (non-tx path)",
+      "Database.getConnection(): circuit breaker circuit open + cooldown expired \u2192 transitions to half-open, succeeds",
+      "Database.getConnection(): circuit breaker circuit open + cooldown not expired \u2192 throws immediately",
+      "Database.getConnection(): circuit breaker half-open \u2192 success \u2192 closes circuit",
+      "Database.getConnection(): circuit breaker happy path: returns connection and resets failures",
+      "Database.getConnection(): circuit breaker maxAttempts exhaustion: throws when failures < threshold",
+      "Database.getConnection(): circuit breaker retry-with-backoff: fails once then succeeds",
+      "Database.getConnection(): circuit breaker returns transactionConnection directly when one is active",
+      "Database.getConnection(): circuit breaker threshold exceeded: circuit opens and throws",
+      "Database.releaseConnection() is a no-op when transactionConnection is null",
+      "Database.releaseConnection() releases and nulls transactionConnection when present",
+      "Database.rollbackTransaction() is a no-op when no active transaction",
+      "Database.rollbackTransaction() releases in finally even when rollback throws",
+      "Database.rollbackTransaction() rolls back and releases when transactionConnection is active"
+    ],
     "ba95e284dc4b4796": [
       "ServerPoller CI suite selection keeps CI lifecycle detection out of the production poller module",
       "ServerPoller CI suite selection selects the safety suites explicitly in the CI script"
@@ -4037,12 +4087,6 @@
     "d276bbc2f251795a": [
       "Integration: ServerPoller updateStatus updates broadcaster status with real block data"
     ],
-    "d2d56e78b428dd10": [
-      "ClientSync: multi-source state_hash vote @regression a state_hash-only dissenter is struck and the matching majority applies",
-      "ClientSync: multi-source state_hash vote @regression sources agreeing on every field including state_hash still apply",
-      "ClientSync: multi-source state_hash vote @regression tuple key differs when only state_hash differs",
-      "ClientSync: multi-source state_hash vote @regression two sources with equal hashes but different state_hash halt with no-source-quorum"
-    ],
     "d2fffeabd095588e": [
       "SyncService getClientSyncState omits halt info for a healthy sync",
       "SyncService getClientSyncState reports a live sync, including halt info when halted",
@@ -4202,6 +4246,10 @@
       "Integration: ServerPoller poll does nothing when no new blocks",
       "Integration: ServerPoller poll processes multiple sequential blocks",
       "Integration: ServerPoller poll records each block in transparency log"
+    ],
+    "dd071b2638ca8ab8": [
+      "consensus block-hash conformance twins (static drift-lock) @regression BlockHasher and the leaf-row gatherers build the pinned preimage keys, in order, at the hashed block",
+      "consensus block-hash conformance twins (static drift-lock) @regression db.getBlockHashLedgerRows and getBlockHashContractData build the same preimage keys as BlockHasher"
     ],
     "de57542d908be190": [
       "coinTicker() + per-chain activation lookup normalization is idempotent on tickers and case-insensitive",
@@ -4490,6 +4538,19 @@
       "ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression stays quiet when recompute is enabled",
       "ClientSync: VERIFY_RECOMPUTE=false is declared unsafe @regression warns UNSAFE at construction when explicitly disabled"
     ],
+    "eef55ceca79cac84": [
+      "ClientSync: a null state_hash in log-only mode and at the quorum timeout @regression applies a null-versus-state_hash pair in log-only mode",
+      "ClientSync: a null state_hash in log-only mode and at the quorum timeout @regression applies the checkable payload at the quorum timeout when a null report joins it",
+      "ClientSync: a null state_hash in log-only mode and at the quorum timeout @regression applies two null reports as before",
+      "ClientSync: a null state_hash is no evidence in the source vote @regression applies a burst-exempt null report beside a state_hash report, in both arrival orders",
+      "ClientSync: a null state_hash is no evidence in the source vote @regression lets a null report decide neither side of a real state_hash split",
+      "ClientSync: a null state_hash is no evidence in the source vote @regression never strikes a null reporter whose other hashes match the accepted group",
+      "ClientSync: a null state_hash is no evidence in the source vote @regression still splits a null report whose ledger hash differs",
+      "ClientSync: multi-source state_hash vote @regression a state_hash-only dissenter is struck and the matching majority applies",
+      "ClientSync: multi-source state_hash vote @regression sources agreeing on every field including state_hash still apply",
+      "ClientSync: multi-source state_hash vote @regression tuple key differs when only state_hash differs",
+      "ClientSync: multi-source state_hash vote @regression two sources with equal hashes but different state_hash halt with no-source-quorum"
+    ],
     "f1150c948244069d": [
       "Integration: REST API GET /schema/:dbType/:chain/:network returns table DDLs"
     ],
@@ -4642,21 +4703,6 @@
       "Tier 2 - ClientRollback @tier2 rollback transaction is always committed or rolled back, never leaked",
       "Tier 2 - ClientRollback @tier2 rollback when firstActionIndex is null, action-scoped DELETEs use no action_index filter"
     ],
-    "fc128a24fee83524": [
-      "vendored checkpoint verifier (twin conformance) @regression a garbage-then-valid duplicate for one signer still PASSES (seen marked after verify)",
-      "vendored checkpoint verifier (twin conformance) @regression an empty validator set can never verify",
-      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint matches the ACTIVE SPV-root spec byte-for-byte (EQUIV-wrapped, roots committed)",
-      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)",
-      "vendored checkpoint verifier (twin conformance) @regression canonicalCheckpoint pins the mainnet flag day (960999 legacy, 961000 roots and EQUIV wrap)",
-      "vendored checkpoint verifier (twin conformance) @regression rejects a checkpoint whose signer is not in the pinned set",
-      "vendored checkpoint verifier (twin conformance) @regression rejects a checkpoint with a tampered field (signature no longer matches the canonical)",
-      "vendored checkpoint verifier (twin conformance) @regression rejects a post-flag-day empty-string root even when the signature covers it",
-      "vendored checkpoint verifier (twin conformance) @regression src/checkpoint.js is code-identical to the xchain-sdk copy (comments excepted)",
-      "vendored checkpoint verifier (twin conformance) @regression src/consensus/equivocation_header.js is code-identical to the xchain-sdk copy (comments excepted)",
-      "vendored checkpoint verifier (twin conformance) @regression src/consensus/stake_weighted_quorum.js is code-identical to the xchain-sdk copy (comments excepted)",
-      "vendored checkpoint verifier (twin conformance) @regression the mainnet checkpoint gates flip exactly at snapshot_block 961000",
-      "vendored checkpoint verifier (twin conformance) @regression verifies a real Ed25519 quorum-signed checkpoint against its pinned set"
-    ],
     "fc2e4e6f74912b6b": [
       "ServerPoller poll detects a net-forward reorg via a changed same-height hash",
       "ServerPoller poll detects reorg and broadcasts reorg event",
@@ -4779,8 +4825,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 395,
-      "titleCount": 3108,
+      "fileCount": 402,
+      "titleCount": 3148,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4805,6 +4851,7 @@
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
         "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
         "test/unit/blockhash_conformance_twin.test/04_hash_call_binding.test.js": "81e83c2e7406e406",
+        "test/unit/blockhash_conformance_twin.test/05_preimage_shape.test.js": "dd071b2638ca8ab8",
         "test/unit/boundaries/batch_insert.test.js": "ec173aca8005e2db",
         "test/unit/boundaries/block_index.test.js": "3c56690bfa37c105",
         "test/unit/boundaries/circuit_breaker.test.js": "f5bb2b28cc7a8e95",
@@ -4846,9 +4893,10 @@
         "test/unit/boundaries/websocket_limits.test/03_backpressure_drop.test.js": "ca7bc2bfcf7cd73c",
         "test/unit/boundaries/websocket_limits.test/04_backpressure_recovery.test.js": "29c90f8bd7e76e16",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
-        "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
+        "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/archive_reset_predicate.test.js": "a54f9a2821a10c99",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
+        "test/unit/client/commit_without_open_transaction.test.js": "1ad311d10965d7a2",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
@@ -4879,6 +4927,7 @@
         "test/unit/client_rollback.test/11_token_bridged_rederive.test.js": "a4f6aa69e33278ea",
         "test/unit/client_rollback.test/12_archive_invalid_reset_pin.test.js": "6f53c214736534f2",
         "test/unit/client_rollback.test/12_archive_stamp_journal_restore.test.js": "abc321c1e9fd95fd",
+        "test/unit/client_rollback.test/13_schema_gap_predicate.test.js": "2402b4d4caebb5fa",
         "test/unit/client_sync.test.js": "a5dcb3dfab180b59",
         "test/unit/client_sync.test/11_heal_schema_if_stale.test.js": "ca3ef17f876157b0",
         "test/unit/client_sync.test/18_should_reconcile_dispensers_decoder_resume_cadence.test.js": "0ddb81e3688155bc",
@@ -4926,7 +4975,7 @@
         "test/unit/client_sync_io.test/15_heartbeat.test.js": "2de415b648901dff",
         "test/unit/client_sync_io.test/16_connect_web_socket.test.js": "81b2c5034f4c92dd",
         "test/unit/client_sync_io.test/17_handle_event_last_known_server_block_branches.test.js": "2c00f2c184ea8958",
-        "test/unit/client_sync_io.test/18_misc_branch_coverage.test.js": "5ccec02617fb694b",
+        "test/unit/client_sync_io.test/18_misc_branch_coverage.test.js": "51f4843c86a45112",
         "test/unit/client_sync_io.test/19_small_branches.test.js": "81b2dec027b5a63e",
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
         "test/unit/client_sync_io.test/bootstrap/01_bootstrap_size_wall.test.js": "e187211525c8a3de",
@@ -4941,10 +4990,11 @@
         "test/unit/client_sync_io.test/verify/08_verify_recompute_join_block_skip.test.js": "87e2f6a904c7a19a",
         "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js": "03adcaec6f5e7625",
         "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js": "665052ac9fa042e3",
+        "test/unit/client_sync_io.test/verify/14_verify_against_source_state_hash.test.js": "3637c3dd9e3c233a",
         "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "235d1488d9a1d9fe",
         "test/unit/client_sync_schema_apply.test.js": "b6ab840e3149d748",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
-        "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
+        "test/unit/client_sync_source_state_hash_vote.test.js": "eef55ceca79cac84",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
         "test/unit/client_sync_verified_tip/catch_up_interior_recompute.test.js": "0828824e678890c4",
@@ -4988,7 +5038,7 @@
         "test/unit/cors_origin.test.js": "e3fcef2cb94f7253",
         "test/unit/coverage_thresholds_sync.test.js": "88538c23864af3e5",
         "test/unit/db.test.js": "3e452242329a55a6",
-        "test/unit/db.test/01_database_do_query.test.js": "35f586531a7008e6",
+        "test/unit/db.test/01_database_do_query.test.js": "b98bb97c87e32de9",
         "test/unit/db.test/02_database_commit_transaction.test.js": "202bed8f78d5d96d",
         "test/unit/db.test/03_database_verify_sync_tables.test.js": "db839ea0e9db1207",
         "test/unit/db.test/04_database_add_missing_columns_edge_branches.test.js": "2b8574874fbaf660",
@@ -5031,7 +5081,7 @@
         "test/unit/follower_missing_prior_root.test.js": "e76d24fca4e63da9",
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/get_block_leaf_rows_canonical.test.js": "7bd37c7fd3de6737",
-        "test/unit/hash_verifier.test.js": "072602400b206ab1",
+        "test/unit/hash_verifier.test.js": "36c6843f80cb090f",
         "test/unit/health/carrier_logic.test.js": "a1f27ad98d35a6a3",
         "test/unit/health_halt_verdict.test.js": "b692b313f677d5c4",
         "test/unit/hub_client.test.js": "68687be53be6c143",
@@ -5054,7 +5104,7 @@
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
         "test/unit/missing_tables.test.js": "092adf2c2aa96019",
         "test/unit/observability.test.js": "ca8fa416b5e8a763",
-        "test/unit/pinned_validators.test.js": "2fb051ef6cd51bcb",
+        "test/unit/pinned_validators.test.js": "91d7a6aeff6eed9c",
         "test/unit/pool_sizing.test.js": "ae699f6978a9fbbd",
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/recovery_rewards.test.js": "c7ffd8486a3a6f7e",
@@ -5076,6 +5126,8 @@
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
+        "test/unit/server/reward_identity.test.js": "76012416eb4db01f",
+        "test/unit/server/status_state_hash.test.js": "134ad03c5062e3c4",
         "test/unit/server/updated_rows/accumulator.test.js": "547bbbb3e69a37dd",
         "test/unit/server/updated_rows/table_specs.test.js": "8f8f77d749f72058",
         "test/unit/server/updated_rows/token_rows.test.js": "cfe77aacb98b3e42",
@@ -5466,8 +5518,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 118,
-      "titleCount": 905,
+      "fileCount": 119,
+      "titleCount": 923,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5476,8 +5528,9 @@
         "test/unit/blockhash_conformance_twin.test/02_stakes_root_twin_parity.test.js": "8b755303c377c7f4",
         "test/unit/blockhash_conformance_twin.test/03_state_root_assembly_twin.test.js": "425919c4ab56cb8d",
         "test/unit/blockhash_conformance_twin.test/04_hash_call_binding.test.js": "81e83c2e7406e406",
+        "test/unit/blockhash_conformance_twin.test/05_preimage_shape.test.js": "dd071b2638ca8ab8",
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
-        "test/unit/checkpoint_twin.test.js": "fc128a24fee83524",
+        "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
@@ -5507,7 +5560,7 @@
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
         "test/unit/client_sync_io.test/verify/post_commit_verify_retry.test.js": "235d1488d9a1d9fe",
         "test/unit/client_sync_source_quorum.test.js": "4d1ce9c4b6023937",
-        "test/unit/client_sync_source_state_hash_vote.test.js": "d2d56e78b428dd10",
+        "test/unit/client_sync_source_state_hash_vote.test.js": "eef55ceca79cac84",
         "test/unit/client_sync_tip_hash_refresh.test.js": "283afce58127f133",
         "test/unit/client_sync_train_activation.test.js": "83fe31113184d5b3",
         "test/unit/client_sync_verified_tip/catch_up_interior_recompute.test.js": "0828824e678890c4",
@@ -5543,7 +5596,7 @@
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
         "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
-        "test/unit/pinned_validators.test.js": "2fb051ef6cd51bcb",
+        "test/unit/pinned_validators.test.js": "91d7a6aeff6eed9c",
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/rollback_coverage.test.js": "fe9ae5e0abacec1d",

@@ -306,6 +306,8 @@ function applyServerHashFields(row, hashRow, dbType){
         row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
         row.actions_hash  = hashRow ? hashRow.actions_hash : null;
         row.contract_hash = hashRow ? hashRow.contract_hash : null;
+        // Publish state_hash so a follower can compare in-place state across sources.
+        row.state_hash    = (hashRow && hashRow.state_hash != null) ? hashRow.state_hash : null;
     }
 }
 
@@ -462,6 +464,8 @@ function createClientStatusRow(hashRow, dbType){
         row.ledger_hash   = hashRow ? hashRow.ledger_hash : null;
         row.actions_hash  = hashRow ? hashRow.actions_hash : null;
         row.contract_hash = hashRow ? hashRow.contract_hash : null;
+        // Publish state_hash so a downstream follower can compare in-place state too.
+        row.state_hash    = (hashRow && hashRow.state_hash != null) ? hashRow.state_hash : null;
     }
     return row;
 }

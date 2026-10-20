@@ -227,7 +227,9 @@ class ClientApplier {
             } else {
                 this._lastComputedRoots = null;
             }
-            await this.db.commitTransaction();
+            // A false commit found no open transaction: nothing landed, so this block must not count as applied.
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('block ' + payload.block_index + ': no open transaction at commit; nothing was committed');
         } catch(e){
             await this.db.rollbackTransaction();
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
@@ -444,7 +446,8 @@ class ClientApplier {
             if(this.shouldSeedSnapshotRoots(snapshotData, dbType))
                 await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
 
-            await this.db.commitTransaction();
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('full snapshot: no open transaction at commit; nothing was committed');
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
@@ -507,7 +510,8 @@ class ClientApplier {
                 if(isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker))
                     await seedSnapshotRoots(this.db, this.coinTicker, this.network, snapshotData.block_height);
             }
-            await this.db.commitTransaction();
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('incremental snapshot: no open transaction at commit; nothing was committed');
             logger.info('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await this.db.rollbackTransaction();
@@ -550,7 +554,8 @@ class ClientApplier {
         try {
             await this.db.deleteAllDispensers();
             if(rows.length) await this.insertRows('dispensers', rows);
-            await this.db.commitTransaction();
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('dispensers reconcile: no open transaction at commit; nothing was committed');
         } catch(e){
             await this.db.rollbackTransaction();
             logger.error(util.format('Error applying dispensers reconcile:', e));

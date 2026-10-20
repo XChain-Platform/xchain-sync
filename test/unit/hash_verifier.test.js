@@ -69,6 +69,41 @@ describe('HashVerifier', function(){
         verifier = new HashVerifier();
     });
 
+    describe('compareBlockHashes state_hash', function(){
+        const hashA = { ledger_hash: 'aaa', actions_hash: 'bbb', contract_hash: 'ccc' };
+
+        it('detects a state_hash-only mismatch when both sides carry one', function(){
+            let result = verifier.compareBlockHashes(7, { ...hashA, state_hash: 's1' }, { ...hashA, state_hash: 's2' });
+            assert.strictEqual(result.match, false);
+            assert.deepStrictEqual(result.mismatches, [{ field: 'state_hash', a: 's1', b: 's2' }]);
+            assert.deepStrictEqual(result.skipped, []);
+        });
+
+        it('skips state_hash, still matching, when only one side carries it', function(){
+            let local = verifier.compareBlockHashes(7, { ...hashA, state_hash: 's1' }, { ...hashA });
+            assert.strictEqual(local.match, true);
+            assert.deepStrictEqual(local.skipped, [{ field: 'state_hash', reason: 'absent-remote' }]);
+            let remote = verifier.compareBlockHashes(7, { ...hashA, state_hash: null }, { ...hashA, state_hash: 's2' });
+            assert.strictEqual(remote.match, true);
+            assert.deepStrictEqual(remote.skipped, [{ field: 'state_hash', reason: 'absent-local' }]);
+        });
+
+        it('matches with nothing skipped when neither side carries a state_hash', function(){
+            let result = verifier.compareBlockHashes(7, { ...hashA, state_hash: null }, { ...hashA });
+            assert.strictEqual(result.match, true);
+            assert.deepStrictEqual(result.skipped, []);
+        });
+    });
+});
+
+describe('HashVerifier', function(){
+
+    let verifier;
+
+    beforeEach(function(){
+        verifier = new HashVerifier();
+    });
+
     describe('verifyChainContinuity', function(){
         it('returns valid when prevBlockIndex is null (bootstrap)', function(){
             let result = verifier.verifyChainContinuity(null, null, { block_index: 1 });

@@ -32,6 +32,7 @@ const tableLifecycle = require('../table_lifecycle');
 const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
+const { validatorRewardKey } = require('./reward_identity');
 const { SnapshotStreamWriter } = require('./snapshot_builder/stream_writer');
 const {
     OPERATOR_LOCAL_TABLES,
@@ -51,14 +52,10 @@ const tableStreaming = require('./snapshot_builder/table_streaming');
 // round_reference (MATCH_BATCH_SEQ) is a dense hub counter a rebase
 // reissues, so two distinct archive rewards can share the four older
 // columns and the narrower key silently drops one from the payload.
-function rewardKey(r){
-    return r.source_id + ':' + r.signing_pubkey_id + ':' + r.reward_type + ':' + r.round_reference + ':' + r.round_qualifier;
-}
-
 function appendNewRewardRows(rows, extra){
-    let seen = new Set(rows.map(rewardKey));
+    let seen = new Set(rows.map(validatorRewardKey));
     for(let r of extra){
-        let k = rewardKey(r);
+        let k = validatorRewardKey(r);
         if(!seen.has(k)){ seen.add(k); rows.push(r); }
     }
 }
