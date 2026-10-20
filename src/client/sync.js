@@ -2122,9 +2122,17 @@ class ClientSync {
                     return 'halted';
                 }
             }
-            let countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
-                { remoteHeight: remoteStatus.block_height, localHeight: blockHeight });
-            reportTableCountResults(source, blockHeight, remoteStatus, countMismatches);
+            // Compare counts only when the source read them at this height; otherwise log the
+            // skip and report neither a shortfall nor a pass for counts taken elsewhere.
+            let countMismatches = [];
+            if(this.remoteCountsAtHeight(remoteStatus, blockHeight)){
+                countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
+                    { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: blockHeight });
+                reportTableCountResults(source, blockHeight, remoteStatus, countMismatches);
+            } else if(remoteStatus.table_counts){
+                getLogger().info('Table-count check against ' + source + ' skipped: source counts read at ' +
+                    this.remoteTableCountsHeight(remoteStatus) + ', replica at ' + blockHeight);
+            }
             if(shouldCompareIndexMap(this, blockHeight, remoteStatus, countMismatches)){
                 try {
                     let localChecksum = await this.blockHasher.computeIndexMapChecksum(blockHeight);
@@ -2319,6 +2327,13 @@ class ClientSync {
                     ', replica at ' + blockHeight);
                 return null;
             }
+            // The sweep also needs counts read at that height: counts taken past it would
+            // read as a hole to repair, and a null return leaves the tracked gaps unaged.
+            if(opts && opts.requireEqualHeight && !this.remoteCountsAtHeight(remoteStatus, blockHeight)){
+                getLogger().info('Decoder completeness sweep skipped: source counts read at ' +
+                    this.remoteTableCountsHeight(remoteStatus) + ', replica at ' + blockHeight);
+                return null;
+            }
 
             // On a truncated replica the block-windowed tables (blocks, transactions,
             // transaction_outputs) hold only [base..tip], so comparing their local
@@ -2480,8 +2495,38 @@ class ClientSync {
     remoteStatusMatchesCompletenessHeight(remoteStatus){
         // Re-check the height against the status we just fetched: the tick that
         // triggered this may be seconds old and the source may have advanced.
-        return remoteStatus.block_height == null ||
-            Number(remoteStatus.block_height) === Number(this.lastAppliedBlock);
+        // Also require the counts themselves to describe that height (remoteCountsAtHeight).
+        return (remoteStatus.block_height == null ||
+            Number(remoteStatus.block_height) === Number(this.lastAppliedBlock)) &&
+            this.remoteCountsAtHeight(remoteStatus, this.lastAppliedBlock);
+    }
+
+    // Return the height a source's table_counts were read at, or null when unknown.
+    // A current source labels them with table_counts_height (null when a block landed
+    // mid-count); an older one is trusted at block_height only while its tip equals it.
+    remoteTableCountsHeight(remoteStatus){
+        if(!remoteStatus || typeof remoteStatus !== 'object') return null;
+        if(Object.prototype.hasOwnProperty.call(remoteStatus, 'table_counts_height')){
+            let labelled = remoteStatus.table_counts_height;
+            return (labelled == null || !Number.isFinite(Number(labelled))) ? null : Number(labelled);
+        }
+        if(remoteStatus.block_height == null) return null;
+        // An older source counts its live tip, so a cached tip past block_height means
+        // rows from blocks above block_height were counted too.
+        if(remoteStatus.source_height != null &&
+           Number(remoteStatus.source_height) !== Number(remoteStatus.block_height)) return null;
+        return Number(remoteStatus.block_height);
+    }
+
+    // True when the source's table_counts describe its state at `height`, so comparing
+    // them against this replica at `height` is meaningful. A source that labels nothing
+    // at all (no table_counts_height and no block_height) is compared as before.
+    remoteCountsAtHeight(remoteStatus, height){
+        if(!remoteStatus || typeof remoteStatus !== 'object') return false;
+        let labelled = Object.prototype.hasOwnProperty.call(remoteStatus, 'table_counts_height');
+        if(!labelled && remoteStatus.block_height == null) return true;
+        let countsHeight = this.remoteTableCountsHeight(remoteStatus);
+        return countsHeight !== null && countsHeight === Number(height);
     }
 
     // Periodic replica-completeness sweep against the PRIMARY source: the row-count
@@ -2538,9 +2583,10 @@ class ClientSync {
         return axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
     }
 
+    // Pass the counts' own height, so replica-ahead fires only on counts taken at ours.
     verifyCompletenessCounts(remoteStatus){
         return this.verifyTableCounts(remoteStatus.table_counts, undefined,
-            { remoteHeight: remoteStatus.block_height, localHeight: this.lastAppliedBlock });
+            { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: this.lastAppliedBlock });
     }
 
     partitionCompletenessMismatches(mismatches){
@@ -3211,8 +3257,8 @@ class ClientSync {
     }
 
     rejectBlockWithoutQuorum(blockIndex, groups){
-        // Reject a contested block after every active source reports and no group
-        // reaches quorum, because the replica cannot determine the true payload.
+        // Reject a contested block when every active source reports and no group reaches
+        // quorum, or the quorum timeout finds conflicting reports: the true payload is unknown.
         // Clear the pending confirmation state before halting or logging the split.
         this.pendingHashes.delete(blockIndex);
         this._strictConfirmPending.delete(blockIndex);
@@ -3260,7 +3306,31 @@ class ClientSync {
                     // Mark the height strict-pending until another source confirms it.
                     this._strictConfirmPending.add(blockIndex);
                 } else {
-                    getLogger().info('Cross-source quorum timeout for block ' + blockIndex + ', applying from primary');
+                    // Re-tally the reports that arrived while waiting. The fallback covers a
+                    // SILENT source only: a height another active source already contests is
+                    // rejected like a split every source reported, never applied first-come.
+                    let { groups } = this.tallyPendingBlockHashes(this.pendingHashes.get(blockIndex));
+                    let heldKey = this.hashTupleKey(event);
+                    if(groups.size > 1){
+                        getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
+                            ' with conflicting source reports; rejecting instead of applying the first arrival');
+                        try {
+                            await this.rejectBlockWithoutQuorum(blockIndex, groups);
+                        } catch(e){
+                            getLogger().error(util.format('Error rejecting block ' + blockIndex + ' after cross-source timeout:', e));
+                        }
+                        return;
+                    }
+                    // Never apply a payload whose source was evicted while it waited.
+                    if(!groups.has(heldKey)){
+                        getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
+                            ': the held report is no longer an active source\'s; not applying it');
+                        this.pendingHashes.delete(blockIndex);
+                        return;
+                    }
+                    getLogger().info('Cross-source quorum timeout for block ' + blockIndex +
+                        ', applying the uncontested report');
+                    // Guards the timer callback: applyBlockEvent can still reject before its own catch.
                     try {
                         await this.applyBlockEvent(event);
                     } catch(e){

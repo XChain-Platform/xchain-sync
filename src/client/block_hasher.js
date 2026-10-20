@@ -303,7 +303,8 @@ class BlockHasher {
     // uptoBlock] through their own scope join. Append-only lookups have no block
     // column, so they use the id window (id_max - window, id_max]; a SOURCE publishes
     // id_max and a follower MUST pass it back through opts.idBounds so both sides
-    // read the same range rather than each hashing its own tail.
+    // read the same range rather than each hashing its own tail. The source takes
+    // id_max from the ceiling its poller read at uptoBlock (opts.strictIdBounds).
     //
     // Fail-soft per table: a schema gap or a transient read drops that ONE table from
     // the result (the verifier then skips it) instead of failing the whole advisory
@@ -330,9 +331,11 @@ class BlockHasher {
             try {
                 let rows, idMax = null;
                 if(step.bound === 'id'){
-                    idMax = (idBounds[step.table] !== undefined && idBounds[step.table] !== null)
-                        ? Number(idBounds[step.table])
-                        : await this.db.getMaxRowId(step.table);
+                    // Under strictIdBounds a lookup with no supplied ceiling is omitted, never
+                    // bounded by the live MAX(id), which may include ids past uptoBlock.
+                    let bounded = idBounds[step.table] !== undefined && idBounds[step.table] !== null;
+                    idMax = bounded ? Number(idBounds[step.table])
+                        : (o.strictIdBounds ? null : await this.db.getMaxRowId(step.table));
                     if(idMax === null || !Number.isFinite(idMax)) continue;
                     rows = await this.db.getContentIdWindowRows(step.table, Math.max(0, idMax - window), idMax);
                 } else {

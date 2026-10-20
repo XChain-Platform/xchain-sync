@@ -110,6 +110,10 @@ function initializeCursorState(poller, chain, network){
     poller.lastEventId = null;
     poller.reorgMarkerCursorInitialized = false;
 
+    // Hold each id-bounded lookup's MAX(id) as read at a broadcast height, as { block, ids }.
+    // /status uses it only while block equals the published height; null until a batch records it.
+    poller.contentParityIdCeiling = null;
+
     // Bound recently broadcast hashes by block index and content hash.
     // Seed walk-back from the pre-reorg hash for net-forward reorgs.
     // Continue deep walk-back across later polls.
@@ -455,6 +459,8 @@ class ServerPoller {
     }
 
     broadcastReorg(forkBlock){
+        // A reorg voids the lookup id ceiling read on the old branch; the next batch re-reads it.
+        this.contentParityIdCeiling = null;
         // block_index identifies the first orphaned height, so a subscriber removes
         // that height and every successor before accepting replacement block events.
         // dbType routes the rollback when one subscriber follows both database tracks.
@@ -512,6 +518,10 @@ class ServerPoller {
                 this.lastPolledBlock = nextBlock;
                 result.blocksProcessed++;
             }
+            // Record the lookup id ceiling only when the batch reached the snapshot tip, since
+            // the pinned view then holds exactly the state at the height just broadcast.
+            if(snapTip != null && this.lastPolledBlock === snapTip)
+                await this.recordContentParityIdCeiling(snapConn, snapTip);
         } finally {
             // Snapshot release is the final await in forward processing and also runs
             // when payload construction or transparency recording throws. A release
@@ -519,6 +529,32 @@ class ServerPoller {
             await this.db.commitReadSnapshot(snapConn);
         }
         return result;
+    }
+
+    // Read each id-bounded lookup's MAX(id) inside the batch snapshot pinned at `tip`.
+    // /status publishes these as content-parity id_max for that height, so a lookup row a
+    // later, unbroadcast block interned never widens the window a follower recomputes.
+    async recordContentParityIdCeiling(snapConn, tip){
+        this.contentParityIdCeiling = null;
+        // Skip the reads entirely while the advisory check is off (the default).
+        if(!this.config || !this.config['TABLE_CONTENT_PARITY_CHECK']) return;
+        if(typeof this.db.getMaxRowId !== 'function') return;
+        let ids = {};
+        for(let step of replicatedTables.contentParityPlan(this.dbType)){
+            if(step.bound !== 'id') continue;
+            try {
+                let m = await this.db.getMaxRowId(step.table, snapConn);
+                if(m !== null && m !== undefined) ids[step.table] = m;
+            } catch(e){
+                // Absent or unreadable lookup: left out, so /status omits that one table.
+            }
+        }
+        this.contentParityIdCeiling = { block: tip, ids: ids };
+    }
+
+    // Return the id ceiling recorded at the last batch that reached its snapshot tip, or null.
+    getContentParityIdCeiling(){
+        return this.contentParityIdCeiling || null;
     }
 
     publishBlockPayload(payload, nextBlock){

@@ -341,9 +341,37 @@ function getTokenFoldChecksum(db, polledBlock){
 // Return null when disabled so followers skip the comparison.
 // Preserve a content commitment for replicated decoder tables when enabled.
 // Complement the primary hashes and the index-map checksum.
-function getTableContentParity(db, polledBlock){
-    return new BlockHasher(db, statusUtil)
-        .computeTableContentChecksums(polledBlock, { window: cfg['TABLE_CONTENT_PARITY_WINDOW'] });
+// Bound append-only lookups by the id ceiling the poller read at polledBlock when it has one.
+// A ceiling labelled with another height (restart, reorg, mid catch-up) is not used, and the
+// lookups fall back to the live MAX(id), which can only make a lagging follower skip a table.
+function getTableContentParity(db, polledBlock, idCeiling){
+    let opts = { window: cfg['TABLE_CONTENT_PARITY_WINDOW'] };
+    if(idCeiling && idCeiling.block === polledBlock && idCeiling.ids){
+        opts.idBounds = idCeiling.ids;
+        opts.strictIdBounds = true;
+    }
+    return new BlockHasher(db, statusUtil).computeTableContentChecksums(polledBlock, opts);
+}
+
+// Read the poller's content-parity id ceiling, or null when no poller records one.
+function getContentParityIdCeiling(syncService, chain, network, dbType){
+    let poller = (typeof syncService.getPoller === 'function')
+        ? syncService.getPoller(chain, network, dbType) : null;
+    return (poller && typeof poller.getContentParityIdCeiling === 'function')
+        ? poller.getContentParityIdCeiling() : null;
+}
+
+// Read the database tip that brackets a table_counts loop; null when it cannot be read.
+async function readCountsTip(db){
+    try { return await db.getLastBlock(); }
+    catch(e){ return null; }
+}
+
+// Label table_counts with the tip they were counted at, or null when the tip moved mid-loop.
+// The loop is unpinned (no snapshot holds a pool connection), so a block committed or rolled
+// back between the two tip reads leaves the label null and followers skip the comparison.
+function labelCountsHeight(tipBefore, tipAfter){
+    return (tipBefore !== null && tipBefore !== undefined && tipBefore === tipAfter) ? tipBefore : null;
 }
 
 function getExistingTables(db){
@@ -393,7 +421,10 @@ async function buildServerStatusRow(syncService, db, dbType, chain, network){
     }
     row.table_content_parity = null;
     if(cfg['TABLE_CONTENT_PARITY_CHECK'] && polledBlock !== null){
-        try { row.table_content_parity = await getTableContentParity(db, polledBlock); }
+        try {
+            row.table_content_parity = await getTableContentParity(db, polledBlock,
+                getContentParityIdCeiling(syncService, chain, network, dbType));
+        }
         catch(e){ console.error('[API] table_content_parity compute failed for %s/%s at block %s (advisory, returning null):', chain, network, polledBlock, e.message); }
     }
     // Expose per-subscriber applied-block lag so operators can see a
@@ -403,6 +434,9 @@ async function buildServerStatusRow(syncService, db, dbType, chain, network){
     row.table_counts = {};
     let presentA = null;
     try { presentA = await getExistingTables(db); } catch(e){ /* fall back to probing */ }
+    // Bracket the counts with the live tip: block_height is the poller's broadcast height,
+    // so the counts carry their own label rather than borrowing that one.
+    let countsTipA = await readCountsTip(db);
     for(let table of getReplicatedTables(dbType)){
         if(presentA && !presentA.has(table)) continue;
         try {
@@ -411,6 +445,7 @@ async function buildServerStatusRow(syncService, db, dbType, chain, network){
             // Raced away between the listing and the count; omit rather than fail.
         }
     }
+    row.table_counts_height = labelCountsHeight(countsTipA, await readCountsTip(db));
     applyServerMissingTables(row, presentA, dbType);
     applySnapshotStatus(row, syncService);
     return row;
@@ -589,6 +624,8 @@ async function buildClientStatusRow(syncService, db, dbType, chain, network){
     // Apply the same missing-table rationale as the server path above.
     let present = null;
     try { present = await getExistingTables(db); } catch(e){ /* fall back to probing */ }
+    // Label the counts the same way as the server path, so a block applied mid-loop is visible.
+    let countsTip = await readCountsTip(db);
     for(let table of getReplicatedTables(dbType)){
         if(present && !present.has(table)) continue;
         try {
@@ -598,6 +635,7 @@ async function buildClientStatusRow(syncService, db, dbType, chain, network){
             // indexer split); omit rather than fail the whole status.
         }
     }
+    row.table_counts_height = labelCountsHeight(countsTip, await readCountsTip(db));
     applyClientMissingTables(row, syncService, chain, network, dbType);
     await applyUnverifiedRecompute(row, db, dbType);
     return row;
