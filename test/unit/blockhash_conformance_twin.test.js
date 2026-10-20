@@ -41,6 +41,9 @@
  *   8. the values each side hands its fold (the indexer's foldBlockHashes call
  *      arguments, the block_index - 1 chaining argument, the previous-hash fill),
  *      which item 4 cannot see; checked in blockhash_conformance_twin.test/04_*
+ *   9. the ledger and contract preimage objects (key names, key order, the
+ *      gatherer behind each key and its block bind), which item 2 cannot see;
+ *      checked in blockhash_conformance_twin.test/05_*
  *
  * A one-sided edit to any of these forks every sync validator's recomputed
  * hash on the next real block (durable divergence halt fleet-wide). The

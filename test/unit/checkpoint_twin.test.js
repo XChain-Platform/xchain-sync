@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const fs     = require('fs');
 const path   = require('path');
 const checkpoint = require('../../src/checkpoint');
+const swq    = require('../../src/consensus/stake_weighted_quorum');
 const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js');
 
 // Sibling resolution goes through siblingCheckout: skip when the SDK checkout is
@@ -84,8 +85,8 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
     // Byte-parity guard for the canonical signing string: every other case in this suite signs and verifies
     // through sync's own builder, so a symmetric one-sided edit (drop/reorder a field, change a delimiter)
     // would keep sign==verify green while real hub-signed federation checkpoints silently fail to verify.
-    // Pins the exact output to the same golden literal xchain-sdk/test/unit/checkpoint.test.js uses, so drift
-    // of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies fails here, not in production.
+    // Pins the exact output to the same golden literal xchain-sdk/test/unit/consensus/checkpoint.test.js uses,
+    // so drift of sync's canonicalCheckpoint from the SDK/hub/indexer/explorer copies fails here, not in production.
     // (snapshot_block 900120 sits below the mainnet 961000 flag day, so this pins the legacy rootless,
     // unwrapped shape the SDK's golden vector uses; the boundary case below pins the armed shape.)
     it('canonicalCheckpoint matches the ANCHOR spec byte-for-byte (SDK-pinned golden vector)', function(){
@@ -173,6 +174,44 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
 
 describe('vendored checkpoint verifier (twin conformance) @regression', function(){
 
+    // Testnet is the one network whose checkpoint gates differ: the EQUIV wrap and the
+    // stake-weighted quorum are active from genesis while the roots join the signed bytes
+    // only at snapshot_block 146000, so below it the canonical is wrapped but rootless.
+    it('canonicalCheckpoint pins the testnet flag day (145999 EQUIV-wrapped rootless, 146000 roots committed)', function(){
+        const base = { chain: 'BTC', network: 'testnet', block_index: 146003,
+            block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32),
+            actions_hash: 'ef'.repeat(32), contract_hash: '01'.repeat(32), checkpoint_seq: 418,
+            state_root: 'd4'.repeat(32), state_root_version: 1,
+            block_merkle_root: 'e5'.repeat(32), block_merkle_version: 1 };
+        const head = 'XCHECKPOINT|BTC|testnet|146003|' + 'ab'.repeat(32) + '|' + 'cd'.repeat(32) +
+            '|' + 'ef'.repeat(32) + '|' + '01'.repeat(32) + '|418|';
+        const wrap = 'EQUIV|XCHECKPOINT|BTC|testnet|146003|418|0||';
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(Object.assign({}, base, { snapshot_block: 145999 })),
+            wrap + head + '145999',
+            'one block below the testnet flag day the canonical must be EQUIV-wrapped but rootless; the vendored builder has drifted');
+        assert.strictEqual(
+            checkpoint.canonicalCheckpoint(Object.assign({}, base, { snapshot_block: 146000 })),
+            wrap + head + '146000' + '|' + 'd4'.repeat(32) + '|1|' + 'e5'.repeat(32) + '|1',
+            'at the testnet flag day the canonical must commit the roots inside the EQUIV wrap; the vendored builder has drifted');
+    });
+
+    it('the testnet checkpoint gates: EQUIV and stake-weighted from genesis, commitment at snapshot_block 146000', function(){
+        const eq  = require('../../src/consensus/equivocation_header');
+        assert.strictEqual(eq.isEquivHeaderActive(0, 'testnet'), true);
+        assert.strictEqual(swq.isStakeWeightedQuorumActive(0, 'testnet'), true);
+        const rootless = { chain: 'BTC', network: 'testnet', state_root: null, block_merkle_root: null };
+        assert.strictEqual(checkpoint.commitmentActive(Object.assign({}, rootless, { snapshot_block: 145999 })), false);
+        assert.strictEqual(checkpoint.commitmentActive(Object.assign({}, rootless, { snapshot_block: 146000 })), true);
+        assert.strictEqual(checkpoint.commitmentMissing(Object.assign({}, rootless, { snapshot_block: 145999 })), false,
+            'a rootless testnet row below the flag day is legacy, not missing its commitment');
+        assert.strictEqual(checkpoint.commitmentMissing(Object.assign({}, rootless, { snapshot_block: 146000 })), true,
+            'a rootless testnet row at the flag day cannot be verified');
+    });
+});
+
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
+
     it('verifies a real Ed25519 quorum-signed checkpoint against its pinned set', function(){
         const s = makeSigner();
         const cp = signedCheckpoint(s);
@@ -225,6 +264,85 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
         // (matching the SDK/explorer copies) must still count it.
         cp.validator_signatures = [{ pubkey: s2.pubkeyHex, sig: '00'.repeat(64) }].concat(cp.validator_signatures);
         assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, true);
+    });
+});
+
+// Add each signer's signature over cp's canonical to its signature list.
+function addSignatures(cp, signers){
+    const canonical = checkpoint.canonicalCheckpoint(cp);
+    for(const s of signers) cp.validator_signatures.push({ pubkey: s.pubkeyHex, sig: sign(s.privateKey, canonical) });
+    return cp;
+}
+const weighted = (s, source, weight) => ({ pubkey: s.pubkeyHex, source: source || s.pubkeyHex, weight: weight || '100' });
+
+// Behavioural vectors for the verifier's fail-closed branches. The twin loop below skips
+// without the SDK checkout and passes on an edit made to both copies, so these must hold alone.
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
+
+    it('a malformed validator_signatures value counts as zero signatures', function(){
+        const s = makeSigner();
+        const good = signedCheckpoint(s);
+        const list = good.validator_signatures;
+        const verify = (value) => checkpoint.verifyCheckpoint(Object.assign({}, good, { validator_signatures: value }), [weighted(s)]);
+        assert.strictEqual(verify(JSON.stringify(list)).valid, true, 'a JSON-string list parses and verifies');
+        const warn = console.warn;
+        console.warn = () => {};
+        try {
+            for(const bad of [JSON.stringify(list) + 'x', 'not json', list[0], JSON.stringify(list[0]), 42, null]){
+                const r = verify(bad);
+                assert.strictEqual(r.valid, false, 'malformed ' + JSON.stringify(bad) + ' must not verify');
+                assert.strictEqual(r.validSigs, 0, 'malformed ' + JSON.stringify(bad) + ' counts zero signatures');
+            }
+        } finally { console.warn = warn; }
+    });
+
+    it('a weighted-regime set that mixes weighted and unweighted entries never verifies', function(){
+        const s1 = makeSigner(), s2 = makeSigner();
+        const cp = addSignatures(signedCheckpoint(s1), [s2]);
+        const mixes = [[weighted(s1), s2.pubkeyHex], [weighted(s1), { pubkey: s2.pubkeyHex, source: s2.pubkeyHex }]];
+        for(const set of mixes) assert.strictEqual(checkpoint.verifyCheckpoint(cp, set).valid, false);
+        // meetsStakeThreshold fails closed on these sets too, so stub it open to pin the
+        // every-entry and non-empty gate on its own.
+        const real = swq.meetsStakeThreshold;
+        swq.meetsStakeThreshold = () => true;
+        try {
+            assert.strictEqual(checkpoint.verifyCheckpoint(cp, [weighted(s1), weighted(s2)]).valid, true,
+                'the stub must be reached for a fully weighted set');
+            for(const set of mixes) assert.strictEqual(checkpoint.verifyCheckpoint(cp, set).valid, false,
+                'one unweighted entry must fail the set before the stake predicate runs');
+            assert.strictEqual(checkpoint.verifyCheckpoint(cp, []).valid, false, 'an empty set must fail before the stake predicate runs');
+        } finally { swq.meetsStakeThreshold = real; }
+    });
+});
+
+describe('vendored checkpoint verifier (twin conformance) @regression', function(){
+
+    it('two pubkeys that share a source count that source once', function(){
+        const a = makeSigner(), b = makeSigner(), c = makeSigner();
+        // S = 10 (source X, counted once) + 15 (source Y) = 25; the bar is 3 * tally > 50.
+        const set = [weighted(a, 'X', '10'), weighted(b, 'X', '10'), weighted(c, 'Y', '15')];
+        assert.strictEqual(checkpoint.verifyCheckpoint(addSignatures(signedCheckpoint(a), [b]), set).valid, false,
+            'a and b share X, so the tally is 10, not 20');
+        assert.strictEqual(checkpoint.verifyCheckpoint(addSignatures(signedCheckpoint(a), [c]), set).valid, true,
+            'X plus Y is 25 of 25');
+    });
+
+    it('below the mainnet flag day the count regime needs 2f+1 valid signatures', function(){
+        const signers = Array.from({ length: 7 }, makeSigner);
+        const countCheckpoint = (k) => addSignatures({ chain: 'BTC', network: 'mainnet', block_index: 900123,
+            block_hash: 'ab'.repeat(32), ledger_hash: 'cd'.repeat(32), actions_hash: 'ef'.repeat(32),
+            contract_hash: '01'.repeat(32), checkpoint_seq: 417, snapshot_block: 900120,
+            validator_signatures: [] }, signers.slice(0, k));
+        const cases = [[4, 3, true], [4, 2, false], [7, 5, true], [7, 4, false]];
+        for(const [n, k, valid] of cases){
+            const r = checkpoint.verifyCheckpoint(countCheckpoint(k), signers.slice(0, n).map(s => s.pubkeyHex));
+            assert.strictEqual(r.weighted, false, 'mainnet below 961000 is the count regime');
+            assert.strictEqual(r.quorum, n === 4 ? 3 : 5, n + ' validators need 2f+1');
+            assert.strictEqual(r.valid, valid, k + ' of ' + n + ' signatures');
+        }
+        const none = checkpoint.verifyCheckpoint(countCheckpoint(7), []);
+        assert.strictEqual(none.quorum, 1);
+        assert.strictEqual(none.valid, false, 'an empty count-regime set never verifies');
     });
 });
 

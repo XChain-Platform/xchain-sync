@@ -280,6 +280,14 @@
  *       strict apply with an unknown-column error. The migration is mode=auto, so
  *       the forced schema refresh carries the column onto followers. Decoder is
  *       unaffected and stays at 5.
+ * Index-only frontier record (no version bump): the
+ *       2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx migration adds a
+ *       non-unique (chain, network, snapshot_block) secondary index to the
+ *       stream:action `anchor_actions` table. It changes neither replicated columns
+ *       nor payload shape, so an older follower can still store every streamed row.
+ *       Its second statement, the same non-unique index, lands on the hub-mirrored
+ *       `state_checkpoints`, which never rides the wire. The migration is
+ *       mode=auto. Indexer stays at 19 and decoder stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -306,7 +314,7 @@ const SCHEMA_VERSION = { indexer: 19, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-18',
+        through: '2026-10-19',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -373,15 +381,18 @@ const MIGRATION_FRONTIER = {
             '2026-10-14-anchor-block-doge-and-checkpoint-block-idx.sql',
             '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
             '2026-10-17-dispensers-sweeps-column-order.sql',
-            '2026-10-17-ledger-address-tick-amount-index.sql'
-        ],
-        accounted: [
+            '2026-10-17-ledger-address-tick-amount-index.sql',
             '2026-10-18-anchor-actions-pre-archive-status.sql'
         ],
-        indexOnly: [],
+        accounted: [
+            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
+        ],
+        indexOnly: [
+            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
+        ],
         hashes: {
-            '2026-10-18-anchor-actions-pre-archive-status.sql':
-                '29ace5abd9378dad83304568beb08945eb352022d250c66e677a0c04e5ed81ac'
+            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql':
+                '5f52530ff55eeecf95a193909f057026d3e368264f9a132282fa704504a6cb36'
         }
     },
     decoder: {

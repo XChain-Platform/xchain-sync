@@ -86,3 +86,80 @@ describe('ClientSync: multi-source state_hash vote @regression', function(){
         assert.strictEqual(sync.isHalted(), false);
     });
 });
+
+// Deliver the reports in order and return the spy on applyBlockEvent.
+async function deliver(sync, reports){
+    let spy = sinon.spy(sync, 'applyBlockEvent');
+    for(let [state, idx] of reports) await sync.handleBlock(blockEvent(101, state), idx);
+    return spy;
+}
+
+describe('ClientSync: a null state_hash is no evidence in the source vote @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    it('applies a burst-exempt null report beside a state_hash report, in both arrival orders', async function(){
+        for(let order of [[['S1', 0], [null, 1]], [[null, 0], ['S1', 1]]]){
+            let { sync, applier } = makeSync('http://a:3006,http://b:3006');
+            let spy = await deliver(sync, order);
+            assert.strictEqual(applier.applyBlock.calledOnce, true, 'the block applies once');
+            assert.strictEqual(sync.isHalted(), false);
+            assert.strictEqual(spy.firstCall.args[0].state_hash, 'S1', 'the checkable payload is applied');
+        }
+    });
+
+    it('never strikes a null reporter whose other hashes match the accepted group', async function(){
+        let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
+        await deliver(sync, [['S1', 0], [null, 1], ['S1', 2]]);
+        assert.strictEqual(applier.applyBlock.calledOnce, true);
+        assert.strictEqual(sync._sourceStrikes.get(1), undefined);
+    });
+
+    it('lets a null report decide neither side of a real state_hash split', async function(){
+        let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
+        await deliver(sync, [['S1', 0], ['BAD', 1], [null, 2]]);
+        assert.strictEqual(applier.applyBlock.called, false);
+        assert.strictEqual(sync.getHaltInfo().reason, 'no-source-quorum');
+    });
+
+    it('still splits a null report whose ledger hash differs', async function(){
+        let { sync, applier } = makeSync('http://a:3006,http://b:3006');
+        await sync.handleBlock(blockEvent(101, 'S1'), 0);
+        await sync.handleBlock(Object.assign(blockEvent(101, null), { ledger_hash: 'lhOTHER' }), 1);
+        assert.strictEqual(applier.applyBlock.called, false);
+        assert.strictEqual(sync.getHaltInfo().reason, 'no-source-quorum');
+    });
+});
+
+describe('ClientSync: a null state_hash in log-only mode and at the quorum timeout @regression', function(){
+    beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error'); });
+    afterEach(function(){ sinon.restore(); });
+
+    it('applies a null-versus-state_hash pair in log-only mode', async function(){
+        let { sync, applier } = makeSync('http://a:3006,http://b:3006');
+        sync.config.HALT_ON_DIVERGENCE = false;
+        await deliver(sync, [[null, 0], ['S1', 1]]);
+        assert.strictEqual(applier.applyBlock.calledOnce, true);
+    });
+
+    it('applies two null reports as before', async function(){
+        let { sync, applier } = makeSync('http://a:3006,http://b:3006');
+        let spy = await deliver(sync, [[null, 0], [null, 1]]);
+        assert.strictEqual(applier.applyBlock.calledOnce, true);
+        assert.strictEqual(spy.firstCall.args[0].state_hash, null);
+    });
+
+    it('applies the checkable payload at the quorum timeout when a null report joins it', async function(){
+        let clock = sinon.useFakeTimers();
+        try {
+            let { sync, applier } = makeSync('http://a:3006,http://b:3006,http://c:3006');
+            sync.sourceQuorum = 3;
+            let spy = await deliver(sync, [[null, 0], ['S1', 1]]);
+            assert.strictEqual(applier.applyBlock.called, false, 'held for the silent third source');
+            await clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100);
+            assert.strictEqual(applier.applyBlock.calledOnce, true);
+            assert.strictEqual(spy.firstCall.args[0].state_hash, 'S1');
+            assert.strictEqual(sync.isHalted(), false);
+        } finally { clock.restore(); }
+    });
+});

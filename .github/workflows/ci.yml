@@ -242,9 +242,16 @@ jobs:
   # hides the gate's result; the rename map carries the moves a restructure declares.
   suite-title-pin:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the re-taken sync suite-title pin
+        uses: actions/checkout@v4
+        with:
+          repository: XChain-Platform/xchain-sync
+          ref: 3dc83c2a824c089ad37f8be09d4d5a68394b0651
+          path: suite-title-pin/xchain-sync
 
       - name: Check out declared sibling repositories
         uses: XChain-Platform/.github/actions/checkout-siblings@master # one definition for every call site; see the action for why this tracks master
@@ -258,9 +265,115 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+        run: |
+          set -euo pipefail
+          for repo in . suite-title-pin/xchain-sync; do
+            (cd "$repo" && if [ -f package-lock.json ]; then npm ci; else npm install; fi)
+          done
 
-      - name: Collected suite titles vs the committed pin
+      - name: Recreate the pinned sibling layout
+        run: |
+          set -euo pipefail
+          while IFS= read -r sibling; do
+            case "$sibling" in
+              ""|\#*) continue ;;
+            esac
+            ln -s "$GITHUB_WORKSPACE/../$sibling" "suite-title-pin/$sibling"
+          done < .ci-siblings
+
+      - name: Pinned suite titles still collected; additions warn
         env:
           TEST_DB_PASS: dry-run-unused
-        run: node bin/suite-title-map.js --compare bin/pins/at1-suite-titles.json --rename-map bin/pins/suite-title-renames.json
+        run: |
+          set -euo pipefail
+          (cd suite-title-pin/xchain-sync && \
+            node bin/suite-title-map.js --out "$RUNNER_TEMP/sync-suite-titles.json")
+
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const root = process.env.GITHUB_WORKSPACE;
+          const suiteTitles = require(path.join(root, 'bin/suite-title-map.js'));
+          const pin = JSON.parse(fs.readFileSync(path.join(
+              process.env.RUNNER_TEMP, 'sync-suite-titles.json'), 'utf8'));
+          const renames = JSON.parse(fs.readFileSync(path.join(
+              root, 'bin/pins/suite-title-renames.json'), 'utf8'));
+          const blockingKinds = new Set(['file_dropped', 'title_dropped']);
+          const escapeCommand = (value) => String(value)
+              .replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          const exitCodeFor = (blockingCount) => blockingCount ? 1 : 0;
+          const reportDifferences = (differences, write = console.log) => {
+              const blocking = differences.filter((difference) => blockingKinds.has(difference.kind));
+              if (!differences.length) {
+                  write('sync: suite identity holds against the re-taken pin');
+                  return { blockingCount: 0, differenceCount: 0 };
+              }
+
+              write(`sync: ${differences.length} difference(s); ${blocking.length} blocking`);
+              for (const difference of differences.slice(0, 200)) {
+                  const isBlocking = blockingKinds.has(difference.kind);
+                  const message = [
+                      `[sync/${difference.script}]`, difference.kind, difference.file || '',
+                      difference.title ? `:: ${difference.title}` : difference.detail || '',
+                  ].filter(Boolean).join(' ');
+                  write(`::${isBlocking ? 'error' : 'warning'}::${escapeCommand(message)}`);
+              }
+              if (differences.length > 200)
+                  write(`sync: ... and ${differences.length - 200} more`);
+              return { blockingCount: blocking.length, differenceCount: differences.length };
+          };
+
+          process.chdir(root);
+          const fresh = suiteTitles.buildMap();
+          const differences = suiteTitles.compare(pin, fresh, renames);
+          const result = reportDifferences(differences);
+
+          const fixturePin = {
+              titleSets: { pinned: ['kept title'] },
+              scripts: { test: { files: { 'test/pinned.test.js': 'pinned' } } },
+          };
+          const policyCases = [
+              ['file_added', {
+                  titleSets: { pinned: ['kept title'] },
+                  scripts: { test: { files: {
+                      'test/pinned.test.js': 'pinned', 'test/new.test.js': 'pinned',
+                  } } },
+              }, 'warning', 0],
+              ['title_added', {
+                  titleSets: { grown: ['kept title', 'new title'] },
+                  scripts: { test: { files: { 'test/pinned.test.js': 'grown' } } },
+              }, 'warning', 0],
+              ['file_dropped', {
+                  titleSets: {}, scripts: { test: { files: {} } },
+              }, 'error', 1],
+              ['title_dropped', {
+                  titleSets: { empty: [] },
+                  scripts: { test: { files: { 'test/pinned.test.js': 'empty' } } },
+              }, 'error', 1],
+          ];
+          for (const [kind, candidate, annotation, expectedExitCode] of policyCases) {
+              const caseDifferences = suiteTitles.compare(fixturePin, candidate, {}, 'test');
+              const kinds = caseDifferences.map((difference) => difference.kind);
+              const output = [];
+              const caseResult = reportDifferences(caseDifferences, (line) => output.push(line));
+              const annotationPrefix = `::${annotation}::`;
+              if (kinds.length !== 1 || kinds[0] !== kind
+                  || !output.some((line) => line.startsWith(annotationPrefix) && line.includes(kind))
+                  || exitCodeFor(caseResult.blockingCount) !== expectedExitCode) {
+                  throw new Error(`suite-title policy rejected its ${kind} falsification case`);
+              }
+          }
+          console.log(`suite-title policy falsification passed (${policyCases.length} cases)`);
+
+          const summary = [
+              '### suite-title-pin',
+              '',
+              `Commit: \`${process.env.GITHUB_SHA}\``,
+              `Differences: ${result.differenceCount}`,
+              `Blocking drops: ${result.blockingCount}`,
+              '',
+          ].join('\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          process.exitCode = exitCodeFor(result.blockingCount);
+          NODE

@@ -117,7 +117,7 @@ describe('Tier 1 - HashVerifier @tier1', function () {
         });
 
         it('mismatch fields are always from the known set', function () {
-            let validFields = new Set(['ledger_hash', 'actions_hash', 'contract_hash']);
+            let validFields = new Set(['ledger_hash', 'actions_hash', 'contract_hash', 'state_hash']);
             fc.assert(fc.property(
                 fc.integer(), blockHashPair(), blockHashPair(),
                 (height, a, b) => {

@@ -26,3 +26,9 @@ CREATE TABLE sync_meta (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
 
 CREATE UNIQUE INDEX block_index ON sync_meta (block_index);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    state_key   VARCHAR(128) NOT NULL PRIMARY KEY,
+    state_value TEXT,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;

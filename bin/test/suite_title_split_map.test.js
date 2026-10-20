@@ -138,6 +138,16 @@ describe('bin/suite_title_map/split_map.js: a declared split that is honest', ()
         // The same symbol rename left out of the name map is still a finding.
         assert.deepStrictEqual(kinds(graded({})), ['title_added', 'title_dropped']);
     });
+
+    it('activates a declared title rename only when the candidate title is collected', () => {
+        const oldTitle = 'Database.beginTransaction() releases the open transaction';
+        const newTitle = 'Database.beginTransaction() refuses the open transaction';
+        const pin = mapOf({ test: { [OLD]: [oldTitle] } });
+        const renames = { [oldTitle]: newTitle };
+
+        assert.deepStrictEqual(compare(pin, mapOf({ test: { [OLD]: [oldTitle] } }), renames), []);
+        assert.deepStrictEqual(compare(pin, mapOf({ test: { [OLD]: [newTitle] } }), renames), []);
+    });
 });
 
 describe('bin/suite_title_map/split_map.js: what a declared split still refuses', () => {

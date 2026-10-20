@@ -14,6 +14,7 @@ const assert = require('assert');
 const sinon = require('sinon');
 const ClientRollback = require('../../../src/client/rollback');
 const Utility = require('../../../src/util');
+const { foldArchiveHeadFloor } = require('../../../src/consensus/archive_head_pick');
 
 const UNVERIFIED_STATUS_ID = 7;
 const ARCHIVE_RESET = /^UPDATE anchor_actions p /;
@@ -44,7 +45,7 @@ async function rollbackHead(head){
     await new ClientRollback(db, new Utility(), undefined, 'regtest').rollback(100);
     const reset = db.doQuery.getCalls().filter(call => ARCHIVE_RESET.test(call.args[0]));
     assert.strictEqual(reset.length, 1);
-    assert.deepStrictEqual(reset[0].args[1], [500, 500]);
+    assert.deepStrictEqual(reset[0].args[1], [500, foldArchiveHeadFloor('regtest', 'DOGE'), 500]);
     assert.strictEqual(db.commitTransaction.calledOnce, true);
 }
 

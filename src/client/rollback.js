@@ -30,9 +30,13 @@ const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
-const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
+const { archiveHeadPredicate } = require('../consensus/state_hash');
+// The source's parent-pick predicate and fold floor, so the reset selects every head a chunk can stamp.
+const { archiveHeadPickPredicate, foldArchiveHeadFloor } = require('../consensus/archive_head_pick');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const gateRegistry = require('../consensus/gate_registry');
+// The one schema-gap rule (errno 1146 missing table / 1054 missing column) the forward channels use.
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -204,7 +208,7 @@ async function reverseCooldownMaturities(db, blockIndex, network, coin){
             "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
             [validStatusId, completedStatusId, blockIndex, blockIndex]);
     } catch(e){
-        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+        if(!isSchemaGapError(e)) throw e;
     }
 }
 
@@ -299,7 +303,7 @@ class ClientRollback {
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip:
                 // the sweep below then has nothing to do. Everything else (deadlock, lock-wait,
                 // connection drop) aborts here, before the transaction opens.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
         }
 
@@ -363,7 +367,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // xcalls (XCALL v0 request): an orphaned result callback / deadline
@@ -380,7 +384,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // polls (VOTE v0): an orphaned VOTE v2 finalization flipped a surviving
@@ -407,7 +411,7 @@ class ClientRollback {
                     // callback_due_block rides the single mirrored statement (source-text parity),
                     // so a replica whose schema predates it skips the WHOLE re-open; accepted
                     // because the schema reconcile (db.js) adds source columns before rows stream.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // polls timelock: a DEFERRED binding-callback fire whose due block is
@@ -428,7 +432,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // BET in-place flip resets ( P4): the updated_rows BET classes
@@ -467,7 +471,7 @@ class ClientRollback {
                     );
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // contract_slash_debits restore: an orphaned SLASH reduced
@@ -517,7 +521,7 @@ class ClientRollback {
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
 
@@ -552,7 +556,7 @@ class ClientRollback {
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
 
@@ -585,7 +589,7 @@ class ClientRollback {
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
 
@@ -633,7 +637,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // delegations ← orphaned DELEGATE-revoke and ROLLCALL-eviction stamps, mirror of
@@ -659,7 +663,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // contract_stakes ← orphaned contract_unstakes (contract staking, all chains).
@@ -680,7 +684,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // contract_delegations ← orphaned DELEGATE v3 contract-revokes. No child row
@@ -698,7 +702,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
                 } // end deactivation_block mirror (activationDelay present)
 
@@ -754,7 +758,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Reverse orphaned cooldown-maturity completions, mirror of
@@ -775,14 +779,14 @@ class ClientRollback {
             // Runs BEFORE the dataTables delete.
             await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
 
-            // Restore the surviving archive head stamped by an orphaned final chunk.
+            // Restore the surviving archive head (v1, or a v3 fold row) stamped by an orphaned final chunk.
             // Journaled heads recover their prior status; legacy heads become unverified.
             // This must run before the orphaned action rows are deleted below.
             if(firstActionIndex !== null){
                 try {
-                    // Author scope, flag-day gated and INERT on every network today; mirror of
+                    // Author scope, flag-day gated per network (see the gate row); mirror of
                     // the source indexer's term. Rationale and the arming precondition live in
-                    // archive_rollback_author_scope_activation.js.
+                    // src/consensus/gates/archive_rollback_author_scope_gate.js.
                     let authorScope = archiveAuthorScopeJoin(block_index, this.network);
                     await this.db.doQuery(
                         "UPDATE anchor_actions p " +
@@ -792,13 +796,14 @@ class ClientRollback {
                         authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = COALESCE(p.pre_archive_status_id, us.id), p.pre_archive_status_id = NULL " +
-                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +
+                        "WHERE " + archiveHeadPickPredicate('p') +
                         " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
-                        [firstActionIndex, firstActionIndex]);
+                        // Bind in SQL order: the chunk join, the pick predicate's fold floor, then the parent bound.
+                        [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -859,7 +864,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -870,7 +875,7 @@ class ClientRollback {
                 try {
                     issueTickIds = await tokenRefold.collectIssueTickIds(this.db, firstActionIndex);
                 } catch(e){
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -887,7 +892,7 @@ class ClientRollback {
                         // committing a PARTIAL ledger rollback. These are consensus tables;
                         // the only prior backstop was the next block's VERIFY_STATE_COMMITMENT
                         // recompute, which is absent when that flag is off (truncated replicas).
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
 
@@ -909,7 +914,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
 
                 // Clear tokens.bridged on every token left with no applied XBRIDGE v3 lock,
@@ -924,7 +929,7 @@ class ClientRollback {
                     try {
                         await rederiveTokenBridged(this.db);
                     } catch(e){
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
 
@@ -936,7 +941,7 @@ class ClientRollback {
                     try {
                         await rederiveCoinpayMatchStatus(this.db);
                     } catch(e){
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
             }
@@ -962,7 +967,7 @@ class ClientRollback {
                     // Swallow only schema gaps (see the dataTables loop); a transient error
                     // must abort the rollback rather than leave block-scoped consensus rows
                     // (blocks/transactions/slash_events/state_tree_roots) half-deleted.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -982,7 +987,7 @@ class ClientRollback {
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip:
                 // such a replica holds no derived reward either. All other errors (deadlock,
                 // lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Roll back the index id lookups (index_addresses / index_tickers), mirroring
@@ -1004,7 +1009,7 @@ class ClientRollback {
                     // on older replicas); a transient error must abort. A surviving orphaned
                     // ^<id> row is consensus-relevant (forks the checkpoint after a reorg, per
                     // the note above), so a half-done index rollback must never commit.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -1039,7 +1044,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // IDX-2 (mirror of xchain-indexer/src/rollback/sweeps.js): the dangling-tick sweep
@@ -1083,7 +1088,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
             try {
                 let addressMax = await this.readSurvivingMaxId('index_addresses');
@@ -1093,7 +1098,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // price_snapshots anchors each round to a block via reference_block
@@ -1125,7 +1130,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Re-NULL delegation stamps a ROLLCALL eviction in the orphaned range wrote, mirror of
@@ -1148,7 +1153,7 @@ class ClientRollback {
                     );
                 } catch(e){
                     // Skip only a schema gap (a replica predating the ROLLCALL tables holds no eviction).
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -1166,7 +1171,7 @@ class ClientRollback {
                 try {
                     await this.db.doQuery("DELETE FROM " + table + " WHERE close_block >= ?", [block_index]);
                 } catch(e){
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -1187,7 +1192,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
             }
 
@@ -1221,7 +1226,7 @@ class ClientRollback {
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                    if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                    if(!isSchemaGapError(e)) throw e;
                 }
                 //</CROSS-CHAIN-MIRROR-REORG-DELETE>
             }
@@ -1231,7 +1236,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
@@ -1250,7 +1255,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // attest_validator_stats: running per-validator aggregate counters
@@ -1282,7 +1287,7 @@ class ClientRollback {
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                if(!isSchemaGapError(e)) throw e;
             }
 
             // Recalculate balances from the surviving credits/debits.
@@ -1311,7 +1316,7 @@ class ClientRollback {
                     logger.warn('ClientRollback: tokens refold skipped ' + refold.skipped.length + ' tick(s) whose first ' +
                         'issuance is not held locally (truncated replica?); tick_ids ' + refold.skipped.slice(0, 20).join(','));
             } catch(e){
-                if(e.errno !== 1146 && e.errno !== 1054){ logger.error(util.format('refoldTokenRows after rollback failed:', e)); throw e; }
+                if(!isSchemaGapError(e)){ logger.error(util.format('refoldTokenRows after rollback failed:', e)); throw e; }
             }
 
             // Recompute tokens.supply from the surviving credits/debits/escrows. The
@@ -1328,7 +1333,8 @@ class ClientRollback {
                 if(e.errno !== 1146){ logger.error(util.format('recomputeTokenSupplies after rollback failed:', e)); throw e; }
             }
 
-            await this.db.commitTransaction();
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('indexer rollback to block ' + block_index + ': no open transaction at commit; nothing was committed');
             logger.info('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
@@ -1366,7 +1372,7 @@ class ClientRollback {
                     } catch(e){
                         // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                         // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
-                        if(e.errno !== 1146 && e.errno !== 1054) throw e;
+                        if(!isSchemaGapError(e)) throw e;
                     }
                 }
             }
@@ -1385,7 +1391,8 @@ class ClientRollback {
             // consensus value; block hashes are computed from resolved strings, not lookup
             // ids (the current BLOCK_HASH_VERSION). Never let a lookup id back into a hashed projection.
 
-            await this.db.commitTransaction();
+            if((await this.db.commitTransaction()) === false)
+                throw new Error('decoder rollback to block ' + block_index + ': no open transaction at commit; nothing was committed');
             logger.info('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){

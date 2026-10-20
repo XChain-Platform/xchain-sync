@@ -900,13 +900,16 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor journal restore and clear',     re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
-            // The parent predicate must select the FULL archive-head version set
-            // (currently just v1) via the shared state_hash.js constant, on both sides,
-            // rather than a hardcoded literal that drifts from it. Matches the indexer's
-            // template-literal splice (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's
-            // string concat.
-            { name: 'archive-head version predicate (shared v1+v6 constant)',
-              re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
+            // The parent predicate must select every head the forward chunk path can pick
+            // and stamp (v1, plus a v3 fold row above the DOGE fold floor) via the shared
+            // archiveHeadPickPredicate, on both sides, rather than a hardcoded literal that
+            // drifts from it. Matches the indexer's template-literal splice and the sync
+            // side's string concat.
+            { name: 'archive-head pick predicate (forward parent pick)',
+              re: /WHERE (\$\{)?archiveHeadPickPredicate\( p \)\}? AND p\.action_index < \?/ },
+            // Both sides bind the same DOGE fold floor the forward pick binds.
+            { name: 'archive-head pick fold floor binding',
+              re: /firstActionIndex, foldArchiveHeadFloor\((config\[ NETWORK \]|this\.network), DOGE \), firstActionIndex\]/ },
             // The publisher-scope term is spliced from the shared activation module on both
             // sides, between the chunk-status join and the reset join. A side that drops it
             // resets under a different batch key than its twin the moment the flag day arms.
@@ -1221,13 +1224,10 @@ describe('Rollback coverage guard @regression', function(){
     // different stakes_root at an armed height - the same class of fork the source-cap
     // twin above guards. It also carries the schema-drift contract both services'
     // startup checks read, so one definition of "undrifted" serves both fleets.
-    // utf8mb4Columns.js is the widen set for the columns that ingest raw wire fields
-    // (contracts.code and the grammar-constrained fields). The source converges through a
-    // dated migration and the follower through ensureReplicaUtf8mb4Columns, so a drifted
-    // copy means an origin that accepts a 4-byte character and a replica that halts on it
-    // with errno 1366 - a fleet-wide follower halt with no schema error upstream.
+    // The utf8mb4 inventory is a synced copy, not a byte twin; see
+    // test/unit/schema/utf8mb4_columns_parity.test.js.
     // The two sides no longer share one relative path. xchain-sync keeps its twins flat
-    // under src/ except the utf8mb4 map, which sits in src/schema/, and the W5 gates,
+    // under src/ except the W5 gates,
     // which sit under src/consensus/gates/ on both sides, while the indexer has sorted
     // its other copies into feature directories, so the indexer tail is spelled out per
     // twin and a third element names the sync path where it is not src/ plus the basename.
@@ -1246,7 +1246,6 @@ describe('Rollback coverage guard @regression', function(){
         ['table_lifecycle.js',                   'src/hub/table_lifecycle.js'],
         ['table_lifecycle/action_tables.js',     'src/hub/table_lifecycle/action_tables.js'],
         ['table_lifecycle/block_and_special_tables.js', 'src/hub/table_lifecycle/block_and_special_tables.js'],
-        ['utf8mb4Columns.js',                    'src/chain/utf8mb4_columns.js',  'schema/utf8mb4_columns.js'],
     ]){
         it(twin + ' is byte-identical across xchain-sync and xchain-indexer (cross-repo twin)', function(){
             const fs = require('fs'), pathMod = require('path');
