@@ -12,6 +12,7 @@ const assert = require('assert');
 const sinon  = require('sinon');
 const ClientRollback = require('../../../src/client/rollback');
 const Utility = require('../../../src/util');
+const { archiveHeadPickPredicate, foldArchiveHeadFloor } = require('../../../src/consensus/archive_head_pick');
 
 const NETWORKS = ['regtest', 'testnet', 'mainnet'];
 const ARCHIVE_RESET = /^UPDATE anchor_actions p /;
@@ -64,7 +65,8 @@ describe('ClientRollback invalid_archive parent reset @regression', function(){
             assert.ok(sql.includes("cs.status = 'valid'"));
             assert.ok(sql.includes("us.status = 'unverified'"));
             assert.ok(sql.includes('p.action_index < ?'));
-            assert.deepStrictEqual(resets[0].args[1], [500, 500]);
+            assert.ok(sql.includes(archiveHeadPickPredicate('p')));
+            assert.deepStrictEqual(resets[0].args[1], [500, foldArchiveHeadFloor(network, 'DOGE'), 500]);
         }
     });
 

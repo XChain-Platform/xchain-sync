@@ -39,6 +39,10 @@ describe('anchor fold reader census', function () {
 
         assert.strictEqual(count(source, "archiveHeadPredicate('p')"), 1,
             failure(relativePath, 'expected exactly one fold row predicate'));
+        assert.strictEqual(count(source, "archiveHeadPickPredicate('p')"), 1,
+            failure(relativePath, 'expected exactly one forward parent-pick predicate'));
+        assert.strictEqual(count(source, VERSION_SPLICE), 0,
+            failure(relativePath, 'expected no frozen archive-head version splice in the reset'));
         assert.strictEqual(count(source, CHUNK_JOIN), 1,
             failure(relativePath, 'expected exactly one invalid_archive v2 chunk join'));
     });

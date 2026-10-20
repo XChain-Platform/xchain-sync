@@ -63,6 +63,29 @@ function undeclaredInPlaceTables(carried, planned, inPlace){
     return [...carried].filter(t => planned.has(t) && !(inPlace[t] && inPlace[t].length)).sort();
 }
 
+// Bind each updated-rows spec list to the column its in-place carry rewrites.
+function inPlaceColumnBindings(){
+    let specs = require('../../../src/server/updated_rows/table_specs');
+    return [
+        { tables: specs.ROTATION_TABLES,                  column: 'signing_pubkey_id', list: 'ROTATION_TABLES' },
+        { tables: specs.SLASH_SPECS.map(s => s.table),    column: 'amount',            list: 'SLASH_SPECS' },
+        { tables: specs.DEACTIVATION_TABLES,              column: 'deactivation_block', list: 'DEACTIVATION_TABLES' },
+        { tables: specs.COOLDOWN_STATUS_TABLES,           column: 'status_id',         list: 'COOLDOWN_STATUS_TABLES' },
+    ];
+}
+
+// Return every planned table.column a bound spec list rewrites in place but the registry still hashes.
+function undeclaredInPlaceColumns(bindings, planned, excludedFor){
+    let gaps = [], checked = [];
+    for(let b of bindings)
+        for(let table of b.tables){
+            if(!planned.has(table)) continue;
+            checked.push(table + '.' + b.column);
+            if(!excludedFor(table).includes(b.column)) gaps.push(table + '.' + b.column + ' (' + b.list + ')');
+        }
+    return { gaps: gaps.sort(), checked };
+}
+
 // The applier's two node-local id sets, read off a real instance (both are set in the constructor).
 function applierSurrogateTables(){
     let applier = new ClientApplier({}, new Utility());
@@ -118,6 +141,22 @@ describe('Advisory table-content parity', function(){
             let planned = plannedTables();
             assert.deepStrictEqual(undeclaredInPlaceTables(new Set(['order_matches', 'tokens', 'markets']), planned, {}),
                 ['order_matches', 'tokens']);
+        });
+
+        it('declares the exact column each updated-rows spec list rewrites in place', function(){
+            let { gaps, checked } = undeclaredInPlaceColumns(inPlaceColumnBindings(), plannedTables(), excludedFor);
+            assert.ok(checked.includes('contract_stakes.signing_pubkey_id') && checked.includes('stakes.amount'),
+                'the binding scan examined ' + JSON.stringify(checked) + '; it no longer reaches the rotated or slashed tables');
+            assert.deepStrictEqual(gaps, [], 'a later block rewrites these columns in place, so a source one block ahead ' +
+                'false-alarms; add each to CONTENT_PARITY_IN_PLACE_COLUMNS in xchain-indexer/src/hub/table_lifecycle.js ' +
+                'and copy it here: ' + JSON.stringify(gaps));
+        });
+
+        it('reports a rotated column the in-place map does not declare', function(){
+            let { gaps } = undeclaredInPlaceColumns(inPlaceColumnBindings(), plannedTables(),
+                (t) => (lifecycle.CONTENT_PARITY_EXCLUDED_COLUMNS[t] || []));
+            assert.ok(gaps.includes('contract_stakes.signing_pubkey_id (ROTATION_TABLES)'), JSON.stringify(gaps));
+            assert.ok(gaps.includes('contract_unstakes.signing_pubkey_id (ROTATION_TABLES)'), JSON.stringify(gaps));
         });
     });
 });

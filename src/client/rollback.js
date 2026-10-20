@@ -30,7 +30,9 @@ const tokenRefold    = require('../db/token_refold');
 const lifecycle      = require('../table_lifecycle');
 const replicatedTables = require('../schema/replicated_tables');
 const { activationDelayBlocks, gasTickSymbol, coinTicker } = require('../consensus-constants');
-const { ARCHIVE_HEAD_VERSIONS_SQL, archiveHeadPredicate } = require('../consensus/state_hash');
+const { archiveHeadPredicate } = require('../consensus/state_hash');
+// The source's parent-pick predicate and fold floor, so the reset selects every head a chunk can stamp.
+const { archiveHeadPickPredicate, foldArchiveHeadFloor } = require('../consensus/archive_head_pick');
 const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = require('../consensus/gates/archive_rollback_author_scope_gate');
 const gateRegistry = require('../consensus/gate_registry');
 const util = require('node:util');
@@ -775,7 +777,7 @@ class ClientRollback {
             // Runs BEFORE the dataTables delete.
             await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
 
-            // Restore the surviving archive head stamped by an orphaned final chunk.
+            // Restore the surviving archive head (v1, or a v3 fold row) stamped by an orphaned final chunk.
             // Journaled heads recover their prior status; legacy heads become unverified.
             // This must run before the orphaned action rows are deleted below.
             if(firstActionIndex !== null){
@@ -792,9 +794,10 @@ class ClientRollback {
                         authorScope +
                         "JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = COALESCE(p.pre_archive_status_id, us.id), p.pre_archive_status_id = NULL " +
-                        "WHERE p.version " + ARCHIVE_HEAD_VERSIONS_SQL +
+                        "WHERE " + archiveHeadPickPredicate('p') +
                         " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
-                        [firstActionIndex, firstActionIndex]);
+                        // Bind in SQL order: the chunk join, the pick predicate's fold floor, then the parent bound.
+                        [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.

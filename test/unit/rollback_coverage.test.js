@@ -900,13 +900,16 @@ describe('Rollback coverage guard @regression', function(){
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
             { name: 'anchor journal restore and clear',     re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
-            // The parent predicate must select the FULL archive-head version set
-            // (currently just v1) via the shared state_hash.js constant, on both sides,
-            // rather than a hardcoded literal that drifts from it. Matches the indexer's
-            // template-literal splice (${ARCHIVE_HEAD_VERSIONS_SQL}) and the sync side's
-            // string concat.
-            { name: 'archive-head version predicate (shared v1+v6 constant)',
-              re: /WHERE p\.version (\$\{)?ARCHIVE_HEAD_VERSIONS_SQL\}? AND p\.action_index < \?/ },
+            // The parent predicate must select every head the forward chunk path can pick
+            // and stamp (v1, plus a v3 fold row above the DOGE fold floor) via the shared
+            // archiveHeadPickPredicate, on both sides, rather than a hardcoded literal that
+            // drifts from it. Matches the indexer's template-literal splice and the sync
+            // side's string concat.
+            { name: 'archive-head pick predicate (forward parent pick)',
+              re: /WHERE (\$\{)?archiveHeadPickPredicate\( p \)\}? AND p\.action_index < \?/ },
+            // Both sides bind the same DOGE fold floor the forward pick binds.
+            { name: 'archive-head pick fold floor binding',
+              re: /firstActionIndex, foldArchiveHeadFloor\((config\[ NETWORK \]|this\.network), DOGE \), firstActionIndex\]/ },
             // The publisher-scope term is spliced from the shared activation module on both
             // sides, between the chunk-status join and the reset join. A side that drops it
             // resets under a different batch key than its twin the moment the flag day arms.

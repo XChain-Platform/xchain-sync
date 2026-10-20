@@ -342,6 +342,13 @@
     "17946dcd3345474c": [
       "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)"
     ],
+    "1944d7a9ee88bfc7": [
+      "ServerPoller content-parity id ceiling drops the ceiling when a reorg is broadcast",
+      "ServerPoller content-parity id ceiling leaves out a lookup whose read fails, keeping the others",
+      "ServerPoller content-parity id ceiling reads every id-bounded lookup on the snapshot connection at the broadcast tip",
+      "ServerPoller content-parity id ceiling records nothing for a batch capped below its snapshot tip",
+      "ServerPoller content-parity id ceiling records nothing while the advisory check is off"
+    ],
     "19b6bdb857cf7156": [
       "ClientSync syncLookupTablesPaged catch-up: starts from the replica MAX(id) so only NEW rows are fetched",
       "ClientSync syncLookupTablesPaged decoder: pages pubkeys by its surrogate id cursor",
@@ -1863,10 +1870,6 @@
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression the shadow value never reaches a committed column (source pin, both twins)",
       "XCHAIN_ESC locked leaf: the \u00a77 shadow thread @regression threading equals a fresh build of the same leaf set (spendable + locked)"
     ],
-    "6bf91ada4d7570c1": [
-      "state hash archive fold twin exports the archive fold predicates with their canonical SQL",
-      "state hash archive fold twin is byte-identical to the xchain-indexer state hash module"
-    ],
     "6c7b6eb10f3ced0f": [
       "Chaos: Sync Resilience CE-SYNC-01: Server Crash \u2192 Reconnect \u2192 Gap Healing client recovers from server crash and heals block gap",
       "Chaos: Sync Resilience CE-SYNC-02: Block Gap Detection \u2192 Incremental Catch-Up client detects and heals a multi-block gap via status event",
@@ -2095,6 +2098,12 @@
       "getBlockLeafRows special-address canonicalization (consensus) canonicalizes credit/debit/escrow special addresses to their role token",
       "getBlockLeafRows special-address canonicalization (consensus) leaves contract source addresses raw (ledger-only canonicalization, mirrors the source)",
       "getBlockLeafRows special-address canonicalization (consensus) passes a non-special ledger address through unchanged"
+    ],
+    "7bdc44c60cb9418e": [
+      "state hash archive fold twin exports the archive fold predicates with their canonical SQL",
+      "state hash archive fold twin gives the recompute a Database with doQueryStrict",
+      "state hash archive fold twin is byte-identical to the xchain-indexer state hash module",
+      "state hash archive fold twin keeps every state_hash/ collector byte-identical to the xchain-indexer copy"
     ],
     "7c3cb0ea1dec02ed": [
       "API security createApiKeyMiddleware passes through when no API key is configured (empty string, open mode)",
@@ -2568,6 +2577,16 @@
       "Boundary: Config Parsing VERIFY_HASHES case insensitivity \"false\" disables",
       "Boundary: Config Parsing VERIFY_HASHES case insensitivity unset defaults to true"
     ],
+    "8d2c440d7e9753f5": [
+      "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
+      "Advisory table-content parity excluded-column registry @regression declares the edited columns of every in-place carried table still in the parity window",
+      "Advisory table-content parity excluded-column registry @regression declares the exact column each updated-rows spec list rewrites in place",
+      "Advisory table-content parity excluded-column registry @regression excludes every applier node-local id and every generated column of a hashed table",
+      "Advisory table-content parity excluded-column registry @regression reports a generated column the registry does not exclude",
+      "Advisory table-content parity excluded-column registry @regression reports a hashed node-local-id table with no id exclusion, and ignores one that is not hashed",
+      "Advisory table-content parity excluded-column registry @regression reports a rotated column the in-place map does not declare",
+      "Advisory table-content parity excluded-column registry @regression reports an in-place carried table with no declared column, and ignores one outside the window"
+    ],
     "8dc78d9edd499139": [
       "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 0 (first block at zero)",
       "Boundary: Hash Continuity Check null prevBlockIndex (bootstrap) valid: null \u2192 1 (first block)",
@@ -2893,6 +2912,16 @@
       "ClientSync warnTrustPosture warns that the decoder path has no hash rejection",
       "ClientSync warnTrustPosture warns when running single-source (no cross-source rejection)"
     ],
+    "9f6fc8a2e5fab106": [
+      "/status content-parity lookup id ceiling bounds lookups by the poller ceiling read at the published height, not the live MAX(id)",
+      "/status content-parity lookup id ceiling falls back to the live MAX(id) when the ceiling is labelled with another height",
+      "/status content-parity lookup id ceiling omits a lookup the ceiling does not cover rather than reading its live MAX(id)",
+      "/status table_counts_height labels client counts the same way",
+      "/status table_counts_height labels server counts with the live tip they were read at, apart from block_height",
+      "/status table_counts_height publishes null when a block lands between the two tip reads",
+      "/status table_counts_height publishes null when a rollback lands between the two tip reads",
+      "/status table_counts_height publishes null when the tip cannot be read"
+    ],
     "a023f4fb968cd172": [
       "BlockBroadcaster security getIp: TRUST_PROXY=false ignores x-forwarded-for when TRUST_PROXY is false",
       "BlockBroadcaster security getIp: TRUST_PROXY=false returns unknown when no socket address and no forwarded header",
@@ -2915,6 +2944,12 @@
       "ClientSync rollback guard reset boundaries resets the guard after a full snapshot is applied",
       "ClientSync rollback guard reset boundaries resets the guard when an operator clears a max-depth halt",
       "Database.setSyncState strict write throws an upsert fault under opts.rethrow and still releases the connection"
+    ],
+    "a0f0046d278bd4fd": [
+      "Advisory table-content parity strictIdBounds keeps the live fallback when the option is absent",
+      "Advisory table-content parity strictIdBounds lets a follower one interned row behind compare, where the live ceiling skipped it",
+      "Advisory table-content parity strictIdBounds omits a lookup with no supplied ceiling instead of reading the live MAX(id)",
+      "Advisory table-content parity strictIdBounds uses a supplied ceiling and publishes it as id_max"
     ],
     "a122a447c627671c": [
       "state_hash attest_batch_head class, follower twin @regression active: stamped heads fold in before block_index and a dropped stamp changes the hash",
@@ -3081,14 +3116,6 @@
     "abc321c1e9fd95fd": [
       "ClientRollback archive stamp journal restore @regression resets an unjournaled head to unverified and leaves the journal clear",
       "ClientRollback archive stamp journal restore @regression restores a journaled head status verbatim and clears the journal"
-    ],
-    "ad581ffaee874b66": [
-      "Advisory table-content parity excluded-column registry @regression checks a non-empty plan and reaches both known exclusions",
-      "Advisory table-content parity excluded-column registry @regression declares the edited columns of every in-place carried table still in the parity window",
-      "Advisory table-content parity excluded-column registry @regression excludes every applier node-local id and every generated column of a hashed table",
-      "Advisory table-content parity excluded-column registry @regression reports a generated column the registry does not exclude",
-      "Advisory table-content parity excluded-column registry @regression reports a hashed node-local-id table with no id exclusion, and ignores one that is not hashed",
-      "Advisory table-content parity excluded-column registry @regression reports an in-place carried table with no declared column, and ignores one outside the window"
     ],
     "ae094bbd1678fdf4": [
       "SnapshotBuilder streamIncrementalSnapshot snapshot-replication tables full-dumps indexer pubkeys instead of action-scoping it into errno 1054",
@@ -4186,6 +4213,20 @@
       "coinTicker() + per-chain activation lookup the trap this exists to prevent the FULL-NAME form silently resolves to OFF (the full-name lookup bug)",
       "coinTicker() + per-chain activation lookup the trap this exists to prevent the TICKER form activates at the armed height on every production chain"
     ],
+    "df32345ad0b55850": [
+      "ClientSync decoder completeness sweep and the counts label returns no reading for counts read past the replica height",
+      "ClientSync decoder completeness sweep and the counts label returns the shortfalls for counts read at the replica height",
+      "ClientSync indexer completeness sweep and the counts label compares and ages the gap when the counts were read at the follower height",
+      "ClientSync indexer completeness sweep and the counts label reports replica-ahead only against counts read at the follower height",
+      "ClientSync indexer completeness sweep and the counts label skips an unlabelled source whose own tip is past its broadcast height",
+      "ClientSync indexer completeness sweep and the counts label skips counts read past the follower height and leaves the tracked gap untouched",
+      "ClientSync indexer completeness sweep and the counts label skips counts the source could not label (a block landed mid-count)",
+      "ClientSync indexer completeness sweep and the counts label still compares an unlabelled source that publishes no source_height",
+      "ClientSync remoteTableCountsHeight reads the published label, and null when the source saw the tip move mid-count",
+      "ClientSync remoteTableCountsHeight trusts an unlabelled source at block_height only while its own tip equals it",
+      "ClientSync verifyAgainstSource and the counts label compares counts read at the follower height",
+      "ClientSync verifyAgainstSource and the counts label skips counts read at another height, with no shortfall and no pass line"
+    ],
     "df77321eda7793e8": [
       "transparency-log DDL datetime columns merkle_epochs.sql declares created_at as DATETIME without TIMESTAMP columns",
       "transparency-log DDL datetime columns merkle_reorgs.sql declares detected_at as DATETIME without TIMESTAMP columns"
@@ -4558,6 +4599,10 @@
       "contract_state_root: shadow-compute window @regression the arming block full-builds and does NOT inherit the shadow value",
       "contract_state_root: shadow-compute window @regression the shadow derives a real root and threads through its OWN column"
     ],
+    "f944606a1548e553": [
+      "archive parent-pick predicate twin arms the DOGE testnet floor and leaves mainnet UNARMED",
+      "archive parent-pick predicate twin matches the xchain-indexer parent pick, function body and floor, on every network"
+    ],
     "f9851634c56991cb": [
       "ServerPoller poll snapshot pinning (H-P2) never streams past the snapshot tip when it sits behind the outer read",
       "ServerPoller poll snapshot pinning (H-P2) pins the forward batch to one read snapshot and threads it through every payload read",
@@ -4725,12 +4770,17 @@
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config keep the reader defaults when unset",
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config keeps DISPENSERS_RECONCILE_MAX_INTERVAL_MS=0 as the documented disable",
       "Boundary: Config Parsing client reconcile and paging knobs reach the live config pass a set value through"
+    ],
+    "ff5ff8150abe0ded": [
+      "/status height labels against a real database @integration labels the counts with the database tip, not the broadcast height",
+      "/status height labels against a real database @integration publishes a null label when a block commits while the counts are read",
+      "/status height labels against a real database @integration reads the lookup id ceiling from the pinned batch view, excluding a later commit"
     ]
   },
   "scripts": {
     "test": {
-      "fileCount": 391,
-      "titleCount": 3079,
+      "fileCount": 395,
+      "titleCount": 3108,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4841,6 +4891,7 @@
         "test/unit/client_sync.test/completeness/08_persistent_replica_gaps.test.js": "6fe6527e42a197a6",
         "test/unit/client_sync.test/completeness/16_verify_table_counts_replica_completeness.test.js": "169ecc74d07da9cf",
         "test/unit/client_sync.test/completeness/17_decoder_bootstrap_completeness.test.js": "4ee867ce8010316d",
+        "test/unit/client_sync.test/completeness/18_counts_height_label.test.js": "df32345ad0b55850",
         "test/unit/client_sync.test/events/06_handle_event.test.js": "447987fa6855b9be",
         "test/unit/client_sync.test/events/09_handle_block.test.js": "ce122cc4912e82c8",
         "test/unit/client_sync.test/events/10_apply_block_event.test.js": "99d874997e2b72e1",
@@ -4911,6 +4962,7 @@
         "test/unit/consensus/anchor_fold_registry_rows.test.js": "f5621b6227dcbcd6",
         "test/unit/consensus/anchor_fold_rollback_predicate.test.js": "7a28b038cd083cbf",
         "test/unit/consensus/anchor_fold_tables_predicate.test.js": "aecc5a537ca19d39",
+        "test/unit/consensus/archive_head_pick_twin.test.js": "f944606a1548e553",
         "test/unit/consensus/archive_invalid_every_network.test.js": "31ee6c76f3ff525b",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
         "test/unit/consensus/armed_map/completeness.test.js": "be8349064e8f7983",
@@ -4921,7 +4973,7 @@
         "test/unit/consensus/index_map_every_network.test.js": "f6fbd3a44c9a1195",
         "test/unit/consensus/regtest_env_twin.test.js": "cbad35bf1daff99f",
         "test/unit/consensus/stake_weight_collation_twin.test.js": "c4195dde3aa9c82f",
-        "test/unit/consensus/state_hash_fold_twin.test.js": "6bf91ada4d7570c1",
+        "test/unit/consensus/state_hash_fold_twin.test.js": "7bdc44c60cb9418e",
         "test/unit/consensus_pin_boot.test.js": "03d0b8b6f4107f85",
         "test/unit/consensus_primitive_conformance.test.js": "b354a58502708ba2",
         "test/unit/contract_state_subtree.test.js": "8340f62c3bf4e723",
@@ -5045,6 +5097,7 @@
         "test/unit/server_poller.test/14_unrecognized_coin_activation_delay.test.js": "6d0c8ebeb93fdc48",
         "test/unit/server_poller.test/15_ledger_neutral_reorg_identity.test.js": "9720670ea76e54f9",
         "test/unit/server_poller.test/16_updated_rows_lookup_reference.test.js": "651dfe957395acec",
+        "test/unit/server_poller.test/17_content_parity_id_ceiling.test.js": "1944d7a9ee88bfc7",
         "test/unit/server_poller_action_scoped_probe.test.js": "d7ac1268f904a175",
         "test/unit/shutdown.test.js": "e4081567250aec28",
         "test/unit/sibling_coverage.test.js": "d8d1e52267ea606f",
@@ -5082,6 +5135,7 @@
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees.test.js": "d623f47649b38518",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_2.test.js": "ee22ef37c7d06c2b",
         "test/unit/state_subtree_activation.test/state_root_reserved_sub_trees_armed_set.test.js": "8e78b69ca3426aa3",
+        "test/unit/status_counts_height.test.js": "9f6fc8a2e5fab106",
         "test/unit/stream_scope_columns.test.js": "39a2dac10979dbd3",
         "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_meta_client_retention.test.js": "64d6e397618c5805",
@@ -5108,7 +5162,8 @@
         "test/unit/table_content_parity.test/03_compare_table_content.test.js": "39c89678ecd7b9af",
         "test/unit/table_content_parity.test/04_wiring.test.js": "0193b2edcc8a3f28",
         "test/unit/table_content_parity.test/05_operational_log_exclusion.test.js": "14ec247717c62037",
-        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",
+        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "8d2c440d7e9753f5",
+        "test/unit/table_content_parity.test/07_strict_id_bounds.test.js": "a0f0046d278bd4fd",
         "test/unit/train_activation.test.js": "4bbfbfece133da72",
         "test/unit/train_activation_twin.test.js": "be30d095ec85b25c",
         "test/unit/train_gate_verdict_characterization.test.js": "5039fe55a9d97010",
@@ -5270,8 +5325,8 @@
       }
     },
     "test:integration": {
-      "fileCount": 38,
-      "titleCount": 132,
+      "fileCount": 39,
+      "titleCount": 135,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5305,6 +5360,7 @@
         "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
         "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
         "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/status_height_labels_real.test.js": "ff5ff8150abe0ded",
         "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
         "test/integration/tokens.test/owner_edit_refresh.test.js": "ce6599d5bc434589",
@@ -5314,8 +5370,8 @@
       }
     },
     "test:integration:ci": {
-      "fileCount": 34,
-      "titleCount": 122,
+      "fileCount": 35,
+      "titleCount": 125,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5345,6 +5401,7 @@
         "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
         "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
         "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/status_height_labels_real.test.js": "ff5ff8150abe0ded",
         "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
         "test/integration/tokens.test/owner_edit_refresh.test.js": "ce6599d5bc434589",
@@ -5528,7 +5585,7 @@
         "test/unit/stream_scope_columns.test.js": "39a2dac10979dbd3",
         "test/unit/surrogate_id_registry.test.js": "166fa60da55ff1a9",
         "test/unit/sync_service.test/14_state_tree_metric_coin_ticker.test.js": "bce5f38ce4fa01fe",
-        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "ad581ffaee874b66",
+        "test/unit/table_content_parity.test/06_excluded_columns_registry.test.js": "8d2c440d7e9753f5",
         "test/unit/updated_rows.test/03_errno_less_errors.test.js": "5cf9fde8844c1229"
       }
     },

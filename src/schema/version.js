@@ -281,11 +281,13 @@
  *       the forced schema refresh carries the column onto followers. Decoder is
  *       unaffected and stays at 5.
  * Index-only frontier record (no version bump): the
- *       2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx migration adds non-unique
- *       (chain, network, snapshot_block) secondary indexes to `anchor_actions` and
- *       `state_checkpoints`. It changes neither replicated columns nor payload shape,
- *       so an older follower can still store every streamed row. Indexer stays at 19
- *       and decoder stays at 5.
+ *       2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx migration adds a
+ *       non-unique (chain, network, snapshot_block) secondary index to the
+ *       stream:action `anchor_actions` table. It changes neither replicated columns
+ *       nor payload shape, so an older follower can still store every streamed row.
+ *       Its second statement, the same non-unique index, lands on the hub-mirrored
+ *       `state_checkpoints`, which never rides the wire. The migration is
+ *       mode=auto. Indexer stays at 19 and decoder stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
