@@ -59,16 +59,11 @@ function makeSync(extraConfig){
     return { sync, rollback };
 }
 
-describe('ClientSync: source reorgs need the block quorum @regression', function(){
-    let clock;
-    beforeEach(function(){
-        sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error');
-        clock = sinon.useFakeTimers();
-    });
-    afterEach(function(){ clock.restore(); sinon.restore(); });
+// Fake timers shared by the cases below; each beforeEach installs a fresh clock.
+const reorgCtx = {};
+async function pastTimeout(sync){ await reorgCtx.clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100); }
 
-    async function pastTimeout(sync){ await clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100); }
-
+function registerQuorumCases(){
     it('holds a lone reorg report and unwinds once a second source reports the same height', async function(){
         let { sync, rollback } = makeSync();
         await sync.handleEvent(reorgEvent(95), 0);
@@ -118,7 +113,9 @@ describe('ClientSync: source reorgs need the block quorum @regression', function
         assert.strictEqual(rollback.rollback.called, false);
         assert.strictEqual(sync.lastAppliedBlock, 100);
     });
+}
 
+function registerEvictionAndScopeCases(){
     it('does not unwind on a held report whose source was evicted while it waited', async function(){
         let { sync, rollback } = makeSync();
         await sync.handleEvent(reorgEvent(95), 0);
@@ -175,4 +172,15 @@ describe('ClientSync: source reorgs need the block quorum @regression', function
         await sync.handleEvent(reorgEvent(95), 0);
         assert.strictEqual(rollback.rollback.calledOnce, true);
     });
+}
+
+describe('ClientSync: source reorgs need the block quorum @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log'); sinon.stub(console, 'warn'); sinon.stub(console, 'error');
+        reorgCtx.clock = sinon.useFakeTimers();
+    });
+    afterEach(function(){ reorgCtx.clock.restore(); sinon.restore(); });
+
+    registerQuorumCases();
+    registerEvictionAndScopeCases();
 });
