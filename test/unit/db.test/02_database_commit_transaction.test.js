@@ -3,6 +3,8 @@
 
 'use strict';
 
+const path = require('path');
+const { splitSqlStatements } = require('../../../src/db/sql_util');
 const {
     assert,
     sinon,
@@ -256,6 +258,9 @@ describe('Database.createDatabase()', function () {
 
 
 describe('Database.verifySyncTables()', function () {
+    // Production DDL from src/sql, read for real (not hand-written stubs).
+    const sqlDir = path.join(__dirname, '../../../src/sql');
+    const ddl = name => fs.readFileSync(path.join(sqlDir, name + '.sql'), 'utf8');
     let db;
     beforeEach(function () { silenceConsole(); db = makeDb(); });
     afterEach(async function () { sinon.restore(); await db.close(); });
@@ -285,12 +290,14 @@ describe('Database.verifySyncTables()', function () {
         // First call (information_schema check) returns empty → table missing
         let conn = { query: sinon.stub().resolves([]), release: sinon.stub().resolves() };
         sinon.stub(db, 'getConnection').resolves(conn);
-        sinon.stub(fs, 'readFileSync').returns('CREATE TABLE sync_meta (id INT);');
+        let expected = splitSqlStatements(ddl('sync_meta'));
         let doQueryStub = sinon.stub(db, 'doQuery').resolves([]);
         let result = await db.verifySyncTables();
         assert.strictEqual(result, true);
-        // doQuery should have been called for the CREATE TABLE statement
-        assert.ok(doQueryStub.calledOnce);
+        // doQuery runs every statement of the production sync_meta DDL
+        assert.ok(expected.length > 0);
+        assert.deepStrictEqual(doQueryStub.args.map(a => a[0]), expected);
+        assert.ok(doQueryStub.args.some(a => /^CREATE TABLE sync_meta\b/.test(a[0])));
     });
 
     it('decoder dbType: creates ONLY sync_halt (transparency log is indexer-only)', async function () {
@@ -298,14 +305,14 @@ describe('Database.verifySyncTables()', function () {
         sinon.stub(fs, 'readdirSync').returns(['merkle_epochs.sql', 'sync_halt.sql', 'sync_meta.sql']);
         let conn = { query: sinon.stub().resolves([]), release: sinon.stub().resolves() };
         sinon.stub(dec, 'getConnection').resolves(conn);
-        sinon.stub(fs, 'readFileSync').returns('CREATE TABLE sync_halt (id INT);');
+        let expected = splitSqlStatements(ddl('sync_halt'));
         let doQueryStub = sinon.stub(dec, 'doQuery').resolves([]);
         let result = await dec.verifySyncTables();
         assert.strictEqual(result, true);
         // Only sync_halt is probed and created: one information_schema check,
         // one CREATE; sync_meta/merkle_epochs never touched on a decoder DB.
         assert.strictEqual(conn.query.callCount, 1);
-        assert.strictEqual(doQueryStub.callCount, 1);
+        assert.deepStrictEqual(doQueryStub.args.map(a => a[0]), expected);
         await dec.close();
     });
 
