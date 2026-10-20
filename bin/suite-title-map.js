@@ -264,15 +264,13 @@ function applyNameMap(title, names) {
 }
 
 /**
- * Pin against tree, script by script. `renames` is the moving commit's declared
- * {oldPath: newPath}; a pin entry is compared under its new name so a pure move
- * reports no difference while a move that changed a title still does. `names`
- * does the same for a renamed SYMBOL a title happens to quote: a suite that
- * names the method it covers has a title that a pure rename legitimately
- * changes, and without this every one of those reads as a dropped test.
+ * Pin against tree, script by script. `renames` maps paths and title tokens.
+ * Title changes activate only when the renamed title is collected. `names`
+ * adds the larger symbol-rename map used by restructures.
  */
 function compare(pin, fresh, renames, only, symbolMap) {
     const differences = [];
+    const titleRenames = { ...(renames || {}), ...(symbolMap || {}) };
     // A run narrowed to one script compares that script only: every other
     // script in the pin is absent because it was not collected, which is not a
     // finding and would bury the one that is.
@@ -288,8 +286,13 @@ function compare(pin, fresh, renames, only, symbolMap) {
             continue;
         }
         const mapped = {};
-        for (const rel of Object.keys(before))
-            mapped[renames[rel] || rel] = before[rel].map((t) => applyNameMap(t, symbolMap));
+        for (const rel of Object.keys(before)) {
+            const target = renames[rel] || rel;
+            mapped[target] = before[rel].map((title) => {
+                const renamed = applyNameMap(title, titleRenames);
+                return (after[target] || []).includes(renamed) ? renamed : title;
+            });
+        }
         const files = Array.from(new Set(Object.keys(mapped).concat(Object.keys(after)))).sort();
         for (const rel of files) {
             if (!mapped[rel]) { differences.push({ script: name, kind: 'file_added', file: rel }); continue; }

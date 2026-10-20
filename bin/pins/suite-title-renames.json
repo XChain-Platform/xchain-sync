@@ -1,4 +1,5 @@
 {
+  "Database.beginTransaction() if transactionConnection already exists: releases it first, then opens new one": "Database.beginTransaction() if transactionConnection already exists: refuses and leaves the open transaction untouched",
   "contract_stakes reset joins contract_unstakes on pubkey+contract+tick": "contract_stakes reset joins contract_unstakes on source_id",
   "contractStateSubtree.js": "contract_state_subtree.js",
   "escrowLeafSubtree.js": "escrow_leaf_subtree.js",
