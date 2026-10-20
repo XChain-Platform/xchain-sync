@@ -280,6 +280,7 @@ function stopDivergenceApply(client){
     client._strictConfirmPending.clear();
     for(let [, timer] of client._applyTimers) clearTimeout(timer);
     client._applyTimers.clear();
+    client.clearAllPendingReorgs();
 }
 
 // Keep the highest numeric height a server reported; null until one arrives.
@@ -468,6 +469,11 @@ class ClientSync {
         // a second source over the live stream (which clears it) or an operator
         // intervenes. INERT unless HASH_CONFIRM_STRICT is on with 2+ sources.
         this._strictConfirmPending = new Set();
+
+        // Source-reported reorgs held for cross-source agreement, keyed by the reported
+        // height: { votes: Set of sourceIndex, timer, event, rewind }. The delete side
+        // follows the same quorum, timeout and strict rule as block application.
+        this._pendingReorgs = new Map();
 
         // Multi-source Byzantine quorum.
         // Effective agreement threshold over the configured source set. SOURCE_QUORUM=0
@@ -747,6 +753,12 @@ class ClientSync {
     // Effective quorum, clamped to the number of active (non-evicted) sources so an
     // eviction lowers the denominator rather than making quorum permanently unreachable.
     effectiveQuorum(){ return Math.min(this.sourceQuorum, Math.max(1, this.activeSourceCount())); }
+
+    // True when a source's block or reorg needs cross-source agreement: a multi-source
+    // indexer with hash verification. Decoder and single-source replicas apply directly.
+    sourceQuorumActive(){
+        return this.dbType === 'indexer' && !!this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1;
+    }
 
     // Record a divergence strike against a source for a block, prune the sliding
     // window, and evict once the threshold is reached (subject to the keep-quorum-
@@ -1165,6 +1177,7 @@ class ClientSync {
         this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
+        this.clearAllPendingReorgs();
     }
 
     // Table and key of an upsert full-dump duplicate-key failure (errno 1062), or null
@@ -1220,6 +1233,7 @@ class ClientSync {
         this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
+        this.clearAllPendingReorgs();
     }
 
     // True when a snapshot download aborted because the body outgrew the axios
@@ -1276,6 +1290,7 @@ class ClientSync {
         this._strictConfirmPending.clear();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
+        this.clearAllPendingReorgs();
     }
 
     // A missing table (errno 1146) or missing column (1054) during an apply
@@ -3049,7 +3064,7 @@ class ClientSync {
             updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
-            await this.handleReorg(event);
+            await this.handleSourceReorg(event, sourceIndex);
         } else if(event.type === 'status'){
             updateLastKnownServerBlock(this, event.block_height);
             // Keep the server's replication verdict even when its height stalls.
@@ -3167,7 +3182,7 @@ class ClientSync {
         return this.rewindForkedHead(blockIndex);
     }
 
-    handleIndexerHeadDuplicate(event){
+    handleIndexerHeadDuplicate(event, sourceIndex){
         let blockIndex = event.block_index;
 
         // Restrict hash comparison to a re-delivery of the committed head.
@@ -3187,12 +3202,16 @@ class ClientSync {
         // Rewind before catch-up so the orphaned predecessor cannot enter local hash
         // recomputation. Matching duplicates remain silent skips.
         // Route both database types through the same rollback and catch-up sequence.
+        // A source's re-delivered forked head claims what its reorg report claims, so it
+        // votes through the same gate; an internal re-delivery (no source) rewinds at once.
         getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
-            '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up');
-        return this.rewindForkedHead(blockIndex);
+            '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up ' +
+            'once the source quorum agrees');
+        if(sourceIndex === undefined || sourceIndex === null) return this.rewindForkedHead(blockIndex);
+        return this.handleSourceReorg({ type: 'reorg', block_index: blockIndex }, sourceIndex, true);
     }
 
-    handlePreviouslyAppliedBlock(event){
+    handlePreviouslyAppliedBlock(event, sourceIndex){
         let blockIndex = event.block_index;
         if(this.lastAppliedBlock === null || blockIndex > this.lastAppliedBlock) return null;
 
@@ -3200,7 +3219,7 @@ class ClientSync {
         // Skip older heights without a fork check because they cannot replace the tip.
         let completion = null;
         if(this.dbType === 'decoder') completion = this.handleDecoderHeadDuplicate(event);
-        else if(this.dbType === 'indexer') completion = this.handleIndexerHeadDuplicate(event);
+        else if(this.dbType === 'indexer') completion = this.handleIndexerHeadDuplicate(event, sourceIndex);
         return { completion };
     }
 
@@ -3391,8 +3410,7 @@ class ClientSync {
         // Require tuple quorum only for a multi-source indexer with hash verification.
         // Keep decoder, disabled-verification, and single-source application direct.
         // Preserve the two-source unanimous case and larger-set majority behavior.
-        if(this.dbType !== 'indexer' || !this.config['VERIFY_HASHES'] || this.activeSourceCount() <= 1)
-            return null;
+        if(!this.sourceQuorumActive()) return null;
 
         // Ignore an evicted source's in-flight delivery.
         // Exclude decoder and single-source paths because they need no tuple quorum.
@@ -3428,7 +3446,7 @@ class ClientSync {
             return;
         }
 
-        action = this.handlePreviouslyAppliedBlock(event);
+        action = this.handlePreviouslyAppliedBlock(event, sourceIndex);
         if(action){
             if(action.completion) await action.completion;
             return;
@@ -4625,6 +4643,103 @@ class ClientSync {
         } catch(e){
             await this.haltForReorgRollbackFailure(event, e);
         }
+        this.prunePendingReorgs();
+    }
+
+    // Gate a source-reported reorg exactly as handleBlockQuorum gates a block: drop an
+    // evicted source's report, unwind once a quorum reports the same height, and leave a
+    // lone report to the confirmation timeout. `rewind` marks a re-delivered forked head,
+    // which re-fetches the tip after the unwind (rewindForkedHead).
+    async handleSourceReorg(event, sourceIndex, rewind){
+        if(this._evictedSources.has(sourceIndex)){
+            getLogger().warn('Ignoring reorg at block ' + event.block_index + ' from evicted source ' +
+                (this.sources[sourceIndex] || ('#' + sourceIndex)) + ' for ' + this.chain + '/' + this.network);
+            return;
+        }
+        if(sourceIndex === undefined || sourceIndex === null || !this.sourceQuorumActive())
+            return this.applyAgreedReorg({ event, rewind: !!rewind });
+        if(this.ignoreReorgWithoutTip(event) || this.ignoreReorgAboveTip(event)) return;
+
+        let entry = this.recordReorgVote(event, sourceIndex, rewind);
+        if(this.activeReorgVotes(entry) >= this.effectiveQuorum()){
+            this.clearPendingReorg(event.block_index);
+            getLogger().info('Reorg at block ' + event.block_index + ' confirmed by ' +
+                this.activeReorgVotes(entry) + ' source(s); unwinding');
+            return this.applyAgreedReorg(entry);
+        }
+        this.armReorgQuorumTimer(event.block_index);
+    }
+
+    recordReorgVote(event, sourceIndex, rewind){
+        let height = event.block_index;
+        let entry = this._pendingReorgs.get(height);
+        if(!entry){
+            entry = { votes: new Set(), timer: null, event, rewind: false };
+            this._pendingReorgs.set(height, entry);
+        }
+        entry.votes.add(sourceIndex);
+        if(rewind) entry.rewind = true;
+        return entry;
+    }
+
+    // Count only votes from sources still active, as the block tally does.
+    activeReorgVotes(entry){
+        return [...entry.votes].filter(idx => !this._evictedSources.has(idx)).length;
+    }
+
+    clearPendingReorg(height){
+        let entry = this._pendingReorgs.get(height);
+        if(entry && entry.timer) clearTimeout(entry.timer);
+        this._pendingReorgs.delete(height);
+    }
+
+    // Drop every held report and its timer when a halt stops the live apply path.
+    clearAllPendingReorgs(){
+        for(let [height] of this._pendingReorgs) this.clearPendingReorg(height);
+    }
+
+    // Drop held reports an unwind made moot: a height above the new tip is a no-op.
+    prunePendingReorgs(){
+        if(this.lastAppliedBlock === null) return;
+        for(let height of [...this._pendingReorgs.keys()]){
+            if(height > this.lastAppliedBlock) this.clearPendingReorg(height);
+        }
+    }
+
+    async applyAgreedReorg(entry){
+        if(entry.rewind) await this.rewindForkedHead(entry.event.block_index);
+        else await this.handleReorg(entry.event);
+    }
+
+    armReorgQuorumTimer(height){
+        let entry = this._pendingReorgs.get(height);
+        if(!entry || entry.timer) return;
+
+        // Arm one liveness fallback, as armBlockQuorumTimer does: strict confirmation
+        // refuses a lone report and keeps it for a later vote; otherwise apply it.
+        entry.timer = setTimeout(async () => {
+            entry.timer = null;
+            if(this._pendingReorgs.get(height) !== entry) return;
+            if(this.config['HASH_CONFIRM_STRICT']){
+                getLogger().error('STRICT: Cross-source quorum timeout for reorg at block ' + height +
+                    ', refusing to unwind on ' + this.activeReorgVotes(entry) + ' source(s) (HASH_CONFIRM_STRICT=true)');
+                return;
+            }
+            this._pendingReorgs.delete(height);
+            // Never unwind on a report whose source was evicted while it waited.
+            if(!this.activeReorgVotes(entry)){
+                getLogger().error('Cross-source quorum timeout for reorg at block ' + height +
+                    ': the held report is no longer an active source\'s; not unwinding');
+                return;
+            }
+            getLogger().info('Cross-source quorum timeout for reorg at block ' + height +
+                ', applying the uncontested report');
+            try {
+                await this.applyAgreedReorg(entry);
+            } catch(e){
+                getLogger().error(util.format('Error unwinding reorg at block ' + height + ' after cross-source timeout:', e));
+            }
+        }, this.config['HASH_CONFIRM_TIMEOUT']);
     }
 }
 
