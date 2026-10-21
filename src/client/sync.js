@@ -278,6 +278,7 @@ function stopDivergenceApply(client){
     // Stop the live apply path; pending cross-source hashes are now moot.
     client.pendingHashes.clear();
     client._strictConfirmPending.clear();
+    client.clearReorgVotes();
     for(let [, timer] of client._applyTimers) clearTimeout(timer);
     client._applyTimers.clear();
 }
@@ -468,6 +469,15 @@ class ClientSync {
         // a second source over the live stream (which clears it) or an operator
         // intervenes. INERT unless HASH_CONFIRM_STRICT is on with 2+ sources.
         this._strictConfirmPending = new Set();
+
+        // Source votes for a reorg, keyed by rewind height. A reorg from a multi-source
+        // client rolls back committed rows, so it needs the same effective quorum as a
+        // block. Under HASH_CONFIRM_STRICT a reorg that timed out short of quorum is
+        // recorded in _strictReorgPending and blocks catch-up: the refused source's
+        // next block would otherwise land single-source through the catch-up refill.
+        this._reorgVotes = new Map();
+        this._reorgTimers = new Map();
+        this._strictReorgPending = new Set();
 
         // Multi-source Byzantine quorum.
         // Effective agreement threshold over the configured source set. SOURCE_QUORUM=0
@@ -1163,6 +1173,7 @@ class ClientSync {
         getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
+        this.clearReorgVotes();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
     }
@@ -1218,6 +1229,7 @@ class ClientSync {
         getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
+        this.clearReorgVotes();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
     }
@@ -1274,6 +1286,7 @@ class ClientSync {
         getLogger().error('================================================================');
         this.pendingHashes.clear();
         this._strictConfirmPending.clear();
+        this.clearReorgVotes();
         for(let [, timer] of this._applyTimers) clearTimeout(timer);
         this._applyTimers.clear();
     }
@@ -1810,8 +1823,9 @@ class ClientSync {
         // must come from a second source over the live stream, not from a single-source
         // catch-up. Refuse the catch-up while one is outstanding. Scoped to strict mode
         // with 2+ sources; the set is otherwise always empty so this is inert.
-        if(this._strictConfirmPending.size > 0){
-            let heights = Array.from(this._strictConfirmPending).sort((a, b) => a - b);
+        if(this._strictConfirmPending.size > 0 || this._strictReorgPending.size > 0){
+            let heights = Array.from(this._strictConfirmPending).concat(Array.from(this._strictReorgPending))
+                .sort((a, b) => a - b);
             getLogger().error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; HASH_CONFIRM_STRICT is on and block(s) ' + JSON.stringify(heights) +
                 ' await cross-source confirmation. Single-source catch-up would bypass the strict gate; ' +
@@ -3049,6 +3063,7 @@ class ClientSync {
             updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
         } else if(event.type === 'reorg'){
+            if(this.reorgAwaitsQuorum(event, sourceIndex)) return;
             await this.handleReorg(event);
         } else if(event.type === 'status'){
             updateLastKnownServerBlock(this, event.block_height);
@@ -4606,6 +4621,62 @@ class ClientSync {
         await this.haltOnDivergence(event.block_index,
             [{ field: 'reorg_rollback_failed', error: String(error && error.message ? error.message : error) }],
             this.sources.slice(0, 1), 'reorg-rollback-failed');
+    }
+
+    clearReorgVotes(){
+        this._reorgVotes.clear();
+        this._strictReorgPending.clear();
+        for(let [, timer] of this._reorgTimers) clearTimeout(timer);
+        this._reorgTimers.clear();
+    }
+
+    // True while a reorg event from a multi-source client has not reached the effective
+    // quorum of distinct active sources. Single-source clients and internal rewinds
+    // (no sourceIndex) apply directly. On quorum the votes are cleared and the caller
+    // proceeds. Short of quorum, a liveness timer fires: strict mode refuses the reorg
+    // and blocks catch-up, otherwise the reorg is applied as the uncontested report.
+    reorgAwaitsQuorum(event, sourceIndex){
+        if(sourceIndex === undefined || sourceIndex === null) return false;
+        if(this.activeSourceCount() <= 1) return false;
+        if(this._evictedSources.has(sourceIndex)) return true;
+        let height = event.block_index;
+        if(!this._reorgVotes.has(height)) this._reorgVotes.set(height, new Set());
+        let votes = this._reorgVotes.get(height);
+        votes.add(sourceIndex);
+        let live = Array.from(votes).filter(idx => !this._evictedSources.has(idx)).length;
+        if(live >= this.effectiveQuorum()){
+            this.settleReorgVotes(height);
+            return false;
+        }
+        getLogger().warn('Reorg at block ' + height + ' from source ' + sourceIndex + ' holds for quorum (' +
+            live + '/' + this.effectiveQuorum() + ')');
+        if(!this._reorgTimers.has(height)){
+            let timer = setTimeout(async () => {
+                this._reorgTimers.delete(height);
+                if(!this._reorgVotes.has(height)) return;
+                if(this.config['HASH_CONFIRM_STRICT']){
+                    getLogger().error('STRICT: reorg quorum timeout for block ' + height +
+                        ', refusing and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
+                    this._strictReorgPending.add(height);
+                    return;
+                }
+                this.settleReorgVotes(height);
+                try {
+                    await this.handleReorg(event);
+                } catch(e){
+                    getLogger().error(util.format('Error applying reorg at block ' + height + ' after quorum timeout:', e));
+                }
+            }, this.config['HASH_CONFIRM_TIMEOUT']);
+            this._reorgTimers.set(height, timer);
+        }
+        return true;
+    }
+
+    settleReorgVotes(height){
+        this._reorgVotes.delete(height);
+        this._strictReorgPending.delete(height);
+        let timer = this._reorgTimers.get(height);
+        if(timer){ clearTimeout(timer); this._reorgTimers.delete(height); }
     }
 
     async handleReorg(event){
