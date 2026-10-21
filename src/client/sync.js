@@ -766,6 +766,14 @@ class ClientSync {
         return this.dbType === 'indexer' && !!this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1;
     }
 
+    // True when a source-reported reorg needs cross-source agreement. Unlike blocks,
+    // this covers the decoder too: a reorg unwinds committed rows and needs no
+    // synthetic hashes to be voted on, so any multi-source replica waits for quorum.
+    sourceReorgQuorumActive(){
+        if(this.activeSourceCount() <= 1) return false;
+        return this.dbType === 'decoder' || this.sourceQuorumActive();
+    }
+
     // Record a divergence strike against a source for a block, prune the sliding
     // window, and evict once the threshold is reached (subject to the keep-quorum-
     // viable guard). Idempotent per (source, block).
@@ -4663,7 +4671,7 @@ class ClientSync {
                 (this.sources[sourceIndex] || ('#' + sourceIndex)) + ' for ' + this.chain + '/' + this.network);
             return;
         }
-        if(sourceIndex === undefined || sourceIndex === null || !this.sourceQuorumActive())
+        if(sourceIndex === undefined || sourceIndex === null || !this.sourceReorgQuorumActive())
             return this.applyAgreedReorg({ event, rewind: !!rewind });
         if(this.ignoreReorgWithoutTip(event) || this.ignoreReorgAboveTip(event)) return;
 
