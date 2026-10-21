@@ -1804,6 +1804,11 @@ class ClientSync {
         if(hashes !== null) this.lastHashes = hashes;
     }
 
+    strictPendingConfirmationHeights(){
+        return Array.from(this._strictConfirmPending).concat(Array.from(this._strictReorgPending))
+            .sort((a, b) => a - b);
+    }
+
     // Incremental catch-up.
     //
     // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
@@ -1840,8 +1845,7 @@ class ClientSync {
         // catch-up. Refuse the catch-up while one is outstanding. Scoped to strict mode
         // with 2+ sources; the set is otherwise always empty so this is inert.
         if(this._strictConfirmPending.size > 0 || this._strictReorgPending.size > 0){
-            let heights = Array.from(this._strictConfirmPending).concat(Array.from(this._strictReorgPending))
-                .sort((a, b) => a - b);
+            let heights = this.strictPendingConfirmationHeights();
             getLogger().error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; HASH_CONFIRM_STRICT is on and block(s) ' + JSON.stringify(heights) +
                 ' await cross-source confirmation. Single-source catch-up would bypass the strict gate; ' +
