@@ -5,7 +5,7 @@
 # rebuilds this image on every update (ModuleService.buildAndUp), so a routine
 # rolling upgrade silently moves the runtime off the declared Node 22 with no
 # signal anywhere.
-FROM node:22.23.2-bookworm@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844
+FROM node:22.23.4-bookworm@sha256:2bd396628eceb5c999a6e43731fab69d5fb98b94ba9d9d90b5f64575c5178765
 
 RUN mkdir /XChainIndexerSync/
 COPY ./package.json /XChainIndexerSync/package.json
