@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-20
+
+### Changed
+- Held source-reported reorgs for the same quorum as blocks.
+- Moved the replica schema DDL into migrations behind a relocated runner.
+- Advanced the indexer migration frontier for the anchor-axis checkpoint index.
+
+### Fixed
+- Fixed transaction-state handling, halt clearing and quorum voting.
+- Rejected contested quorum timeouts.
+
 ## [0.25.0] - 2026-10-18
 
 ### Added

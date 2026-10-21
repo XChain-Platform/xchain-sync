@@ -39,8 +39,12 @@ function registerHandleEventGroup1Tests(){
         });
 
         it('routes reorg events to handleReorg', async function(){
+            // Both sources report the height, so the two-source quorum releases it.
+            sync.lastAppliedBlock = 12;
             sinon.stub(sync, 'handleReorg').resolves();
             await sync.handleEvent({ type: 'reorg', block_index: 10 }, 0);
+            assert.strictEqual(sync.handleReorg.called, false);
+            await sync.handleEvent({ type: 'reorg', block_index: 10 }, 1);
             assert.strictEqual(sync.handleReorg.calledOnce, true);
         });
 
