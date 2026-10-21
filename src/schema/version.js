@@ -288,6 +288,13 @@
  *       Its second statement, the same non-unique index, lands on the hub-mirrored
  *       `state_checkpoints`, which never rides the wire. The migration is
  *       mode=auto. Indexer stays at 19 and decoder stays at 5.
+ *  20 - (indexer only) `rollcall_actions`, a new table (one row per valid ROLLCALL
+ *       action) created by the 2026-10-21-rollcall-actions migration. It is
+ *       stream:action wire-replicated, so a v19 follower has no table to receive the
+ *       streamed rows and fails the block under ClientApplier's strict apply. It is
+ *       DERIVED in src/table_lifecycle/action_tables.js and rolled back by
+ *       `action_index >= ?`. The migration is mode=auto, so the forced schema refresh
+ *       creates the table on followers. Decoder is unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -310,11 +317,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 19, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 20, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-19',
+        through: '2026-10-21',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -382,17 +389,15 @@ const MIGRATION_FRONTIER = {
             '2026-10-17-dispenser-statuses-dispenser-action-idx.sql',
             '2026-10-17-dispensers-sweeps-column-order.sql',
             '2026-10-17-ledger-address-tick-amount-index.sql',
-            '2026-10-18-anchor-actions-pre-archive-status.sql'
+            '2026-10-18-anchor-actions-pre-archive-status.sql',
+            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
         ],
         accounted: [
-            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
-        ],
-        indexOnly: [
-            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
+            '2026-10-21-rollcall-actions.sql'
         ],
         hashes: {
-            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql':
-                '5f52530ff55eeecf95a193909f057026d3e368264f9a132282fa704504a6cb36'
+            '2026-10-21-rollcall-actions.sql':
+                '95bc2659cf2f16a331a16bced6daa2e5ad412c832db1ce3ba695b7d5137af167'
         }
     },
     decoder: {
