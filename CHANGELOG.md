@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-10-21
+
+### Added
+- Replicated the new indexer rollcall_actions table and moved the indexer schema version to 20.
+
+### Changed
+- Gated catch-up refill, live reorgs and decoder reorgs by the source quorum.
+
 ## [0.26.0] - 2026-10-20
 
 ### Changed

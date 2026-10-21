@@ -475,6 +475,12 @@ class ClientSync {
         // follows the same quorum, timeout and strict rule as block application.
         this._pendingReorgs = new Map();
 
+        // Heights of source reorgs refused for lack of quorum under HASH_CONFIRM_STRICT.
+        // The refused source's next block would otherwise land single-source through the
+        // catch-up refill, so a height recorded here blocks catch-up until a quorum
+        // reports it (which clears it) or the held report is dropped.
+        this._strictReorgPending = new Set();
+
         // Multi-source Byzantine quorum.
         // Effective agreement threshold over the configured source set. SOURCE_QUORUM=0
         // (unset) selects the simple-majority default ceil((N+1)/2): N=1 -> 1 (single-
@@ -758,6 +764,14 @@ class ClientSync {
     // indexer with hash verification. Decoder and single-source replicas apply directly.
     sourceQuorumActive(){
         return this.dbType === 'indexer' && !!this.config['VERIFY_HASHES'] && this.activeSourceCount() > 1;
+    }
+
+    // True when a source-reported reorg needs cross-source agreement. Unlike blocks,
+    // this covers the decoder too: a reorg unwinds committed rows and needs no
+    // synthetic hashes to be voted on, so any multi-source replica waits for quorum.
+    sourceReorgQuorumActive(){
+        if(this.activeSourceCount() <= 1) return false;
+        return this.dbType === 'decoder' || this.sourceQuorumActive();
     }
 
     // Record a divergence strike against a source for a block, prune the sliding
@@ -1790,6 +1804,11 @@ class ClientSync {
         if(hashes !== null) this.lastHashes = hashes;
     }
 
+    strictPendingConfirmationHeights(){
+        return Array.from(this._strictConfirmPending).concat(Array.from(this._strictReorgPending))
+            .sort((a, b) => a - b);
+    }
+
     // Incremental catch-up.
     //
     // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
@@ -1825,8 +1844,8 @@ class ClientSync {
         // must come from a second source over the live stream, not from a single-source
         // catch-up. Refuse the catch-up while one is outstanding. Scoped to strict mode
         // with 2+ sources; the set is otherwise always empty so this is inert.
-        if(this._strictConfirmPending.size > 0){
-            let heights = Array.from(this._strictConfirmPending).sort((a, b) => a - b);
+        if(this._strictConfirmPending.size > 0 || this._strictReorgPending.size > 0){
+            let heights = this.strictPendingConfirmationHeights();
             getLogger().error('Refusing incremental catch-up since block ' + sinceBlock +
                 '; HASH_CONFIRM_STRICT is on and block(s) ' + JSON.stringify(heights) +
                 ' await cross-source confirmation. Single-source catch-up would bypass the strict gate; ' +
@@ -4656,7 +4675,7 @@ class ClientSync {
                 (this.sources[sourceIndex] || ('#' + sourceIndex)) + ' for ' + this.chain + '/' + this.network);
             return;
         }
-        if(sourceIndex === undefined || sourceIndex === null || !this.sourceQuorumActive())
+        if(sourceIndex === undefined || sourceIndex === null || !this.sourceReorgQuorumActive())
             return this.applyAgreedReorg({ event, rewind: !!rewind });
         if(this.ignoreReorgWithoutTip(event) || this.ignoreReorgAboveTip(event)) return;
 
@@ -4691,11 +4710,13 @@ class ClientSync {
         let entry = this._pendingReorgs.get(height);
         if(entry && entry.timer) clearTimeout(entry.timer);
         this._pendingReorgs.delete(height);
+        this._strictReorgPending.delete(height);
     }
 
     // Drop every held report and its timer when a halt stops the live apply path.
     clearAllPendingReorgs(){
         for(let [height] of this._pendingReorgs) this.clearPendingReorg(height);
+        this._strictReorgPending.clear();
     }
 
     // Drop held reports an unwind made moot: a height above the new tip is a no-op.
@@ -4723,6 +4744,7 @@ class ClientSync {
             if(this.config['HASH_CONFIRM_STRICT']){
                 getLogger().error('STRICT: Cross-source quorum timeout for reorg at block ' + height +
                     ', refusing to unwind on ' + this.activeReorgVotes(entry) + ' source(s) (HASH_CONFIRM_STRICT=true)');
+                this._strictReorgPending.add(height);
                 return;
             }
             this._pendingReorgs.delete(height);
