@@ -26,6 +26,11 @@ function errorLines(){
     return console.error.getCalls().map(c => String(c.args[0])).join('\n');
 }
 
+// A sweep's TABLE_COUNT_MISMATCH detection logs at warn (persistence escalates separately).
+function warnLines(){
+    return console.warn.getCalls().map(c => String(c.args[0])).join('\n');
+}
+
 function infoLines(){
     return console.log.getCalls().map(c => String(c.args[0])).join('\n');
 }
@@ -84,7 +89,7 @@ function registerIndexerSweepTests(){
             let pager = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
             await sweep({ block_height: 100, table_counts_height: 103, table_counts: { blocks: 10 } });
 
-            assert.ok(!/TABLE_COUNT_MISMATCH/.test(errorLines()),
+            assert.ok(!/TABLE_COUNT_MISMATCH/.test(warnLines()),
                 'counts taken three blocks ahead are lag, not a hole');
             assert.strictEqual(pager.called, false, 'no lookup re-page from id 0 on a skipped sweep');
             assert.strictEqual(sync._replicaGaps.get('blocks').sweeps, 1, 'a skipped sweep neither ages nor clears');
@@ -93,7 +98,7 @@ function registerIndexerSweepTests(){
         it('skips counts the source could not label (a block landed mid-count)', async function(){
             seedGap();
             await sweep({ block_height: 100, table_counts_height: null, table_counts: { blocks: 10 } });
-            assert.ok(!/TABLE_COUNT_MISMATCH/.test(errorLines()));
+            assert.ok(!/TABLE_COUNT_MISMATCH/.test(warnLines()));
             assert.strictEqual(sync._replicaGaps.get('blocks').sweeps, 1);
         });
 
@@ -102,20 +107,20 @@ function registerIndexerSweepTests(){
             // with an honest label must report and age, or the skips prove nothing.
             seedGap();
             await sweep({ block_height: 100, table_counts_height: 100, table_counts: { blocks: 10 } });
-            assert.ok(/TABLE_COUNT_MISMATCH/.test(errorLines()));
+            assert.ok(/TABLE_COUNT_MISMATCH/.test(warnLines()));
             assert.strictEqual(sync._replicaGaps.get('blocks').sweeps, 2);
         });
 
         it('skips an unlabelled source whose own tip is past its broadcast height', async function(){
             seedGap();
             await sweep({ block_height: 100, source_height: 102, table_counts: { blocks: 10 } });
-            assert.ok(!/TABLE_COUNT_MISMATCH/.test(errorLines()));
+            assert.ok(!/TABLE_COUNT_MISMATCH/.test(warnLines()));
             assert.strictEqual(sync._replicaGaps.get('blocks').sweeps, 1);
         });
 
         it('still compares an unlabelled source that publishes no source_height', async function(){
             await sweep({ block_height: 100, table_counts: { blocks: 10 } });
-            assert.ok(/TABLE_COUNT_MISMATCH/.test(errorLines()));
+            assert.ok(/TABLE_COUNT_MISMATCH/.test(warnLines()));
         });
 
         it('reports replica-ahead only against counts read at the follower height', async function(){

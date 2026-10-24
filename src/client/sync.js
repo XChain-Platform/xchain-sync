@@ -61,6 +61,11 @@ const envConfig = require('../config');
 // also reads, so the count and content checks cannot disagree about a table.
 const OPERATIONAL_LOG_TABLES = new Set(replicatedTables.OPERATIONAL_LOG_TABLES);
 const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
+// Stream tables the registry lets a replica replace wholesale when a count gap
+// persists (replicaRepair: 'replace'), and how many tries one gap gets.
+const REPLICA_GAP_REPLACE_TABLES = new Set(tableLifecycle.tablesWhere(t =>
+    t.replication === 'stream:action' && t.replicaRepair === 'replace'));
+const REPLICA_STREAM_REPAIR_ATTEMPTS = 3;
 // Lock-wait timeouts on schema apply retry with exponential backoff before the
 // table counts as a persistent failure.
 const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
@@ -131,6 +136,21 @@ function compareSourceBlockHashes(client, source, blockHeight, remoteStatus, loc
 }
 
 // Report completeness gaps without changing the hash verdict or halting the replica.
+// The decoder count check's verdict. The periodic sweep (`periodic`) logs a shortfall
+// at warn, as ClientSync.reportCompletenessShortfalls does: one sweep's lag heals by
+// itself, and a persistent gap escalates through REPLICA_GAP_PERSISTENT. A one-shot
+// verify keeps the error line.
+function reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches, periodic){
+    if(countMismatches.length){
+        let log = periodic ? getLogger().warn.bind(getLogger()) : getLogger().error.bind(getLogger());
+        log('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
+            '; decoder snapshot may be truncated or incomplete:');
+        log(JSON.stringify(countMismatches));
+    } else if(remoteStatus.table_counts){
+        getLogger().info('Table-count verification passed against ' + source);
+    }
+}
+
 function reportTableCountResults(source, blockHeight, remoteStatus, countMismatches){
     let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
     let ahead = countMismatches.filter(m => m.reason === 'replica-ahead');
@@ -2423,13 +2443,7 @@ class ClientSync {
             }
 
             let countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, effectiveExcludes);
-            if(countMismatches.length){
-                getLogger().error('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
-                    '; decoder snapshot may be truncated or incomplete:');
-                getLogger().error(JSON.stringify(countMismatches));
-            } else if(remoteStatus.table_counts){
-                getLogger().info('Table-count verification passed against ' + source);
-            }
+            reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches, opts && opts.requireEqualHeight);
 
             // Decoder content parity (advisory). The counts above are the
             // ONLY other signal this DB has: no ledger/actions/contract hash, no state
@@ -2524,25 +2538,96 @@ class ClientSync {
         return mismatches;
     }
 
-    // Re-page the short append-only lookups from id 0 and return the Set it tried.
+    // Re-page the short append-only lookups from id 0, replace a persistently short
+    // stream table the registry marks repairable, and return the Set it tried.
     // The ordinary pager seeds at MAX(id), so a hole below the high-water mark
     // survives every sweep (see the HOLE note in syncLookupTablesPaged); detecting it
     // and never acting is what let the BTC mainnet index_transactions gap sit for
     // four weeks. INSERT IGNORE makes a re-page idempotent, a table short for another
     // reason comes back short next sweep, and operational logs never converge, so
-    // they are never re-paged. Advisory: a failed pass logs and never throws.
+    // they are never re-paged. A stream table has no id cursor to re-page from, so
+    // the dogecoin testnet mappings_actions replica sat 2 rows short for good; see
+    // repairShortStreams. Advisory: a failed pass logs and never throws.
     async repairShortLookups(source, shortfalls){
         let lookups = new Set(replicatedTables.getTopology(this.dbType).index || []);
         let shortLookups = new Set((shortfalls || []).map(m => m && m.table)
             .filter(t => lookups.has(t) && !OPERATIONAL_LOG_TABLES.has(t)));
-        if(!shortLookups.size) return shortLookups;
+        if(shortLookups.size){
+            try {
+                await this.syncLookupTablesPaged(source, { fromZero: shortLookups });
+            } catch(repairErr){
+                getLogger().error(util.format('Lookup repair pass failed against ' + source + ':',
+                    repairErr.message || repairErr));
+            }
+        }
+        let shortStreams = this.persistentRepairableStreams(shortfalls);
+        if(shortStreams.size) await this.repairShortStreams(source, shortStreams, shortfalls);
+        return new Set([...shortLookups, ...shortStreams]);
+    }
+
+    // The short stream tables to replace this sweep: marked replicaRepair 'replace' in
+    // the registry, short for one sweep less than the alert threshold (a one-sweep lag
+    // heals by itself and is never touched), and under the attempt cap, since each try
+    // downloads the whole snapshot. A truncated replica holds only its retained window,
+    // which can never match the source's full-history count, so it never repairs.
+    persistentRepairableStreams(shortfalls){
+        if(this.dbType !== 'indexer' || this.isTruncated()) return new Set();
+        return new Set((shortfalls || []).map(m => m && m.table).filter(table => {
+            let gap = this._replicaGaps.get(table);
+            return REPLICA_GAP_REPLACE_TABLES.has(table) && gap &&
+                gap.sweeps >= Math.max(1, this._replicaGapAlertSweeps - 1) &&
+                (gap.repairAttempts || 0) < REPLICA_STREAM_REPAIR_ATTEMPTS;
+        }));
+    }
+
+    // Re-read `tables` from the source's full snapshot and replace the replica's rows,
+    // only when the snapshot is at the replica's own height and holds exactly the row
+    // count the sweep saw at the source. Anything else skips or logs; the gap tracker
+    // keeps reporting until a sweep sees the counts match.
+    async repairShortStreams(source, tables, shortfalls){
         try {
-            await this.syncLookupTablesPaged(source, { fromZero: shortLookups });
+            let expected = new Map((shortfalls || []).filter(m => m && tables.has(m.table))
+                .map(m => [m.table, Number(m.sourceCount)]));
+            let height = this.lastAppliedBlock;
+            let { snapshotData } = await this.downloadIncrementalCatchUp(source, 0);
+            if(Number(snapshotData.block_height) !== Number(height)){
+                getLogger().warn('Stream-table repair skipped: source moved from block ' +
+                    height + ' to ' + snapshotData.block_height + ' during the repair read.');
+                return;
+            }
+            for(let table of tables){
+                let rows = snapshotData.tables && snapshotData.tables[table];
+                if(!Array.isArray(rows)) throw new Error('repair snapshot omitted table ' + table);
+                if(Number.isFinite(expected.get(table)) && rows.length !== expected.get(table))
+                    throw new Error('repair snapshot for ' + table + ' held ' + rows.length +
+                        ' row(s), expected ' + expected.get(table));
+                await this.replaceReplicaStreamTable(table, rows, height);
+                getLogger().warn('Stream-table repair: replaced ' + table + ' from ' + source +
+                    ' at block ' + height + ' (' + rows.length + ' row(s)).');
+            }
         } catch(repairErr){
-            getLogger().error(util.format('Lookup repair pass failed against ' + source + ':',
+            getLogger().error(util.format('Stream-table repair pass failed against ' + source + ':',
                 repairErr.message || repairErr));
         }
-        return shortLookups;
+    }
+
+    // Swap one table's rows in a single transaction under the apply lock, refusing if a
+    // block applied since the repair read (the snapshot would then be one block stale).
+    replaceReplicaStreamTable(table, rows, expectedHeight){
+        return this.withApplyLock(async () => {
+            if(Number(this.lastAppliedBlock) !== Number(expectedHeight))
+                throw new Error('replica advanced during repair read');
+            await this.db.beginTransaction();
+            try {
+                await this.db.deleteAllRows(table);
+                if(rows.length) await this.applier.insertRows(table, rows);
+                if((await this.db.commitTransaction()) === false)
+                    throw new Error('stream-table repair: no open transaction at commit');
+            } catch(e){
+                await this.db.rollbackTransaction();
+                throw e;
+            }
+        });
     }
 
     beginCompletenessSweep(source, remoteHeight){
@@ -2664,10 +2749,14 @@ class ClientSync {
         };
     }
 
+    // One sweep's shortfall is a detection, logged at warn: a follower one sweep
+    // behind heals in about two, and an error line here tripped the roll pre-flight
+    // gate on that ordinary lag. A gap that persists escalates to error through
+    // REPLICA_GAP_PERSISTENT (trackReplicaGaps).
     reportCompletenessShortfalls(source, shortfalls){
-        getLogger().error('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
+        getLogger().warn('TABLE_COUNT_MISMATCH at block ' + this.lastAppliedBlock + ' against ' + source +
             '; follower may be missing replicated rows:');
-        getLogger().error(JSON.stringify(shortfalls));
+        getLogger().warn(JSON.stringify(shortfalls));
     }
 
     reportCompletenessAhead(source, ahead){

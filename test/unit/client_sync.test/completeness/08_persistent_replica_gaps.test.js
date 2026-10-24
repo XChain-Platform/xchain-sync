@@ -53,7 +53,9 @@ function registerPersistentReplicaGapsGroup1Tests(){
             await sweep({ blocks: 10 });
 
             let logged = errorLines();
-            assert.ok(/TABLE_COUNT_MISMATCH/.test(logged), 'the detection still fires');
+            assert.ok(/TABLE_COUNT_MISMATCH/.test(warn.getCalls().map(c => String(c.args[0])).join('\n')),
+                'the detection still fires, at warn');
+            assert.ok(!/TABLE_COUNT_MISMATCH/.test(logged), 'a one-sweep lag never logs at error');
             assert.ok(!/REPLICA_GAP_PERSISTENT/.test(logged),
                 'one sighting is not yet evidence of a permanent gap');
             assert.deepStrictEqual(sync.getReplicaGaps(), []);
