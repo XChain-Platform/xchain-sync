@@ -35,7 +35,7 @@ const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_R
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_BLOBS = {
-    'shared_rows.js':   'ca3695a6216c66ebcd0a16e441f3851e089468bb',
+    'shared_rows.js':   '1d1e611b0edc5855f83fa14ad69114b3fb0b9209',
     'shared_rows_1.js': '088d556015fc3ec95322b4f551a2b0efb191f7e4',
     'shared_rows_2.js': 'f7906c1f870cf12039e04b7ae4b66a3327d3ba85',
     'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
@@ -43,7 +43,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_5.js': 'a86612072fd23b140a4116988e8ec205b149dcd8',
 };
 const INDEXER_CANONICAL_SHA256 = {
-    'shared_rows.js':   '69985d91fce466d8f40f41217502be1ff055f0d1cd89fc3cc6ea1cfdb548f992',
+    'shared_rows.js':   '813ee55c0c87bc54a9e4283bf4059972927d7d83d7e6d8bc55d88d8383f5c826',
     'shared_rows_1.js': '141975560c1646036d08d86b1e8c55ead2afefc94900153ef08b9715cac50a91',
     'shared_rows_2.js': 'f11392f3802e0274f6a771b5e1b2a795a4997d90914d8bb2a284af4d643f2d7a',
     'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',
