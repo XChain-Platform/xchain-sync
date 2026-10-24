@@ -40,7 +40,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_2.js': 'f7906c1f870cf12039e04b7ae4b66a3327d3ba85',
     'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
-    'shared_rows_5.js': 'e852e84d7b5767aecd49923b03a7109480989031',
+    'shared_rows_5.js': '23d7d39e19e4ca05a901fb9d80cd3042a513cd9a',
 };
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '419b9e23ceaea3c8dfefd0798ed49204040137935e890fec8dc731829d13a7d4',
@@ -48,7 +48,7 @@ const INDEXER_CANONICAL_SHA256 = {
     'shared_rows_2.js': 'f11392f3802e0274f6a771b5e1b2a795a4997d90914d8bb2a284af4d643f2d7a',
     'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
-    'shared_rows_5.js': '991c2cfd322d689c6a8b7a0cb1c720bfba70504df03290aebd0a29ff5e6e2d6d',
+    'shared_rows_5.js': '289b5761d0e0ac9b9d36e0184ea39f425d63e5af4cdb09a94dc2c2f0e72af3e7',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
@@ -200,6 +200,21 @@ describe('armed map v2: falsification on temp trees', function () {
             "addGate('anchor_reward_activation.ANCHOR_REWARD_AMOUNT', 'constant', '10.00000001');");
         const after = readV2(root);
         assert.strictEqual(after.hex, baseline.hex);
+    });
+
+    it('arming the archive roll-call presence testnet sentinel does not move the sync fingerprint', function () {
+        // Follow-forward verifies state_checkpoints against the full oracle_publish set and reads
+        // no archive_publish set, so the row stays outside sync membership when a cut arms it.
+        const root = tree();
+        edit(root, 'src/consensus/gate_registry/shared_rows_5.js',
+            "'height', { mainnet: UNPINNED, 'BTC:testnet': UNARMED, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation",
+            "'height', { mainnet: UNPINNED, 'BTC:testnet': 160000, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation");
+        const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
+        assert.strictEqual(get('archive_rollcall_presence_activation.ARCHIVE_ROLLCALL_PRESENCE_ACTIVATION')['BTC:testnet'],
+            9999999999, 'the shipped row is on the UNARMED sentinel');
+        const after = readV2(root);
+        assert.strictEqual(after.hex, baseline.hex);
+        assert.ok(!Object.keys(after.rows).some((k) => k.startsWith('archive_rollcall_presence_activation.')));
     });
 
     it('reads the same value without node_modules because every registry row is local data', function () {
