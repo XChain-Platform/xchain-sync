@@ -47,7 +47,7 @@ const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, 
 const { bootstrapDepthKey } = require('../config');
 const checkpointVerifier = require('../checkpoint');
 const M = require('../merkle');
-const { getPinnedValidators, getPinnedCheckpoint } = require('./pinned_validators');
+const { getPinnedValidators, getPinnedCheckpoint, checkpointQuorumEnabled } = require('./pinned_validators');
 // Resolved at each call site rather than bound once: the shim is installed by the
 // entry file after this module is required, and getLogger() hands back a lazy
 // façade that reaches the real sink once that has happened.
@@ -672,11 +672,12 @@ class ClientSync {
         if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE'] !== false){
             let pinned = getPinnedValidators(this.chain, this.network);
             let havePinned = Array.isArray(pinned) && pinned.length > 0;
-            if(!this.config['VERIFY_CHECKPOINT_QUORUM'] || !havePinned){
+            let quorumOn = this.checkpointQuorumOn();
+            if(!quorumOn || !havePinned){
                 getLogger().warn(
                     'SECURITY: ' + this.chain + '/' + this.network + '/indexer replica has NO active ' +
                     'checkpoint-quorum anchor (' +
-                    (!this.config['VERIFY_CHECKPOINT_QUORUM'] ? 'VERIFY_CHECKPOINT_QUORUM is off'
+                    (!quorumOn ? 'VERIFY_CHECKPOINT_QUORUM is off'
                         : 'no pinned validator set configured') +
                     '). Cross-source quorum only outvotes a MINORITY of Byzantine sources; if ALL ' +
                     'configured sources collude they agree unanimously and wrong. The federation ' +
@@ -4223,9 +4224,15 @@ class ClientSync {
         }
     }
 
+    // Whether the checkpoint-quorum anchor runs for this client's (chain, network): the
+    // explicit VERIFY_CHECKPOINT_QUORUM when set, else that key's shipped default.
+    checkpointQuorumOn(){
+        return checkpointQuorumEnabled(this.config['VERIFY_CHECKPOINT_QUORUM'], this.chain, this.network);
+    }
+
     checkpointQuorumIsDue(){
         // Check whether the verified tip reaches the next checkpoint interval.
-        return this.dbType === 'indexer' && this.config['VERIFY_CHECKPOINT_QUORUM']
+        return this.dbType === 'indexer' && this.checkpointQuorumOn()
             && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL'];
     }
 

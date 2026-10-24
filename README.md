@@ -32,7 +32,7 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 - **Cross-source comparison**: clients can sync from 2+ independent servers and hold blocks until all sources confirm identical hashes
 - **Transparency log**: append-only per-block hash record with SHA-256 Merkle epoch roots and inclusion proofs (indexer only)
 - **SPV state-commitment recompute**: apply-time rebuild of per-block light-client roots (`state_tree_roots`/`state_tree_nodes`) that halts on divergence from the source (indexer only, opt-out via `VERIFY_STATE_COMMITMENT=false`)
-- **Checkpoint-quorum anchor**: optional federation anchor that fetches the server's quorum-signed checkpoint, verifies it against a pinned validator set, and asserts the committed state root matches the replica's own recomputed value (indexer only, opt-in via `VERIFY_CHECKPOINT_QUORUM=true`)
+- **Checkpoint-quorum anchor**: optional federation anchor that fetches the server's quorum-signed checkpoint, verifies it against a pinned validator set, and asserts the committed state root matches the replica's own recomputed value (indexer only; on by default for testnet, off for mainnet until its launch validator set is pinned and for regtest; `VERIFY_CHECKPOINT_QUORUM=true` or `=false` overrides every chain and network)
 - **Rate limiting**: configurable per-IP limits on snapshot downloads and WebSocket connections
 - **Reorg propagation**: detects chain reorganizations from the source database and broadcasts rollback events to all subscribers, then rolls back the replica
 - **Automatic catch-up**: clients detect block gaps on reconnect and self-heal via incremental REST snapshots

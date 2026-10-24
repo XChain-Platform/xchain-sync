@@ -61,9 +61,9 @@
  * the launch checkpoints, in the stake-weighted shape checkpoint.js verifyCheckpoint
  * expects:
  *   [ { pubkey: '<64-hex ed25519>', weight: '<canonical amount>', source: '<signer/delegation source>' }, ... ]
- * The SAME change must flip the VERIFY_CHECKPOINT_QUORUM default to true in
- * config.js, because a pinned set with the anchor still defaulting off leaves
- * replicas trusting their source when a trust root is available.
+ * The SAME change must flip that key's VERIFY_CHECKPOINT_QUORUM default to true in
+ * CHECKPOINT_QUORUM_DEFAULTS below, because a pinned set with the anchor still
+ * defaulting off leaves replicas trusting their source when a trust root is available.
  * test/unit/checkpoint_quorum_flag_day.test.js fails until both halves land.
  *
  ********************************************************************/
@@ -114,6 +114,36 @@ for (const k of Object.keys(PINNED)) {
     }
 }
 Object.freeze(PINNED);
+
+/**
+ * Shipped VERIFY_CHECKPOINT_QUORUM defaults, keyed like PINNED. The operator ruled
+ * per-(chain, network) defaults (2026-10-12) so testnet rehearses the anchor before
+ * mainnet relies on it: testnet anchors by default, and until its pins land the
+ * anchor skips (never bypasses) and the startup warning names the missing pinned set.
+ * Mainnet stays off until the launch key fill, which flips it in the same change.
+ * Regtest stays off: a rail venue runs no signing federation to anchor against.
+ * An explicit VERIFY_CHECKPOINT_QUORUM env value overrides every key.
+ */
+const CHECKPOINT_QUORUM_DEFAULTS = Object.freeze({
+    'BTC:mainnet':  false,  // ON AT LAUNCH FILL
+    'BTC:testnet':  true,
+    'BTC:regtest':  false,
+    'LTC:mainnet':  false,  // ON AT LAUNCH FILL
+    'LTC:testnet':  true,
+    'LTC:regtest':  false,
+    'DOGE:mainnet': false,  // ON AT LAUNCH FILL
+    'DOGE:testnet': true,
+    'DOGE:regtest': false,
+});
+
+// Whether the checkpoint-quorum anchor runs for (chain, network): the explicit env
+// value config.js read (true or false) when the operator set one, else the shipped
+// default for that key. An unknown key is off.
+function checkpointQuorumEnabled(explicit, chain, network) {
+    if (typeof explicit === 'boolean') return explicit;
+    if (chain == null || network == null) return false;
+    return CHECKPOINT_QUORUM_DEFAULTS[tickerOf(chain) + ':' + String(network).toLowerCase()] === true;
+}
 
 function envKey(chain, network) {
     return 'CHECKPOINT_VALIDATORS_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
@@ -333,4 +363,4 @@ function assertPinnedEnvOverrides(env) {
     );
 }
 
-module.exports = { getPinnedValidators, getPinnedCheckpoint, assertPinnedEnvOverrides, PINNED, PINNED_CHECKPOINTS };
+module.exports = { getPinnedValidators, getPinnedCheckpoint, assertPinnedEnvOverrides, checkpointQuorumEnabled, PINNED, PINNED_CHECKPOINTS, CHECKPOINT_QUORUM_DEFAULTS };

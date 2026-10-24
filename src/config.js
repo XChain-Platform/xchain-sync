@@ -569,6 +569,17 @@ function addParityConfig(config){
     }
 }
 
+// The operator's explicit VERIFY_CHECKPOINT_QUORUM: true or false when set (anything
+// but 'true' is false, so =false stays the opt-out for throwaway mirrors), null when
+// unset. ClientSync resolves null through checkpointQuorumEnabled
+// (client/pinned_validators.js), whose CHECKPOINT_QUORUM_DEFAULTS turn testnet on and
+// keep mainnet off until the launch validator set lands, flipped in the same change;
+// test/unit/checkpoint_quorum_flag_day.test.js enforces that coupling.
+function explicitCheckpointQuorum(raw){
+    if(raw === undefined || raw === '') return null;
+    return String(raw).toLowerCase() === 'true';
+}
+
 function addCheckpointConfig(config){
     // VERIFY_CHECKPOINT_QUORUM (SPV): anchor the replica's INDEPENDENTLY-recomputed
     // state_root to the federation quorum instead of trusting the source's claimed
@@ -577,21 +588,15 @@ function addCheckpointConfig(config){
     // and HALTs if the quorum fails or the checkpoint's state_root disagrees with the
     // replica's own state_tree_roots row. Closes the single-source trust gap that the
     // recompute checks (which only compare against the same source) cannot.
-    // Default OFF: consensus-sensitive and INERT without a pinned set. When on but no
-    // pinned set is configured for the (chain, network), the step is skipped (never
-    // bypassed). CHECKPOINT_VERIFY_INTERVAL bounds how often the /latest checkpoint is
-    // probed (in applied blocks; default 50).
+    // When on but no pinned set is configured for the (chain, network), the step is
+    // skipped (never bypassed). CHECKPOINT_VERIFY_INTERVAL bounds how often the /latest
+    // checkpoint is probed (in applied blocks; default 50).
     //
-    // FLAG-DAY COUPLING: this default is tied to pinnedValidators.js. It stays
-    // OFF only while every pinned key is null, because a true-but-inert flag reads as
-    // "protected" while nothing is actually verified. The change that populates a real
-    // launch validator set must flip this default to ON in the same change (an operator
-    // who has a trust root available and does not use it is still trusting the source);
-    // an explicit VERIFY_CHECKPOINT_QUORUM=false remains the opt-out for throwaway
-    // mirrors. test/unit/checkpoint_quorum_flag_day.test.js enforces both halves, and the
-    // launch activation runbook carries the deploy-side ordering (the federation must
-    // be serving signed checkpoints first).
-    config['VERIFY_CHECKPOINT_QUORUM'] = (process.env.VERIFY_CHECKPOINT_QUORUM || 'false').toLowerCase() === 'true';
+    // PER-(CHAIN, NETWORK) DEFAULT: one process serves several chains, so the default
+    // is not decided here (see explicitCheckpointQuorum). The launch activation runbook
+    // carries the deploy-side ordering (the federation must be serving signed
+    // checkpoints first).
+    config['VERIFY_CHECKPOINT_QUORUM'] = explicitCheckpointQuorum(process.env.VERIFY_CHECKPOINT_QUORUM);
     config['CHECKPOINT_VERIFY_INTERVAL'] = parseIntMin1(process.env.CHECKPOINT_VERIFY_INTERVAL, 50);
 
     // Out-of-band checkpoint anchor endpoint. The quorum verify is sound even when the
