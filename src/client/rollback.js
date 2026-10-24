@@ -52,6 +52,40 @@ const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
 // Database.MARKET_NATIVE_TICK_ID in xchain-indexer/src/db/index.js; the replica cannot
 // require indexer code, so the value is restated rather than imported.
 const MARKET_NATIVE_TICK_ID = 0;
+// The orphaned price_snapshots purge deletes at most this many rows per statement, the
+// bound xchain-indexer src/db/rollback/sweeps.js uses, and retries a statement timeout at
+// half the chunk up to this many times in a row before the rollback gives up.
+const PRICE_SNAPSHOT_PURGE_CHUNK = 1000;
+const PRICE_SNAPSHOT_PURGE_TIMEOUT_RETRIES = 3;
+
+// MariaDB max_statement_time (1969) and MySQL max_execution_time (3024).
+function isStatementTimeout(error){
+    if(!error) return false;
+    return error.errno === 1969 || error.errno === 3024 ||
+        error.code === 'ER_STATEMENT_TIMEOUT' || error.code === 'ER_QUERY_TIMEOUT';
+}
+
+async function purgeOrphanedPriceSnapshots(db, blockIndex){
+    let chunk = PRICE_SNAPSHOT_PURGE_CHUNK;
+    let timeouts = 0;
+    for(;;){
+        let result;
+        try {
+            result = await db.doQuery(
+                "DELETE FROM price_snapshots " +
+                "WHERE reference_chain = 'BTC' AND reference_block >= ? LIMIT ?",
+                [blockIndex, chunk]);
+        } catch(error){
+            if(!isStatementTimeout(error) || ++timeouts > PRICE_SNAPSHOT_PURGE_TIMEOUT_RETRIES)
+                throw error;
+            chunk = Math.max(1, Math.floor(chunk / 2));
+            continue;
+        }
+        timeouts = 0;
+        const rows = (result && result.affectedRows != null) ? Number(result.affectedRows) : 0;
+        if(rows < chunk) return;
+    }
+}
 
 function initializeDependencies(client, db, util){
     client.db   = db;
@@ -1123,10 +1157,13 @@ class ClientRollback {
             // anchor height regardless of the publishing chain, so only the BTC replica can prune
             // BTC-published rounds by it. Qualify by reference_chain and run only on the BTC replica so
             // a BTC reorg never deletes an off-BTC-published round the hub still keeps (price_snapshots
-            // feeds getOracleDataForVM). Behavior-preserving today (price capability is BTC-only).
+            // feeds getOracleDataForVM). Delete in bounded chunks off idx_refchain_block: an unbounded
+            // purge can exceed the per-statement timeout on a large mirror. A timed-out chunk is retried
+            // at half size because MariaDB and MySQL roll back that statement without aborting the
+            // transaction. Which matching rows each chunk takes does not matter, so no ordering is needed.
             try {
                 if(this.coin === 'BTC')
-                    await this.db.doQuery("DELETE FROM price_snapshots WHERE reference_chain = 'BTC' AND reference_block >= ?", [block_index]);
+                    await purgeOrphanedPriceSnapshots(this.db, block_index);
             } catch(e){
                 // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                 // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -1504,5 +1541,8 @@ async function rederiveTokenBridged(db){
 ClientRollback.rederiveEscrowGate = rederiveEscrowGate;
 ClientRollback.rederiveCoinpayMatchStatus = rederiveCoinpayMatchStatus;
 ClientRollback.rederiveTokenBridged = rederiveTokenBridged;
+ClientRollback.purgeOrphanedPriceSnapshots = purgeOrphanedPriceSnapshots;
+ClientRollback.PRICE_SNAPSHOT_PURGE_CHUNK = PRICE_SNAPSHOT_PURGE_CHUNK;
+ClientRollback.PRICE_SNAPSHOT_PURGE_TIMEOUT_RETRIES = PRICE_SNAPSHOT_PURGE_TIMEOUT_RETRIES;
 
 module.exports = ClientRollback;

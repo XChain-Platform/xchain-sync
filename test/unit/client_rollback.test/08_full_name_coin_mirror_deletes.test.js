@@ -49,7 +49,7 @@ describe('ClientRollback full-name coin @regression', function(){
             let snaps = deletesOf(db, 'price_snapshots');
             assert.strictEqual(snaps.length, 1, 'the BTC replica must prune orphaned price_snapshots');
             assert.ok(snaps[0].args[0].includes("reference_chain = 'BTC' AND reference_block >= ?"));
-            assert.deepStrictEqual(snaps[0].args[1], [100]);
+            assert.deepStrictEqual(snaps[0].args[1], [100, ClientRollback.PRICE_SNAPSHOT_PURGE_CHUNK]);
 
             assert.deepStrictEqual(deletesOf(db, 'oracle_prices')[0].args[1], ['BTC', 500]);
             assert.deepStrictEqual(deletesOf(db, 'cross_chain_calls')[0].args[1], ['BTC', 500]);
