@@ -33,5 +33,7 @@
   "test/unit/client_sync_io.test/12_verify_against_source.test.js": "test/unit/client_sync_io.test/verify/12_verify_against_source.test.js",
   "test/unit/client_sync_io.test/13_verify_decoder_completeness_catch.test.js": "test/unit/client_sync_io.test/verify/13_verify_decoder_completeness_catch.test.js",
   "ClientSync rollback guard persistence treats a rollback guard read failure as an empty streak": "ClientSync rollback guard persistence reports a rollback guard read failure as unreadable and keeps the streak empty",
+  "pinnedValidators @regression is INERT: every real (chain, network) pins null": "pinnedValidators @regression keeps mainnet and regtest INERT",
+  "pinnedValidators: the hub's full coin name @regression is INERT under the full coin names too": "pinnedValidators: the hub's full coin name @regression resolves testnet pins and inert networks under the full coin names too",
   "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the two close_block tables by close_block on every forward channel": "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the close_block tables by close_block on every forward channel"
 }
