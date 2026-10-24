@@ -385,6 +385,7 @@ class ClientSync {
         this._reconnectTimers = new Map();
         this._streamWatchdogs = new Map();
         this._sourceLastWsEventAt = new Map();
+        this._sourceLastReportedTip = new Map();
         this._sourcesNeedingRecovery = new Set();
         this.lastAppliedBlock     = null;
         this.lastHashes           = null;
@@ -982,6 +983,7 @@ class ClientSync {
         this._reconnectTimers.clear();
         this._streamWatchdogs.clear();
         this._sourceLastWsEventAt.clear();
+        this._sourceLastReportedTip.clear();
         this._sourcesNeedingRecovery.clear();
         if(this._hbTimer){
             clearTimeout(this._hbTimer);
@@ -3064,6 +3066,14 @@ class ClientSync {
         // not when apply work finishes. Every valid event type counts.
         this._lastWsEventAt = Date.now();
         this._sourceLastWsEventAt.set(sourceIndex, this._lastWsEventAt);
+        let reportedTip = null;
+        if(event.type === 'block') reportedTip = event.block_index;
+        else if(event.type === 'status'){
+            reportedTip = (typeof event.source_block_height === 'number')
+                ? event.source_block_height : event.block_height;
+        }
+        if(typeof reportedTip === 'number' && Number.isFinite(reportedTip))
+            this._sourceLastReportedTip.set(sourceIndex, reportedTip);
         this.armStreamWatchdog(source, sourceIndex, ws);
         this._wsEventChain = (this._wsEventChain || Promise.resolve())
             .then(() => this.handleEvent(event, sourceIndex))
@@ -3150,23 +3160,52 @@ class ClientSync {
         const timer = setTimeout(() => {
             this._streamWatchdogs.delete(sourceIndex);
             if(!this.running || (ws && this.wsConns[sourceIndex] !== ws)) return;
-            let seenAt = this._sourceLastWsEventAt.get(sourceIndex);
+            const seenAt = this._sourceLastWsEventAt.get(sourceIndex);
             if(typeof seenAt === 'number' && Date.now() - seenAt <= staleMs){
                 this.armStreamWatchdog(source, sourceIndex, ws);
                 return;
             }
-            getLogger().warn('WebSocket stream from ' + source + ' has produced no sync event for ' +
-                staleMs + 'ms; reconnecting ' + this.chain + '/' + this.network + '/' + this.dbType);
-            this._sourcesNeedingRecovery.add(sourceIndex);
-            this._upstreamStatus.delete(sourceIndex);
-            if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
-            try {
-                if(ws && typeof ws.terminate === 'function') ws.terminate();
-                else if(ws) ws.close();
-            } catch(e){ /* best-effort */ }
-            this.scheduleReconnect(source, sourceIndex);
+            this.reconnectStaleStreamIfSourceAdvanced(source, sourceIndex, ws, staleMs, seenAt)
+                .catch(e => {
+                    getLogger().error(util.format('WebSocket stale check failed for ' + source + ':', e));
+                    if(this.running && (!ws || this.wsConns[sourceIndex] === ws))
+                        this.armStreamWatchdog(source, sourceIndex, ws);
+                });
         }, remaining);
         this._streamWatchdogs.set(sourceIndex, timer);
+    }
+
+    async reconnectStaleStreamIfSourceAdvanced(source, sourceIndex, ws, staleMs, staleSeenAt){
+        const url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
+        const response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+        const status = response.data || {};
+        const sourceTip = (typeof status.source_height === 'number')
+            ? status.source_height : status.block_height;
+        const reportedTip = this._sourceLastReportedTip.has(sourceIndex)
+            ? this._sourceLastReportedTip.get(sourceIndex) : this.lastAppliedBlock;
+
+        if(!this.running || (ws && this.wsConns[sourceIndex] !== ws)) return;
+        const currentSeenAt = this._sourceLastWsEventAt.get(sourceIndex);
+        if(currentSeenAt !== staleSeenAt ||
+           (typeof currentSeenAt === 'number' && Date.now() - currentSeenAt <= staleMs)) return;
+        if(typeof sourceTip !== 'number' || !Number.isFinite(sourceTip) ||
+           typeof reportedTip !== 'number' || !Number.isFinite(reportedTip) ||
+           sourceTip <= reportedTip){
+            this.armStreamWatchdog(source, sourceIndex, ws);
+            return;
+        }
+
+        getLogger().warn('WebSocket stream from ' + source + ' has produced no sync event for ' +
+            staleMs + 'ms while its source tip advanced from ' + reportedTip + ' to ' + sourceTip +
+            '; reconnecting ' + this.chain + '/' + this.network + '/' + this.dbType);
+        this._sourcesNeedingRecovery.add(sourceIndex);
+        this._upstreamStatus.delete(sourceIndex);
+        if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
+        try {
+            if(ws && typeof ws.terminate === 'function') ws.terminate();
+            else if(ws) ws.close();
+        } catch(e){ /* best-effort */ }
+        this.scheduleReconnect(source, sourceIndex);
     }
 
     async handleEvent(event, sourceIndex){
