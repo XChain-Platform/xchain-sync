@@ -27,9 +27,9 @@
  * duplicated here because xchain-sync has no xchain-sdk dependency by design.
  * Keyed by "chain:network".
  *
- * INERT until populated: every real (chain, network) ships null, so with
- * VERIFY_CHECKPOINT_QUORUM off (the default) AND no pinned set, behavior is
- * unchanged. An operator may also supply a set out of band via the env var
+ * Mainnet and regtest stay inert until populated. Testnet ships the live
+ * validator set so its default-on checkpoint-quorum anchor can verify. An
+ * operator may also supply a set out of band via the env var
  *   CHECKPOINT_VALIDATORS_<CHAIN>_<NETWORK>   (JSON array, e.g.
  *   CHECKPOINT_VALIDATORS_BTC_MAINNET='[{"pubkey":"..","weight":"..","source":".."}]')
  * which overrides the baked-in entry for that key.
@@ -39,13 +39,10 @@
  * (CHECKPOINT_VALIDATORS_BTC_MAINNET or CHECKPOINT_VALIDATORS_BITCOIN_MAINNET); the
  * ticker form is canonical and wins when both are set.
  *
- * ABSENT is not INVALID. An unset override is inert: no trust root exists, so
- * ClientSync.verifyCheckpointQuorum skips the step, which is what the config.js
- * VERIFY_CHECKPOINT_QUORUM contract means by "skipped, never bypassed". An override
- * the operator DID supply but got wrong used to resolve to the same null, and with
- * every baked-in key still null that silently switched checkpoint authentication OFF
- * on a replica whose operator armed the flag believing it on. So the getters still
- * return null (they are read on hot paths and must never throw), and
+ * ABSENT is not INVALID. An unset override leaves the baked-in choice unchanged. A
+ * bad explicit override must not be mistaken for absence: an unpinned network would
+ * skip authentication, while a pinned network would silently ignore the operator's
+ * intended replacement. The hot-path getters never throw, so
  * `assertPinnedEnvOverrides` runs once at client startup to REFUSE to start on a
  * present-but-invalid value, the same shape as config.js assertBootstrapDepthChains.
  *
@@ -76,6 +73,14 @@ const swq = require('../consensus/stake_weighted_quorum');
 const logger = getLogger();
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 
+const TESTNET_VALIDATORS = [
+    { pubkey: '18e4c1d54c8932d51fa54e4bc0164461a0605fb801bfca21cad57fa74495c174', weight: '50000.00000000', source: 'mverify2tE4RK7QYHRXbpmj6iLabcYtpWY' },
+    { pubkey: '2661bd8f42b910bbb471387b7c28eaa440fc3c99077c160a69f22859f924aa7d', weight: '50000.00000000', source: 'mverify1Q6YPNqP4UzqLoa1MpDDZUu4ogC' },
+    { pubkey: '72a25832d5f9d30baf704579fc440723f03cba55098cb2aac21063bf71029bad', weight: '50000.00000000', source: 'mverify4Hoe6uqa7ZJanX7GFXDpZ6dmtyX' },
+    { pubkey: '8a1215431e8143b2ebdc9fed2fe7f655ecc327c4efd66798bc4e5504a5d5b0a8', weight: '50000.00000000', source: 'mverify3LaXvGitmYx3nHa3y2LMJ1odWVc' },
+    { pubkey: 'c1de91459e8bd93de9e3263c26d886058593d3fdae57ad0c1bd48ca3dd22f32a', weight: '50000.00000000', source: 'mverify5szar1XwwAjqAnPUHbA814kfHh4' },
+];
+
 // Fold a ticker or full coin name onto the uppercase ticker the pin maps are keyed by.
 function tickerOf(chain) {
     return String(coinTicker(String(chain))).toUpperCase();
@@ -91,19 +96,20 @@ function envNames(keyFn, chain, network) {
 }
 
 /**
- * Baked-in pinned validator sets, keyed "chain:network". All real keys ship null
- * (inert) until launch values land.
+ * Baked-in pinned validator sets, keyed "chain:network". Mainnet and regtest
+ * ship null until launch values land; all testnet chains share the BTC-anchored
+ * oracle_publish set.
  * @type {Record<string, Array<{pubkey:string, weight:string, source:string}> | null>}
  */
 const PINNED = {
     'BTC:mainnet':  null,   // FILL AT LAUNCH
-    'BTC:testnet':  null,
+    'BTC:testnet':  TESTNET_VALIDATORS,
     'BTC:regtest':  null,
     'LTC:mainnet':  null,   // FILL AT LAUNCH
-    'LTC:testnet':  null,
+    'LTC:testnet':  TESTNET_VALIDATORS,
     'LTC:regtest':  null,
     'DOGE:mainnet': null,   // FILL AT LAUNCH
-    'DOGE:testnet': null,
+    'DOGE:testnet': TESTNET_VALIDATORS,
     'DOGE:regtest': null,
 };
 
@@ -118,8 +124,7 @@ Object.freeze(PINNED);
 /**
  * Shipped VERIFY_CHECKPOINT_QUORUM defaults, keyed like PINNED. The operator ruled
  * per-(chain, network) defaults (2026-10-12) so testnet rehearses the anchor before
- * mainnet relies on it: testnet anchors by default, and until its pins land the
- * anchor skips (never bypasses) and the startup warning names the missing pinned set.
+ * mainnet relies on it: testnet anchors by default against the shipped live set.
  * Mainnet stays off until the launch key fill, which flips it in the same change.
  * Regtest stays off: a rail venue runs no signing federation to anchor against.
  * An explicit VERIFY_CHECKPOINT_QUORUM env value overrides every key.
@@ -325,13 +330,12 @@ function isReadOverrideName(family, name) {
  * CHECKPOINT_SEED_* value is present but unusable, or sits under a CHAIN_NETWORK name no
  * getter reads (an unknown chain or network, or a name not in upper case).
  *
- * A malformed or misnamed override is not inert. The getters answer null for it, exactly as they
- * do for an override nobody set, and every baked-in pin still ships null, so
- * ClientSync.verifyCheckpointQuorum's `if(!validators || !validators.length) return;`
- * skips checkpoint authentication entirely on a replica whose operator turned
- * VERIFY_CHECKPOINT_QUORUM on. An unset variable stays inert and is NOT an error; only
- * a value the operator supplied and got wrong is. Same rationale, and the same
- * "Refusing to start" shape, as config.js assertBootstrapDepthChains.
+ * A malformed or misnamed override is not inert. The hot-path getters cannot throw;
+ * they fall back to the baked-in pin or null. That would either ignore an intended
+ * replacement or skip checkpoint authentication entirely. An unset variable stays
+ * inert and is NOT an error; only a value the operator supplied and got wrong is.
+ * Same rationale, and the same "Refusing to start" shape, as config.js
+ * assertBootstrapDepthChains.
  *
  * @param {Record<string, string>} [env] Environment to scan; defaults to process.env.
  * @throws {Error} naming every offending variable and why it is unusable.

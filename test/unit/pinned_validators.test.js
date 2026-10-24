@@ -10,8 +10,8 @@
  *
  **********************************************************************
  * pinnedValidators: the out-of-band trust root for the SPV checkpoint-quorum
- * anchor. Must be INERT (null) for every real (chain, network) until launch
- * values land, and an env override must parse only when well-formed (fail
+ * anchor. Testnet carries its live validator set while mainnet and regtest stay
+ * INERT (null), and an env override must parse only when well-formed (fail
  * closed: a malformed override yields null, never a weak set).
  ********************************************************************/
 
@@ -19,16 +19,36 @@ const assert = require('assert');
 const pinned = require('../../src/client/pinned_validators');
 
 const ENVKEY = 'CHECKPOINT_VALIDATORS_BTC_REGTEST';
+const TESTNET_VALIDATORS = [
+    { pubkey: '18e4c1d54c8932d51fa54e4bc0164461a0605fb801bfca21cad57fa74495c174', weight: '50000.00000000', source: 'mverify2tE4RK7QYHRXbpmj6iLabcYtpWY' },
+    { pubkey: '2661bd8f42b910bbb471387b7c28eaa440fc3c99077c160a69f22859f924aa7d', weight: '50000.00000000', source: 'mverify1Q6YPNqP4UzqLoa1MpDDZUu4ogC' },
+    { pubkey: '72a25832d5f9d30baf704579fc440723f03cba55098cb2aac21063bf71029bad', weight: '50000.00000000', source: 'mverify4Hoe6uqa7ZJanX7GFXDpZ6dmtyX' },
+    { pubkey: '8a1215431e8143b2ebdc9fed2fe7f655ecc327c4efd66798bc4e5504a5d5b0a8', weight: '50000.00000000', source: 'mverify3LaXvGitmYx3nHa3y2LMJ1odWVc' },
+    { pubkey: 'c1de91459e8bd93de9e3263c26d886058593d3fdae57ad0c1bd48ca3dd22f32a', weight: '50000.00000000', source: 'mverify5szar1XwwAjqAnPUHbA814kfHh4' },
+];
 
 describe('pinnedValidators @regression', function(){
     afterEach(function(){ delete process.env[ENVKEY]; });
 
-    it('is INERT: every real (chain, network) pins null', function(){
+    it('pins the five live validators for every testnet chain', function(){
         for(const chain of ['BTC', 'LTC', 'DOGE']){
-            for(const net of ['mainnet', 'testnet', 'regtest']){
+            assert.deepStrictEqual(pinned.getPinnedValidators(chain, 'testnet'), TESTNET_VALIDATORS, chain);
+        }
+    });
+
+    it('keeps mainnet and regtest INERT', function(){
+        for(const chain of ['BTC', 'LTC', 'DOGE']){
+            for(const net of ['mainnet', 'regtest']){
                 assert.strictEqual(pinned.getPinnedValidators(chain, net), null, chain + ':' + net);
             }
         }
+    });
+
+    it('freezes the shipped validator set and its entries', function(){
+        const set = pinned.getPinnedValidators('BTC', 'testnet');
+        assert.strictEqual(Object.isFrozen(set), true);
+        assert.strictEqual(set.length, 5);
+        set.forEach((validator) => assert.strictEqual(Object.isFrozen(validator), true));
     });
 
     it('returns null for an unknown chain/network and for null args', function(){
@@ -79,9 +99,10 @@ describe('pinnedValidators: the hub\'s full coin name @regression', function(){
         }
     });
 
-    it('is INERT under the full coin names too', function(){
+    it('resolves testnet pins and inert networks under the full coin names too', function(){
         for(const chain of ['bitcoin', 'litecoin', 'dogecoin']){
-            for(const net of ['mainnet', 'testnet', 'regtest']){
+            assert.deepStrictEqual(pinned.getPinnedValidators(chain, 'testnet'), TESTNET_VALIDATORS, chain);
+            for(const net of ['mainnet', 'regtest']){
                 assert.strictEqual(pinned.getPinnedValidators(chain, net), null, chain + ':' + net);
             }
         }
@@ -147,8 +168,8 @@ describe('pinnedValidators: rotation seed checkpoint @regression', function(){
     });
 });
 
-// The getters answer null for an override nobody set AND for one the operator set and
-// got wrong, and with every baked-in pin null those two states reach
+// These regtest getters answer null for an override nobody set AND for one the operator
+// set and got wrong. Since their baked-in pins are null, those two states reach
 // ClientSync.verifyCheckpointQuorum identically: `if(!validators||!validators.length)
 // return;` skips checkpoint authentication on a replica whose operator armed
 // VERIFY_CHECKPOINT_QUORUM. assertPinnedEnvOverrides is the startup refusal that keeps
