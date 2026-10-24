@@ -382,6 +382,10 @@ class ClientSync {
         this.sources    = this.config['SYNC_SOURCES'].split(',').map(s => s.trim()).filter(s => s);
         this.running    = false;
         this.wsConns    = [];
+        this._reconnectTimers = new Map();
+        this._streamWatchdogs = new Map();
+        this._sourceLastWsEventAt = new Map();
+        this._sourcesNeedingRecovery = new Set();
         this.lastAppliedBlock     = null;
         this.lastHashes           = null;
         this.lastKnownServerBlock = null;
@@ -973,6 +977,12 @@ class ClientSync {
         this.running = false;
         this._stopping = true;
         this.cancelHaltPersistRetry();
+        for(const timer of this._reconnectTimers.values()) clearTimeout(timer);
+        for(const timer of this._streamWatchdogs.values()) clearTimeout(timer);
+        this._reconnectTimers.clear();
+        this._streamWatchdogs.clear();
+        this._sourceLastWsEventAt.clear();
+        this._sourcesNeedingRecovery.clear();
         if(this._hbTimer){
             clearTimeout(this._hbTimer);
             this._hbTimer = null;
@@ -2966,11 +2976,19 @@ class ClientSync {
     }
 
     connectWebSocket(source, sourceIndex){
-        let ws = this.createWebSocket(source, sourceIndex);
+        this.cancelReconnect(sourceIndex);
+        const ws = this.createWebSocket(source, sourceIndex);
         if(!ws) return;
 
+        const previous = this.wsConns[sourceIndex];
         this.registerWebSocketHandlers(ws, source, sourceIndex);
         this.wsConns[sourceIndex] = ws;
+        if(previous && previous !== ws){
+            try {
+                if(typeof previous.terminate === 'function') previous.terminate();
+                else previous.close();
+            } catch(e){ /* best-effort */ }
+        }
     }
 
     createWebSocket(source, sourceIndex){
@@ -2993,6 +3011,7 @@ class ClientSync {
             });
         } catch(e){
             getLogger().error(util.format('WebSocket connection error:', e));
+            this._sourcesNeedingRecovery.add(sourceIndex);
             this.scheduleReconnect(source, sourceIndex);
             return;
         }
@@ -3001,17 +3020,32 @@ class ClientSync {
     }
 
     registerWebSocketHandlers(ws, source, sourceIndex){
-        ws.on('open', () => this.handleWebSocketOpen(source));
-        ws.on('message', data => this.handleWebSocketMessage(data, source, sourceIndex));
-        ws.on('close', () => this.handleWebSocketClose(source, sourceIndex));
-        ws.on('error', err => this.handleWebSocketError(err, source));
+        ws.on('open', () => this.handleWebSocketOpen(source, sourceIndex, ws));
+        ws.on('message', data => this.handleWebSocketMessage(data, source, sourceIndex, ws));
+        ws.on('close', () => this.handleWebSocketClose(source, sourceIndex, ws));
+        ws.on('error', err => this.handleWebSocketError(err, source, sourceIndex, ws));
     }
 
-    handleWebSocketOpen(source){
+    handleWebSocketOpen(source, sourceIndex, ws){
+        if(ws && this.wsConns[sourceIndex] !== ws) return;
         getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+        this.cancelReconnect(sourceIndex);
+        this._sourceLastWsEventAt.set(sourceIndex, Date.now());
+        this.armStreamWatchdog(source, sourceIndex, ws);
+
+        if(this._sourcesNeedingRecovery.delete(sourceIndex) && this.running && this.lastAppliedBlock !== null){
+            const since = (typeof this._verifiedTip === 'number')
+                ? this._verifiedTip + 1 : this.lastAppliedBlock + 1;
+            getLogger().info('WebSocket restored from ' + source + '; resuming ' +
+                this.chain + '/' + this.network + '/' + this.dbType +
+                ' from its last verified block');
+            const recovery = Promise.resolve().then(() => this.incrementalCatchUp(since));
+            this.trackInFlight(recovery).catch(e => this.handleWsChainError(e));
+        }
     }
 
-    handleWebSocketMessage(data, source, sourceIndex){
+    handleWebSocketMessage(data, source, sourceIndex, ws){
+        if(ws && this.wsConns[sourceIndex] !== ws) return;
         // Synchronous chaining keeps gap detection and apply work atomic and ordered
         // because ws does not await async listeners.
         let event;
@@ -3029,21 +3063,31 @@ class ClientSync {
         // Stamp liveness on receipt so freshness reflects when the server last speaks,
         // not when apply work finishes. Every valid event type counts.
         this._lastWsEventAt = Date.now();
+        this._sourceLastWsEventAt.set(sourceIndex, this._lastWsEventAt);
+        this.armStreamWatchdog(source, sourceIndex, ws);
         this._wsEventChain = (this._wsEventChain || Promise.resolve())
             .then(() => this.handleEvent(event, sourceIndex))
             .catch(e => this.handleWsChainError(e));
     }
 
-    handleWebSocketClose(source, sourceIndex){
+    handleWebSocketClose(source, sourceIndex, ws){
+        if(ws && this.wsConns[sourceIndex] !== ws) return;
         getLogger().info('WebSocket disconnected from ' + source);
+        if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
+        this.clearStreamWatchdog(sourceIndex);
+        this._sourceLastWsEventAt.delete(sourceIndex);
+        if(this.running) this._sourcesNeedingRecovery.add(sourceIndex);
         // A disconnected source provides no evidence about upstream freshness, so its
         // last verdict cannot continue certifying that source.
         this._upstreamStatus.delete(sourceIndex);
         this.scheduleReconnect(source, sourceIndex);
     }
 
-    handleWebSocketError(err, source){
+    handleWebSocketError(err, source, sourceIndex, ws){
         getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
+        if(!this.running || sourceIndex === undefined || (ws && this.wsConns[sourceIndex] !== ws)) return;
+        this._sourcesNeedingRecovery.add(sourceIndex);
+        this.scheduleReconnect(source, sourceIndex);
     }
 
     // Terminal-error gate for the serialized WS event chain. Ordinary handler
@@ -3072,10 +3116,57 @@ class ClientSync {
                 this.chain + '/' + this.network + '/' + this.dbType);
             return;
         }
-        setTimeout(() => {
+        if(this._reconnectTimers.has(sourceIndex)) return;
+        let delay = Number(this.config['CLIENT_RECONNECT_DELAY']);
+        if(!Number.isFinite(delay) || delay < 0) delay = 5000;
+        const timer = setTimeout(() => {
+            this._reconnectTimers.delete(sourceIndex);
             if(this.running)
                 this.connectWebSocket(source, sourceIndex);
-        }, this.config['CLIENT_RECONNECT_DELAY']);
+        }, delay);
+        this._reconnectTimers.set(sourceIndex, timer);
+    }
+
+    cancelReconnect(sourceIndex){
+        const timer = this._reconnectTimers.get(sourceIndex);
+        if(timer) clearTimeout(timer);
+        this._reconnectTimers.delete(sourceIndex);
+    }
+
+    clearStreamWatchdog(sourceIndex){
+        const timer = this._streamWatchdogs.get(sourceIndex);
+        if(timer) clearTimeout(timer);
+        this._streamWatchdogs.delete(sourceIndex);
+    }
+
+    armStreamWatchdog(source, sourceIndex, ws){
+        this.clearStreamWatchdog(sourceIndex);
+        if(!this.running) return;
+        const staleMs = Number(this.config['CLIENT_SOURCE_STALE_MS']);
+        if(!Number.isFinite(staleMs) || staleMs <= 0) return;
+        let lastEventAt = this._sourceLastWsEventAt.get(sourceIndex);
+        if(typeof lastEventAt !== 'number') lastEventAt = Date.now();
+        const remaining = Math.max(1, staleMs - (Date.now() - lastEventAt) + 1);
+        const timer = setTimeout(() => {
+            this._streamWatchdogs.delete(sourceIndex);
+            if(!this.running || (ws && this.wsConns[sourceIndex] !== ws)) return;
+            let seenAt = this._sourceLastWsEventAt.get(sourceIndex);
+            if(typeof seenAt === 'number' && Date.now() - seenAt <= staleMs){
+                this.armStreamWatchdog(source, sourceIndex, ws);
+                return;
+            }
+            getLogger().warn('WebSocket stream from ' + source + ' has produced no sync event for ' +
+                staleMs + 'ms; reconnecting ' + this.chain + '/' + this.network + '/' + this.dbType);
+            this._sourcesNeedingRecovery.add(sourceIndex);
+            this._upstreamStatus.delete(sourceIndex);
+            if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
+            try {
+                if(ws && typeof ws.terminate === 'function') ws.terminate();
+                else if(ws) ws.close();
+            } catch(e){ /* best-effort */ }
+            this.scheduleReconnect(source, sourceIndex);
+        }, remaining);
+        this._streamWatchdogs.set(sourceIndex, timer);
     }
 
     async handleEvent(event, sourceIndex){
