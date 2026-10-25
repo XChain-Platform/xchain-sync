@@ -357,6 +357,13 @@
       "SyncService discoverChains datetime retype wiring client mode calls ensureDatetimeColumns once per chain, after verifySyncTables and before ensureReplicatedColumns, with includeFollowerDerived: true",
       "SyncService discoverChains datetime retype wiring server mode calls ensureDatetimeColumns once per chain, after verifySyncTables, with includeFollowerDerived: false"
     ],
+    "1cfd474206588129": [
+      "ServerPoller retroactive rewind fields @regression retroactiveForkPoint prefers the rules target over the walk-back point",
+      "ServerPoller retroactive rewind fields @regression retroactiveFromRules derives target and lowercase rules_to for pending or replaying rules",
+      "ServerPoller retroactive rewind fields @regression retroactiveFromRules returns null for replayed or malformed rules",
+      "ServerPoller retroactive rewind fields @regression withRetroactive adds a copied retroactive field without mutating the event",
+      "ServerPoller retroactive rewind fields @regression withRetroactive returns the original event for null retroactive data"
+    ],
     "1dc85ba5837c0fa0": [
       "Integration: armed source handshake (server-tier rollout rehearsal) REST: a client carrying the upstream key reads a snapshot from an armed source",
       "Integration: armed source handshake (server-tier rollout rehearsal) REST: the inbound guard key is NOT accepted upstream, so the two are truly separate",
@@ -5138,6 +5145,7 @@
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
+        "test/unit/server/retroactive_rewind_fields.test.js": "1cfd474206588129",
         "test/unit/server/reward_identity.test.js": "76012416eb4db01f",
         "test/unit/server/status_state_hash.test.js": "134ad03c5062e3c4",
         "test/unit/server/updated_rows/accumulator.test.js": "547bbbb3e69a37dd",
@@ -5619,6 +5627,7 @@
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
+        "test/unit/server/retroactive_rewind_fields.test.js": "1cfd474206588129",
         "test/unit/server_poller.test/01_resume_cursor_restart_resume_regression.test.js": "48914b893fa0ef67",
         "test/unit/server_poller.test/02_seed_reorg_guard_hash_durable_reorg_guard_seed_regression.test.js": "9e1eab683f917093",
         "test/unit/server_poller.test/03_backfill_gaps_regression.test.js": "3107b91431c55ba5",
