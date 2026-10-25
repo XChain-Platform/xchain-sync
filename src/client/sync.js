@@ -4884,6 +4884,9 @@ class ClientSync {
             const admission = this.retroactiveReorgAdmission(event, depth, retroactiveReports);
             if(!admission.admit){
                 if(admission.reason === 'no_quorum' && retroactiveReports) return;
+                getLogger().error('Refusing deep rewind at block ' + event.block_index +
+                    ': reason=' + admission.reason + ', depth=' + depth +
+                    ' blocks, retroactive cap=' + admission.capBlocks + ' blocks');
                 await this.haltForExcessiveRollback(event, depth);
                 return;
             }
@@ -4976,14 +4979,17 @@ class ClientSync {
     retroactiveReorgAdmission(event, depth, reports){
         const retroactive = event && event.retroactive &&
             event.retroactive.target === event.block_index ? event.retroactive : null;
-        return admitRetroactiveRewind({
+        // The indexer source uses RETROACTIVE_REPLAY_CAP_BLOCKS. This replica setting is
+        // deliberately separate; both defaults describe the same 72-hour chain window.
+        const capBlocks = retroactiveCapBlocks(this.coinTicker,
+            this.config['RETROACTIVE_REWIND_CAP_HOURS'] || 72);
+        return Object.assign({ capBlocks }, admitRetroactiveRewind({
             depth,
-            capBlocks: retroactiveCapBlocks(this.coinTicker,
-                this.config['RETROACTIVE_REWIND_CAP_HOURS'] || 72),
+            capBlocks,
             retroactive,
             reports: reports || [],
             quorum: this.effectiveQuorum()
-        });
+        }));
     }
 
     // Count only votes from sources still active, as the block tally does.
