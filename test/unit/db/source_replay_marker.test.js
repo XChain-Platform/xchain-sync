@@ -77,7 +77,9 @@ describe('Database source replay marker reader @regression', function(){
     it('rejects data that is not JSON', async function(){
         await rejectsMarker('not json');
     });
+});
 
+describe('Database source replay marker reader @regression', function(){
     it('rejects a target that is not a non-negative safe integer', async function(){
         await rejectsMarker(JSON.stringify({ ...MARKER, target: -1 }));
         await rejectsMarker(JSON.stringify({ ...MARKER, target: Number.MAX_SAFE_INTEGER + 1 }));
@@ -108,7 +110,9 @@ describe('Database source replay marker reader @regression', function(){
 
         await assert.rejects(() => getSourceReplayMarker.call(database), error);
     });
+});
 
+describe('Database source replay marker reader @regression', function(){
     describe('rulesFromMarker composition', function(){
         it('returns null for no marker', function(){
             assert.strictEqual(rulesFromMarker(null), null);
