@@ -24,7 +24,7 @@ const row = (checkpointSeq, blockIndex, supersedesFrom = null) => ({
     supersedes_from: supersedesFrom,
 });
 
-describe('Supersede follow rules @regression', function(){
+function registerSupersedingSeqTests(){
     it('supersedes steps at and above supersedes_from but not below it', function(){
         const below = row(10, 104);
         const at = row(11, 105);
@@ -60,7 +60,9 @@ describe('Supersede follow rules @regression', function(){
 
         assert.strictEqual(supersedingSeqFor(step, [step, superseder]), 12);
     });
+}
 
+function registerBindingStepTests(){
     it('returns a plain range whole, in order, in a new array', function(){
         const first = row(10, 100);
         const second = row(11, 110);
@@ -96,4 +98,9 @@ describe('Supersede follow rules @regression', function(){
     it('throws a TypeError when bindingSteps receives a non-array', function(){
         assert.throws(() => bindingSteps(null), TypeError);
     });
+}
+
+describe('Supersede follow rules @regression', function(){
+    registerSupersedingSeqTests();
+    registerBindingStepTests();
 });
